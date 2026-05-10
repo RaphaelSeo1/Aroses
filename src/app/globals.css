@@ -1,26 +1,69 @@
 @import "tailwindcss";
 
+/* Manual theme: toggle `class="dark"` on <html> (see ThemeToggle + layout script). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Aroses brand — exact palette */
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #1a0505;
+  --accent: #dc2626;
+  --accent-muted: rgba(220, 38, 38, 0.08);
+}
+
+html.dark {
+  --background: #141110;
+  --foreground: #fff5f5;
+  --accent-muted: rgba(252, 165, 165, 0.12);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-brand: #dc2626;
+  --color-brand-hover: #b91c1c;
+  --color-brand-soft: #fca5a5;
+  --color-brand-blush: #fff5f5;
+  --color-brand-border: #fde8e8;
+  --color-brand-ink: #1a0505;
+  --color-brand-muted: #888888;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Soft backdrop — warm red tint, no blue/purple */
+.bg-app-gradient {
+  background-color: #ffffff;
+  background-image:
+    radial-gradient(
+      ellipse 120% 80% at 50% -30%,
+      rgba(220, 38, 38, 0.06),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 80% 50% at 100% 0%,
+      rgba(252, 165, 165, 0.14),
+      transparent 45%
+    );
+}
+
+html.dark .bg-app-gradient {
+  background-color: #141110;
+  background-image:
+    radial-gradient(
+      ellipse 120% 80% at 50% -30%,
+      rgba(220, 38, 38, 0.12),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 80% 50% at 100% 0%,
+      rgba(185, 28, 28, 0.08),
+      transparent 45%
+    );
 }

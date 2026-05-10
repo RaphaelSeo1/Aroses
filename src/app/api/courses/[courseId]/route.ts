@@ -1,0 +1,120 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+type Params = { params: Promise<{ courseId: string }> };
+
+export async function PATCH(request: Request, ctx: Params) {
+  const { courseId } = await ctx.params;
+  if (!UUID_RE.test(courseId)) {
+    return NextResponse.json({ error: "Invalid course id." }, { status: 400 });
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const b = body as {
+    title?: string;
+    description?: string;
+    isPublic?: unknown;
+  };
+  const title =
+    typeof b.title === "string" ? b.title.trim() : undefined;
+  const description =
+    typeof b.description === "string" ? b.description.trim() : undefined;
+  const isPublic =
+    typeof b.isPublic === "boolean" ? b.isPublic : undefined;
+
+  if (title !== undefined && title.length < 2) {
+    return NextResponse.json(
+      { error: "Title must be at least 2 characters." },
+      { status: 400 }
+    );
+  }
+
+  if (
+    title === undefined &&
+    description === undefined &&
+    isPublic === undefined
+  ) {
+    return NextResponse.json(
+      { error: "Nothing to update." },
+      { status: 400 }
+    );
+  }
+
+  const patch: Record<string, string | boolean> = {};
+  if (title !== undefined) patch.title = title;
+  if (description !== undefined) patch.description = description;
+  if (isPublic !== undefined) patch.is_public = isPublic;
+
+  const { error } = await supabase
+    .from("courses")
+    .update(patch)
+    .eq("id", courseId)
+    .eq("user_id", user.id);
+
+  if (error) {
+    console.error(error);
+    const code = "code" in error ? String(error.code) : "";
+    const msg = "message" in error ? String(error.message) : "";
+    const missingIsPublic =
+      isPublic !== undefined &&
+      (code === "42703" ||
+        /is_public|column .* does not exist/i.test(msg));
+    if (missingIsPublic) {
+      return NextResponse.json(
+        {
+          error:
+            "Explore listing needs a one-time database update. In the Supabase SQL Editor, run `supabase/migrations/007_public_courses.sql` (adds the is_public column), then try again.",
+        },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json({ error: "Could not update course." }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
+export async function DELETE(_request: Request, ctx: Params) {
+  const { courseId } = await ctx.params;
+  if (!UUID_RE.test(courseId)) {
+    return NextResponse.json({ error: "Invalid course id." }, { status: 400 });
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { error } = await supabase
+    .from("courses")
+    .delete()
+    .eq("id", courseId)
+    .eq("user_id", user.id);
+
+  if (error) {
+    console.error(error);
+    return NextResponse.json({ error: "Could not delete course." }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
+}

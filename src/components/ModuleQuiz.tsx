@@ -1,0 +1,431 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { shuffleMcqChoices, type QuizSessionItem } from "@/lib/quiz-session";
+import { isQuizMcq } from "@/types/course";
+
+type Props = {
+  materialId: string;
+  moduleId: number;
+  items: QuizSessionItem[];
+  /** Bumps when a new quiz session starts — reshuffles MC option order. */
+  shuffleEpoch: number;
+  /** Whether another module exists after this one in the course */
+  hasNextModule: boolean;
+  /** Called after marking this module complete — choose review vs navigate */
+  onCompleteQuiz: (
+    choice: "review_lessons" | "next_module"
+  ) => void | Promise<void>;
+};
+
+export function ModuleQuiz({
+  materialId,
+  moduleId,
+  items,
+  shuffleEpoch,
+  hasNextModule,
+  onCompleteQuiz,
+}: Props) {
+  const [index, setIndex] = useState(0);
+  const [wrongAttempts, setWrongAttempts] = useState(0);
+
+  /** Multiple choice */
+  const [mcSelected, setMcSelected] = useState<number | null>(null);
+  const [mcRevealed, setMcRevealed] = useState(false);
+
+  /** Free response */
+  const [frText, setFrText] = useState("");
+  const [frBusy, setFrBusy] = useState(false);
+  const [frFeedback, setFrFeedback] = useState<string | null>(null);
+  const [frGraded, setFrGraded] = useState(false);
+  const [frCorrect, setFrCorrect] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const slot = items[index];
+  const q = slot?.question;
+  const originalQuizIndex = slot?.originalIndex ?? index;
+  const total = items.length;
+  const isLast = index === total - 1;
+  const isMc = q ? isQuizMcq(q) : false;
+
+  /** Fresh permutation of A–D each question / session (not taken from stored JSON order). */
+  const displayMcq = useMemo(() => {
+    const slot = items[index];
+    const slotQ = slot?.question;
+    if (!slotQ || !isQuizMcq(slotQ)) return null;
+    return shuffleMcqChoices(slotQ);
+  }, [items, index, shuffleEpoch]);
+
+  useEffect(() => {
+    setMcSelected(null);
+    setMcRevealed(false);
+    setFrText("");
+    setFrBusy(false);
+    setFrFeedback(null);
+    setFrGraded(false);
+    setFrCorrect(false);
+    setSubmitError(null);
+  }, [index, originalQuizIndex]);
+
+  const recordMcAttempt = useCallback(
+    async (quizQuestionIndex: number, choice: number, isCorrect: boolean) => {
+      try {
+        await fetch("/api/record-attempt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            materialId,
+            moduleId,
+            quizQuestionIndex,
+            selectedChoice: choice,
+            isCorrect,
+          }),
+        });
+      } catch {
+        /* non-blocking */
+      }
+    },
+    [materialId, moduleId]
+  );
+
+  const recordFreeAttempt = useCallback(
+    async (quizQuestionIndex: number, isCorrect: boolean) => {
+      try {
+        await fetch("/api/record-attempt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            materialId,
+            moduleId,
+            quizQuestionIndex,
+            responseKind: "free",
+            isCorrect,
+          }),
+        });
+      } catch {
+        /* non-blocking */
+      }
+    },
+    [materialId, moduleId]
+  );
+
+  const onMcChoose = useCallback(
+    async (choiceIndex: number) => {
+      if (!displayMcq || mcRevealed) return;
+      setMcSelected(choiceIndex);
+      setMcRevealed(true);
+      const ok = choiceIndex === displayMcq.correctIndex;
+      if (!ok) setWrongAttempts((w) => w + 1);
+      await recordMcAttempt(originalQuizIndex, choiceIndex, ok);
+    },
+    [displayMcq, mcRevealed, originalQuizIndex, recordMcAttempt]
+  );
+
+  const goForward = useCallback(() => {
+    if (isLast) {
+      setFinished(true);
+    } else {
+      setIndex((i) => i + 1);
+    }
+  }, [isLast]);
+
+  const gradeFree = useCallback(async () => {
+    if (!q || isQuizMcq(q) || frBusy || frGraded) return;
+    const answer = frText.trim();
+    if (answer.length < 2) return;
+
+    setFrBusy(true);
+    setFrFeedback(null);
+    setSubmitError(null);
+    try {
+      const res = await fetch("/api/quiz-grade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          materialId,
+          question: q.question,
+          referenceAnswer: q.referenceAnswer,
+          studentAnswer: answer,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSubmitError(
+          typeof body.error === "string"
+            ? body.error
+            : "Could not grade. Try again."
+        );
+        setFrBusy(false);
+        return;
+      }
+      const correct = Boolean(body.correct);
+      const feedback =
+        typeof body.feedback === "string"
+          ? body.feedback
+          : correct
+            ? "Looks good."
+            : "Keep refining your answer.";
+      setFrCorrect(correct);
+      setFrFeedback(feedback);
+      setFrGraded(true);
+      if (!correct) setWrongAttempts((w) => w + 1);
+      await recordFreeAttempt(originalQuizIndex, correct);
+    } catch {
+      setSubmitError("Network error. Try again.");
+    }
+    setFrBusy(false);
+  }, [
+    q,
+    frBusy,
+    frGraded,
+    frText,
+    materialId,
+    originalQuizIndex,
+    recordFreeAttempt,
+  ]);
+
+  const [finished, setFinished] = useState(false);
+  const [savingExit, setSavingExit] = useState(false);
+
+  const runComplete = async (choice: "review_lessons" | "next_module") => {
+    setSavingExit(true);
+    try {
+      await onCompleteQuiz(choice);
+    } finally {
+      setSavingExit(false);
+    }
+  };
+
+  const scoreLabel = useMemo(
+    () =>
+      wrongAttempts === 0
+        ? "No misses this pass"
+        : `${wrongAttempts} miss${wrongAttempts === 1 ? "" : "es"} — review them later from your queue`,
+    [wrongAttempts]
+  );
+
+  if (finished) {
+    return (
+      <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+          Module quiz complete
+        </h3>
+        <p className="mt-2 text-zinc-600 dark:text-zinc-400">
+          You finished this pass —{" "}
+          <span className="font-medium text-zinc-900 dark:text-zinc-100">
+            {total}
+          </span>{" "}
+          questions. Missed items stay in your review queue for next time.
+        </p>
+        <p className="mt-1 text-sm text-zinc-500">{scoreLabel}</p>
+        <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
+          Save your progress, then choose whether to reread the lessons or jump
+          ahead.
+        </p>
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+          <button
+            type="button"
+            disabled={savingExit}
+            onClick={() => void runComplete("review_lessons")}
+            className="inline-flex flex-1 items-center justify-center rounded-full border border-zinc-300 bg-white px-6 py-2.5 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900 sm:flex-none"
+          >
+            {savingExit ? "Saving…" : "Review lessons again"}
+          </button>
+          <button
+            type="button"
+            disabled={savingExit || !hasNextModule}
+            onClick={() => void runComplete("next_module")}
+            title={
+              !hasNextModule
+                ? "This is the last module in this upload."
+                : undefined
+            }
+            className="inline-flex flex-1 items-center justify-center rounded-full bg-brand px-6 py-2.5 text-sm font-medium text-white hover:bg-brand-hover disabled:opacity-60 dark:bg-brand dark:hover:bg-brand-soft sm:flex-none"
+          >
+            {savingExit ? "Saving…" : "Next module"}
+          </button>
+        </div>
+        {!hasNextModule ? (
+          <p className="mt-3 text-xs text-zinc-500">
+            You&apos;re on the last module for this PDF — use{" "}
+            <strong className="font-medium text-zinc-700 dark:text-zinc-300">
+              Review lessons again
+            </strong>{" "}
+            to revisit material, or exit study mode from the header when you’re
+            done.
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (!q) {
+    return (
+      <p className="text-sm text-zinc-500">
+        No quiz questions for this module.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="rounded-xl border border-brand-border bg-brand-blush/80 px-4 py-3 text-sm text-brand-ink dark:border-brand-border/50 dark:bg-brand-blush/8 dark:text-brand-blush">
+        <span className="font-semibold">Single pass:</span> answer each question
+        once. If you miss, you&apos;ll move on — missed questions are logged and
+        prioritized in your next run or in the review queue below the lessons.
+      </p>
+
+      <div className="flex items-center justify-between text-sm text-zinc-500">
+        <span>
+          Question {index + 1} of {total}{" "}
+          <span className="text-zinc-400">
+            ({isMc ? "multiple choice" : "short answer"})
+          </span>
+        </span>
+        <span>{wrongAttempts > 0 ? `${wrongAttempts} misses so far` : "—"}</span>
+      </div>
+
+      <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <p className="text-lg font-medium leading-snug text-zinc-900 dark:text-zinc-100">
+          {q.question}
+        </p>
+
+        {isMc && displayMcq ? (
+          <>
+            <ul className="mt-5 space-y-2">
+              {displayMcq.choices.map((choice, i) => {
+                const letter = String.fromCharCode(65 + i);
+                const isSel = mcSelected === i;
+                const isCorr = i === displayMcq.correctIndex;
+                let ring =
+                  "border-zinc-200 hover:border-zinc-400 dark:border-zinc-700 dark:hover:border-zinc-500";
+                if (mcRevealed) {
+                  if (isCorr) {
+                    ring =
+                      "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40";
+                  } else if (isSel && !isCorr) {
+                    ring = "border-red-500 bg-red-50 dark:bg-red-950/40";
+                  }
+                } else if (isSel) {
+                  ring =
+                    "border-brand bg-brand-blush dark:border-brand-soft dark:bg-brand-blush/8";
+                }
+
+                return (
+                  <li key={`${originalQuizIndex}-${shuffleEpoch}-${i}-${choice.slice(0, 24)}`}>
+                    <button
+                      type="button"
+                      disabled={mcRevealed}
+                      onClick={() => void onMcChoose(i)}
+                      className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm transition-colors ${ring}`}
+                    >
+                      <span className="mt-0.5 font-mono text-xs text-zinc-500">
+                        {letter}.
+                      </span>
+                      <span className="flex-1">{choice}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {mcRevealed && (
+              <div className="mt-6 rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
+                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                  {mcSelected === displayMcq.correctIndex ? (
+                    <span className="text-emerald-700 dark:text-emerald-400">
+                      Correct.
+                    </span>
+                  ) : (
+                    <span className="text-red-700 dark:text-red-400">
+                      Incorrect — saved for review. Read the explanation, then
+                      continue.
+                    </span>
+                  )}
+                </p>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  {displayMcq.explanation}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={goForward}
+                    className="inline-flex items-center justify-center rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                  >
+                    {isLast ? "See results" : "Continue"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : !isQuizMcq(q) ? (
+          <>
+            <div className="mt-5">
+              <label
+                className="sr-only"
+                htmlFor={`free-${moduleId}-${originalQuizIndex}`}
+              >
+                Your answer
+              </label>
+              <textarea
+                id={`free-${moduleId}-${originalQuizIndex}`}
+                value={frText}
+                onChange={(e) => setFrText(e.target.value)}
+                disabled={frBusy || frGraded}
+                rows={6}
+                placeholder="Type your answer in your own words…"
+                className="w-full resize-y rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+              />
+              {!frGraded ? (
+                <button
+                  type="button"
+                  disabled={frBusy || frText.trim().length < 2}
+                  onClick={() => void gradeFree()}
+                  className="mt-3 inline-flex rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-hover disabled:opacity-50 dark:bg-brand"
+                >
+                  {frBusy ? "Checking…" : "Submit answer"}
+                </button>
+              ) : null}
+              {submitError ? (
+                <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+                  {submitError}
+                </p>
+              ) : null}
+            </div>
+
+            {frFeedback && frGraded && (
+              <div className="mt-6 rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
+                <p
+                  className={`text-sm font-medium ${
+                    frCorrect
+                      ? "text-emerald-700 dark:text-emerald-400"
+                      : "text-zinc-900 dark:text-zinc-100"
+                  }`}
+                >
+                  {frCorrect ? "Correct — well done." : "Feedback"}
+                </p>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  {frFeedback}
+                </p>
+                {!frCorrect && frGraded ? (
+                  <p className="mt-4 text-xs text-zinc-500">
+                    Lesson reminder: {q.explanation}
+                  </p>
+                ) : null}
+                {frGraded ? (
+                  <button
+                    type="button"
+                    onClick={goForward}
+                    className="mt-4 inline-flex rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                  >
+                    {isLast ? "See results" : "Continue"}
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
