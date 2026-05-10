@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
-import { CourseHomeOverview } from "@/components/CourseHomeOverview";
+import { CourseCreatorOverview } from "@/components/CourseCreatorOverview";
 import { CourseVisibilityToggle } from "@/components/CourseVisibilityToggle";
 import {
   ExamGroupsPanel,
@@ -26,7 +26,14 @@ export default async function CourseDetailPage({ params }: Props) {
 
   const supabase = await createClient();
 
-  const course = await fetchCourseForDashboard(supabase, courseId);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect(`/login?next=${encodeURIComponent(`/dashboard/courses/${courseId}`)}`);
+  }
+
+  const course = await fetchCourseForDashboard(supabase, courseId, user.id);
 
   if (!course) notFound();
 
@@ -65,37 +72,10 @@ export default async function CourseDetailPage({ params }: Props) {
     .select("id, course_payload")
     .eq("course_id", course.id);
 
-  const statIds = (statsMaterials ?? []).map((m) => m.id);
   let modulesTotal = 0;
   for (const m of statsMaterials ?? []) {
     const pl = m.course_payload as CoursePayload | null;
     modulesTotal += pl?.modules?.length ?? 0;
-  }
-
-  let modulesCompleted = 0;
-  let quizAttemptsTotal = 0;
-  let quizAccuracyPct: number | null = null;
-  let wrongAttempts = 0;
-
-  if (statIds.length > 0) {
-    const { count: mcCount } = await supabase
-      .from("module_completion")
-      .select("*", { count: "exact", head: true })
-      .in("material_id", statIds);
-    modulesCompleted = mcCount ?? 0;
-
-    const { data: attRows } = await supabase
-      .from("question_attempts")
-      .select("is_correct")
-      .in("material_id", statIds);
-    const attempts = attRows ?? [];
-    quizAttemptsTotal = attempts.length;
-    const correct = attempts.filter((a) => a.is_correct).length;
-    wrongAttempts = attempts.length - correct;
-    quizAccuracyPct =
-      attempts.length > 0
-        ? Math.round((correct / attempts.length) * 100)
-        : null;
   }
 
   const uploadsCount = statsMaterials?.length ?? 0;
@@ -117,14 +97,10 @@ export default async function CourseDetailPage({ params }: Props) {
             </p>
           ) : null}
 
-          <CourseHomeOverview
+          <CourseCreatorOverview
             courseId={course.id}
-            quizAttemptsTotal={quizAttemptsTotal}
-            quizAccuracyPct={quizAccuracyPct}
-            wrongAttempts={wrongAttempts}
-            modulesCompleted={modulesCompleted}
-            modulesTotal={modulesTotal}
             uploadsCount={uploadsCount}
+            modulesTotal={modulesTotal}
           />
 
           <div className="mt-10">

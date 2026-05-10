@@ -40,7 +40,7 @@ export function CourseLearningCard({ course }: { course: CourseLearningSummary }
           </div>
           <div className="flex shrink-0 flex-col gap-2 sm:items-end">
             <Link
-              href={`/dashboard/courses/${course.courseId}/study`}
+              href={`/dashboard/courses/${course.courseId}/study?mode=learn`}
               className="rounded-full bg-brand px-4 py-2 text-center text-sm font-semibold text-white hover:bg-brand-hover dark:bg-brand"
             >
               Study
@@ -118,7 +118,7 @@ export function CourseLearningCard({ course }: { course: CourseLearningSummary }
                     {m.modulesCompleted}/{m.modulesTotal} modules
                   </span>
                   <Link
-                    href={`/dashboard/courses/${course.courseId}/study?material=${m.materialId}`}
+                    href={`/dashboard/courses/${course.courseId}/study?material=${m.materialId}&mode=learn`}
                     className="text-xs font-semibold text-brand hover:underline dark:text-brand-soft"
                   >
                     Open

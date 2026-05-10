@@ -62,11 +62,13 @@ export async function PATCH(request: Request, ctx: Params) {
   if (description !== undefined) patch.description = description;
   if (isPublic !== undefined) patch.is_public = isPublic;
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from("courses")
     .update(patch)
     .eq("id", courseId)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     console.error(error);
@@ -88,6 +90,13 @@ export async function PATCH(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Could not update course." }, { status: 500 });
   }
 
+  if (!updated) {
+    return NextResponse.json(
+      { error: "Course not found or you do not have access." },
+      { status: 403 }
+    );
+  }
+
   return NextResponse.json({ ok: true });
 }
 
@@ -105,15 +114,24 @@ export async function DELETE(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { error } = await supabase
+  const { data: deleted, error } = await supabase
     .from("courses")
     .delete()
     .eq("id", courseId)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     console.error(error);
     return NextResponse.json({ error: "Could not delete course." }, { status: 500 });
+  }
+
+  if (!deleted) {
+    return NextResponse.json(
+      { error: "Course not found or you do not have access." },
+      { status: 403 }
+    );
   }
 
   return NextResponse.json({ ok: true });

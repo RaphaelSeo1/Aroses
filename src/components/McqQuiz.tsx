@@ -138,7 +138,7 @@ export function McqQuiz({ materialId, questions }: Props) {
                   type="button"
                   disabled={revealed}
                   onClick={() => onChoose(i)}
-                  className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm transition-colors ${ring}`}
+                  className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm ${ring}`}
                 >
                   <span className="mt-0.5 font-mono text-xs text-zinc-500">
                     {letter}.

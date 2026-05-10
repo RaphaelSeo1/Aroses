@@ -60,6 +60,13 @@ function parseOutlineRows(raw: unknown): ExploreOutlineGroup[] {
   });
 }
 
+/** True when the public outline includes at least one module title. */
+export function exploreOutlineHasModules(groups: ExploreOutlineGroup[]): boolean {
+  return groups.some((g) =>
+    g.materials.some((m) => m.modules.length > 0)
+  );
+}
+
 /** Parses JSON returned by `explore_course_outline` RPC (migration 009). */
 export function exploreOutlineFromRpcPayload(raw: unknown): ExploreOutlineGroup[] {
   if (raw == null) return [];

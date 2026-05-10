@@ -36,8 +36,13 @@ export async function GET(request: Request, ctx: Params) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
   if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({
+      missedQuizIndices: [],
+      everWrongQuizIndices: [],
+      attemptCount: 0,
+    });
   }
 
   const { data: rows, error } = await supabase

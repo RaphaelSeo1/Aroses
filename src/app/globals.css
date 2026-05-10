@@ -9,12 +9,32 @@
   --foreground: #1a0505;
   --accent: #dc2626;
   --accent-muted: rgba(220, 38, 38, 0.08);
+
+  /* Shared motion for buttons, links, controls — smooth, not blocky */
+  --interactive-duration: 220ms;
+  --interactive-duration-fast: 190ms;
+  --interactive-ease: cubic-bezier(0.33, 1, 0.68, 1);
+  --interactive-ease-out: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 html.dark {
   --background: #141110;
   --foreground: #fff5f5;
   --accent-muted: rgba(252, 165, 165, 0.12);
+}
+
+/* Theme toggle: smooth cross-fade when View Transitions API runs (see theme.ts). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.45s;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 1ms !important;
+  }
 }
 
 @theme inline {
@@ -32,13 +52,34 @@ html.dark {
   --color-brand-muted: #888888;
 }
 
+html {
+  background-color: var(--background);
+  transition: background-color 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    transition-duration: 0.01ms;
+  }
+}
+
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
+  transition:
+    background-color 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition-duration: 0.01ms;
+  }
 }
 
 /* Soft backdrop — warm red tint, no blue/purple */
 .bg-app-gradient {
+  transition: background-color 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   background-color: #ffffff;
   background-image:
     radial-gradient(
@@ -51,6 +92,12 @@ body {
       rgba(252, 165, 165, 0.14),
       transparent 45%
     );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-app-gradient {
+    transition-duration: 0.01ms;
+  }
 }
 
 html.dark .bg-app-gradient {
@@ -66,4 +113,84 @@ html.dark .bg-app-gradient {
       rgba(185, 28, 28, 0.08),
       transparent 45%
     );
+}
+
+/*
+ * Interactive motion (unlayered — must beat Tailwind utility `transition-*`).
+ * Hover colors animate; :active gets a short scale + brightness dip you can feel.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  button:not(:disabled):not(.transition-none),
+  input[type="submit"]:not(:disabled),
+  input[type="button"]:not(:disabled),
+  input[type="reset"]:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]):not(.transition-none) {
+    -webkit-tap-highlight-color: transparent;
+    transition-property: transform, background-color, border-color, color,
+      box-shadow, opacity, filter !important;
+    transition-duration: 0.26s !important;
+    transition-timing-function: cubic-bezier(0.33, 1, 0.68, 1) !important;
+    transform-origin: center;
+  }
+
+  button:not(:disabled):not(.transition-none):active,
+  input[type="submit"]:not(:disabled):active,
+  input[type="button"]:not(:disabled):active,
+  input[type="reset"]:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):not(.transition-none):active {
+    transform: scale(0.96);
+    filter: brightness(0.94);
+  }
+
+  a[href]:not(.transition-none) {
+    -webkit-tap-highlight-color: transparent;
+    transition-property: color, background-color, border-color, opacity,
+      box-shadow, text-decoration-color, transform, filter !important;
+    transition-duration: 0.26s !important;
+    transition-timing-function: cubic-bezier(0.33, 1, 0.68, 1) !important;
+    transform-origin: center;
+  }
+
+  a[href]:active:not(.group):not(.transition-none) {
+    opacity: 0.88;
+    filter: brightness(0.94);
+  }
+
+  a[href].inline-flex:active:not(.transition-none),
+  a[href].inline-grid:active:not(.transition-none) {
+    opacity: 1 !important;
+    transform: scale(0.96);
+    filter: brightness(0.94);
+  }
+
+  select,
+  textarea,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
+      [type="file"]
+    ):not([type="hidden"]):not([type="image"]) {
+    transition-property: border-color, background-color, color, box-shadow,
+      opacity !important;
+    transition-duration: 0.22s !important;
+    transition-timing-function: cubic-bezier(0.33, 1, 0.68, 1) !important;
+  }
+
+  :is(button, a, input, select, textarea):focus-visible {
+    transition-property: box-shadow, outline-color, outline-offset, transform,
+      filter !important;
+    transition-duration: 0.2s !important;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active,
+  input[type="submit"]:not(:disabled):active,
+  input[type="button"]:not(:disabled):active,
+  input[type="reset"]:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):active,
+  a[href]:active {
+    transform: none !important;
+    filter: none !important;
+    opacity: 1 !important;
+  }
 }

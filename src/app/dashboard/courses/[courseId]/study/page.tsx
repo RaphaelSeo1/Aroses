@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { AppHeader } from "@/components/AppHeader";
 import { CoursePlayer } from "@/components/CoursePlayer";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
@@ -17,12 +18,14 @@ const UUID_RE =
 
 type Props = {
   params: Promise<{ courseId: string }>;
-  searchParams: Promise<{ material?: string; module?: string }>;
+  searchParams: Promise<{ material?: string; module?: string; mode?: string }>;
 };
 
 export default async function StudyPage({ params, searchParams }: Props) {
   const { courseId } = await params;
-  const { material: materialId, module: moduleParam } = await searchParams;
+  const { material: materialId, module: moduleParam, mode: modeParam } =
+    await searchParams;
+  const learnMode = modeParam === "learn";
 
   const moduleNum =
     typeof moduleParam === "string" ? Number(moduleParam) : Number.NaN;
@@ -34,10 +37,20 @@ export default async function StudyPage({ params, searchParams }: Props) {
 
   const supabase = await createClient();
 
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect(
+      `/login?next=${encodeURIComponent(`/dashboard/courses/${courseId}/study`)}`
+    );
+  }
+
   const { data: courseRow } = await supabase
     .from("courses")
     .select("id, title, description")
     .eq("id", courseId)
+    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!courseRow) notFound();
@@ -228,6 +241,8 @@ export default async function StudyPage({ params, searchParams }: Props) {
           initialCompletedModuleIds={completedModuleIds}
           sidebarOutlines={sidebarOutlines}
           initialModuleFromUrl={initialModuleFromUrl}
+          courseManageEnabled={!learnMode}
+          learnMode={learnMode}
         />
       </>
     );
@@ -261,7 +276,8 @@ export default async function StudyPage({ params, searchParams }: Props) {
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
             Study pack
           </h1>
-          <section className="mt-10 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          <AiStudyDisclaimer className="mt-5" />
+          <section className="mt-8 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
               Summary
             </h2>

@@ -14,11 +14,13 @@ export function LessonEditableBlocks({
   moduleId,
   lessonIndex,
   lesson,
+  readOnly = false,
 }: {
   materialId: string;
   moduleId: number;
   lessonIndex: number;
   lesson: CourseLesson;
+  readOnly?: boolean;
 }) {
   const router = useRouter();
   const [section, setSection] = useState<Section>(null);
@@ -94,6 +96,75 @@ export function LessonEditableBlocks({
     void patch({
       examples: draftExamples.map((s) => s.trim()).filter((s) => s.length > 0),
     });
+
+  if (readOnly) {
+    return (
+      <article className="space-y-6">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+            Lesson title
+          </p>
+          <h3 className="mt-2 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            {lesson.title}
+          </h3>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+            Lesson content
+          </p>
+          <div className="mt-3">
+            <LessonRichContent markdown={lesson.content} />
+          </div>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+            Key terms
+          </p>
+          <div className="mt-3">
+            {lesson.key_terms.length === 0 ? (
+              <p className="text-sm italic text-zinc-500 dark:text-zinc-400">
+                No key terms for this lesson.
+              </p>
+            ) : (
+              <dl className="grid gap-3 sm:grid-cols-2">
+                {lesson.key_terms.map((kt, ki) => (
+                  <div
+                    key={ki}
+                    className="rounded-xl border border-zinc-200 bg-white/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/50"
+                  >
+                    <dt className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {kt.term}
+                    </dt>
+                    <dd className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                      {kt.definition}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </div>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+            Real-world examples
+          </p>
+          <div className="mt-3">
+            {lesson.examples.length === 0 ? (
+              <p className="text-sm italic text-zinc-500 dark:text-zinc-400">
+                No examples for this lesson.
+              </p>
+            ) : (
+              <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+                {lesson.examples.map((ex, ei) => (
+                  <li key={ei}>{ex}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article className="space-y-6">

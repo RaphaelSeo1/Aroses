@@ -4,7 +4,7 @@ import { HEADER_NAV_NEUTRAL } from "@/components/AppHeader";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
-export function LogoutButton() {
+export function LogoutButton({ className }: { className?: string }) {
   const router = useRouter();
 
   async function handleLogout() {
@@ -18,7 +18,7 @@ export function LogoutButton() {
     <button
       type="button"
       onClick={handleLogout}
-      className={`${HEADER_NAV_NEUTRAL} cursor-pointer`}
+      className={className ?? HEADER_NAV_NEUTRAL}
     >
       Log out
     </button>

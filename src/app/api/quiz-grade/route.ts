@@ -7,12 +7,6 @@ const UUID_RE =
 
 export async function POST(request: Request) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
 
   let body: unknown;
   try {
@@ -36,7 +30,6 @@ export async function POST(request: Request) {
     .from("study_materials")
     .select("id")
     .eq("id", b.materialId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!row) {

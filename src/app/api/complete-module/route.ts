@@ -26,10 +26,6 @@ export async function POST(request: Request) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   let body: unknown;
   try {
     body = await request.json();
@@ -46,7 +42,6 @@ export async function POST(request: Request) {
     .from("study_materials")
     .select("course_payload")
     .eq("id", b.materialId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (fetchErr || !row) {
@@ -58,6 +53,10 @@ export async function POST(request: Request) {
     payload?.modules?.some((m) => m.id === b.moduleId) ?? false;
   if (!okModule) {
     return NextResponse.json({ error: "Invalid module" }, { status: 400 });
+  }
+
+  if (!user) {
+    return NextResponse.json({ ok: true, saved: false });
   }
 
   const { error } = await supabase.from("module_completion").upsert({
@@ -74,5 +73,5 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, saved: true });
 }

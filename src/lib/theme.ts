@@ -22,11 +22,33 @@ export function resolveDark(pref: ThemePreference): boolean {
 
 /** Updates `document.documentElement` class and localStorage. */
 export function applyTheme(pref: ThemePreference): void {
-  if (typeof document === "undefined") return;
-  document.documentElement.classList.toggle("dark", resolveDark(pref));
-  try {
-    localStorage.setItem(THEME_STORAGE_KEY, pref);
-  } catch {
-    /* ignore */
+  if (typeof document === "undefined" || typeof window === "undefined") return;
+
+  const dark = resolveDark(pref);
+
+  const commit = () => {
+    document.documentElement.classList.toggle("dark", dark);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, pref);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const willChange =
+    document.documentElement.classList.contains("dark") !== dark;
+  const reduceMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)"
+  ).matches;
+
+  if (
+    willChange &&
+    !reduceMotion &&
+    typeof document.startViewTransition === "function"
+  ) {
+    document.startViewTransition(commit);
+    return;
   }
+
+  commit();
 }

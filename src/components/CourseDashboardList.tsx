@@ -8,14 +8,18 @@ export type DashboardCourse = {
   id: string;
   title: string;
   description: string | null;
+  /** Creator — must match the signed-in user for dashboard management actions. */
+  user_id: string;
   /** Listed on /explore when true (requires DB migration 007). */
   is_public?: boolean;
 };
 
 export function CourseDashboardList({
   courses: initialCourses,
+  viewerUserId,
 }: {
   courses: DashboardCourse[];
+  viewerUserId: string;
 }) {
   const router = useRouter();
   const [courses, setCourses] = useState(initialCourses);
@@ -141,6 +145,7 @@ export function CourseDashboardList({
         {courses.map((c, index) => {
           const isEditing = editingId === c.id;
           const busy = busyId === c.id || busyId === "__reorder__";
+          const canManage = c.user_id === viewerUserId;
 
           return (
             <li key={c.id}>
@@ -222,46 +227,48 @@ export function CourseDashboardList({
                       </Link>
                     </div>
 
-                    <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-800">
-                      <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        Order
-                      </span>
-                      <button
-                        type="button"
-                        disabled={busy || index === 0}
-                        onClick={() => void reorder(index, index - 1)}
-                        className="rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                        title="Move up"
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy || index >= courses.length - 1}
-                        onClick={() => void reorder(index, index + 1)}
-                        className="rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                        title="Move down"
-                      >
-                        ↓
-                      </button>
-                      <span className="mx-1 h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden />
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => startEdit(c)}
-                        className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void removeCourse(c.id, c.title)}
-                        className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
-                      >
-                        Delete
-                      </button>
-                    </div>
+                    {canManage ? (
+                      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-800">
+                        <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                          Order
+                        </span>
+                        <button
+                          type="button"
+                          disabled={busy || index === 0}
+                          onClick={() => void reorder(index, index - 1)}
+                          className="rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                          title="Move up"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy || index >= courses.length - 1}
+                          onClick={() => void reorder(index, index + 1)}
+                          className="rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                          title="Move down"
+                        >
+                          ↓
+                        </button>
+                        <span className="mx-1 h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden />
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => startEdit(c)}
+                          className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void removeCourse(c.id, c.title)}
+                          className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ) : null}
                   </>
                 )}
               </div>

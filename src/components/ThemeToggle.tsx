@@ -58,7 +58,7 @@ function IconSystem({ className }: { className?: string }) {
 }
 
 const BTN =
-  "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-transparent text-brand-muted transition hover:bg-brand-blush hover:text-brand-ink dark:text-brand-soft dark:hover:bg-white/10 dark:hover:text-white";
+  "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-transparent text-brand-muted hover:bg-brand-blush hover:text-brand-ink dark:text-brand-soft dark:hover:bg-white/10 dark:hover:text-white";
 
 const BTN_ON =
   "border-brand-border bg-white text-brand shadow-sm dark:border-brand-border/50 dark:bg-[#1e1616] dark:text-brand-soft";

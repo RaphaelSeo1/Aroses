@@ -1,12 +1,11 @@
 import Link from "next/link";
-import {
-  AppHeader,
-  HEADER_NAV_ACCENT,
-  HEADER_NAV_NEUTRAL,
-  HEADER_NAV_PRIMARY,
-} from "@/components/AppHeader";
+import { AppHeader } from "@/components/AppHeader";
+import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { BrandLogo } from "@/components/BrandLogo";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { LegalFooterLinks } from "@/components/LegalFooterLinks";
+import { ModuleMosaic } from "@/components/progress/ModuleMosaic";
+import { ProgressRings } from "@/components/progress/ProgressRings";
 import { APP_NAME } from "@/lib/brand";
 import { createClient } from "@/lib/supabase/server";
 
@@ -74,6 +73,12 @@ function IconPath({ className }: { className?: string }) {
 }
 
 function HeroPreview() {
+  /** Sample numbers only — matches Profile → Progress UI patterns (rings + mosaic). */
+  const modulesCompleted = 8;
+  const modulesTotal = 12;
+  const modulePct = Math.round((modulesCompleted / modulesTotal) * 100);
+  const quizAccuracy = 84;
+
   return (
     <div className="relative mx-auto w-full max-w-lg lg:mx-0 lg:max-w-none">
       <div
@@ -90,74 +95,69 @@ function HeroPreview() {
             <BrandLogo className="h-10 w-10 shadow-md shadow-red-600/30 ring-brand-border/40" />
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-brand dark:text-brand-soft">
-                This week
+                Course workspace
               </p>
               <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                Organic chemistry · Module path
+                Cell biology · sample snapshot
               </p>
             </div>
           </div>
         </div>
-        <div className="space-y-4 p-5">
-          <div className="flex gap-2">
-            {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].map((d, i) => (
-              <div
-                key={d}
-                className="flex flex-1 flex-col items-center gap-2"
-              >
-                <span className="text-[10px] font-medium text-zinc-500">{d}</span>
-                <div
-                  className={`w-full max-w-[28px] rounded-md bg-gradient-to-t from-brand to-brand-hover opacity-90 dark:from-brand-soft dark:to-brand ${
-                    i < 3 ? "h-10" : i < 5 ? "h-6" : "h-3"
-                  }`}
-                />
-              </div>
-            ))}
-          </div>
-          <div className="rounded-xl border border-zinc-100 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
-            <div className="flex items-center justify-between gap-3">
+        <div className="space-y-5 p-5">
+          <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-start">
+            <div className="flex shrink-0 justify-center">
+              <ProgressRings
+                ringId="land-hero"
+                modulePct={modulePct}
+                quizPct={quizAccuracy}
+                size="sm"
+              />
+            </div>
+            <div className="min-w-0 flex-1 space-y-4">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
-                  Quiz accuracy
+                  Module path
                 </p>
-                <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
-                  84%
+                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  {modulesCompleted}/{modulesTotal} checkpoints · 3 lesson units
                 </p>
+                <div className="mt-2">
+                  <ModuleMosaic
+                    completed={modulesCompleted}
+                    total={modulesTotal}
+                  />
+                </div>
               </div>
-              <div className="relative h-16 w-16 shrink-0">
-                <svg viewBox="0 0 64 64" className="h-full w-full -rotate-90">
-                  <circle
-                    cx="32"
-                    cy="32"
-                    r="26"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="6"
-                    className="text-zinc-200 dark:text-zinc-700"
-                  />
-                  <circle
-                    cx="32"
-                    cy="32"
-                    r="26"
-                    fill="none"
-                    stroke="url(#land-preview)"
-                    strokeWidth="6"
-                    strokeDasharray="163.36"
-                    strokeDashoffset="26"
-                    strokeLinecap="round"
-                  />
-                  <defs>
-                    <linearGradient id="land-preview" x1="0" y1="0" x2="1" y2="1">
-                      <stop offset="0%" stopColor="rgb(220 38 38)" />
-                      <stop offset="100%" stopColor="rgb(185 28 28)" />
-                    </linearGradient>
-                  </defs>
-                </svg>
+              <div className="grid grid-cols-3 gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-800">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase text-zinc-500">
+                    Quiz accuracy
+                  </p>
+                  <p className="mt-0.5 text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                    {quizAccuracy}%
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase text-zinc-500">
+                    Attempts
+                  </p>
+                  <p className="mt-0.5 text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                    24
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold uppercase text-zinc-500">
+                    Correct
+                  </p>
+                  <p className="mt-0.5 text-lg font-semibold tabular-nums text-brand dark:text-brand-soft">
+                    20
+                  </p>
+                </div>
               </div>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {["Checkpoints", "Review queue", "Study workspace"].map((t) => (
+            {["Lessons", "Module quizzes", "In-course help"].map((t) => (
               <span
                 key={t}
                 className="rounded-full border border-brand-border bg-brand-blush/90 px-3 py-1 text-xs font-medium text-brand-ink dark:border-brand-border/40 dark:bg-[#1e1616]/60 dark:text-brand-soft"
@@ -166,6 +166,13 @@ function HeroPreview() {
               </span>
             ))}
           </div>
+          <p className="text-center text-[10px] leading-snug text-zinc-500 dark:text-zinc-400">
+            Illustrative example —{" "}
+            <span className="font-medium text-zinc-600 dark:text-zinc-300">
+              Profile → Progress
+            </span>{" "}
+            shows the same rings and tiles from your real activity.
+          </p>
         </div>
       </div>
     </div>
@@ -188,15 +195,11 @@ export default async function Home() {
             <HeaderNavLoggedIn />
           ) : (
             <>
-              <Link href="/explore" className={HEADER_NAV_ACCENT}>
-                Explore
-              </Link>
-              <Link href="/login" className={HEADER_NAV_NEUTRAL}>
-                Log in
-              </Link>
-              <Link href="/signup" className={HEADER_NAV_PRIMARY}>
+              <HeaderNavLink href="/explore">Explore</HeaderNavLink>
+              <HeaderNavLink href="/login">Log in</HeaderNavLink>
+              <HeaderNavLink href="/signup" variant="primary">
                 Sign up
-              </Link>
+              </HeaderNavLink>
             </>
           )
         }
@@ -206,18 +209,18 @@ export default async function Home() {
           <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 pb-20 pt-16 sm:gap-16 sm:px-6 sm:pb-24 sm:pt-20 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] lg:gap-16">
             <div>
               <p className="inline-flex items-center rounded-full border border-brand-border bg-white/80 px-4 py-1 text-xs font-semibold uppercase tracking-wider text-brand shadow-sm dark:border-brand-border/40 dark:bg-zinc-900/80 dark:text-brand-soft">
-                Personal AI study studio
+                Lessons, quizzes &amp; practice from your slides
               </p>
               <h1 className="mt-6 text-4xl font-semibold tracking-tight text-brand-ink sm:text-5xl sm:leading-[1.08] dark:text-white">
-                Turn your class material into a{" "}
-                <span className="bg-gradient-to-r from-brand to-brand-hover bg-clip-text text-transparent dark:from-brand-soft dark:to-brand">
-                  course that learns you back
-                </span>
+                Built for the classes that break you.
               </h1>
               <p className="mt-6 max-w-xl text-lg leading-relaxed text-brand-muted dark:text-brand-soft">
-                {APP_NAME} builds structured lessons, checkpoints, and quizzes
-                from what you already use — so every session feels tied to your
-                syllabus, not a generic tutor.
+                Upload your lecture slides and {APP_NAME} builds a full
+                personalized course — lessons, quizzes, and practice questions
+                from your actual material.{" "}
+                <span className="font-medium text-brand-ink dark:text-zinc-100">
+                  Not generic. Yours.
+                </span>
               </p>
               <div className="mt-10 flex flex-wrap items-center gap-3">
                 {user ? (
@@ -251,7 +254,11 @@ export default async function Home() {
                 </li>
                 <li className="flex items-center gap-2">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  Practice rhythm &amp; accuracy
+                  Per-module quizzes &amp; review
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  Notes → cards with spaced repetition (Anki-class scheduling)
                 </li>
                 <li className="flex items-center gap-2">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
@@ -276,7 +283,7 @@ export default async function Home() {
               },
               {
                 k: "Measurable",
-                v: "Quizzes, streaks, and a pulse view of how you’re doing.",
+                v: "Quizzes and streaks — plus personal cards from your notes with spaced repetition so reviews land when memory fades.",
               },
             ].map((s) => (
               <div
@@ -297,11 +304,11 @@ export default async function Home() {
         <section className="mx-auto w-full max-w-6xl px-4 py-20 sm:px-6 sm:py-24">
           <div className="mx-auto max-w-2xl text-center">
             <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-              Three moves. One habit.
+              Three steps. Your studio.
             </h2>
             <p className="mt-3 text-zinc-600 dark:text-zinc-400">
-              Set up once, then study in short loops — add material, clear
-              checkpoints, quiz, repeat.
+              Set up once: add your materials, work through modules, then quiz and
+              revisit what stuck — all anchored to what you uploaded.
             </p>
           </div>
           <ol className="mx-auto mt-14 grid max-w-5xl gap-8 sm:grid-cols-3">
@@ -318,8 +325,8 @@ export default async function Home() {
               },
               {
                 n: "03",
-                title: "Study with signal",
-                body: "Quizzes per module, wrong-answer review, and progress you can see across courses.",
+                title: "Practice what you learned",
+                body: "Module quizzes, wrong-answer review, and focus cards from your highlights — spaced repetition like Anki, without importing decks by hand.",
               },
             ].map((step) => (
               <li
@@ -359,15 +366,15 @@ export default async function Home() {
                   Progress you can read at a glance
                 </h3>
                 <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  Dual rings for checkpoints vs quiz accuracy, module tiles, and
-                  a day-by-day practice rhythm — so “how am I doing?” has an
+                  Rings for checkpoints vs quiz accuracy, module tiles, and a
+                  calendar of recent study — so “how am I doing?” has a straight
                   answer.
                 </p>
                 <Link
-                  href={user ? "/dashboard/progress" : "/signup"}
+                  href={user ? "/dashboard/profile?tab=progress" : "/signup"}
                   className="mt-6 inline-flex text-sm font-semibold text-brand hover:underline dark:text-brand-soft"
                 >
-                  {user ? "Open learning pulse →" : "Start tracking →"}
+                  {user ? "Open Progress →" : "Start tracking →"}
                 </Link>
               </div>
 
@@ -383,8 +390,8 @@ export default async function Home() {
                   Icon: IconSpark,
                 },
                 {
-                  title: "Quizzes tied to each module",
-                  body: "Practice what you just read. Completion carries across sessions.",
+                  title: "Retention you can feel",
+                  body: "Turn highlights into your own multiple-choice cards; scheduling spreads reviews over days so you’re not re-reading the same slide forever — same core idea as Anki, tied to your course.",
                   Icon: IconTarget,
                 },
               ].map((item) => (
@@ -425,25 +432,33 @@ export default async function Home() {
           </div>
         </section>
 
-        <footer className="mt-16 border-t border-zinc-200/80 bg-white/40 px-4 py-10 dark:border-zinc-800 dark:bg-zinc-950/50 sm:px-6">
-          <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-6 sm:flex-row">
-            <div className="flex items-center gap-3">
-              <BrandLogo className="h-9 w-9 sm:h-10 sm:w-10" />
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                © {year} {APP_NAME}
-              </p>
+        <footer className="mt-16 border-t border-zinc-200/80 bg-white/40 px-4 py-12 dark:border-zinc-800 dark:bg-zinc-950/50 sm:px-6">
+          <div className="mx-auto flex max-w-6xl flex-col items-center gap-10">
+            <div className="flex w-full flex-col items-center justify-between gap-8 sm:flex-row sm:items-start">
+              <div className="flex items-center gap-3">
+                <BrandLogo className="h-9 w-9 sm:h-10 sm:w-10" />
+                <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  © {year} {APP_NAME}
+                </p>
+              </div>
+              <nav
+                className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-sm font-medium text-zinc-700 dark:text-zinc-300 sm:justify-end"
+                aria-label="Site"
+              >
+                <Link href="/explore" className="hover:text-brand dark:hover:text-brand-soft">
+                  Explore
+                </Link>
+                <Link href="/login" className="hover:text-brand dark:hover:text-brand-soft">
+                  Log in
+                </Link>
+                <Link href="/signup" className="hover:text-brand dark:hover:text-brand-soft">
+                  Sign up
+                </Link>
+              </nav>
             </div>
-            <nav className="flex flex-wrap items-center justify-center gap-6 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              <Link href="/explore" className="hover:text-brand dark:hover:text-brand-soft">
-                Explore
-              </Link>
-              <Link href="/login" className="hover:text-brand dark:hover:text-brand-soft">
-                Log in
-              </Link>
-              <Link href="/signup" className="hover:text-brand dark:hover:text-brand-soft">
-                Sign up
-              </Link>
-            </nav>
+            <div className="w-full max-w-xl border-t border-zinc-200/70 pt-8 dark:border-zinc-800">
+              <LegalFooterLinks className="text-xs text-zinc-500 sm:text-sm dark:text-zinc-500" />
+            </div>
           </div>
         </footer>
       </main>

@@ -4,17 +4,17 @@ import { BrandLogo } from "@/components/BrandLogo";
 import { APP_NAME } from "@/lib/brand";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-/** Accent pill — Explore (stands out from neutrals). */
+/** Selected / emphasized nav pill (active route). */
 export const HEADER_NAV_ACCENT =
-  "inline-flex items-center justify-center rounded-full px-3 py-2 text-sm font-medium text-brand transition-colors hover:bg-brand-blush dark:text-brand-soft dark:hover:bg-brand-blush/15";
+  "inline-flex items-center justify-center rounded-full px-3 py-2 text-sm font-semibold text-brand bg-brand-blush/95 shadow-sm shadow-brand/10 hover:bg-brand-blush dark:bg-white/[0.14] dark:text-white dark:shadow-none dark:ring-1 dark:ring-brand-soft/45 dark:hover:bg-white/[0.18]";
 
-/** Neutral pill — Dashboard, My courses, Log in, … */
+/** Neutral pill — inactive nav links */
 export const HEADER_NAV_NEUTRAL =
-  "inline-flex items-center justify-center rounded-full px-3 py-2 text-sm font-medium text-brand-muted transition-colors hover:bg-brand-blush hover:text-brand-ink dark:text-brand-soft dark:hover:bg-white/5 dark:hover:text-white";
+  "inline-flex items-center justify-center rounded-full px-3 py-2 text-sm font-medium text-brand-muted hover:bg-brand-blush hover:text-brand-ink dark:text-zinc-500 dark:hover:bg-white/10 dark:hover:text-zinc-100";
 
 /** Solid CTA — Sign up */
 export const HEADER_NAV_PRIMARY =
-  "inline-flex items-center justify-center rounded-full bg-brand px-3 py-2 text-sm font-medium text-white shadow-md shadow-red-600/20 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-hover";
+  "inline-flex items-center justify-center rounded-full bg-brand px-3 py-2 text-sm font-medium text-white shadow-md shadow-red-600/20 hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-hover";
 
 export function AppHeader({
   right,

@@ -1,11 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { parseSafeInternalNext } from "@/lib/internal-next-path";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
-  const next = url.searchParams.get("next") ?? "/dashboard";
+  const nextRaw = url.searchParams.get("next") ?? "/dashboard";
+  const next = parseSafeInternalNext(nextRaw) ?? "/dashboard";
 
   if (code) {
     const cookieStore = await cookies();

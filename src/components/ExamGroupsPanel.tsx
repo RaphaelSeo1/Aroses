@@ -168,6 +168,12 @@ function SortableMaterialRow({
           })}
         </span>
         <div className="flex w-full shrink-0 flex-wrap items-center gap-2 pl-10 sm:ml-0 sm:w-auto sm:pl-0">
+          <Link
+            href={`/dashboard/courses/${courseId}/study?material=${encodeURIComponent(m.id)}`}
+            className="rounded-full border border-brand/45 bg-brand-blush/70 px-3 py-1.5 text-xs font-semibold text-brand hover:bg-brand-blush dark:border-brand-border/45 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand-blush/25"
+          >
+            Edit
+          </Link>
           <button
             type="button"
             disabled={busy}
@@ -276,6 +282,12 @@ function PlainMaterialRow(
             })}
           </span>
           <div className="flex w-full shrink-0 flex-wrap items-center gap-2 pl-10 sm:ml-0 sm:w-auto sm:pl-0">
+            <Link
+              href={`/dashboard/courses/${courseId}/study?material=${encodeURIComponent(m.id)}`}
+              className="rounded-full border border-brand/45 bg-brand-blush/70 px-3 py-1.5 text-xs font-semibold text-brand hover:bg-brand-blush dark:border-brand-border/45 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand-blush/25"
+            >
+              Edit
+            </Link>
             <button
               type="button"
               disabled={busy}
@@ -314,6 +326,12 @@ function PlainMaterialRow(
           })}
         </span>
         <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
+          <Link
+            href={`/dashboard/courses/${courseId}/study?material=${encodeURIComponent(m.id)}`}
+            className="rounded-full border border-brand/45 bg-brand-blush/70 px-3 py-1.5 text-xs font-semibold text-brand hover:bg-brand-blush dark:border-brand-border/45 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand-blush/25"
+          >
+            Edit
+          </Link>
           <button
             type="button"
             disabled={busy}

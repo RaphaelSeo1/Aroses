@@ -1,9 +1,9 @@
 import Link from "next/link";
 import {
   AppHeader,
-  HEADER_NAV_NEUTRAL,
-  HEADER_NAV_PRIMARY,
 } from "@/components/AppHeader";
+import { ExploreCoursesBoard } from "@/components/ExploreCoursesBoard";
+import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { APP_NAME } from "@/lib/brand";
 import { createClient } from "@/lib/supabase/server";
@@ -41,18 +41,17 @@ export default async function ExplorePage() {
             <HeaderNavLoggedIn />
           ) : (
             <>
-              <Link href="/login" className={HEADER_NAV_NEUTRAL}>
-                Log in
-              </Link>
-              <Link href="/signup" className={HEADER_NAV_PRIMARY}>
+              <HeaderNavLink href="/explore">Explore</HeaderNavLink>
+              <HeaderNavLink href="/login">Log in</HeaderNavLink>
+              <HeaderNavLink href="/signup" variant="primary">
                 Sign up
-              </Link>
+              </HeaderNavLink>
             </>
           )
         }
       />
       <main className="min-h-[calc(100vh-4rem)] flex-1 bg-app-gradient">
-        <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-14">
+        <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-14">
           <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
             Community
           </p>
@@ -60,9 +59,12 @@ export default async function ExplorePage() {
             Explore courses
           </h1>
           <p className="mt-3 max-w-2xl text-zinc-600 dark:text-zinc-400">
-            Courses stay private until you open a course&apos;s workspace and turn
-            on listing — visiting this page does not publish anything. Open a
-            listing to read its title and description only.
+            Courses appear here when a creator turns on{" "}
+            <strong className="font-semibold text-zinc-800 dark:text-zinc-200">
+              Show this course on Explore
+            </strong>
+            . Sign in to open a course and study lessons and quizzes (your account
+            keeps progress across devices).
           </p>
 
           {exploreBroken ? (
@@ -92,7 +94,7 @@ export default async function ExplorePage() {
               <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
                 Each course is private until you enable it: open{" "}
                 <strong className="font-semibold text-zinc-800 dark:text-zinc-200">
-                  My courses
+                  Home
                 </strong>
                 , choose a course, then check{" "}
                 <strong className="font-semibold text-zinc-800 dark:text-zinc-200">
@@ -104,48 +106,14 @@ export default async function ExplorePage() {
                 href={user ? "/dashboard" : "/signup"}
                 className="mt-6 inline-flex rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white hover:bg-brand-hover dark:bg-brand"
               >
-                {user ? "Go to My courses" : "Get started"}
+                {user ? "Go to Home" : "Get started"}
               </Link>
             </div>
           ) : (
-            <ul className="mt-12 space-y-4">
-              {courses.map((c) => (
-                <li key={c.id}>
-                  <Link
-                    href={`/explore/${c.id}`}
-                    className="block rounded-2xl border border-zinc-200/90 bg-white/95 p-6 shadow-sm transition hover:border-brand-border hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950/95 dark:hover:border-brand-border/50"
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-                        {c.title}
-                      </h2>
-                      {user && user.id === c.user_id ? (
-                        <span className="rounded-full bg-brand-blush px-2.5 py-0.5 text-xs font-medium text-brand-ink dark:bg-[#1e1616] dark:text-brand-soft">
-                          Your listing
-                        </span>
-                      ) : null}
-                    </div>
-                    {c.description ? (
-                      <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                        {c.description}
-                      </p>
-                    ) : (
-                      <p className="mt-2 text-sm italic text-zinc-500">
-                        No description
-                      </p>
-                    )}
-                    <p className="mt-4 text-xs text-zinc-500">
-                      Listed{" "}
-                      {new Date(c.created_at).toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </p>
-                  </Link>
-                </li>
-              ))}
-            </ul>
+            <ExploreCoursesBoard
+              courses={courses}
+              currentUserId={user?.id}
+            />
           )}
         </div>
       </main>

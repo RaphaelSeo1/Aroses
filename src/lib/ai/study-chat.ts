@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { APP_NAME } from "@/lib/brand";
+import { AI_ASSISTANT_NAME, APP_NAME } from "@/lib/brand";
 import type { CoursePayload } from "@/types/course";
 import { isQuizMcq } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
@@ -97,7 +97,7 @@ export async function runStudyChat(
     throw new Error("Missing ANTHROPIC_API_KEY");
   }
 
-  const system = `You are an expert but friendly tutor. The student is working inside ${APP_NAME} on course material that was generated from their own uploaded files.
+  const system = `You are ${AI_ASSISTANT_NAME}, an expert but friendly tutor. The student is working inside ${APP_NAME} on course material that was generated from their own uploaded files.
 
 Rules:
 - Answer ONLY using the CONTEXT section below. If the answer is not there, say clearly that their materials don't cover it and point them to the closest related heading or module to re-read.

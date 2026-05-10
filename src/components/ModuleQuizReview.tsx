@@ -25,9 +25,21 @@ function formatShortDate(iso: string | null): string {
 type Props = {
   quiz: CourseQuizItem[];
   reviewByIndex: Record<string, QuizReviewStatsDto | undefined>;
+  /** When nested inside another panel (e.g. focus section) — no heavy top margin/border */
+  embedded?: boolean;
+  /**
+   * When placed directly under a page header that already has a bottom rule —
+   * avoids a second divider + huge empty strip between lines.
+   */
+  compact?: boolean;
 };
 
-export function ModuleQuizReview({ quiz, reviewByIndex }: Props) {
+export function ModuleQuizReview({
+  quiz,
+  reviewByIndex,
+  embedded,
+  compact,
+}: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
 
@@ -95,16 +107,36 @@ export function ModuleQuizReview({ quiz, reviewByIndex }: Props) {
   ];
 
   return (
-    <section className="mt-12 border-t border-zinc-100 pt-10 dark:border-zinc-900">
+    <section
+      className={
+        embedded
+          ? "mt-0 border-0 pt-0"
+          : compact
+            ? "mt-5 border-0 pt-1 dark:border-transparent"
+            : "mt-10 border-t border-zinc-100 pt-8 dark:border-zinc-900"
+      }
+    >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+          <h3
+            className={
+              embedded
+                ? "text-base font-semibold text-zinc-900 dark:text-zinc-100"
+                : "text-lg font-semibold text-zinc-900 dark:text-zinc-100"
+            }
+          >
             Question review
           </h3>
-          <p className="mt-1 max-w-xl text-sm text-zinc-600 dark:text-zinc-400">
-            Every bank question for this module, with your latest result and the
-            answer key. MC options shuffle during the quiz; choices below are in
-            source order.
+          <p
+            className={
+              embedded
+                ? "mt-1 text-xs text-zinc-600 dark:text-zinc-400"
+                : "mt-1 max-w-xl text-sm text-zinc-600 dark:text-zinc-400"
+            }
+          >
+            {embedded
+              ? "Your attempts and answer key — filters below."
+              : "Every bank question for this module, with your latest result and the answer key. MC options shuffle during the quiz; choices below are in source order."}
           </p>
         </div>
       </div>
@@ -115,7 +147,7 @@ export function ModuleQuizReview({ quiz, reviewByIndex }: Props) {
             key={id}
             type="button"
             onClick={() => setFilter(id)}
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`transition-none inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium ${
               filter === id
                 ? "border-brand bg-brand-blush text-brand-ink dark:border-brand dark:bg-brand-blush/8 dark:text-brand-blush"
                 : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400 dark:hover:border-zinc-600"
@@ -155,7 +187,7 @@ export function ModuleQuizReview({ quiz, reviewByIndex }: Props) {
               <button
                 type="button"
                 onClick={() => toggleExpanded(quizIndex)}
-                className="flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors hover:bg-white/60 dark:hover:bg-zinc-950/50"
+                className="transition-none flex w-full items-start gap-3 px-4 py-3.5 text-left hover:bg-white/60 dark:hover:bg-zinc-950/50"
               >
                 <span className="mt-0.5 flex h-7 min-w-7 items-center justify-center rounded-lg bg-white text-xs font-semibold text-zinc-500 shadow-sm ring-1 ring-zinc-200/80 dark:bg-zinc-950 dark:text-zinc-400 dark:ring-zinc-700">
                   {quizIndex + 1}

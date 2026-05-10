@@ -31,6 +31,8 @@ export type QuizSessionItem = {
   question: CourseQuizItem;
   /** Index in the module’s original `quiz` array (for logging / stats). */
   originalIndex: number;
+  /** When set, attempts are stored on `user_personal_question_attempts`. */
+  personalItemId?: string;
 };
 
 /** If the random draw had no FR items, swap one slot so written prompts can appear when the bank has them. */
@@ -105,5 +107,28 @@ export function buildQuizSessionItems(
   return order.map((originalIndex) => ({
     question: bank[originalIndex],
     originalIndex,
+  }));
+}
+
+type PersonalRow = {
+  id: string;
+  item: CourseQuizItem;
+};
+
+/**
+ * Builds a personal quiz session: prioritizes `priorityIndices` (due cards,
+ * lapses, etc.), fills with other rows, shuffles order within tiers.
+ */
+export function buildPersonalQuizSessionItems(
+  rows: PersonalRow[],
+  priorityIndices: number[],
+  sessionNonce: number
+): QuizSessionItem[] {
+  if (rows.length === 0) return [];
+  const bank = rows.map((r) => r.item);
+  const slots = buildQuizSessionItems(bank, priorityIndices, sessionNonce);
+  return slots.map((s) => ({
+    ...s,
+    personalItemId: rows[s.originalIndex].id,
   }));
 }

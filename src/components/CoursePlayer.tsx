@@ -3,9 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
+import { LessonNotesCapture } from "@/components/LessonNotesCapture";
 import { ModuleQuiz } from "@/components/ModuleQuiz";
 import { ModuleQuizReview } from "@/components/ModuleQuizReview";
+import { PersonalQuizSection } from "@/components/PersonalQuizSection";
 import { buildQuizSessionItems } from "@/lib/quiz-session";
 import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
@@ -18,6 +21,18 @@ import type {
 import type { QuizReviewStatsDto } from "@/types/quiz-review";
 
 const EMPTY_MODULE_QUIZ: CourseQuizItem[] = [];
+
+function buildStudySearchParams(
+  materialId: string,
+  moduleId: number,
+  learnMode: boolean
+): string {
+  const p = new URLSearchParams();
+  p.set("material", materialId);
+  p.set("module", String(moduleId));
+  if (learnMode) p.set("mode", "learn");
+  return p.toString();
+}
 
 function pickInitialModuleId(
   course: CoursePayload,
@@ -42,6 +57,9 @@ export function CoursePlayer({
   sidebarOutlines,
   initialModuleFromUrl,
   mode = "lessons",
+  studyHrefBase,
+  courseManageEnabled = true,
+  learnMode = false,
 }: {
   course: CoursePayload;
   courseId: string;
@@ -52,12 +70,18 @@ export function CoursePlayer({
   initialModuleFromUrl?: number;
   /** `lessons` = lecture only + link to practice page. `quiz` = review + quiz (no lesson body). */
   mode?: "lessons" | "quiz";
+  /** Defaults to dashboard study URL; use `/explore/[courseId]/study` for public learners. */
+  studyHrefBase?: string;
+  /** When false, hide editing, AI refine, and generating more quiz questions (Explore). */
+  courseManageEnabled?: boolean;
+  /** When true, keep `mode=learn` on lecture/practice URLs (dashboard “study as learner”). */
+  learnMode?: boolean;
 }) {
   const router = useRouter();
+  const studyBase =
+    studyHrefBase ?? `/dashboard/courses/${courseId}/study`;
   const navigationBasePath =
-    mode === "quiz"
-      ? `/dashboard/courses/${courseId}/study/quiz`
-      : `/dashboard/courses/${courseId}/study`;
+    mode === "quiz" ? `${studyBase}/quiz` : studyBase;
   const [activeModuleId, setActiveModuleId] = useState(() =>
     pickInitialModuleId(course, initialModuleFromUrl)
   );
@@ -65,6 +89,7 @@ export function CoursePlayer({
     () => new Set(initialCompletedModuleIds)
   );
   const [quizOpen, setQuizOpen] = useState(false);
+  const [personalQuizActive, setPersonalQuizActive] = useState(false);
   const [quizSessionEpoch, setQuizSessionEpoch] = useState(0);
   const [missedQuizIndices, setMissedQuizIndices] = useState<number[]>([]);
   const [renamingModuleId, setRenamingModuleId] = useState<number | null>(null);
@@ -181,23 +206,31 @@ export function CoursePlayer({
     [mode, activeModule, moduleQuizBank, missedQuizIndices, quizSessionEpoch]
   );
 
-  const practicePageHref = `/dashboard/courses/${courseId}/study/quiz?material=${encodeURIComponent(materialId)}&module=${encodeURIComponent(String(activeModuleId))}`;
+  const practicePageHref = useMemo(
+    () =>
+      `${studyBase}/quiz?${buildStudySearchParams(materialId, activeModuleId, learnMode)}`,
+    [studyBase, materialId, activeModuleId, learnMode]
+  );
 
-  const lecturePageHref = `/dashboard/courses/${courseId}/study?material=${encodeURIComponent(materialId)}&module=${encodeURIComponent(String(activeModuleId))}`;
+  const lecturePageHref = useMemo(
+    () =>
+      `${studyBase}?${buildStudySearchParams(materialId, activeModuleId, learnMode)}`,
+    [studyBase, materialId, activeModuleId, learnMode]
+  );
 
   /** Keeps `module=` in the URL when switching modules (study vs quiz routes). */
   const syncModuleToUrl = useCallback(
     (modId: number) => {
       setActiveModuleId(modId);
       setQuizOpen(false);
-      const q = `?material=${encodeURIComponent(materialId)}&module=${encodeURIComponent(String(modId))}`;
+      const q = `?${buildStudySearchParams(materialId, modId, learnMode)}`;
       router.replace(`${navigationBasePath}${q}`, { scroll: false });
     },
-    [materialId, navigationBasePath, router]
+    [materialId, navigationBasePath, router, learnMode]
   );
 
   const appendModuleQuizQuestions = useCallback(async () => {
-    if (!activeModule) return;
+    if (!courseManageEnabled || !activeModule) return;
     setQuizAppendBusy(true);
     setQuizAppendError(null);
     try {
@@ -224,7 +257,7 @@ export function CoursePlayer({
     } finally {
       setQuizAppendBusy(false);
     }
-  }, [activeModule, materialId, router]);
+  }, [activeModule, courseManageEnabled, materialId, router]);
 
   const activeModuleIndex = useMemo(
     () => course.modules.findIndex((m) => m.id === activeModuleId),
@@ -249,7 +282,14 @@ export function CoursePlayer({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ materialId, moduleId }),
       });
-      if (!res.ok) throw new Error("Could not save module progress");
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof body.error === "string"
+            ? body.error
+            : "Could not save module progress"
+        );
+      }
       setCompleted((prev) => new Set([...prev, moduleId]));
       setQuizOpen(false);
       if (options?.advanceToNextModule) {
@@ -345,7 +385,7 @@ export function CoursePlayer({
     (targetMaterialId: string, modId: number) => {
       setQuizOpen(false);
       setRenamingModuleId(null);
-      const q = `?material=${encodeURIComponent(targetMaterialId)}&module=${encodeURIComponent(String(modId))}`;
+      const q = `?${buildStudySearchParams(targetMaterialId, modId, learnMode)}`;
       if (targetMaterialId === materialId) {
         setActiveModuleId(modId);
         router.replace(`${navigationBasePath}${q}`, { scroll: false });
@@ -353,7 +393,7 @@ export function CoursePlayer({
         router.push(`${navigationBasePath}${q}`);
       }
     },
-    [courseId, materialId, navigationBasePath, router]
+    [materialId, navigationBasePath, router, learnMode]
   );
 
   const showAccordion = sidebarOutlines.length > 0;
@@ -389,7 +429,7 @@ export function CoursePlayer({
         <div className="sticky top-16 space-y-6 p-6 lg:top-0 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-              Your course
+              {courseManageEnabled ? "Your course" : "Course"}
             </p>
             <h1 className="mt-1 text-xl font-semibold leading-snug tracking-tight text-zinc-900 dark:text-zinc-50">
               {course.title}
@@ -521,7 +561,7 @@ export function CoursePlayer({
                             return (
                               <div
                                 key={mod.id}
-                                className={`flex gap-1 rounded-xl p-1 transition-colors ${
+                                className={`flex gap-1 rounded-xl p-1 transition-[background-color,box-shadow] duration-200 ease-out ${
                                   rowActive
                                     ? "bg-white shadow-md shadow-red-500/10 ring-1 ring-brand-border dark:bg-zinc-900 dark:ring-brand-border/40"
                                     : "hover:bg-white/60 dark:hover:bg-zinc-900/50"
@@ -533,7 +573,7 @@ export function CoursePlayer({
                                   onClick={() =>
                                     goToModule(outline.materialId, mod.id)
                                   }
-                                  className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-2 text-left text-sm transition-all ${
+                                  className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-2 text-left text-sm ${
                                     rowActive
                                       ? "font-medium text-brand dark:text-brand-soft"
                                       : "text-zinc-700 dark:text-zinc-300"
@@ -552,28 +592,30 @@ export function CoursePlayer({
                                     {mod.title}
                                   </span>
                                 </button>
-                                <div className="flex shrink-0 flex-col justify-center gap-0.5 py-1 pr-1">
-                                  <button
-                                    type="button"
-                                    disabled={busy}
-                                    onClick={() => beginRename(fullMod)}
-                                    className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
-                                  >
-                                    Rename
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      busy || course.modules.length <= 1
-                                    }
-                                    onClick={() =>
-                                      void deleteModule(mod.id)
-                                    }
-                                    className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
+                                {courseManageEnabled ? (
+                                  <div className="flex shrink-0 flex-col justify-center gap-0.5 py-1 pr-1">
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => beginRename(fullMod)}
+                                      className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
+                                    >
+                                      Rename
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        busy || course.modules.length <= 1
+                                      }
+                                      onClick={() =>
+                                        void deleteModule(mod.id)
+                                      }
+                                      className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                ) : null}
                               </div>
                             );
                           }
@@ -585,7 +627,7 @@ export function CoursePlayer({
                               onClick={() =>
                                 goToModule(outline.materialId, mod.id)
                               }
-                              className="flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left text-sm text-zinc-700 transition-colors hover:bg-white/80 dark:text-zinc-300 dark:hover:bg-zinc-800/80"
+                              className="flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left text-sm text-zinc-700 hover:bg-white/80 dark:text-zinc-300 dark:hover:bg-zinc-800/80"
                             >
                               <span
                                 className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
@@ -655,7 +697,7 @@ export function CoursePlayer({
                   return (
                     <div
                       key={mod.id}
-                      className={`flex gap-1 rounded-xl p-1 transition-colors ${
+                      className={`flex gap-1 rounded-xl p-1 transition-[background-color,box-shadow] duration-200 ease-out ${
                         active
                           ? "bg-white shadow-md shadow-red-500/10 ring-1 ring-brand-border dark:bg-zinc-900 dark:ring-brand-border/40"
                           : "hover:bg-white/60 dark:hover:bg-zinc-900/50"
@@ -665,7 +707,7 @@ export function CoursePlayer({
                         type="button"
                         disabled={busy}
                         onClick={() => syncModuleToUrl(mod.id)}
-                        className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-2 text-left text-sm transition-all ${
+                        className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-2 text-left text-sm ${
                           active
                             ? "font-medium text-brand dark:text-brand-soft"
                             : "text-zinc-700 dark:text-zinc-300"
@@ -682,24 +724,26 @@ export function CoursePlayer({
                         </span>
                         <span className="leading-snug">{mod.title}</span>
                       </button>
-                      <div className="flex shrink-0 flex-col justify-center gap-0.5 py-1 pr-1">
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => beginRename(mod)}
-                          className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
-                        >
-                          Rename
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy || course.modules.length <= 1}
-                          onClick={() => void deleteModule(mod.id)}
-                          className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      {courseManageEnabled ? (
+                        <div className="flex shrink-0 flex-col justify-center gap-0.5 py-1 pr-1">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => beginRename(mod)}
+                            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
+                          >
+                            Rename
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy || course.modules.length <= 1}
+                            onClick={() => void deleteModule(mod.id)}
+                            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -716,6 +760,7 @@ export function CoursePlayer({
 
       <div className="min-w-0 flex-1 bg-white dark:bg-zinc-950">
         <div className="mx-auto max-w-3xl px-4 py-10 sm:px-10">
+          <AiStudyDisclaimer className="mb-6 sm:mb-8" />
           {mode === "lessons" ? (
             <>
               <header className="border-b border-zinc-100 pb-8 dark:border-zinc-900">
@@ -729,13 +774,21 @@ export function CoursePlayer({
 
               <div className="mt-10 space-y-14">
                 {activeModule.lessons.map((lesson, li) => (
-                  <LessonEditableBlocks
-                    key={li}
-                    materialId={materialId}
-                    moduleId={activeModule.id}
-                    lessonIndex={li}
-                    lesson={lesson}
-                  />
+                  <div key={li}>
+                    <LessonEditableBlocks
+                      materialId={materialId}
+                      moduleId={activeModule.id}
+                      lessonIndex={li}
+                      lesson={lesson}
+                      readOnly={!courseManageEnabled}
+                    />
+                    <LessonNotesCapture
+                      materialId={materialId}
+                      moduleId={activeModule.id}
+                      lessonIndex={li}
+                      lessonTitle={lesson.title}
+                    />
+                  </div>
                 ))}
               </div>
 
@@ -758,7 +811,7 @@ export function CoursePlayer({
             </>
           ) : !quizOpen ? (
             <>
-              <header className="border-b border-zinc-100 pb-8 dark:border-zinc-900">
+              <header className="border-b border-zinc-100 pb-5 dark:border-zinc-900">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
@@ -768,7 +821,8 @@ export function CoursePlayer({
                       {activeModule.title}
                     </h2>
                     <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-                      Question bank, review log, and quiz runs for this module.
+                      Shared bank for everyone on this course — plus your own
+                      focus questions from notes (below).
                     </p>
                   </div>
                   <Link
@@ -781,11 +835,29 @@ export function CoursePlayer({
               </header>
 
               <ModuleQuizReview
+                compact
                 quiz={moduleQuizBank}
                 reviewByIndex={reviewByIndex}
               />
 
-              <div className="mt-14 border-t border-zinc-100 pt-10 dark:border-zinc-900">
+              {activeModule ? (
+                <PersonalQuizSection
+                  materialId={materialId}
+                  moduleId={activeModule.id}
+                  blocked={quizOpen}
+                  hasNextModule={hasNextModule}
+                  onRunOpenChange={setPersonalQuizActive}
+                  onAdvanceModule={() => {
+                    const ix = course.modules.findIndex(
+                      (m) => m.id === activeModule.id
+                    );
+                    const next = course.modules[ix + 1];
+                    if (next) syncModuleToUrl(next.id);
+                  }}
+                />
+              ) : null}
+
+              <div className="mt-9 border-t border-zinc-100 pt-6 dark:border-zinc-900">
                 <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                   Module quiz
                 </h3>
@@ -797,25 +869,43 @@ export function CoursePlayer({
                   invented on each click.
                 </p>
                 <div className="mt-5 flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    disabled={quizAppendBusy || !activeModule}
-                    onClick={() => void appendModuleQuizQuestions()}
-                    className="inline-flex items-center justify-center rounded-full border border-brand-border bg-white px-5 py-2.5 text-sm font-medium text-brand-ink shadow-sm hover:bg-brand-blush disabled:opacity-50 dark:border-brand-border/50 dark:bg-zinc-950 dark:text-brand-soft dark:hover:bg-brand-blush/10"
-                  >
-                    {quizAppendBusy
-                      ? "Generating questions…"
-                      : "Generate more questions (AI)"}
-                  </button>
-                  {moduleQuizBank.length > 0 ? (
-                    <span className="text-xs text-zinc-500">
-                      Bank: {moduleQuizBank.length} question
-                      {moduleQuizBank.length === 1 ? "" : "s"} in this module
-                    </span>
+                  {courseManageEnabled ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={quizAppendBusy || !activeModule}
+                        onClick={() => void appendModuleQuizQuestions()}
+                        className="inline-flex items-center justify-center rounded-full border border-brand-border bg-white px-5 py-2.5 text-sm font-medium text-brand-ink shadow-sm hover:bg-brand-blush disabled:opacity-50 dark:border-brand-border/50 dark:bg-zinc-950 dark:text-brand-soft dark:hover:bg-brand-blush/10"
+                      >
+                        {quizAppendBusy
+                          ? "Generating questions…"
+                          : "Generate more questions (AI)"}
+                      </button>
+                      {moduleQuizBank.length > 0 ? (
+                        <span className="text-xs text-zinc-500">
+                          Bank: {moduleQuizBank.length} question
+                          {moduleQuizBank.length === 1 ? "" : "s"} in this
+                          module
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium text-amber-800 dark:text-amber-200">
+                          No questions yet — generate a batch to start the quiz.
+                        </span>
+                      )}
+                    </>
                   ) : (
-                    <span className="text-xs font-medium text-amber-800 dark:text-amber-200">
-                      No questions yet — generate a batch to start the quiz.
-                    </span>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Question bank is managed by the course creator.
+                      {moduleQuizBank.length > 0 ? (
+                        <>
+                          {" "}
+                          Bank: {moduleQuizBank.length} question
+                          {moduleQuizBank.length === 1 ? "" : "s"}.
+                        </>
+                      ) : (
+                        <> No questions in this module yet.</>
+                      )}
+                    </p>
                   )}
                 </div>
                 {quizAppendError ? (
@@ -856,7 +946,7 @@ export function CoursePlayer({
                 ) : null}
                 <button
                   type="button"
-                  disabled={moduleQuizBank.length === 0}
+                  disabled={moduleQuizBank.length === 0 || personalQuizActive}
                   onClick={() => {
                     setQuizSessionEpoch((e) => e + 1);
                     setQuizOpen(true);
@@ -864,7 +954,9 @@ export function CoursePlayer({
                   title={
                     moduleQuizBank.length === 0
                       ? "Generate questions first"
-                      : undefined
+                      : personalQuizActive
+                        ? "Finish your focus quiz first"
+                        : undefined
                   }
                   className="mt-6 inline-flex items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
                 >
@@ -911,7 +1003,9 @@ export function CoursePlayer({
       </div>
     </div>
     <div className="fixed bottom-6 right-6 z-[100] flex flex-col items-end gap-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-      <CourseRefineDrawer materialId={materialId} docked />
+      {courseManageEnabled ? (
+        <CourseRefineDrawer materialId={materialId} docked />
+      ) : null}
       <StudyChatDrawer
         materialId={materialId}
         moduleId={activeModuleId}

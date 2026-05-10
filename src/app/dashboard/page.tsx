@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseDashboardList } from "@/components/CourseDashboardList";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
@@ -21,9 +22,21 @@ export default async function DashboardPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
+  if (!user) {
+    redirect("/login?next=/dashboard");
+  }
+
+  const ownerId = user.id;
+  if (!ownerId) {
+    redirect("/login?next=/dashboard");
+  }
+
   const primary = await supabase
     .from("courses")
-    .select("id, title, description, created_at, sort_order, is_public")
+    .select(
+      "id, title, description, created_at, sort_order, is_public, user_id"
+    )
+    .eq("user_id", ownerId)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
 
@@ -31,13 +44,16 @@ export default async function DashboardPage() {
     primary.error && missingIsPublicColumn(primary.error)
       ? await supabase
           .from("courses")
-          .select("id, title, description, created_at, sort_order")
+          .select("id, title, description, created_at, sort_order, user_id")
+          .eq("user_id", ownerId)
           .order("sort_order", { ascending: true })
           .order("created_at", { ascending: true })
       : null;
 
-  const courses =
+  const rawRows =
     fallback && !fallback.error ? fallback.data : primary.data;
+
+  const courses = (rawRows ?? []).filter((row) => row.user_id === ownerId);
 
   return (
     <>
@@ -56,9 +72,12 @@ export default async function DashboardPage() {
                 {user?.email ? (
                   <>
                     Signed in as{" "}
-                    <span className="font-medium text-zinc-900 dark:text-zinc-200">
+                    <Link
+                      href="/dashboard/profile"
+                      className="font-medium text-zinc-900 underline-offset-2 hover:text-brand hover:underline dark:text-zinc-200 dark:hover:text-brand-soft"
+                    >
                       {user.email}
-                    </span>
+                    </Link>
                   </>
                 ) : (
                   "Loading profile…"
@@ -90,7 +109,7 @@ export default async function DashboardPage() {
               </Link>
             </div>
           ) : (
-            <CourseDashboardList courses={courses} />
+            <CourseDashboardList courses={courses} viewerUserId={ownerId} />
           )}
         </div>
       </main>

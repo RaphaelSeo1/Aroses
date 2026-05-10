@@ -1,11 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import {
-  AppHeader,
-  HEADER_NAV_NEUTRAL,
-  HEADER_NAV_PRIMARY,
-} from "@/components/AppHeader";
+import { AppHeader } from "@/components/AppHeader";
 import { ExploreCourseOutline } from "@/components/ExploreCourseOutline";
+import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { APP_NAME } from "@/lib/brand";
 import { exploreOutlineFromRpcPayload } from "@/lib/explore-course-outline";
@@ -16,7 +13,6 @@ const UUID_RE =
 
 type Props = {
   params: Promise<{ courseId: string }>;
-  searchParams: Promise<{ view?: string }>;
 };
 
 export async function generateMetadata({ params }: Props) {
@@ -35,9 +31,8 @@ export async function generateMetadata({ params }: Props) {
   return { title: `${course.title} — Explore — ${APP_NAME}` };
 }
 
-export default async function ExploreCoursePage({ params, searchParams }: Props) {
+export default async function ExploreCoursePage({ params }: Props) {
   const { courseId } = await params;
-  const { view } = await searchParams;
   if (!UUID_RE.test(courseId)) notFound();
 
   const supabase = await createClient();
@@ -63,9 +58,7 @@ export default async function ExploreCoursePage({ params, searchParams }: Props)
     : exploreOutlineFromRpcPayload(outlineRaw);
 
   const isOwner = Boolean(user && user.id === course.user_id);
-  /** Same page without owner-only banner & edit — mirrors a visitor’s experience. */
-  const previewAsVisitor = view === "public";
-  const showOwnerChrome = isOwner && !previewAsVisitor;
+  const studyHref = `/explore/${course.id}/study`;
 
   return (
     <>
@@ -75,12 +68,11 @@ export default async function ExploreCoursePage({ params, searchParams }: Props)
             <HeaderNavLoggedIn />
           ) : (
             <>
-              <Link href="/login" className={HEADER_NAV_NEUTRAL}>
-                Log in
-              </Link>
-              <Link href="/signup" className={HEADER_NAV_PRIMARY}>
+              <HeaderNavLink href="/explore">Explore</HeaderNavLink>
+              <HeaderNavLink href="/login">Log in</HeaderNavLink>
+              <HeaderNavLink href="/signup" variant="primary">
                 Sign up
-              </Link>
+              </HeaderNavLink>
             </>
           )
         }
@@ -117,18 +109,8 @@ export default async function ExploreCoursePage({ params, searchParams }: Props)
             </p>
           )}
 
-          <ExploreCourseOutline groups={outlineGroups} />
-
-          {outlineGroups.length === 0 && !outlineError ? (
-            <p className="mt-10 text-sm text-zinc-500 dark:text-zinc-400">
-              When this course has generated lessons, module titles will appear
-              here for visitors. Lesson text and quizzes always stay private on
-              your dashboard until you share a study link.
-            </p>
-          ) : null}
-
           {outlineError ? (
-            <p className="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            <p className="mt-8 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
               Public course outline requires migration{" "}
               <code className="rounded bg-amber-100/80 px-1.5 py-0.5 text-xs dark:bg-amber-900/60">
                 009_explore_course_outline.sql
@@ -138,25 +120,36 @@ export default async function ExploreCoursePage({ params, searchParams }: Props)
             </p>
           ) : null}
 
-          {previewAsVisitor && isOwner ? (
-            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white/90 px-4 py-3 text-sm text-zinc-700 shadow-sm dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-200">
-              <span>Previewing how visitors see this listing.</span>
-              <Link
-                href={`/explore/${course.id}`}
-                className="font-semibold text-brand hover:underline dark:text-brand-soft"
-              >
-                Exit preview
-              </Link>
-            </div>
+          <ExploreCourseOutline groups={outlineGroups} />
+
+          {outlineGroups.length === 0 && !outlineError ? (
+            <p className="mt-10 text-sm text-zinc-500 dark:text-zinc-400">
+              When this course has generated lessons, a{" "}
+              <strong className="font-medium text-zinc-700 dark:text-zinc-300">
+                Course structure
+              </strong>{" "}
+              outline will show here. Use{" "}
+              <strong className="font-medium text-zinc-700 dark:text-zinc-300">
+                Start learning
+              </strong>{" "}
+              whenever you&apos;re ready for full lessons and quizzes.
+            </p>
           ) : null}
 
-          {showOwnerChrome ? (
-            <p className="mt-8 rounded-xl border border-brand-border bg-brand-blush/80 px-4 py-3 text-sm text-brand-ink dark:border-brand-border/40 dark:bg-brand-blush/8 dark:text-brand-blush">
-              You&apos;re viewing your public Explore listing. Visitors see your
-              title, description, and{" "}
-              <span className="font-medium">module titles only</span> — not lesson
-              content or quizzes. Share study links from your dashboard for full
-              access.
+          <div className="mt-10">
+            <Link
+              href={studyHref}
+              className="inline-flex w-full items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover sm:w-auto dark:bg-brand dark:hover:bg-brand-soft"
+            >
+              Start learning
+            </Link>
+          </div>
+
+          {isOwner ? (
+            <p className="mt-10 rounded-xl border border-brand-border bg-brand-blush/80 px-4 py-3 text-sm text-brand-ink dark:border-brand-border/40 dark:bg-brand-blush/8 dark:text-brand-blush">
+              This is your Explore listing. Learners use{" "}
+              <span className="font-medium">Start learning</span> for full content.
+              Edit uploads and structure from your dashboard.
             </p>
           ) : null}
 
@@ -165,37 +158,29 @@ export default async function ExploreCoursePage({ params, searchParams }: Props)
               <>
                 <Link
                   href="/dashboard/courses/new"
-                  className="inline-flex rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 hover:bg-brand-hover dark:bg-brand"
+                  className="inline-flex rounded-full border border-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-900"
                 >
                   Create your own course
                 </Link>
-                {showOwnerChrome ? (
-                  <>
-                    <Link
-                      href={`/dashboard/courses/${course.id}`}
-                      className="inline-flex rounded-full border border-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-900"
-                    >
-                      Edit in dashboard
-                    </Link>
-                    <Link
-                      href={`/explore/${course.id}?view=public`}
-                      className="inline-flex rounded-full border border-brand-border bg-white px-6 py-3 text-sm font-semibold text-brand-ink hover:bg-brand-blush dark:border-brand-border/50 dark:bg-[#1e1616]/60 dark:text-brand-blush dark:hover:bg-[#1e1616]"
-                    >
-                      View as visitor
-                    </Link>
-                  </>
+                {isOwner ? (
+                  <Link
+                    href={`/dashboard/courses/${course.id}`}
+                    className="inline-flex rounded-full border border-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-900"
+                  >
+                    Edit in dashboard
+                  </Link>
                 ) : null}
               </>
             ) : (
               <>
                 <Link
-                  href="/signup"
-                  className="inline-flex rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white hover:bg-brand-hover dark:bg-brand"
+                  href={`/signup?next=${encodeURIComponent(studyHref)}`}
+                  className="inline-flex rounded-full border border-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-900"
                 >
-                  Sign up to create yours
+                  Sign up (save progress)
                 </Link>
                 <Link
-                  href="/login"
+                  href={`/login?next=${encodeURIComponent(studyHref)}`}
                   className="inline-flex rounded-full border border-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-900"
                 >
                   Log in

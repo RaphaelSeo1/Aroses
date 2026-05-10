@@ -69,44 +69,64 @@ export function ModuleQuiz({
 
   const recordMcAttempt = useCallback(
     async (quizQuestionIndex: number, choice: number, isCorrect: boolean) => {
+      const pid = items[index]?.personalItemId;
       try {
         await fetch("/api/record-attempt", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            materialId,
-            moduleId,
-            quizQuestionIndex,
-            selectedChoice: choice,
-            isCorrect,
-          }),
+          body: JSON.stringify(
+            pid
+              ? {
+                  materialId,
+                  personalItemId: pid,
+                  selectedChoice: choice,
+                  isCorrect,
+                }
+              : {
+                  materialId,
+                  moduleId,
+                  quizQuestionIndex,
+                  selectedChoice: choice,
+                  isCorrect,
+                }
+          ),
         });
       } catch {
         /* non-blocking */
       }
     },
-    [materialId, moduleId]
+    [materialId, moduleId, items, index]
   );
 
   const recordFreeAttempt = useCallback(
     async (quizQuestionIndex: number, isCorrect: boolean) => {
+      const pid = items[index]?.personalItemId;
       try {
         await fetch("/api/record-attempt", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            materialId,
-            moduleId,
-            quizQuestionIndex,
-            responseKind: "free",
-            isCorrect,
-          }),
+          body: JSON.stringify(
+            pid
+              ? {
+                  materialId,
+                  personalItemId: pid,
+                  responseKind: "free",
+                  isCorrect,
+                }
+              : {
+                  materialId,
+                  moduleId,
+                  quizQuestionIndex,
+                  responseKind: "free",
+                  isCorrect,
+                }
+          ),
         });
       } catch {
         /* non-blocking */
       }
     },
-    [materialId, moduleId]
+    [materialId, moduleId, items, index]
   );
 
   const onMcChoose = useCallback(
@@ -116,7 +136,7 @@ export function ModuleQuiz({
       setMcRevealed(true);
       const ok = choiceIndex === displayMcq.correctIndex;
       if (!ok) setWrongAttempts((w) => w + 1);
-      await recordMcAttempt(originalQuizIndex, choiceIndex, ok);
+      void recordMcAttempt(originalQuizIndex, choiceIndex, ok);
     },
     [displayMcq, mcRevealed, originalQuizIndex, recordMcAttempt]
   );
@@ -227,7 +247,7 @@ export function ModuleQuiz({
             type="button"
             disabled={savingExit}
             onClick={() => void runComplete("review_lessons")}
-            className="inline-flex flex-1 items-center justify-center rounded-full border border-zinc-300 bg-white px-6 py-2.5 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900 sm:flex-none"
+            className="transition-none inline-flex flex-1 items-center justify-center rounded-full border border-zinc-300 bg-white px-6 py-2.5 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900 sm:flex-none"
           >
             {savingExit ? "Saving…" : "Review lessons again"}
           </button>
@@ -240,7 +260,7 @@ export function ModuleQuiz({
                 ? "This is the last module in this upload."
                 : undefined
             }
-            className="inline-flex flex-1 items-center justify-center rounded-full bg-brand px-6 py-2.5 text-sm font-medium text-white hover:bg-brand-hover disabled:opacity-60 dark:bg-brand dark:hover:bg-brand-soft sm:flex-none"
+            className="transition-none inline-flex flex-1 items-center justify-center rounded-full bg-brand px-6 py-2.5 text-sm font-medium text-white hover:bg-brand-hover disabled:opacity-60 dark:bg-brand dark:hover:bg-brand-soft sm:flex-none"
           >
             {savingExit ? "Saving…" : "Next module"}
           </button>
@@ -317,7 +337,7 @@ export function ModuleQuiz({
                       type="button"
                       disabled={mcRevealed}
                       onClick={() => void onMcChoose(i)}
-                      className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm transition-colors ${ring}`}
+                      className={`transition-none flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm ${ring}`}
                     >
                       <span className="mt-0.5 font-mono text-xs text-zinc-500">
                         {letter}.
@@ -350,7 +370,7 @@ export function ModuleQuiz({
                   <button
                     type="button"
                     onClick={goForward}
-                    className="inline-flex items-center justify-center rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                    className="transition-none inline-flex items-center justify-center rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
                     {isLast ? "See results" : "Continue"}
                   </button>
@@ -381,7 +401,7 @@ export function ModuleQuiz({
                   type="button"
                   disabled={frBusy || frText.trim().length < 2}
                   onClick={() => void gradeFree()}
-                  className="mt-3 inline-flex rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-hover disabled:opacity-50 dark:bg-brand"
+                  className="transition-none mt-3 inline-flex rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-hover disabled:opacity-50 dark:bg-brand"
                 >
                   {frBusy ? "Checking…" : "Submit answer"}
                 </button>
@@ -416,7 +436,7 @@ export function ModuleQuiz({
                   <button
                     type="button"
                     onClick={goForward}
-                    className="mt-4 inline-flex rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                    className="transition-none mt-4 inline-flex rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
                     {isLast ? "See results" : "Continue"}
                   </button>

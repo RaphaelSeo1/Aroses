@@ -9,17 +9,19 @@ export type DashboardCourseRow = {
 };
 
 /**
- * Loads a course for the dashboard. If `is_public` column is missing (migration
- * 007 not applied), falls back to a smaller select so the course page still works.
+ * Loads a course **you own** for the creator workspace (`/dashboard/courses/...`).
+ * Public courses others listed on Explore are not returned here — those use `/explore/...`.
  */
 export async function fetchCourseForDashboard(
   supabase: SupabaseClient,
-  courseId: string
+  courseId: string,
+  ownerUserId: string
 ): Promise<DashboardCourseRow | null> {
   const primary = await supabase
     .from("courses")
     .select("id, title, description, created_at, is_public")
     .eq("id", courseId)
+    .eq("user_id", ownerUserId)
     .maybeSingle();
 
   if (primary.data) {
@@ -45,6 +47,7 @@ export async function fetchCourseForDashboard(
     .from("courses")
     .select("id, title, description, created_at")
     .eq("id", courseId)
+    .eq("user_id", ownerUserId)
     .maybeSingle();
 
   if (fallback.error) {

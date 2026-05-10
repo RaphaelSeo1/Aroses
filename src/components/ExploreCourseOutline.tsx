@@ -14,8 +14,11 @@ export function ExploreCourseOutline({
         Course structure
       </h2>
       <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-        Module titles and section names only — full lessons and quizzes stay with
-        the creator unless they share a study link.
+        Module titles and section names — use{" "}
+        <strong className="font-medium text-zinc-800 dark:text-zinc-200">
+          Start learning
+        </strong>{" "}
+        below for full lesson text and quizzes.
       </p>
       <div className="mt-6 space-y-8">
         {groups.map((g) => (

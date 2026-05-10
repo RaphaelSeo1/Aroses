@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import type { StudyChatTurn } from "@/types/study-chat";
 
 type Props = {
@@ -26,6 +27,7 @@ export function StudyChatDrawer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setMessages([]);
@@ -35,6 +37,23 @@ export function StudyChatDrawer({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, open, loading]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const t = window.setTimeout(() => {
+      panelRef.current?.querySelector<HTMLElement>("textarea")?.focus();
+    }, 100);
+    return () => window.clearTimeout(t);
+  }, [open]);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -108,105 +127,101 @@ export function StudyChatDrawer({
               : "fixed bottom-6 right-6 z-[100] min-w-[11rem] rounded-2xl bg-brand px-5 py-3 text-sm font-semibold text-white shadow-xl shadow-red-600/25 ring-1 ring-white/10 hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
           }
         >
-          Ask AI
+          Ask {AI_ASSISTANT_NAME}!
         </button>
       )}
 
-      {open && (
+      {open ? (
         <div
-          className="fixed inset-0 z-50 flex justify-end bg-zinc-950/50 p-0 backdrop-blur-[2px] sm:p-4 sm:pl-12"
+          ref={panelRef}
           role="dialog"
-          aria-label="Study assistant chat"
-          onClick={() => setOpen(false)}
+          aria-modal="false"
+          aria-label={`${AI_ASSISTANT_NAME} study chat`}
+          className="fixed top-14 right-0 z-[100] flex h-[calc(100vh-3.5rem)] w-[min(100vw-12px,22rem)] flex-col border-l border-zinc-200/95 bg-white dark:border-zinc-700 dark:bg-zinc-950 sm:top-16 sm:h-[calc(100vh-4rem)] sm:w-[min(100vw-16px,26rem)]"
+          style={{
+            boxShadow:
+              "-12px 0 40px -12px rgba(0,0,0,0.12), -4px 0 16px rgba(0,0,0,0.06)",
+          }}
         >
-          <div
-            className="flex h-full w-full max-w-md flex-col bg-white shadow-2xl dark:bg-zinc-950 sm:h-[min(580px,calc(100vh-2rem))] sm:max-h-[calc(100vh-2rem)] sm:rounded-3xl sm:ring-1 sm:ring-zinc-200/80 dark:sm:ring-zinc-700"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-brand-border bg-gradient-to-r from-brand-blush/90 to-white px-5 py-4 dark:border-brand-border/40 dark:from-[#1e1616]/40 dark:to-zinc-950">
-              <div>
-                <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                  Study assistant
-                </p>
-                <p className="text-[11px] text-zinc-500">
-                  {variant === "legacy"
-                    ? "Answers use your summary and practice questions only."
-                    : `Answers use this module’s content only.${quizOpen ? " Quiz mode: won’t reveal MCQ answers." : ""}`}
-                </p>
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-brand-border bg-gradient-to-r from-brand-blush/90 to-white px-4 py-3 dark:border-brand-border/40 dark:from-[#1e1616]/40 dark:to-zinc-950 sm:px-5 sm:py-4">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                {AI_ASSISTANT_NAME}
+              </p>
+              <p className="text-[11px] leading-snug text-zinc-500">
+                {variant === "legacy"
+                  ? "Uses your summary and practice questions only."
+                  : `Side-by-side with your lesson.${quizOpen ? " Quiz mode: won’t reveal MCQ answers." : ""}`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="shrink-0 rounded-lg px-2.5 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+            {messages.length === 0 ? (
+              <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                {`Ask ${AI_ASSISTANT_NAME} anything about what you're viewing — definitions, intuition, or how ideas connect. Answers only use what's in your generated course.`}
+              </p>
+            ) : null}
+            {messages.map((m, i) => (
+              <div
+                key={i}
+                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`max-w-[95%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                    m.role === "user"
+                      ? "bg-brand text-white"
+                      : "bg-zinc-100 text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100"
+                  }`}
+                >
+                  <p className="whitespace-pre-wrap">{m.content}</p>
+                </div>
               </div>
+            ))}
+            {loading ? (
+              <p className="text-xs text-zinc-500">Thinking…</p>
+            ) : null}
+            {error ? (
+              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+            ) : null}
+            <div ref={bottomRef} />
+          </div>
+
+          <div className="shrink-0 border-t border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex gap-2">
+              <textarea
+                rows={2}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+                placeholder={`Ask ${AI_ASSISTANT_NAME}…`}
+                className="min-h-[44px] flex-1 resize-none rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                disabled={loading}
+              />
               <button
                 type="button"
-                onClick={() => setOpen(false)}
-                className="rounded-lg px-2 py-1 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                disabled={loading || !input.trim()}
+                onClick={() => void send()}
+                className="shrink-0 self-end rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
               >
-                Close
+                Send
               </button>
-            </div>
-
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
-              {messages.length === 0 && (
-                <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                  Ask anything about what you&apos;re viewing — definitions,
-                  intuition, or how ideas connect. It only knows what&apos;s in
-                  your generated course.
-                </p>
-              )}
-              {messages.map((m, i) => (
-                <div
-                  key={i}
-                  className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-                >
-                  <div
-                    className={`max-w-[90%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
-                      m.role === "user"
-                        ? "bg-brand text-white"
-                        : "bg-zinc-100 text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100"
-                    }`}
-                  >
-                    <p className="whitespace-pre-wrap">{m.content}</p>
-                  </div>
-                </div>
-              ))}
-              {loading && (
-                <p className="text-xs text-zinc-500">Thinking…</p>
-              )}
-              {error && (
-                <p className="text-sm text-red-600 dark:text-red-400">
-                  {error}
-                </p>
-              )}
-              <div ref={bottomRef} />
-            </div>
-
-            <div className="border-t border-zinc-200 p-3 dark:border-zinc-800">
-              <div className="flex gap-2">
-                <textarea
-                  rows={2}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void send();
-                    }
-                  }}
-                  placeholder="Ask a question…"
-                  className="min-h-[44px] flex-1 resize-none rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-                  disabled={loading}
-                />
-                <button
-                  type="button"
-                  disabled={loading || !input.trim()}
-                  onClick={() => void send()}
-                  className="shrink-0 self-end rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
-                >
-                  Send
-                </button>
-              </div>
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </>
   );
 }

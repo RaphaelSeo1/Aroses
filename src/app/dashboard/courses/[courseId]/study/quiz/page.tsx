@@ -13,12 +13,14 @@ const UUID_RE =
 
 type Props = {
   params: Promise<{ courseId: string }>;
-  searchParams: Promise<{ material?: string; module?: string }>;
+  searchParams: Promise<{ material?: string; module?: string; mode?: string }>;
 };
 
 export default async function StudyQuizPracticePage({ params, searchParams }: Props) {
   const { courseId } = await params;
-  const { material: materialId, module: moduleParam } = await searchParams;
+  const { material: materialId, module: moduleParam, mode: modeParam } =
+    await searchParams;
+  const learnMode = modeParam === "learn";
 
   const moduleNum =
     typeof moduleParam === "string" ? Number(moduleParam) : Number.NaN;
@@ -30,10 +32,20 @@ export default async function StudyQuizPracticePage({ params, searchParams }: Pr
 
   const supabase = await createClient();
 
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect(
+      `/login?next=${encodeURIComponent(`/dashboard/courses/${courseId}/study/quiz`)}`
+    );
+  }
+
   const { data: courseRow } = await supabase
     .from("courses")
     .select("id, title, description")
     .eq("id", courseId)
+    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!courseRow) notFound();
@@ -75,8 +87,13 @@ export default async function StudyQuizPracticePage({ params, searchParams }: Pr
     row = data;
   }
 
+  const studyFallback =
+    learnMode
+      ? `/dashboard/courses/${courseId}/study?mode=learn`
+      : `/dashboard/courses/${courseId}/study`;
+
   if (!row) {
-    redirect(`/dashboard/courses/${courseId}/study`);
+    redirect(studyFallback);
   }
 
   const payload = row.course_payload as CoursePayload | null | undefined;
@@ -87,7 +104,7 @@ export default async function StudyQuizPracticePage({ params, searchParams }: Pr
     payload.modules.length > 0;
 
   if (!hasNewCourse || !payload) {
-    redirect(`/dashboard/courses/${courseId}/study`);
+    redirect(studyFallback);
   }
 
   let completedModuleIds: number[] = [];
@@ -153,7 +170,13 @@ export default async function StudyQuizPracticePage({ params, searchParams }: Pr
     };
   });
 
-  const lessonsHref = `/dashboard/courses/${courseId}/study?material=${encodeURIComponent(row.id)}${initialModuleFromUrl != null ? `&module=${encodeURIComponent(String(initialModuleFromUrl))}` : ""}`;
+  const lessonsQs = new URLSearchParams();
+  lessonsQs.set("material", row.id);
+  if (initialModuleFromUrl != null) {
+    lessonsQs.set("module", String(initialModuleFromUrl));
+  }
+  if (learnMode) lessonsQs.set("mode", "learn");
+  const lessonsHref = `/dashboard/courses/${courseId}/study?${lessonsQs.toString()}`;
 
   return (
     <>
@@ -196,6 +219,8 @@ export default async function StudyQuizPracticePage({ params, searchParams }: Pr
         sidebarOutlines={sidebarOutlines}
         initialModuleFromUrl={initialModuleFromUrl}
         mode="quiz"
+        courseManageEnabled={!learnMode}
+        learnMode={learnMode}
       />
     </>
   );

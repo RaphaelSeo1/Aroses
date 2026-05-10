@@ -26,7 +26,7 @@ export function ModuleMosaic({
       {Array.from({ length: tiles }).map((_, i) => (
         <span
           key={i}
-          className={`h-2.5 w-2.5 rounded-sm transition-colors sm:h-3 sm:w-3 ${
+          className={`h-2.5 w-2.5 rounded-sm transition-[background-color,opacity,transform] duration-200 ease-out sm:h-3 sm:w-3 ${
             i < filled
               ? unit
                 ? "bg-brand shadow-sm shadow-red-600/25"
