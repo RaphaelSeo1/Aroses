@@ -1,5 +1,5 @@
 import { RateLimitError, APIError } from "@anthropic-ai/sdk";
-import { PDFParse } from "pdf-parse";
+import pdfParse from "pdf-parse";
 import { generateCourseFromMaterial } from "@/lib/ai/study-generation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -132,9 +132,8 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
   });
 
   let text = "";
-  const parser = new PDFParse({ data: buf });
   try {
-    const parsed = await parser.getText();
+    const parsed = await pdfParse(buf);
     text = (parsed.text ?? "").trim();
   } catch {
     await failJob(
@@ -144,8 +143,6 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
       "Could not read PDF. Try another file."
     );
     return;
-  } finally {
-    await parser.destroy();
   }
 
   if (text.length < 80) {

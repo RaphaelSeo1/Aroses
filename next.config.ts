@@ -9,7 +9,8 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: projectRoot,
   },
-  serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
+  /** pdf-parse@1.x bundles its own PDF.js build; keep external so the server bundle matches Node resolution. */
+  serverExternalPackages: ["pdf-parse"],
 };
 
 export default nextConfig;

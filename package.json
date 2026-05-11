@@ -17,7 +17,7 @@
     "@supabase/supabase-js": "^2.105.4",
     "katex": "^0.16.45",
     "next": "16.2.6",
-    "pdf-parse": "^2.4.5",
+    "pdf-parse": "1.1.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
