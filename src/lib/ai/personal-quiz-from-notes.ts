@@ -6,7 +6,7 @@ import {
 import type { CourseQuizItem, CourseQuizMcqItem } from "@/types/course";
 import { isQuizMcq } from "@/types/course";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 
 const MAX_CONTEXT_CHARS = 12_000;
 

@@ -8,14 +8,6 @@ import { parseCoursePayload, stripJsonFence } from "@/lib/ai/course-payload";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import type { CoursePayload } from "@/types/course";
 
-/** Default Sonnet; set `ANTHROPIC_COURSE_MODEL` for a faster model (see Anthropic model IDs). */
-function resolveCourseModel(): string {
-  return (
-    process.env.ANTHROPIC_COURSE_MODEL?.trim() ||
-    "claude-sonnet-4-20250514"
-  );
-}
-
 /**
  * Default **`fast`**: small enough JSON to usually finish under Vercel’s ~5m function cap.
  * Set `COURSE_BUILD_PROFILE=balanced` or `full` for richer courses (slower / more timeouts).
@@ -29,14 +21,26 @@ function resolveCourseBuildProfile(): CourseBuildProfile {
   return "fast";
 }
 
+/**
+ * Optional `ANTHROPIC_COURSE_MODEL` overrides everything.
+ * `fast` defaults to Haiku so one job usually finishes inside the Vercel wall clock.
+ */
+function resolveCourseModel(profile: CourseBuildProfile): string {
+  const override = process.env.ANTHROPIC_COURSE_MODEL?.trim();
+  if (override) return override;
+  if (profile === "fast") return "claude-3-5-haiku-20241022";
+  return "claude-sonnet-4-6";
+}
+
 /** Rough input budget — large PDFs + long outputs often hit limits or timeouts. */
 const MAX_MATERIAL_CHARS = 120_000;
+const FAST_MATERIAL_CHARS = 72_000;
 
-function truncateMaterial(text: string): string {
+function truncateMaterial(text: string, maxChars: number = MAX_MATERIAL_CHARS): string {
   const t = text.trim();
-  if (t.length <= MAX_MATERIAL_CHARS) return t;
-  const head = Math.floor(MAX_MATERIAL_CHARS * 0.72);
-  const tail = MAX_MATERIAL_CHARS - head - 80;
+  if (t.length <= maxChars) return t;
+  const head = Math.floor(maxChars * 0.72);
+  const tail = maxChars - head - 80;
   return `${t.slice(0, head)}\n\n[ … middle of document omitted for processing … ]\n\n${t.slice(-tail)}`;
 }
 
@@ -130,10 +134,11 @@ async function createMessageWithRetries(
   anthropic: Anthropic,
   params: Omit<Parameters<Anthropic["messages"]["create"]>[0], "stream"> & {
     stream?: false;
-  }
+  },
+  opts?: { maxAttempts?: number }
 ): Promise<Anthropic.Message> {
   let lastErr: unknown;
-  const maxAttempts = 5;
+  const maxAttempts = opts?.maxAttempts ?? 5;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       return await anthropic.messages.create({ ...params, stream: false });
@@ -163,19 +168,24 @@ function extractTextBlock(msg: Anthropic.Message): string {
 
 async function repairPayloadJson(
   anthropic: Anthropic,
-  brokenAssistantText: string
+  brokenAssistantText: string,
+  profile: CourseBuildProfile
 ): Promise<CoursePayload> {
   const prompt = `You previously returned JSON that could not be parsed or validated. Output ONLY a single valid JSON object for the same course schema (title, description, modules with lessons and quiz arrays). Fix truncation, stray commas, or malformed strings. No markdown, no commentary.
 
 Broken output (repair it):
 ${brokenAssistantText.slice(0, 120_000)}`;
 
-  const msg = await createMessageWithRetries(anthropic, {
-    model: resolveCourseModel(),
-    max_tokens: 32768,
-    temperature: 0.1,
-    messages: [{ role: "user", content: prompt }],
-  });
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: resolveCourseModel(profile),
+      max_tokens: profile === "fast" ? 16_384 : 32_768,
+      temperature: 0.1,
+      messages: [{ role: "user", content: prompt }],
+    },
+    { maxAttempts: profile === "fast" ? 2 : 4 }
+  );
 
   const text = extractTextBlock(msg);
   let parsed: unknown;
@@ -203,15 +213,22 @@ export async function generateCourseFromMaterial(
     maxRetries: 0,
   });
 
-  const trimmed = truncateMaterial(materialText);
+  const trimmed = truncateMaterial(
+    materialText,
+    profile === "fast" ? FAST_MATERIAL_CHARS : MAX_MATERIAL_CHARS
+  );
   const instruction = courseInstruction(trimmed, profile);
 
-  const msg = await createMessageWithRetries(anthropic, {
-    model: resolveCourseModel(),
-    max_tokens: profile === "fast" ? 24_576 : 32_768,
-    temperature: 0.2,
-    messages: [{ role: "user", content: instruction }],
-  });
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: resolveCourseModel(profile),
+      max_tokens: profile === "fast" ? 18_432 : 32_768,
+      temperature: 0.2,
+      messages: [{ role: "user", content: instruction }],
+    },
+    { maxAttempts: profile === "fast" ? 2 : 5 }
+  );
 
   const rawText = extractTextBlock(msg);
   const stopReason = (msg as { stop_reason?: string }).stop_reason;
@@ -226,7 +243,7 @@ export async function generateCourseFromMaterial(
     parsed = JSON.parse(stripJsonFence(rawText));
   } catch {
     try {
-      return await repairPayloadJson(anthropic, rawText);
+      return await repairPayloadJson(anthropic, rawText, profile);
     } catch (e) {
       console.error(e);
       throw new Error("Claude did not return valid JSON");
@@ -238,7 +255,7 @@ export async function generateCourseFromMaterial(
   } catch (e) {
     console.warn("[study-generation] Payload validation failed; repairing", e);
     try {
-      return await repairPayloadJson(anthropic, rawText);
+      return await repairPayloadJson(anthropic, rawText, profile);
     } catch {
       throw e;
     }

@@ -7,8 +7,11 @@ const UUID_RE =
 
 type Params = { params: Promise<{ jobId: string }> };
 
-/** If the serverless worker dies (e.g. Vercel wall), `running` may never flip — treat as failed for polling UX. */
-const STALE_MS = 7 * 60 * 1000;
+/**
+ * Vercel Pro `maxDuration` is 300s — if the worker dies, `running` sticks until we synthesize failure.
+ * Use ~6.5m so users are not stuck until the 11m client poll.
+ */
+const STALE_MS = 6 * 60 * 1000 + 30_000;
 
 export async function GET(_request: Request, ctx: Params) {
   const { jobId } = await ctx.params;

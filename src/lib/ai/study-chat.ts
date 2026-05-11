@@ -5,7 +5,7 @@ import { isQuizMcq } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
 import type { StudyChatTurn } from "@/types/study-chat";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 
 export function buildStudyContextText(
   payload: CoursePayload,

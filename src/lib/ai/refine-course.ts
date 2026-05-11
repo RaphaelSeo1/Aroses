@@ -7,7 +7,7 @@ import {
 import type { CoursePayload } from "@/types/course";
 import { parseCoursePayload, stripJsonFence } from "@/lib/ai/course-payload";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 
 /** Large courses need plenty of headroom for full JSON round-trip. */
 const REFINE_MAX_OUTPUT_TOKENS = 64_000;

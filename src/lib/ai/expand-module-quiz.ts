@@ -5,7 +5,7 @@ import {
 } from "@/lib/ai/course-payload";
 import type { CourseModule, CourseQuizItem } from "@/types/course";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 
 const MAX_LESSON_CHARS = 28_000;
 

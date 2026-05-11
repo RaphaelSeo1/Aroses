@@ -5,7 +5,7 @@ import {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-6";
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
