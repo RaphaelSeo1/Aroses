@@ -54,7 +54,8 @@ function resolveCourseModel(profile: CourseBuildProfile): string {
 
 /** Rough input budget — large PDFs + long outputs often hit limits or timeouts. */
 const MAX_MATERIAL_CHARS = 120_000;
-const FAST_MATERIAL_CHARS = 72_000;
+/** Aggressively small for `fast` so outline/module calls stay quick. */
+const FAST_MATERIAL_CHARS = 40_000;
 
 function truncateMaterial(text: string, maxChars: number = MAX_MATERIAL_CHARS): string {
   const t = text.trim();
@@ -291,7 +292,8 @@ function outlineInstruction(
     moduleCount =
       "Use **2 to 8** modules depending on how much content the source has.";
   } else if (profile === "fast") {
-    moduleCount = "Use **2 to 5** modules.";
+    moduleCount =
+      "Use **2 to 3** modules so the course can be built very quickly.";
   } else {
     moduleCount = "Use **2 to 6** modules.";
   }
@@ -322,7 +324,7 @@ function moduleQuizRules(profile: CourseBuildProfile): string {
     return `QUIZ (this module only): **at least 8** questions, with **at least 4** type free_response (include reference_answer snake_case). The rest MCQ with exactly 4 choices each.`;
   }
   if (profile === "fast") {
-    return `QUIZ (this module only): **at least 5** questions, with **at least 2** type free_response (reference_answer required). The rest MCQ, 4 choices each.`;
+    return `QUIZ (this module only): **at least 3** questions, with **at least 1** type free_response (reference_answer required). The rest MCQ, 4 choices each.`;
   }
   return `QUIZ (this module only): **at least 6** questions, with **at least 3** type free_response (reference_answer required). Mix MCQ and free-response. MCQs: exactly 4 choices.`;
 }
@@ -369,11 +371,11 @@ ${brokenAssistantText.slice(0, 60_000)}`;
     anthropic,
     {
       model: resolveCourseModel(profile),
-      max_tokens: 8192,
+      max_tokens: profile === "fast" ? 4096 : 8192,
       temperature: 0.1,
       messages: [{ role: "user", content: prompt }],
     },
-    { maxAttempts: profile === "fast" ? 2 : 3 }
+    { maxAttempts: profile === "fast" ? 1 : 3 }
   );
 
   const text = extractTextBlock(msg);
@@ -444,11 +446,11 @@ export async function generateCourseOutlineFromMaterial(
     anthropic,
     {
       model: resolveCourseModel(profile),
-      max_tokens: profile === "fast" ? 6144 : 8192,
+      max_tokens: profile === "fast" ? 4096 : 8192,
       temperature: 0.2,
       messages: [{ role: "user", content: instruction }],
     },
-    { maxAttempts: profile === "fast" ? 2 : 4 }
+    { maxAttempts: profile === "fast" ? 1 : 4 }
   );
 
   const rawText = extractTextBlock(msg);
@@ -468,7 +470,7 @@ export async function generateCourseOutlineFromMaterial(
 }
 
 function moduleMaxTokens(profile: CourseBuildProfile): number {
-  if (profile === "fast") return 14_336;
+  if (profile === "fast") return 4_096;
   if (profile === "full") return 30_720;
   return 24_576;
 }
@@ -508,7 +510,7 @@ export async function generateCourseModuleFromMaterial(
       temperature: 0.2,
       messages: [{ role: "user", content: instruction }],
     },
-    { maxAttempts: profile === "fast" ? 2 : 5 }
+    { maxAttempts: profile === "fast" ? 1 : 5 }
   );
 
   const rawText = extractTextBlock(msg);

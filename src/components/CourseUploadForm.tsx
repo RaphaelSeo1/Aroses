@@ -197,7 +197,7 @@ async function pollPdfIngestJob(
           ? ` Elapsed: ${formatElapsedShort(Date.now() - started)}.`
           : "";
       onProgress?.(
-        `Reading your PDF + drafting outline — usually ~1–5 min.${elapsedPart} Next: each course module is built one at a time (typical full run ~5–25 min; big PDFs longer).`
+        `Outline step: download → extract text → AI drafts the course structure (~1–5 min total; most of that is usually the model, not reading the PDF).${elapsedPart} Then each module is another AI step (~5–25 min typical full run).`
       );
     }
 
@@ -547,8 +547,9 @@ export function CourseUploadForm({
         <p className="mt-2 text-xs text-zinc-500">
           Text must be selectable in the PDF for best results (scanned pages may
           not extract well). Multiple files are processed one after another.
-          Large courses are built in several server steps (outline, then each
-          module); keep this tab open until the spinner finishes.
+          Builds run through this app in several server steps (outline, then
+          each module), so they are slower than pasting the same PDF once into a
+          chat. Keep this tab open until the spinner finishes.
         </p>
       </div>
 
