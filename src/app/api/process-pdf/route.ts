@@ -9,9 +9,9 @@ export const runtime = "nodejs";
 
 /**
  * Must be a **numeric literal** (Next.js 16). Keep in sync with `PDF_PROCESS_MAX_DURATION_SEC`
- * in `@/lib/pdf-route-duration`. Hobby: ≤60. Pro: use **300** for long PDF builds.
+ * in `@/lib/pdf-route-duration`. **Vercel Pro:** 300s max. **Hobby:** use **60** or deploy fails.
  */
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export const dynamic = "force-dynamic";
 
