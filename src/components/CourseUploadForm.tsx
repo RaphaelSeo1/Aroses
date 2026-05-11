@@ -505,6 +505,8 @@ export function CourseUploadForm({
         <p className="mt-2 text-xs text-zinc-500">
           Text must be selectable in the PDF for best results (scanned pages may
           not extract well). Multiple files are processed one after another.
+          Large courses are built in several server steps (outline, then each
+          module); keep this tab open until the spinner finishes.
         </p>
       </div>
 
