@@ -115,7 +115,7 @@ function LoginForm({ nextPath }: { nextPath: string }) {
 function LoginPageInner() {
   const searchParams = useSearchParams();
   const safeNext = parseSafeInternalNext(searchParams.get("next"));
-  const nextPath = safeNext ?? "/dashboard";
+  const nextPath = safeNext ?? "/";
   const signupHref = safeNext
     ? `/signup?next=${encodeURIComponent(safeNext)}`
     : "/signup";

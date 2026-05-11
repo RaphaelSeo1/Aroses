@@ -54,7 +54,7 @@ export type CoursePayload = {
   modules: CourseModule[];
 };
 
-/** Lightweight rows for study sidebar (all PDF builds in the course). */
+/** Lightweight rows for study sidebar (every PDF / study material in the course). */
 export type SidebarMaterialOutline = {
   materialId: string;
   fileName: string;

@@ -32,6 +32,17 @@ type Props = {
    * avoids a second divider + huge empty strip between lines.
    */
   compact?: boolean;
+  /** Short line under the title (e.g. scope vs focus cards). */
+  bankScopeHint?: string;
+  /** Omit title + description (e.g. parent supplies heading and tabs). */
+  showHeader?: boolean;
+  /** Override copy when every question has zero attempts (default mentions module quiz). */
+  allUnattemptedHint?: string;
+  /**
+   * When set, filters (+ optional scope hint) stay sticky at the top of this
+   * scrollable area; only the question list scrolls.
+   */
+  scrollAreaClassName?: string;
 };
 
 export function ModuleQuizReview({
@@ -39,6 +50,10 @@ export function ModuleQuizReview({
   reviewByIndex,
   embedded,
   compact,
+  bankScopeHint,
+  showHeader = true,
+  allUnattemptedHint,
+  scrollAreaClassName,
 }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
@@ -106,70 +121,60 @@ export function ModuleQuizReview({
     },
   ];
 
-  return (
-    <section
-      className={
-        embedded
-          ? "mt-0 border-0 pt-0"
-          : compact
-            ? "mt-5 border-0 pt-1 dark:border-transparent"
-            : "mt-10 border-t border-zinc-100 pt-8 dark:border-zinc-900"
-      }
-    >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h3
-            className={
-              embedded
-                ? "text-base font-semibold text-zinc-900 dark:text-zinc-100"
-                : "text-lg font-semibold text-zinc-900 dark:text-zinc-100"
-            }
-          >
-            Question review
-          </h3>
-          <p
-            className={
-              embedded
-                ? "mt-1 text-xs text-zinc-600 dark:text-zinc-400"
-                : "mt-1 max-w-xl text-sm text-zinc-600 dark:text-zinc-400"
-            }
-          >
-            {embedded
-              ? "Your attempts and answer key — filters below."
-              : "Every bank question for this module, with your latest result and the answer key. MC options shuffle during the quiz; choices below are in source order."}
-          </p>
-        </div>
-      </div>
+  const filterMargin =
+    scrollAreaClassName ? "" : showHeader ? "mt-4" : "mt-3";
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        {filterPills.map(({ id, label, hint }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setFilter(id)}
-            className={`transition-none inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium ${
-              filter === id
-                ? "border-brand bg-brand-blush text-brand-ink dark:border-brand dark:bg-brand-blush/8 dark:text-brand-blush"
-                : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400 dark:hover:border-zinc-600"
-            }`}
-          >
-            {label}
-            <span className="rounded-md bg-white/80 px-1.5 py-0 text-[10px] text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400">
-              {hint}
-            </span>
-          </button>
-        ))}
-      </div>
+  const filterRow = (
+    <div className={`flex flex-wrap gap-2 ${filterMargin}`}>
+      {filterPills.map(({ id, label, hint }) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => setFilter(id)}
+          className={`transition-none inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium ${
+            filter === id
+              ? "border-brand bg-brand-blush text-brand-ink dark:border-brand dark:bg-brand-blush/8 dark:text-brand-blush"
+              : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400 dark:hover:border-zinc-600"
+          }`}
+        >
+          {label}
+          <span className="rounded-md bg-white/80 px-1.5 py-0 text-[10px] text-zinc-500 dark:bg-zinc-900/80 dark:text-zinc-400">
+            {hint}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
 
-      {counts.total > 0 && counts.unattempted === counts.total ? (
-        <p className="mt-4 rounded-xl border border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-3 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-400">
-          No attempts logged yet. Start the module quiz below to build your
-          review history.
-        </p>
-      ) : null}
+  const unattemptedBanner =
+    counts.total > 0 && counts.unattempted === counts.total ? (
+      <p
+        className={
+          scrollAreaClassName
+            ? "mt-3 rounded-xl border border-dashed border-zinc-200 bg-zinc-50/80 px-3 py-2.5 text-xs leading-relaxed text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-400 sm:text-sm"
+            : "mt-4 rounded-xl border border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-3 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-400"
+        }
+      >
+        {allUnattemptedHint ??
+          "No attempts logged yet. Start the module quiz below to build your review history."}
+      </p>
+    ) : null;
 
-      <ul className="mt-5 space-y-3">
-        {filtered.map(({ item, quizIndex, stats, lastOk, attempts }) => {
+  const scopeHintStandalone =
+    !scrollAreaClassName && !showHeader && bankScopeHint ? (
+      <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-brand dark:text-brand-soft">
+        {bankScopeHint}
+      </p>
+    ) : null;
+
+  const stickyScopeHint =
+    scrollAreaClassName && !showHeader && bankScopeHint ? (
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-brand dark:text-brand-soft">
+        {bankScopeHint}
+      </p>
+    ) : null;
+
+  const listItems = filtered.map(({ item, quizIndex, stats, lastOk, attempts }) => {
           const open = expanded.has(quizIndex);
           const isMc = isQuizMcq(item);
           const status =
@@ -322,14 +327,83 @@ export function ModuleQuizReview({
               ) : null}
             </li>
           );
-        })}
+        });
+
+  const questionListBlock = (
+    <>
+      <ul
+        className={`space-y-3 ${scrollAreaClassName ? "mt-0" : "mt-5"}`}
+      >
+        {listItems}
       </ul>
 
       {filtered.length === 0 ? (
-        <p className="mt-4 text-center text-sm text-zinc-500">
+        <p className="mt-4 text-center text-sm text-zinc-500 dark:text-zinc-400">
           No questions match this filter.
         </p>
       ) : null}
+    </>
+  );
+
+  return (
+    <section
+      className={
+        embedded
+          ? "mt-0 border-0 pt-0"
+          : compact
+            ? "mt-5 border-0 pt-1 dark:border-transparent"
+            : "mt-10 border-t border-zinc-100 pt-8 dark:border-zinc-900"
+      }
+    >
+      {showHeader ? (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3
+              className={
+                embedded
+                  ? "text-base font-semibold text-zinc-900 dark:text-zinc-100"
+                  : "text-lg font-semibold text-zinc-900 dark:text-zinc-100"
+              }
+            >
+              Question review
+            </h3>
+            {bankScopeHint && !embedded ? (
+              <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-brand dark:text-brand-soft">
+                {bankScopeHint}
+              </p>
+            ) : null}
+            <p
+              className={
+                embedded
+                  ? "mt-1 text-xs text-zinc-600 dark:text-zinc-400"
+                  : "mt-1 max-w-xl text-sm text-zinc-600 dark:text-zinc-400"
+              }
+            >
+              {embedded
+                ? "Your attempts and answer key — filters below."
+                : "Module quiz bank for this module only — not your private focus questions (see Question review → Focus questions). Latest result and answer key per question. MC options shuffle during quizzes; choices below stay in source order."}
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      {scrollAreaClassName ? (
+        <div className={`${scrollAreaClassName}${showHeader ? " mt-4" : ""}`}>
+          <div className="sticky top-0 z-[1] space-y-2 border-b border-zinc-200/90 bg-white/95 px-3 pb-3 pt-3 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-950/95">
+            {stickyScopeHint}
+            {filterRow}
+            {unattemptedBanner}
+          </div>
+          <div className="px-2 pb-3 pt-3 sm:px-3">{questionListBlock}</div>
+        </div>
+      ) : (
+        <>
+          {scopeHintStandalone}
+          {filterRow}
+          {unattemptedBanner}
+          {questionListBlock}
+        </>
+      )}
     </section>
   );
 }

@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
@@ -91,25 +90,6 @@ export default async function ProfilePage({ searchParams }: PageProps) {
       <AppHeader right={<HeaderNavLoggedIn />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 sm:py-12 lg:py-14">
-          <div className="mb-8 lg:mb-10">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-              Settings
-            </p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-3xl">
-              Profile & preferences
-            </h1>
-            <p className="mt-2 max-w-xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Manage your account and learning pulse in one place — open the{" "}
-              <Link
-                href="/dashboard/profile?tab=progress"
-                className="font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-200"
-              >
-                Progress
-              </Link>{" "}
-              tab for rings, quiz stats, and course shortcuts.
-            </p>
-          </div>
-
           <Suspense fallback={<ProfileFormSkeleton />}>
             <ProfileSettingsForm
               email={user.email}

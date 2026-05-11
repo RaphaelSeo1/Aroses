@@ -43,6 +43,8 @@ export function PersonalQuizSection({
   hasNextModule,
   onAdvanceModule,
   onRunOpenChange,
+  onPersonalQuizBankChanged,
+  sectionClassName,
 }: {
   materialId: string;
   moduleId: number;
@@ -50,6 +52,10 @@ export function PersonalQuizSection({
   hasNextModule: boolean;
   onAdvanceModule?: () => void;
   onRunOpenChange?: (open: boolean) => void;
+  /** Called after personal bank data is refreshed (e.g. parent updates badge counts). */
+  onPersonalQuizBankChanged?: () => void;
+  /** Overrides default outer section spacing when nested under practice tabs (avoids double dividers). */
+  sectionClassName?: string;
 }) {
   const [rows, setRows] = useState<LoadedPersonalItem[]>([]);
   const [reviewByItemId, setReviewByItemId] = useState<
@@ -67,7 +73,6 @@ export function PersonalQuizSection({
   const [error, setError] = useState<string | null>(null);
   const [buildOpen, setBuildOpen] = useState(true);
   const [bankOpen, setBankOpen] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editHighlight, setEditHighlight] = useState("");
   const [editNoteBody, setEditNoteBody] = useState("");
@@ -146,8 +151,10 @@ export function PersonalQuizSection({
       }
     } catch {
       setError("Could not load personal study data.");
+    } finally {
+      onPersonalQuizBankChanged?.();
     }
-  }, [materialId, moduleId]);
+  }, [materialId, moduleId, onPersonalQuizBankChanged]);
 
   useEffect(() => {
     void refresh();
@@ -330,15 +337,47 @@ export function PersonalQuizSection({
   }
 
   return (
-    <section className="mt-8 border-t border-dashed border-brand-border/70 pt-6 dark:border-brand-border/35">
+    <section
+      className={
+        sectionClassName ??
+        "mt-8 border-t border-dashed border-brand-border/70 pt-6 dark:border-brand-border/35"
+      }
+    >
       <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-        My focus questions
+        Focus quiz
       </h3>
       <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-        Private cards built from your highlights. Reviews spread out over days;
-        missed or due cards surface first—similar idea to Anki. Your cards stay
-        separate from the course&apos;s shared quiz bank.
+        Private cards from your highlights — separate from the module quiz bank.
+        Question review for these cards is only in this section (below).
       </p>
+
+      {quizList.length > 0 ? (
+        <div
+          id="practice-focus-question-review"
+          className="scroll-mt-28 mt-6 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/90 dark:border-zinc-800 dark:bg-zinc-950/40"
+        >
+          <div className="border-b border-zinc-200/80 px-4 py-3 dark:border-zinc-700/80">
+            <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              Question review · focus only
+            </p>
+            <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+              Not listed under Module bank review — these are your generated
+              cards only.
+            </p>
+          </div>
+          <div className="px-2 pb-4 pt-3 sm:px-3">
+            <ModuleQuizReview
+              embedded
+              showHeader={false}
+              bankScopeHint="Focus questions only"
+              quiz={quizList}
+              reviewByIndex={reviewMapped}
+              scrollAreaClassName="max-h-[min(70vh,28rem)] overflow-y-auto overscroll-contain"
+              allUnattemptedHint="No attempts on these focus questions yet — start your focus quiz below to build history."
+            />
+          </div>
+        </div>
+      ) : null}
 
       <details
         className="mt-6 overflow-hidden rounded-2xl border border-zinc-200/90 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/35"
@@ -508,7 +547,7 @@ export function PersonalQuizSection({
           </button>
           {blocked ? (
             <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">
-              Finish or exit the shared module quiz above before running your
+              Finish or exit the shared module quiz in this section before running your
               focus set.
             </p>
           ) : null}
@@ -574,30 +613,6 @@ export function PersonalQuizSection({
                 </li>
               ))}
             </ul>
-          </div>
-        </details>
-      ) : null}
-
-      {quizList.length > 0 ? (
-        <details
-          className="mt-4 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/90 dark:border-zinc-800 dark:bg-zinc-950/50"
-          open={reviewOpen}
-          onToggle={(e) => setReviewOpen(e.currentTarget.open)}
-        >
-          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-zinc-900 outline-none marker:content-none dark:text-zinc-100 [&::-webkit-details-marker]:hidden">
-            <span className="flex items-center justify-between gap-3">
-              <span>Review log &amp; answer key</span>
-              <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">
-                {quizList.length} questions · tap to open
-              </span>
-            </span>
-          </summary>
-          <div className="max-h-[min(70vh,28rem)] overflow-y-auto overscroll-contain border-t border-zinc-200/80 px-2 pb-3 pt-2 dark:border-zinc-700/80">
-            <ModuleQuizReview
-              embedded
-              quiz={quizList}
-              reviewByIndex={reviewMapped}
-            />
           </div>
         </details>
       ) : null}

@@ -6,8 +6,8 @@ import { parseSafeInternalNext } from "@/lib/internal-next-path";
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
-  const nextRaw = url.searchParams.get("next") ?? "/dashboard";
-  const next = parseSafeInternalNext(nextRaw) ?? "/dashboard";
+  const nextRaw = url.searchParams.get("next") ?? "/";
+  const next = parseSafeInternalNext(nextRaw) ?? "/";
 
   if (code) {
     const cookieStore = await cookies();

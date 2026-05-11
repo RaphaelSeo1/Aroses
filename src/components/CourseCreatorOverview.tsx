@@ -91,7 +91,7 @@ export function CourseCreatorOverview({
             study sidebar.
           </li>
           <li>
-            Drag builds into exam groups and rename uploads in the section
+            Drag materials into exam groups and rename uploads in the section
             below.
           </li>
           <li>

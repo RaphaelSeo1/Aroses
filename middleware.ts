@@ -40,7 +40,11 @@ export async function middleware(request: NextRequest) {
   if (!user && pathname.startsWith("/dashboard")) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("next", fullPath);
+    const nextPath =
+      pathname === "/dashboard" || pathname === "/dashboard/"
+        ? "/"
+        : fullPath;
+    url.searchParams.set("next", nextPath);
     return NextResponse.redirect(url);
   }
 
@@ -61,7 +65,7 @@ export async function middleware(request: NextRequest) {
       url.pathname = resolved.pathname;
       url.search = resolved.search;
     } else {
-      url.pathname = "/dashboard";
+      url.pathname = "/";
       url.search = "";
     }
     return NextResponse.redirect(url);

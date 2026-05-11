@@ -17,7 +17,7 @@ function SignupContent() {
   const searchParams = useSearchParams();
 
   const safeNext = parseSafeInternalNext(searchParams.get("next"));
-  const afterAuthPath = safeNext ?? "/dashboard";
+  const afterAuthPath = safeNext ?? "/";
   const loginHref = safeNext
     ? `/login?next=${encodeURIComponent(safeNext)}`
     : "/login";

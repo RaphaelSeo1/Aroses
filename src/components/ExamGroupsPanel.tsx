@@ -105,7 +105,7 @@ function SortableMaterialRow({
           >
             <div className="min-w-0 flex-1">
               <label className="sr-only" htmlFor={`rename-m-${m.id}`}>
-                Build name
+                Upload name
               </label>
               <input
                 id={`rename-m-${m.id}`}
@@ -225,7 +225,7 @@ function PlainMaterialRow(
           >
             <div className="min-w-0 flex-1">
               <label className="sr-only" htmlFor={`rename-m-${m.id}`}>
-                Build name
+                Upload name
               </label>
               <input
                 id={`rename-m-${m.id}`}
@@ -750,7 +750,7 @@ export function ExamGroupsPanel({
               Exam groups & uploads
             </h2>
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              Pick a tab, then upload PDFs for that exam only. Each build is
+              Pick a tab, then upload PDFs for that exam only. Each upload is
               separate — MT1 won&apos;t mix with MT2.
             </p>
           </div>
@@ -825,7 +825,7 @@ export function ExamGroupsPanel({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                Builds in this group
+                Materials in this group
               </h3>
               {materialsForActive.length > 1 ? (
                 <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">

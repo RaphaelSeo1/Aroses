@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import type { StudyingCourse } from "@/lib/load-dashboard-courses";
 
 export type DashboardCourse = {
   id: string;
@@ -17,9 +18,12 @@ export type DashboardCourse = {
 export function CourseDashboardList({
   courses: initialCourses,
   viewerUserId,
+  className,
 }: {
   courses: DashboardCourse[];
   viewerUserId: string;
+  /** Wraps list area; default top margin `mt-12`. */
+  className?: string;
 }) {
   const router = useRouter();
   const [courses, setCourses] = useState(initialCourses);
@@ -135,7 +139,7 @@ export function CourseDashboardList({
   }
 
   return (
-    <div className="mt-12 space-y-4">
+    <div className={`space-y-4 ${className ?? "mt-12"}`}>
       {listError && (
         <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200">
           {listError}
@@ -277,5 +281,67 @@ export function CourseDashboardList({
         })}
       </ul>
     </div>
+  );
+}
+
+export function StudyingCoursesSection({
+  courses,
+}: {
+  courses: StudyingCourse[];
+}) {
+  if (courses.length === 0) return null;
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
+          Continue learning
+        </h2>
+        <p className="mt-2 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
+          Community courses you&apos;ve started — resume on Explore (read-only;
+          you don&apos;t manage these).
+        </p>
+      </div>
+      <ul className="grid gap-5 sm:grid-cols-2">
+        {courses.map((c) => (
+          <li key={c.id}>
+            <div className="flex h-full flex-col rounded-2xl border border-emerald-200/80 bg-emerald-50/40 p-6 shadow-sm dark:border-emerald-900/50 dark:bg-emerald-950/20">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-800 dark:text-emerald-300">
+                From Explore
+              </span>
+              <Link
+                href={`/explore/${c.id}`}
+                className="mt-2 text-lg font-semibold text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-50"
+              >
+                {c.title}
+              </Link>
+              {c.description ? (
+                <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  {c.description}
+                </p>
+              ) : (
+                <p className="mt-2 text-sm italic text-zinc-500 dark:text-zinc-500">
+                  No description
+                </p>
+              )}
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Link
+                  href={`/explore/${c.id}/study`}
+                  className="inline-flex text-sm font-semibold text-brand hover:underline dark:text-brand-soft"
+                >
+                  Continue studying →
+                </Link>
+                <Link
+                  href={`/explore/${c.id}`}
+                  className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                >
+                  Outline
+                </Link>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

@@ -36,7 +36,7 @@ function missingIsPublicColumn(err: {
   );
 }
 
-/** Loads cross-course progress for **courses you own** (profile Progress tab). */
+/** Loads cross-course progress: **owned** courses plus any other course where you have module or quiz activity. */
 export async function loadDashboardProgress(
   supabase: SupabaseClient,
   ownerUserId: string
@@ -61,22 +61,22 @@ export async function loadDashboardProgress(
   const courseRows =
     fallback && !fallback.error ? fallback.data : primary.data;
 
-  const courses =
+  const ownedCourses =
     courseRows?.map((c) => ({
       id: c.id,
       title: c.title,
       description: c.description,
     })) ?? [];
 
-  const courseIds = courses.map((c) => c.id);
+  const ownedCourseIds = new Set(ownedCourses.map((c) => c.id));
 
-  const { data: materialsRaw } =
-    courseIds.length > 0
+  const { data: ownedMaterialsRaw } =
+    ownedCourseIds.size > 0
       ? await supabase
           .from("study_materials")
           .select("id, course_id, file_name, course_payload")
-          .in("course_id", courseIds)
-      : { data: [] };
+          .in("course_id", [...ownedCourseIds])
+      : { data: [] as { id: string; course_id: string; file_name: string; course_payload: unknown }[] };
 
   const { data: completionsRaw } = await supabase
     .from("module_completion")
@@ -86,6 +86,74 @@ export async function loadDashboardProgress(
     .from("question_attempts")
     .select("material_id, is_correct");
 
+  const touchedMaterialIds = new Set<string>();
+  for (const c of completionsRaw ?? []) {
+    touchedMaterialIds.add(c.material_id);
+  }
+  for (const a of attemptsRaw ?? []) {
+    touchedMaterialIds.add(a.material_id);
+  }
+
+  const knownMaterialIds = new Set(
+    (ownedMaterialsRaw ?? []).map((m) => m.id)
+  );
+  const missingMaterialIds = [...touchedMaterialIds].filter(
+    (id) => !knownMaterialIds.has(id)
+  );
+
+  let extraMaterials: {
+    id: string;
+    course_id: string;
+    file_name: string;
+    course_payload: unknown;
+  }[] = [];
+
+  if (missingMaterialIds.length > 0) {
+    const { data: fetched } = await supabase
+      .from("study_materials")
+      .select("id, course_id, file_name, course_payload")
+      .in("id", missingMaterialIds);
+    extraMaterials = fetched ?? [];
+  }
+
+  const materialsById = new Map<
+    string,
+    {
+      id: string;
+      course_id: string;
+      file_name: string;
+      course_payload: unknown;
+    }
+  >();
+  for (const m of ownedMaterialsRaw ?? []) {
+    materialsById.set(m.id, m);
+  }
+  for (const m of extraMaterials) {
+    materialsById.set(m.id, m);
+  }
+  const allMaterials = [...materialsById.values()];
+
+  const learnerCourseIds = new Set<string>();
+  for (const m of extraMaterials) {
+    if (!ownedCourseIds.has(m.course_id)) {
+      learnerCourseIds.add(m.course_id);
+    }
+  }
+
+  let learnerCourses: { id: string; title: string; description: string | null }[] =
+    [];
+  if (learnerCourseIds.size > 0) {
+    const { data: fetchedCourses } = await supabase
+      .from("courses")
+      .select("id, title, description")
+      .in("id", [...learnerCourseIds]);
+    learnerCourses = (fetchedCourses ?? []).slice().sort((a, b) =>
+      a.title.localeCompare(b.title)
+    );
+  }
+
+  const courses = [...ownedCourses, ...learnerCourses];
+
   const since = new Date();
   since.setDate(since.getDate() - 20);
   const { data: recentAnswered } = await supabase
@@ -93,20 +161,32 @@ export async function loadDashboardProgress(
     .select("answered_at")
     .gte("answered_at", since.toISOString());
 
-  const { courses: summaries, global } = buildCourseSummaries({
+  const { courses: summariesRaw, global } = buildCourseSummaries({
     courses,
-    materials: materialsRaw ?? [],
+    materials: allMaterials,
     completions: completionsRaw ?? [],
     attempts: attemptsRaw ?? [],
   });
+
+  const summaries = summariesRaw.map((s) => ({
+    ...s,
+    isExploreLearner: !ownedCourseIds.has(s.courseId),
+  }));
 
   const activityBuckets = bucketAttemptsLastDays(
     (recentAnswered ?? []).map((r) => r.answered_at),
     14
   );
 
+  const hasCourses = summaries.some(
+    (s) =>
+      s.uploadsCount > 0 ||
+      s.quizAttempts > 0 ||
+      s.modulesCompleted > 0
+  );
+
   return {
-    hasCourses: courses.length > 0,
+    hasCourses,
     summaries,
     global,
     activityBuckets,

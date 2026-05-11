@@ -10,6 +10,14 @@ export function CourseLearningCard({ course }: { course: CourseLearningSummary }
       ? Math.round((course.modulesCompleted / course.modulesTotal) * 100)
       : 0;
 
+  const explore = Boolean(course.isExploreLearner);
+  const workspaceHref = explore
+    ? `/explore/${course.courseId}`
+    : `/dashboard/courses/${course.courseId}`;
+  const studyHref = explore
+    ? `/explore/${course.courseId}/study?mode=learn`
+    : `/dashboard/courses/${course.courseId}/study?mode=learn`;
+
   return (
     <article className="flex flex-col rounded-3xl border border-brand-border bg-brand-blush p-6 shadow-lg shadow-red-900/5 dark:border-brand-border/40 dark:bg-[#1e1616]/95 sm:flex-row sm:gap-8">
       <div className="flex shrink-0 justify-center sm:justify-start">
@@ -26,7 +34,7 @@ export function CourseLearningCard({ course }: { course: CourseLearningSummary }
           <div>
             <h2 className="text-lg font-semibold text-brand-ink dark:text-white">
               <Link
-                href={`/dashboard/courses/${course.courseId}`}
+                href={workspaceHref}
                 className="hover:text-brand dark:hover:text-brand-soft"
               >
                 {course.title}
@@ -40,16 +48,16 @@ export function CourseLearningCard({ course }: { course: CourseLearningSummary }
           </div>
           <div className="flex shrink-0 flex-col gap-2 sm:items-end">
             <Link
-              href={`/dashboard/courses/${course.courseId}/study?mode=learn`}
+              href={studyHref}
               className="rounded-full bg-brand px-4 py-2 text-center text-sm font-semibold text-white hover:bg-brand-hover dark:bg-brand"
             >
               Study
             </Link>
             <Link
-              href={`/dashboard/courses/${course.courseId}`}
+              href={workspaceHref}
               className="text-center text-xs font-medium text-brand-muted hover:text-brand-ink dark:text-brand-soft dark:hover:text-white"
             >
-              Course workspace
+              {explore ? "Explore course" : "Course workspace"}
             </Link>
           </div>
         </div>
@@ -118,7 +126,11 @@ export function CourseLearningCard({ course }: { course: CourseLearningSummary }
                     {m.modulesCompleted}/{m.modulesTotal} modules
                   </span>
                   <Link
-                    href={`/dashboard/courses/${course.courseId}/study?material=${m.materialId}&mode=learn`}
+                    href={
+                      explore
+                        ? `/explore/${course.courseId}/study?material=${m.materialId}&mode=learn`
+                        : `/dashboard/courses/${course.courseId}/study?material=${m.materialId}&mode=learn`
+                    }
                     className="text-xs font-semibold text-brand hover:underline dark:text-brand-soft"
                   >
                     Open

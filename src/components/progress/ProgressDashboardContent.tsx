@@ -213,7 +213,7 @@ export function ProgressDashboardContent({
               ·
             </span>
             <Link
-              href="/dashboard"
+              href="/"
               className="text-sm font-medium text-brand hover:underline dark:text-brand-soft"
             >
               ← Home (edit order & titles)

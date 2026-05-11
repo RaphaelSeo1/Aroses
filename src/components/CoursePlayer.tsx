@@ -1,8 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
 import { LessonNotesCapture } from "@/components/LessonNotesCapture";
@@ -11,6 +18,7 @@ import { ModuleQuizReview } from "@/components/ModuleQuizReview";
 import { PersonalQuizSection } from "@/components/PersonalQuizSection";
 import { buildQuizSessionItems } from "@/lib/quiz-session";
 import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
+import { PracticeProgressPullTab } from "@/components/PracticeProgressPullTab";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import type {
   CourseModule,
@@ -19,18 +27,55 @@ import type {
   SidebarMaterialOutline,
 } from "@/types/course";
 import type { QuizReviewStatsDto } from "@/types/quiz-review";
+import type { CourseLearningSummary } from "@/lib/learning-stats";
 
 const EMPTY_MODULE_QUIZ: CourseQuizItem[] = [];
+
+function ModuleLessonJumpNav({
+  lessons,
+  onJump,
+}: {
+  lessons: { title: string }[];
+  onJump: (lessonIndex: number) => void;
+}) {
+  if (lessons.length <= 1) return null;
+  return (
+    <div className="mb-2 ml-2 mt-1 border-l-2 border-zinc-200 pl-3 dark:border-zinc-700">
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+        Lessons
+      </p>
+      <ul className="space-y-0.5">
+        {lessons.map((lesson, li) => (
+          <li key={li}>
+            <button
+              type="button"
+              onClick={() => onJump(li)}
+              className="w-full rounded-md px-2 py-1 text-left text-[11px] leading-snug text-zinc-600 hover:bg-brand-blush/80 hover:text-brand-ink dark:text-zinc-400 dark:hover:bg-[#1e1616]/80 dark:hover:text-brand-soft"
+            >
+              <span className="font-medium tabular-nums text-zinc-400 dark:text-zinc-500">
+                {li + 1}.
+              </span>{" "}
+              <span className="line-clamp-2">{lesson.title}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function buildStudySearchParams(
   materialId: string,
   moduleId: number,
-  learnMode: boolean
+  learnMode: boolean,
+  /** When set, opens the Focus panel on `/study/quiz` (single practice page). */
+  practice?: "focus"
 ): string {
   const p = new URLSearchParams();
   p.set("material", materialId);
   p.set("module", String(moduleId));
   if (learnMode) p.set("mode", "learn");
+  if (practice === "focus") p.set("practice", "focus");
   return p.toString();
 }
 
@@ -60,6 +105,8 @@ export function CoursePlayer({
   studyHrefBase,
   courseManageEnabled = true,
   learnMode = false,
+  workspaceCourseTitle,
+  practiceProgressCourseSummary,
 }: {
   course: CoursePayload;
   courseId: string;
@@ -76,12 +123,23 @@ export function CoursePlayer({
   courseManageEnabled?: boolean;
   /** When true, keep `mode=learn` on lecture/practice URLs (dashboard “study as learner”). */
   learnMode?: boolean;
+  /** Workspace title from DB — used in progress drawer when syncing to Profile metrics. */
+  workspaceCourseTitle?: string | null;
+  /** When set (dashboard quiz), progress drawer matches Profile → Progress for this course. */
+  practiceProgressCourseSummary?: CourseLearningSummary | null;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const studyBase =
     studyHrefBase ?? `/dashboard/courses/${courseId}/study`;
-  const navigationBasePath =
-    mode === "quiz" ? `${studyBase}/quiz` : studyBase;
+  const practiceTab =
+    mode === "quiz" && searchParams.get("practice") === "focus"
+      ? "focus"
+      : "module";
+  const navigationBasePath = useMemo(
+    () => (mode === "quiz" ? `${studyBase}/quiz` : studyBase),
+    [mode, studyBase]
+  );
   const [activeModuleId, setActiveModuleId] = useState(() =>
     pickInitialModuleId(course, initialModuleFromUrl)
   );
@@ -101,6 +159,33 @@ export function CoursePlayer({
   const [reviewByIndex, setReviewByIndex] = useState<
     Record<string, QuizReviewStatsDto>
   >({});
+  const [lessonJumpVal, setLessonJumpVal] = useState("");
+  const [reviewRefreshEpoch, setReviewRefreshEpoch] = useState(0);
+  const [progressPanelOpen, setProgressPanelOpen] = useState(false);
+  const [personalBankEpoch, setPersonalBankEpoch] = useState(0);
+  const [focusItemCount, setFocusItemCount] = useState(0);
+  const bumpPersonalBank = useCallback(() => {
+    setPersonalBankEpoch((n) => n + 1);
+  }, []);
+  useEffect(() => {
+    if (practiceTab !== "focus") setPersonalQuizActive(false);
+  }, [practiceTab]);
+
+  const prevQuizOpenRef = useRef(quizOpen);
+  const prevPersonalQuizActiveRef = useRef(personalQuizActive);
+
+  const bumpReviewRefresh = useCallback(() => {
+    setReviewRefreshEpoch((n) => n + 1);
+  }, []);
+
+  useEffect(() => {
+    let bump = false;
+    if (prevQuizOpenRef.current && !quizOpen) bump = true;
+    if (prevPersonalQuizActiveRef.current && !personalQuizActive) bump = true;
+    prevQuizOpenRef.current = quizOpen;
+    prevPersonalQuizActiveRef.current = personalQuizActive;
+    if (bump) setReviewRefreshEpoch((n) => n + 1);
+  }, [quizOpen, personalQuizActive]);
 
   useEffect(() => {
     if (mode === "lessons") setQuizOpen(false);
@@ -141,8 +226,26 @@ export function CoursePlayer({
     [course.modules, activeModuleId]
   );
 
+  const scrollToLesson = useCallback(
+    (lessonIndex: number) => {
+      const mod = course.modules.find((m) => m.id === activeModuleId);
+      if (!mod) return;
+      document
+        .getElementById(`lesson-${mod.id}-${lessonIndex}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    },
+    [course.modules, activeModuleId]
+  );
+
   useEffect(() => {
-    if (mode !== "quiz" || !activeModule) return;
+    setLessonJumpVal("");
+  }, [activeModuleId, materialId]);
+
+  useEffect(() => {
+    if (mode !== "quiz" || practiceTab !== "module" || !activeModule) {
+      setMissedQuizIndices([]);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -164,7 +267,14 @@ export function CoursePlayer({
     return () => {
       cancelled = true;
     };
-  }, [mode, materialId, activeModule?.id, quizOpen]);
+  }, [
+    mode,
+    practiceTab,
+    materialId,
+    activeModule?.id,
+    quizOpen,
+    reviewRefreshEpoch,
+  ]);
 
   useEffect(() => {
     if (mode !== "quiz" || !activeModule) return;
@@ -190,25 +300,72 @@ export function CoursePlayer({
     return () => {
       cancelled = true;
     };
-  }, [mode, materialId, activeModule?.id, quizOpen]);
+  }, [mode, materialId, activeModule?.id, quizOpen, reviewRefreshEpoch]);
+
+  useEffect(() => {
+    if (mode !== "quiz" || !activeModule) {
+      setFocusItemCount(0);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/study-materials/${materialId}/personal-quiz-items?moduleId=${activeModule.id}`
+        );
+        const j = await res.json();
+        if (
+          !cancelled &&
+          res.ok &&
+          Array.isArray(j.items)
+        ) {
+          setFocusItemCount(j.items.length);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    mode,
+    materialId,
+    activeModule?.id,
+    reviewRefreshEpoch,
+    personalBankEpoch,
+  ]);
 
   const moduleQuizBank = activeModule?.quiz ?? EMPTY_MODULE_QUIZ;
 
   const quizSessionItems = useMemo(
     () =>
-      mode === "quiz" && activeModule
+      mode === "quiz" && practiceTab === "module" && activeModule
         ? buildQuizSessionItems(
             moduleQuizBank,
             missedQuizIndices,
             quizSessionEpoch
           )
         : [],
-    [mode, activeModule, moduleQuizBank, missedQuizIndices, quizSessionEpoch]
+    [
+      mode,
+      practiceTab,
+      activeModule,
+      moduleQuizBank,
+      missedQuizIndices,
+      quizSessionEpoch,
+    ]
   );
 
-  const practicePageHref = useMemo(
+  const moduleQuizPageHref = useMemo(
     () =>
       `${studyBase}/quiz?${buildStudySearchParams(materialId, activeModuleId, learnMode)}`,
+    [studyBase, materialId, activeModuleId, learnMode]
+  );
+
+  const focusQuizPageHref = useMemo(
+    () =>
+      `${studyBase}/quiz?${buildStudySearchParams(materialId, activeModuleId, learnMode, "focus")}`,
     [studyBase, materialId, activeModuleId, learnMode]
   );
 
@@ -218,15 +375,46 @@ export function CoursePlayer({
     [studyBase, materialId, activeModuleId, learnMode]
   );
 
-  /** Keeps `module=` in the URL when switching modules (study vs quiz routes). */
+  const selectPracticeTab = useCallback(
+    (tab: "module" | "focus") => {
+      if (mode !== "quiz") return;
+      const q = `?${buildStudySearchParams(
+        materialId,
+        activeModuleId,
+        learnMode,
+        tab === "focus" ? "focus" : undefined
+      )}`;
+      router.replace(`${studyBase}/quiz${q}`, { scroll: false });
+      if (tab === "focus") setQuizOpen(false);
+    },
+    [mode, materialId, activeModuleId, learnMode, router, studyBase]
+  );
+
+  /** Keeps `module=` (and practice tab) in the URL when switching modules. */
   const syncModuleToUrl = useCallback(
     (modId: number) => {
       setActiveModuleId(modId);
       setQuizOpen(false);
-      const q = `?${buildStudySearchParams(materialId, modId, learnMode)}`;
+      const tab =
+        mode === "quiz" && searchParams.get("practice") === "focus"
+          ? "focus"
+          : "module";
+      const q = `?${buildStudySearchParams(
+        materialId,
+        modId,
+        learnMode,
+        tab === "focus" ? "focus" : undefined
+      )}`;
       router.replace(`${navigationBasePath}${q}`, { scroll: false });
     },
-    [materialId, navigationBasePath, router, learnMode]
+    [
+      materialId,
+      navigationBasePath,
+      router,
+      learnMode,
+      mode,
+      searchParams,
+    ]
   );
 
   const appendModuleQuizQuestions = useCallback(async () => {
@@ -272,25 +460,65 @@ export function CoursePlayer({
   const progressPct =
     totalModules > 0 ? Math.round((completedCount / totalModules) * 100) : 0;
 
+  /** Share-bank “mastery”: last-try correct rate among questions with ≥1 attempt. */
+  const practiceMasteryPct = useMemo(() => {
+    let attempted = 0;
+    let correct = 0;
+    for (let i = 0; i < moduleQuizBank.length; i++) {
+      const st = reviewByIndex[String(i)];
+      const n = st?.attemptCount ?? 0;
+      if (n > 0) {
+        attempted++;
+        if (st?.lastIsCorrect === true) correct++;
+      }
+    }
+    if (attempted === 0) return null;
+    return Math.round((100 * correct) / attempted);
+  }, [moduleQuizBank, reviewByIndex]);
+
+  const alignProgressWithProfile = Boolean(practiceProgressCourseSummary);
+
+  const pullProgressCompleted =
+    alignProgressWithProfile && practiceProgressCourseSummary
+      ? practiceProgressCourseSummary.modulesCompleted
+      : completedCount;
+  const pullProgressTotal =
+    alignProgressWithProfile && practiceProgressCourseSummary
+      ? practiceProgressCourseSummary.modulesTotal
+      : totalModules;
+  const pullProgressPct =
+    pullProgressTotal > 0
+      ? Math.round((pullProgressCompleted / pullProgressTotal) * 100)
+      : 0;
+  const pullMasteryPct =
+    alignProgressWithProfile && practiceProgressCourseSummary
+      ? practiceProgressCourseSummary.quizAccuracyPct
+      : practiceMasteryPct;
+
+  const persistModuleCompletion = useCallback(async (moduleId: number) => {
+    const res = await fetch("/api/complete-module", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ materialId, moduleId }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        typeof body.error === "string"
+          ? body.error
+          : "Could not save module progress"
+      );
+    }
+    setCompleted((prev) => new Set([...prev, moduleId]));
+    if (alignProgressWithProfile) router.refresh();
+  }, [materialId, router, alignProgressWithProfile]);
+
   const completeModuleOnServer = useCallback(
     async (
       moduleId: number,
       options?: { advanceToNextModule?: boolean }
     ) => {
-      const res = await fetch("/api/complete-module", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ materialId, moduleId }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          typeof body.error === "string"
-            ? body.error
-            : "Could not save module progress"
-        );
-      }
-      setCompleted((prev) => new Set([...prev, moduleId]));
+      await persistModuleCompletion(moduleId);
       setQuizOpen(false);
       if (options?.advanceToNextModule) {
         const ix = course.modules.findIndex((m) => m.id === moduleId);
@@ -300,8 +528,14 @@ export function CoursePlayer({
         }
       }
     },
-    [materialId, course.modules, syncModuleToUrl]
+    [persistModuleCompletion, course.modules, syncModuleToUrl]
   );
+
+  const handleQuizPassFinished = useCallback(() => {
+    if (!activeModule) return;
+    void persistModuleCompletion(activeModule.id).catch(() => {});
+    bumpReviewRefresh();
+  }, [activeModule, persistModuleCompletion, bumpReviewRefresh]);
 
   function beginRename(mod: CourseModule) {
     setManageError(null);
@@ -385,7 +619,16 @@ export function CoursePlayer({
     (targetMaterialId: string, modId: number) => {
       setQuizOpen(false);
       setRenamingModuleId(null);
-      const q = `?${buildStudySearchParams(targetMaterialId, modId, learnMode)}`;
+      const tab =
+        mode === "quiz" && searchParams.get("practice") === "focus"
+          ? "focus"
+          : "module";
+      const q = `?${buildStudySearchParams(
+        targetMaterialId,
+        modId,
+        learnMode,
+        tab === "focus" ? "focus" : undefined
+      )}`;
       if (targetMaterialId === materialId) {
         setActiveModuleId(modId);
         router.replace(`${navigationBasePath}${q}`, { scroll: false });
@@ -393,28 +636,50 @@ export function CoursePlayer({
         router.push(`${navigationBasePath}${q}`);
       }
     },
-    [materialId, navigationBasePath, router, learnMode]
+    [materialId, navigationBasePath, router, learnMode, mode, searchParams]
   );
 
   const showAccordion = sidebarOutlines.length > 0;
 
   const outlinesKey = sidebarOutlines.map((o) => o.materialId).join(",");
-  const [expandedBuildIds, setExpandedBuildIds] = useState<Set<string>>(
+  const [expandedMaterialIds, setExpandedMaterialIds] = useState<Set<string>>(
     () => new Set(sidebarOutlines.map((o) => o.materialId))
   );
 
   useEffect(() => {
-    setExpandedBuildIds(new Set(sidebarOutlines.map((o) => o.materialId)));
+    setExpandedMaterialIds(new Set(sidebarOutlines.map((o) => o.materialId)));
   }, [outlinesKey]);
 
-  function toggleBuildSection(buildId: string) {
-    setExpandedBuildIds((prev) => {
+  function toggleMaterialSection(materialSectionId: string) {
+    setExpandedMaterialIds((prev) => {
       const next = new Set(prev);
-      if (next.has(buildId)) next.delete(buildId);
-      else next.add(buildId);
+      if (next.has(materialSectionId)) next.delete(materialSectionId);
+      else next.add(materialSectionId);
       return next;
     });
   }
+
+  const courseMixHref = useMemo(() => {
+    if (
+      mode !== "quiz" ||
+      practiceTab !== "module" ||
+      !courseManageEnabled
+    )
+      return null;
+    const p = new URLSearchParams();
+    p.set("material", materialId);
+    p.set("module", String(activeModuleId));
+    if (learnMode) p.set("mode", "learn");
+    return `/dashboard/courses/${courseId}/study/course-mix?${p.toString()}`;
+  }, [
+    mode,
+    courseManageEnabled,
+    courseId,
+    materialId,
+    activeModuleId,
+    learnMode,
+    practiceTab,
+  ]);
 
   if (!activeModule) {
     return (
@@ -441,7 +706,7 @@ export function CoursePlayer({
 
           <div>
             <div className="flex items-center justify-between text-xs font-medium text-zinc-600 dark:text-zinc-400">
-              <span>Course progress</span>
+              <span>This upload</span>
               <span>{completedCount}/{totalModules} modules</span>
             </div>
             <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-zinc-200/90 ring-1 ring-zinc-900/5 dark:bg-zinc-800 dark:ring-white/5">
@@ -450,11 +715,19 @@ export function CoursePlayer({
                 style={{ width: `${progressPct}%` }}
               />
             </div>
+            {courseMixHref ? (
+              <Link
+                href={courseMixHref}
+                className="mt-3 flex w-full items-center justify-center rounded-full border border-zinc-200 bg-white px-3 py-2 text-center text-[11px] font-semibold leading-snug text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+              >
+                Whole-course mixed quiz
+              </Link>
+            ) : null}
           </div>
 
           <nav className="space-y-3">
             <p className="pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
-              {showAccordion ? "All builds" : "Curriculum"}
+              {showAccordion ? "All materials" : "Curriculum"}
             </p>
             {manageError && (
               <p className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
@@ -466,7 +739,7 @@ export function CoursePlayer({
                   const doneCount = outline.completedModuleIds.length;
                   const totalM = outline.modules.length;
                   const isOpenBuild = outline.materialId === materialId;
-                  const expanded = expandedBuildIds.has(outline.materialId);
+                  const expanded = expandedMaterialIds.has(outline.materialId);
 
                   return (
                     <div
@@ -475,7 +748,7 @@ export function CoursePlayer({
                     >
                       <button
                         type="button"
-                        onClick={() => toggleBuildSection(outline.materialId)}
+                        onClick={() => toggleMaterialSection(outline.materialId)}
                         className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2.5 text-left text-sm font-medium text-zinc-900 dark:text-zinc-100"
                       >
                         <span className="flex min-w-0 items-center gap-2">
@@ -559,64 +832,71 @@ export function CoursePlayer({
                             );
                             if (!fullMod) return null;
                             return (
-                              <div
-                                key={mod.id}
-                                className={`flex gap-1 rounded-xl p-1 transition-[background-color,box-shadow] duration-200 ease-out ${
-                                  rowActive
-                                    ? "bg-white shadow-md shadow-red-500/10 ring-1 ring-brand-border dark:bg-zinc-900 dark:ring-brand-border/40"
-                                    : "hover:bg-white/60 dark:hover:bg-zinc-900/50"
-                                }`}
-                              >
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    goToModule(outline.materialId, mod.id)
-                                  }
-                                  className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-2 text-left text-sm ${
+                              <Fragment key={mod.id}>
+                                <div
+                                  className={`flex gap-1 rounded-xl p-1 transition-[background-color,box-shadow] duration-200 ease-out ${
                                     rowActive
-                                      ? "font-medium text-brand dark:text-brand-soft"
-                                      : "text-zinc-700 dark:text-zinc-300"
+                                      ? "bg-white shadow-md shadow-red-500/10 ring-1 ring-brand-border dark:bg-zinc-900 dark:ring-brand-border/40"
+                                      : "hover:bg-white/60 dark:hover:bg-zinc-900/50"
                                   }`}
                                 >
-                                  <span
-                                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
-                                      done
-                                        ? "bg-emerald-500 text-white"
-                                        : "border border-zinc-300 bg-white text-zinc-500 dark:border-zinc-600 dark:bg-zinc-950"
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      goToModule(outline.materialId, mod.id)
+                                    }
+                                    className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-2 text-left text-sm ${
+                                      rowActive
+                                        ? "font-medium text-brand dark:text-brand-soft"
+                                        : "text-zinc-700 dark:text-zinc-300"
                                     }`}
                                   >
-                                    {done ? "✓" : mod.id}
-                                  </span>
-                                  <span className="leading-snug">
-                                    {mod.title}
-                                  </span>
-                                </button>
-                                {courseManageEnabled ? (
-                                  <div className="flex shrink-0 flex-col justify-center gap-0.5 py-1 pr-1">
-                                    <button
-                                      type="button"
-                                      disabled={busy}
-                                      onClick={() => beginRename(fullMod)}
-                                      className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
+                                    <span
+                                      className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                                        done
+                                          ? "bg-emerald-500 text-white"
+                                          : "border border-zinc-300 bg-white text-zinc-500 dark:border-zinc-600 dark:bg-zinc-950"
+                                      }`}
                                     >
-                                      Rename
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={
-                                        busy || course.modules.length <= 1
-                                      }
-                                      onClick={() =>
-                                        void deleteModule(mod.id)
-                                      }
-                                      className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
-                                    >
-                                      Delete
-                                    </button>
-                                  </div>
+                                      {done ? "✓" : mod.id}
+                                    </span>
+                                    <span className="leading-snug">
+                                      {mod.title}
+                                    </span>
+                                  </button>
+                                  {courseManageEnabled ? (
+                                    <div className="flex shrink-0 flex-col justify-center gap-0.5 py-1 pr-1">
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() => beginRename(fullMod)}
+                                        className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
+                                      >
+                                        Rename
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          busy || course.modules.length <= 1
+                                        }
+                                        onClick={() =>
+                                          void deleteModule(mod.id)
+                                        }
+                                        className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </div>
+                                {rowActive && mode === "lessons" ? (
+                                  <ModuleLessonJumpNav
+                                    lessons={fullMod.lessons}
+                                    onJump={scrollToLesson}
+                                  />
                                 ) : null}
-                              </div>
+                              </Fragment>
                             );
                           }
 
@@ -695,56 +975,63 @@ export function CoursePlayer({
                   }
 
                   return (
-                    <div
-                      key={mod.id}
-                      className={`flex gap-1 rounded-xl p-1 transition-[background-color,box-shadow] duration-200 ease-out ${
-                        active
-                          ? "bg-white shadow-md shadow-red-500/10 ring-1 ring-brand-border dark:bg-zinc-900 dark:ring-brand-border/40"
-                          : "hover:bg-white/60 dark:hover:bg-zinc-900/50"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => syncModuleToUrl(mod.id)}
-                        className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-2 text-left text-sm ${
+                    <Fragment key={mod.id}>
+                      <div
+                        className={`flex gap-1 rounded-xl p-1 transition-[background-color,box-shadow] duration-200 ease-out ${
                           active
-                            ? "font-medium text-brand dark:text-brand-soft"
-                            : "text-zinc-700 dark:text-zinc-300"
+                            ? "bg-white shadow-md shadow-red-500/10 ring-1 ring-brand-border dark:bg-zinc-900 dark:ring-brand-border/40"
+                            : "hover:bg-white/60 dark:hover:bg-zinc-900/50"
                         }`}
                       >
-                        <span
-                          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
-                            done
-                              ? "bg-emerald-500 text-white"
-                              : "border border-zinc-300 bg-white text-zinc-500 dark:border-zinc-600 dark:bg-zinc-950"
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => syncModuleToUrl(mod.id)}
+                          className={`flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-2 text-left text-sm ${
+                            active
+                              ? "font-medium text-brand dark:text-brand-soft"
+                              : "text-zinc-700 dark:text-zinc-300"
                           }`}
                         >
-                          {done ? "✓" : mod.id}
-                        </span>
-                        <span className="leading-snug">{mod.title}</span>
-                      </button>
-                      {courseManageEnabled ? (
-                        <div className="flex shrink-0 flex-col justify-center gap-0.5 py-1 pr-1">
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => beginRename(mod)}
-                            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
+                          <span
+                            className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                              done
+                                ? "bg-emerald-500 text-white"
+                                : "border border-zinc-300 bg-white text-zinc-500 dark:border-zinc-600 dark:bg-zinc-950"
+                            }`}
                           >
-                            Rename
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy || course.modules.length <= 1}
-                            onClick={() => void deleteModule(mod.id)}
-                            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
-                          >
-                            Delete
-                          </button>
-                        </div>
+                            {done ? "✓" : mod.id}
+                          </span>
+                          <span className="leading-snug">{mod.title}</span>
+                        </button>
+                        {courseManageEnabled ? (
+                          <div className="flex shrink-0 flex-col justify-center gap-0.5 py-1 pr-1">
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => beginRename(mod)}
+                              className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
+                            >
+                              Rename
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy || course.modules.length <= 1}
+                              onClick={() => void deleteModule(mod.id)}
+                              className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                      {active && mode === "lessons" ? (
+                        <ModuleLessonJumpNav
+                          lessons={mod.lessons}
+                          onJump={scrollToLesson}
+                        />
                       ) : null}
-                    </div>
+                    </Fragment>
                   );
                 })}
           </nav>
@@ -772,9 +1059,42 @@ export function CoursePlayer({
                 </h2>
               </header>
 
+              {activeModule.lessons.length > 1 ? (
+                <div className="mt-6 lg:hidden">
+                  <label
+                    htmlFor="lesson-jump-select"
+                    className="sr-only"
+                  >
+                    Jump to lesson
+                  </label>
+                  <select
+                    id="lesson-jump-select"
+                    value={lessonJumpVal}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "") return;
+                      scrollToLesson(Number(v));
+                      setLessonJumpVal("");
+                    }}
+                    className="w-full rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-brand-soft dark:focus:ring-brand-soft/20"
+                  >
+                    <option value="">Jump to lesson…</option>
+                    {activeModule.lessons.map((lesson, li) => (
+                      <option key={li} value={String(li)}>
+                        {li + 1}. {lesson.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+
               <div className="mt-10 space-y-14">
                 {activeModule.lessons.map((lesson, li) => (
-                  <div key={li}>
+                  <div
+                    key={li}
+                    id={`lesson-${activeModule.id}-${li}`}
+                    className="scroll-mt-24"
+                  >
                     <LessonEditableBlocks
                       materialId={materialId}
                       moduleId={activeModule.id}
@@ -797,56 +1117,311 @@ export function CoursePlayer({
                   Practice & review
                 </h3>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  Multiple choice, short answers, attempt history, and the
-                  question bank live on a dedicated page—so your lecture stays
-                  readable and practice stays focused.
+                  Jump to practice with either tab below—the lecture page stays
+                  uncluttered.
                 </p>
-                <Link
-                  href={practicePageHref}
-                  className="mt-5 inline-flex items-center justify-center rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
-                >
-                  Open practice room
-                </Link>
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <Link
+                    href={moduleQuizPageHref}
+                    className="inline-flex items-center justify-center rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
+                  >
+                    Module quiz
+                  </Link>
+                  <Link
+                    href={focusQuizPageHref}
+                    className="inline-flex items-center justify-center rounded-full border border-zinc-200 bg-white px-6 py-3 text-sm font-semibold text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+                  >
+                    Focus quiz
+                  </Link>
+                </div>
               </div>
             </>
-          ) : !quizOpen ? (
+          ) : (
             <>
               <header className="border-b border-zinc-100 pb-5 dark:border-zinc-900">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-                      Module {activeModule.id}
-                    </p>
-                    <h2 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                      {activeModule.title}
-                    </h2>
-                    <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-                      Shared bank for everyone on this course — plus your own
-                      focus questions from notes (below).
-                    </p>
-                  </div>
-                  <Link
-                    href={lecturePageHref}
-                    className="shrink-0 rounded-full border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+                    Module {activeModule.id}
+                  </p>
+                  <h2 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+                    {activeModule.title}
+                  </h2>
+                  <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+                    Switch with the tabs below —{" "}
+                    <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                      Module quiz
+                    </span>{" "}
+                    is the shared bank;{" "}
+                    <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                      Focus quiz
+                    </span>{" "}
+                    is your private cards from notes.
+                  </p>
+                </div>
+                <div
+                  className="mt-5 flex flex-wrap gap-2"
+                  role="tablist"
+                  aria-label="Practice type"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={practiceTab === "module"}
+                    id="practice-tab-module"
+                    tabIndex={practiceTab === "module" ? 0 : -1}
+                    onClick={() => selectPracticeTab("module")}
+                    className={
+                      practiceTab === "module"
+                        ? "inline-flex items-center gap-2 rounded-full border border-brand bg-brand-blush/95 px-4 py-2 text-sm font-semibold text-brand-ink shadow-sm shadow-brand/10 dark:border-brand-soft dark:bg-white/[0.14] dark:text-white dark:shadow-none dark:ring-1 dark:ring-brand-soft/45"
+                        : "inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 shadow-sm hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:border-zinc-600"
+                    }
                   >
-                    ← Lecture
-                  </Link>
+                    <span>Module quiz</span>
+                    <span
+                      className={
+                        practiceTab === "module"
+                          ? "rounded-full bg-white/90 px-2 py-0.5 text-xs font-semibold tabular-nums text-zinc-900 dark:bg-zinc-900/80 dark:text-zinc-100"
+                          : "text-xs font-semibold tabular-nums text-zinc-500 dark:text-zinc-400"
+                      }
+                    >
+                      {moduleQuizBank.length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={practiceTab === "focus"}
+                    id="practice-tab-focus"
+                    tabIndex={practiceTab === "focus" ? 0 : -1}
+                    onClick={() => selectPracticeTab("focus")}
+                    className={
+                      practiceTab === "focus"
+                        ? "inline-flex items-center gap-2 rounded-full border border-brand bg-brand-blush/95 px-4 py-2 text-sm font-semibold text-brand-ink shadow-sm shadow-brand/10 dark:border-brand-soft dark:bg-white/[0.14] dark:text-white dark:shadow-none dark:ring-1 dark:ring-brand-soft/45"
+                        : "inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 shadow-sm hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:border-zinc-600"
+                    }
+                  >
+                    <span>Focus quiz</span>
+                    <span
+                      className={
+                        practiceTab === "focus"
+                          ? "rounded-full bg-white/90 px-2 py-0.5 text-xs font-semibold tabular-nums text-zinc-900 dark:bg-zinc-900/80 dark:text-zinc-100"
+                          : "text-xs font-semibold tabular-nums text-zinc-500 dark:text-zinc-400"
+                      }
+                    >
+                      {focusItemCount}
+                    </span>
+                  </button>
                 </div>
               </header>
 
-              <ModuleQuizReview
-                compact
-                quiz={moduleQuizBank}
-                reviewByIndex={reviewByIndex}
-              />
+              {practiceTab === "module" ? (
+                <>
+                  <section className="pt-6">
+                    <div className="overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/90 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/40">
+                      <div className="border-b border-zinc-200/80 px-4 py-3 dark:border-zinc-700/80">
+                        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                          Module bank review
+                        </h3>
+                        <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+                          Shared questions for this module (same pool as the quiz
+                          below). Focus cards stay under the Focus quiz tab.
+                        </p>
+                      </div>
+                      <div className="p-3 sm:p-4">
+                        {moduleQuizBank.length === 0 ? (
+                          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                            No module bank questions for this module yet.
+                            {courseManageEnabled
+                              ? " Generate a batch under Module quiz below."
+                              : ""}
+                          </p>
+                        ) : (
+                          <ModuleQuizReview
+                            showHeader={false}
+                            compact
+                            embedded
+                            bankScopeHint={`Module ${activeModule.id} · Module quiz bank`}
+                            quiz={moduleQuizBank}
+                            reviewByIndex={reviewByIndex}
+                            scrollAreaClassName="max-h-[min(52vh,26rem)] overflow-y-auto overscroll-contain rounded-xl border border-zinc-200/70 bg-zinc-50/40 dark:border-zinc-800 dark:bg-zinc-900/25"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </section>
 
-              {activeModule ? (
+                  <div className="mt-9 border-t border-zinc-100 pt-6 dark:border-zinc-900">
+                    <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                      Module quiz
+                    </h3>
+                    <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                      Uses the shared module bank only. For cards from your notes,
+                      open the{" "}
+                      <button
+                        type="button"
+                        onClick={() => selectPracticeTab("focus")}
+                        className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
+                      >
+                        Focus quiz
+                      </button>{" "}
+                      tab.
+                    </p>
+                    <div className="mt-5 flex flex-wrap items-center gap-3">
+                      {courseManageEnabled ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled={quizAppendBusy || !activeModule}
+                            onClick={() => void appendModuleQuizQuestions()}
+                            className="inline-flex items-center justify-center rounded-full border border-brand-border bg-white px-5 py-2.5 text-sm font-medium text-brand-ink shadow-sm hover:bg-brand-blush disabled:opacity-50 dark:border-brand-border/50 dark:bg-zinc-950 dark:text-brand-soft dark:hover:bg-brand-blush/10"
+                          >
+                            {quizAppendBusy
+                              ? "Generating questions…"
+                              : "Generate more questions (AI)"}
+                          </button>
+                          {moduleQuizBank.length > 0 ? (
+                            <span className="text-xs text-zinc-500">
+                              Bank: {moduleQuizBank.length} question
+                              {moduleQuizBank.length === 1 ? "" : "s"} in this
+                              module
+                            </span>
+                          ) : (
+                            <span className="text-xs font-medium text-amber-800 dark:text-amber-200">
+                              No questions yet — generate a batch to start the quiz.
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                          Question bank is managed by the course creator.
+                          {moduleQuizBank.length > 0 ? (
+                            <>
+                              {" "}
+                              Bank: {moduleQuizBank.length} question
+                              {moduleQuizBank.length === 1 ? "" : "s"}.
+                            </>
+                          ) : (
+                            <> No questions in this module yet.</>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                    {quizAppendError ? (
+                      <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+                        {quizAppendError}
+                      </p>
+                    ) : null}
+                    {missedQuizIndices.length > 0 ? (
+                      <div className="mt-5 rounded-2xl border border-amber-200/90 bg-amber-50/90 px-4 py-4 dark:border-amber-900/60 dark:bg-amber-950/30">
+                        <p className="text-sm font-semibold text-amber-950 dark:text-amber-100">
+                          Review queue — {missedQuizIndices.length} question
+                          {missedQuizIndices.length === 1 ? "" : "s"}
+                        </p>
+                        <p className="mt-1 text-xs text-amber-900/80 dark:text-amber-200/80">
+                          Still weak on your last try — they&apos;ll appear first in
+                          your next quiz until you answer them correctly.
+                        </p>
+                        <ul className="mt-3 space-y-2 border-t border-amber-200/60 pt-3 dark:border-amber-900/40">
+                          {missedQuizIndices.slice(0, 5).map((qi) => {
+                            const item = activeModule.quiz[qi];
+                            if (!item) return null;
+                            return (
+                              <li
+                                key={qi}
+                                className="line-clamp-2 text-xs text-amber-950/90 dark:text-amber-100/90"
+                              >
+                                {item.question}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                        {missedQuizIndices.length > 5 ? (
+                          <p className="mt-2 text-[11px] text-amber-800/80 dark:text-amber-300/70">
+                            +{missedQuizIndices.length - 5} more in this module
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {!quizOpen ? (
+                      <button
+                        type="button"
+                        disabled={
+                          moduleQuizBank.length === 0 || personalQuizActive
+                        }
+                        onClick={() => {
+                          setQuizSessionEpoch((e) => e + 1);
+                          setQuizOpen(true);
+                          requestAnimationFrame(() => {
+                            document
+                              .getElementById("module-quiz-run")
+                              ?.scrollIntoView({
+                                behavior: "smooth",
+                                block: "start",
+                              });
+                          });
+                        }}
+                        title={
+                          moduleQuizBank.length === 0
+                            ? "Generate questions first"
+                            : personalQuizActive
+                              ? "Finish your focus quiz first"
+                              : undefined
+                        }
+                        className="mt-6 inline-flex items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
+                      >
+                        Start module quiz
+                      </button>
+                    ) : (
+                      <div
+                        id="module-quiz-run"
+                        className="mt-8 rounded-2xl border border-zinc-200 bg-zinc-50/50 p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/30 sm:p-7"
+                      >
+                        <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200/80 pb-5 dark:border-zinc-800">
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-brand dark:text-brand-soft">
+                              Module quiz run
+                            </p>
+                            <p className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                              {activeModule.title}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setQuizOpen(false)}
+                            className="shrink-0 rounded-full border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                          >
+                            ← Back to overview
+                          </button>
+                        </div>
+                        <ModuleQuiz
+                          key={`${activeModule.id}-${quizSessionEpoch}`}
+                          materialId={materialId}
+                          moduleId={activeModule.id}
+                          items={quizSessionItems}
+                          shuffleEpoch={quizSessionEpoch}
+                          hasNextModule={hasNextModule}
+                          onAttemptRecorded={bumpReviewRefresh}
+                          onPassFinished={handleQuizPassFinished}
+                          onCompleteQuiz={(choice) =>
+                            completeModuleOnServer(activeModule.id, {
+                              advanceToNextModule: choice === "next_module",
+                            })
+                          }
+                        />
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : activeModule ? (
                 <PersonalQuizSection
+                  sectionClassName="mt-0 border-t-0 pt-6"
                   materialId={materialId}
                   moduleId={activeModule.id}
                   blocked={quizOpen}
                   hasNextModule={hasNextModule}
                   onRunOpenChange={setPersonalQuizActive}
+                  onPersonalQuizBankChanged={bumpPersonalBank}
                   onAdvanceModule={() => {
                     const ix = course.modules.findIndex(
                       (m) => m.id === activeModule.id
@@ -856,148 +1431,7 @@ export function CoursePlayer({
                   }}
                 />
               ) : null}
-
-              <div className="mt-9 border-t border-zinc-100 pt-6 dark:border-zinc-900">
-                <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                  Module quiz
-                </h3>
-                <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                  Each run shuffles questions and answer choices. You get a fresh
-                  mix from the question bank (up to 14 per session); items you
-                  missed recently are queued first, like spaced review. New
-                  questions must be generated into this bank — they are not
-                  invented on each click.
-                </p>
-                <div className="mt-5 flex flex-wrap items-center gap-3">
-                  {courseManageEnabled ? (
-                    <>
-                      <button
-                        type="button"
-                        disabled={quizAppendBusy || !activeModule}
-                        onClick={() => void appendModuleQuizQuestions()}
-                        className="inline-flex items-center justify-center rounded-full border border-brand-border bg-white px-5 py-2.5 text-sm font-medium text-brand-ink shadow-sm hover:bg-brand-blush disabled:opacity-50 dark:border-brand-border/50 dark:bg-zinc-950 dark:text-brand-soft dark:hover:bg-brand-blush/10"
-                      >
-                        {quizAppendBusy
-                          ? "Generating questions…"
-                          : "Generate more questions (AI)"}
-                      </button>
-                      {moduleQuizBank.length > 0 ? (
-                        <span className="text-xs text-zinc-500">
-                          Bank: {moduleQuizBank.length} question
-                          {moduleQuizBank.length === 1 ? "" : "s"} in this
-                          module
-                        </span>
-                      ) : (
-                        <span className="text-xs font-medium text-amber-800 dark:text-amber-200">
-                          No questions yet — generate a batch to start the quiz.
-                        </span>
-                      )}
-                    </>
-                  ) : (
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      Question bank is managed by the course creator.
-                      {moduleQuizBank.length > 0 ? (
-                        <>
-                          {" "}
-                          Bank: {moduleQuizBank.length} question
-                          {moduleQuizBank.length === 1 ? "" : "s"}.
-                        </>
-                      ) : (
-                        <> No questions in this module yet.</>
-                      )}
-                    </p>
-                  )}
-                </div>
-                {quizAppendError ? (
-                  <p className="mt-2 text-sm text-red-600 dark:text-red-400">
-                    {quizAppendError}
-                  </p>
-                ) : null}
-                {missedQuizIndices.length > 0 ? (
-                  <div className="mt-5 rounded-2xl border border-amber-200/90 bg-amber-50/90 px-4 py-4 dark:border-amber-900/60 dark:bg-amber-950/30">
-                    <p className="text-sm font-semibold text-amber-950 dark:text-amber-100">
-                      Review queue — {missedQuizIndices.length} question
-                      {missedQuizIndices.length === 1 ? "" : "s"}
-                    </p>
-                    <p className="mt-1 text-xs text-amber-900/80 dark:text-amber-200/80">
-                      Still weak on your last try — they&apos;ll appear first in
-                      your next quiz until you answer them correctly.
-                    </p>
-                    <ul className="mt-3 space-y-2 border-t border-amber-200/60 pt-3 dark:border-amber-900/40">
-                      {missedQuizIndices.slice(0, 5).map((qi) => {
-                        const item = activeModule.quiz[qi];
-                        if (!item) return null;
-                        return (
-                          <li
-                            key={qi}
-                            className="line-clamp-2 text-xs text-amber-950/90 dark:text-amber-100/90"
-                          >
-                            {item.question}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                    {missedQuizIndices.length > 5 ? (
-                      <p className="mt-2 text-[11px] text-amber-800/80 dark:text-amber-300/70">
-                        +{missedQuizIndices.length - 5} more in this module
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={moduleQuizBank.length === 0 || personalQuizActive}
-                  onClick={() => {
-                    setQuizSessionEpoch((e) => e + 1);
-                    setQuizOpen(true);
-                  }}
-                  title={
-                    moduleQuizBank.length === 0
-                      ? "Generate questions first"
-                      : personalQuizActive
-                        ? "Finish your focus quiz first"
-                        : undefined
-                  }
-                  className="mt-6 inline-flex items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
-                >
-                  Start module quiz
-                </button>
-              </div>
             </>
-          ) : (
-            <div>
-              <div className="mb-8 flex flex-wrap items-center justify-between gap-4 border-b border-zinc-100 pb-6 dark:border-zinc-900">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-                    {activeModule.title}
-                  </p>
-                  <h2 className="mt-1 text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-                    Quiz
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setQuizOpen(false)}
-                  className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-                >
-                  ← Back to review & setup
-                </button>
-              </div>
-
-              <ModuleQuiz
-                key={`${activeModule.id}-${quizSessionEpoch}`}
-                materialId={materialId}
-                moduleId={activeModule.id}
-                items={quizSessionItems}
-                shuffleEpoch={quizSessionEpoch}
-                hasNextModule={hasNextModule}
-                onCompleteQuiz={(choice) =>
-                  completeModuleOnServer(activeModule.id, {
-                    advanceToNextModule: choice === "next_module",
-                  })
-                }
-              />
-            </div>
           )}
         </div>
       </div>
@@ -1013,6 +1447,43 @@ export function CoursePlayer({
         docked
       />
     </div>
+
+    {mode === "quiz" ? (
+      <>
+        <Link
+          href={lecturePageHref}
+          className="fixed left-4 top-[max(6.625rem,calc(env(safe-area-inset-top)+5.875rem))] z-[100] inline-flex items-center rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 shadow-lg shadow-black/12 ring-1 ring-black/5 transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:shadow-black/35 dark:ring-white/10 dark:hover:bg-zinc-900 sm:top-[max(7.375rem,calc(env(safe-area-inset-top)+6.625rem))] lg:left-[calc(22rem+1rem)]"
+        >
+          ← Lecture
+        </Link>
+        <PracticeProgressPullTab
+          open={progressPanelOpen}
+          onOpenChange={(next) => {
+            setProgressPanelOpen(next);
+            if (next && alignProgressWithProfile) router.refresh();
+          }}
+          courseTitle={
+            alignProgressWithProfile && workspaceCourseTitle
+              ? workspaceCourseTitle
+              : course.title
+          }
+          sourceLabel={sourceLabel}
+          completedCount={pullProgressCompleted}
+          totalModules={pullProgressTotal}
+          progressPct={pullProgressPct}
+          masteryPct={pullMasteryPct}
+          panelEyebrow={alignProgressWithProfile ? "This course" : undefined}
+          modulesDetailLine={
+            alignProgressWithProfile && practiceProgressCourseSummary
+              ? `${practiceProgressCourseSummary.modulesCompleted}/${practiceProgressCourseSummary.modulesTotal} modules · ${practiceProgressCourseSummary.uploadsCount} ${practiceProgressCourseSummary.uploadsCount === 1 ? "material" : "materials"} · matches Profile → Progress`
+              : undefined
+          }
+          quizMetricSource={
+            alignProgressWithProfile ? "profileCourse" : "materialBank"
+          }
+        />
+      </>
+    ) : null}
     </>
   );
 }

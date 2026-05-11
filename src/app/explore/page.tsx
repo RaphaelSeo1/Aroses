@@ -103,7 +103,7 @@ export default async function ExplorePage() {
                 under Public Explore listing.
               </p>
               <Link
-                href={user ? "/dashboard" : "/signup"}
+                href={user ? "/" : "/signup"}
                 className="mt-6 inline-flex rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white hover:bg-brand-hover dark:bg-brand"
               >
                 {user ? "Go to Home" : "Get started"}

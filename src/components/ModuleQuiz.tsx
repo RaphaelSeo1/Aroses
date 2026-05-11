@@ -16,6 +16,12 @@ type Props = {
   onCompleteQuiz: (
     choice: "review_lessons" | "next_module"
   ) => void | Promise<void>;
+  /** Whole-course mixed session — simpler completion, no module completion. */
+  mixedCourseReview?: boolean;
+  /** Parent refetches quiz-review / progress gauges (e.g. practice drawer). */
+  onAttemptRecorded?: () => void;
+  /** Fires once when the learner finishes the last question (before exit buttons). */
+  onPassFinished?: () => void;
 };
 
 export function ModuleQuiz({
@@ -25,6 +31,9 @@ export function ModuleQuiz({
   shuffleEpoch,
   hasNextModule,
   onCompleteQuiz,
+  mixedCourseReview = false,
+  onAttemptRecorded,
+  onPassFinished,
 }: Props) {
   const [index, setIndex] = useState(0);
   const [wrongAttempts, setWrongAttempts] = useState(0);
@@ -69,7 +78,10 @@ export function ModuleQuiz({
 
   const recordMcAttempt = useCallback(
     async (quizQuestionIndex: number, choice: number, isCorrect: boolean) => {
-      const pid = items[index]?.personalItemId;
+      const slot = items[index];
+      const pid = slot?.personalItemId;
+      const bankMaterialId = slot?.attemptMaterialId ?? materialId;
+      const bankModuleId = slot?.attemptModuleId ?? moduleId;
       try {
         await fetch("/api/record-attempt", {
           method: "POST",
@@ -83,24 +95,28 @@ export function ModuleQuiz({
                   isCorrect,
                 }
               : {
-                  materialId,
-                  moduleId,
+                  materialId: bankMaterialId,
+                  moduleId: bankModuleId,
                   quizQuestionIndex,
                   selectedChoice: choice,
                   isCorrect,
                 }
           ),
         });
+        onAttemptRecorded?.();
       } catch {
         /* non-blocking */
       }
     },
-    [materialId, moduleId, items, index]
+    [materialId, moduleId, items, index, onAttemptRecorded]
   );
 
   const recordFreeAttempt = useCallback(
     async (quizQuestionIndex: number, isCorrect: boolean) => {
-      const pid = items[index]?.personalItemId;
+      const slot = items[index];
+      const pid = slot?.personalItemId;
+      const bankMaterialId = slot?.attemptMaterialId ?? materialId;
+      const bankModuleId = slot?.attemptModuleId ?? moduleId;
       try {
         await fetch("/api/record-attempt", {
           method: "POST",
@@ -114,19 +130,20 @@ export function ModuleQuiz({
                   isCorrect,
                 }
               : {
-                  materialId,
-                  moduleId,
+                  materialId: bankMaterialId,
+                  moduleId: bankModuleId,
                   quizQuestionIndex,
                   responseKind: "free",
                   isCorrect,
                 }
           ),
         });
+        onAttemptRecorded?.();
       } catch {
         /* non-blocking */
       }
     },
-    [materialId, moduleId, items, index]
+    [materialId, moduleId, items, index, onAttemptRecorded]
   );
 
   const onMcChoose = useCallback(
@@ -158,11 +175,13 @@ export function ModuleQuiz({
     setFrFeedback(null);
     setSubmitError(null);
     try {
+      const gradeMaterialId =
+        items[index]?.attemptMaterialId ?? materialId;
       const res = await fetch("/api/quiz-grade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          materialId,
+          materialId: gradeMaterialId,
           question: q.question,
           referenceAnswer: q.referenceAnswer,
           studentAnswer: answer,
@@ -202,10 +221,17 @@ export function ModuleQuiz({
     materialId,
     originalQuizIndex,
     recordFreeAttempt,
+    items,
+    index,
   ]);
 
   const [finished, setFinished] = useState(false);
   const [savingExit, setSavingExit] = useState(false);
+
+  useEffect(() => {
+    if (!finished || mixedCourseReview) return;
+    onPassFinished?.();
+  }, [finished, mixedCourseReview, onPassFinished]);
 
   const runComplete = async (choice: "review_lessons" | "next_module") => {
     setSavingExit(true);
@@ -225,6 +251,33 @@ export function ModuleQuiz({
   );
 
   if (finished) {
+    if (mixedCourseReview) {
+      return (
+        <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            Mixed review complete
+          </h3>
+          <p className="mt-2 text-zinc-600 dark:text-zinc-400">
+            You finished this pass —{" "}
+            <span className="font-medium text-zinc-900 dark:text-zinc-100">
+              {total}
+            </span>{" "}
+            questions drawn at random from every module and upload in this
+            course. Attempts are saved to each question&apos;s home module.
+          </p>
+          <p className="mt-1 text-sm text-zinc-500">{scoreLabel}</p>
+          <button
+            type="button"
+            disabled={savingExit}
+            onClick={() => void runComplete("review_lessons")}
+            className="transition-none mt-6 inline-flex w-full items-center justify-center rounded-full bg-brand px-6 py-2.5 text-sm font-medium text-white hover:bg-brand-hover disabled:opacity-60 dark:bg-brand dark:hover:bg-brand-soft sm:w-auto"
+          >
+            {savingExit ? "Closing…" : "Back to practice room"}
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -239,8 +292,8 @@ export function ModuleQuiz({
         </p>
         <p className="mt-1 text-sm text-zinc-500">{scoreLabel}</p>
         <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-          Save your progress, then choose whether to reread the lessons or jump
-          ahead.
+          Progress is saved when you finish this pass. Choose whether to reread
+          the lessons or jump ahead.
         </p>
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
           <button
@@ -260,7 +313,7 @@ export function ModuleQuiz({
                 ? "This is the last module in this upload."
                 : undefined
             }
-            className="transition-none inline-flex flex-1 items-center justify-center rounded-full bg-brand px-6 py-2.5 text-sm font-medium text-white hover:bg-brand-hover disabled:opacity-60 dark:bg-brand dark:hover:bg-brand-soft sm:flex-none"
+            className="transition-none inline-flex flex-1 items-center justify-center rounded-full bg-brand-hover px-6 py-2.5 text-sm font-medium text-white shadow-sm shadow-red-950/25 hover:bg-red-900 disabled:opacity-60 dark:bg-brand-hover dark:hover:bg-red-950 dark:shadow-black/40 sm:flex-none"
           >
             {savingExit ? "Saving…" : "Next module"}
           </button>

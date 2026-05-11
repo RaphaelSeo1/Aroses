@@ -33,7 +33,39 @@ export type QuizSessionItem = {
   originalIndex: number;
   /** When set, attempts are stored on `user_personal_question_attempts`. */
   personalItemId?: string;
+  /** Override shared-bank attempt routing (whole-course mixed sessions). */
+  attemptMaterialId?: string;
+  attemptModuleId?: number;
 };
+
+export type CourseWideQuizEntry = {
+  materialId: string;
+  moduleId: number;
+  quizIndex: number;
+  question: CourseQuizItem;
+};
+
+/** Random subset from every module/material in the course (up to {@link QUIZ_SESSION_MAX_QUESTIONS}). */
+export function buildCourseWideQuizSession(
+  entries: CourseWideQuizEntry[],
+  _sessionNonce: number
+): QuizSessionItem[] {
+  const n = entries.length;
+  if (n === 0) return [];
+
+  const maxQ = Math.min(QUIZ_SESSION_MAX_QUESTIONS, n);
+  const pick = shuffleIndices(n).slice(0, maxQ);
+
+  return pick.map((i) => {
+    const e = entries[i]!;
+    return {
+      question: e.question,
+      originalIndex: e.quizIndex,
+      attemptMaterialId: e.materialId,
+      attemptModuleId: e.moduleId,
+    };
+  });
+}
 
 /** If the random draw had no FR items, swap one slot so written prompts can appear when the bank has them. */
 function ensureFreeResponseInSession(

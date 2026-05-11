@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import type { StudyChatTurn } from "@/types/study-chat";
 
@@ -181,7 +182,11 @@ export function StudyChatDrawer({
                       : "bg-zinc-100 text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100"
                   }`}
                 >
-                  <p className="whitespace-pre-wrap">{m.content}</p>
+                  {m.role === "user" ? (
+                    <p className="whitespace-pre-wrap">{m.content}</p>
+                  ) : (
+                    <StudyChatMessageMarkdown source={m.content} />
+                  )}
                 </div>
               </div>
             ))}

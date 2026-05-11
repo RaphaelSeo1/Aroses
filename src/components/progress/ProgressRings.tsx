@@ -9,12 +9,21 @@ export function ProgressRings({
   className = "",
   /** Unique prefix for SVG defs when multiple rings mount on one page. */
   ringId = "pr",
+  /** Tailwind classes for stroke dash animation (speedometer-style sweep). */
+  strokeTransitionClass = "transition-[stroke-dashoffset] duration-700 ease-out",
+  /**
+   * `below` keeps the ring center to modules only and prints quiz % under the graphic
+   * (clearer in tight marketing cards and small sizes).
+   */
+  quizLabelPlacement = "center",
 }: {
   modulePct: number;
   quizPct: number | null;
   size?: "sm" | "lg";
   className?: string;
   ringId?: string;
+  strokeTransitionClass?: string;
+  quizLabelPlacement?: "center" | "below";
 }) {
   const dim = size === "lg" ? 160 : 112;
   const c = dim / 2;
@@ -31,11 +40,30 @@ export function ProgressRings({
   const offInner =
     quizClamped == null ? cInner : cInner - (quizClamped / 100) * cInner;
 
-  return (
-    <div
-      className={`relative flex items-center justify-center ${className}`}
-      style={{ width: dim, height: dim }}
-    >
+  const quizBelow =
+    quizLabelPlacement === "below" && quizClamped != null;
+
+  const centerPctClass =
+    size === "lg"
+      ? "text-2xl"
+      : quizBelow
+        ? "text-xl"
+        : quizClamped != null
+          ? "text-[1.0625rem]"
+          : "text-lg";
+
+  /** Flex centering sits visually high on numeric + caption stacks; nudge toward donut hole center. */
+  const centerAnchorClass =
+    !quizBelow && quizClamped != null
+      ? size === "lg"
+        ? "left-1/2 top-[calc(50%+0.28rem)] -translate-x-1/2 -translate-y-1/2"
+        : "left-1/2 top-[calc(50%+0.35rem)] -translate-x-1/2 -translate-y-1/2"
+      : size === "lg"
+        ? "left-1/2 top-[calc(50%+0.14rem)] -translate-x-1/2 -translate-y-1/2"
+        : "left-1/2 top-[calc(50%+0.22rem)] -translate-x-1/2 -translate-y-1/2";
+
+  const ringsInner = (
+    <>
       <svg
         width={dim}
         height={dim}
@@ -87,7 +115,7 @@ export function ProgressRings({
           strokeDasharray={cOuter}
           strokeDashoffset={offOuter}
           transform={`rotate(-90 ${c} ${c})`}
-          className="transition-[stroke-dashoffset] duration-700 ease-out"
+          className={strokeTransitionClass}
         />
         {/* inner track */}
         <circle
@@ -115,19 +143,37 @@ export function ProgressRings({
           strokeDasharray={cInner}
           strokeDashoffset={offInner}
           transform={`rotate(-90 ${c} ${c})`}
-          className="transition-[stroke-dashoffset] duration-700 ease-out"
+          className={strokeTransitionClass}
         />
       </svg>
-      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+      <div
+        className={`pointer-events-none absolute flex flex-col items-center px-1 text-center ${centerAnchorClass}`}
+      >
         <span
-          className={`font-bold tabular-nums text-brand-ink dark:text-white ${size === "lg" ? "text-2xl" : "text-lg"}`}
+          className={`block font-bold tabular-nums leading-none text-brand-ink dark:text-white ${centerPctClass}`}
         >
           {modClamped}%
         </span>
-        <span className="text-[10px] font-medium uppercase tracking-wide text-brand-muted dark:text-brand-soft">
+        <span className="mt-0.5 block text-[10px] font-medium uppercase leading-none tracking-wide text-brand-muted dark:text-brand-soft">
           modules
         </span>
+        {!quizBelow && quizClamped != null ? (
+          <span
+            className={`mt-1.5 tabular-nums font-semibold leading-none text-brand-ink/90 dark:text-brand-soft ${size === "lg" ? "text-[11px]" : "text-[10px]"}`}
+          >
+            {Math.round(quizClamped)}% quiz
+          </span>
+        ) : null}
       </div>
+    </>
+  );
+
+  return (
+    <div
+      className={`relative shrink-0 ${className}`}
+      style={{ width: dim, height: dim }}
+    >
+      {ringsInner}
     </div>
   );
 }

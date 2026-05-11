@@ -4,8 +4,7 @@ import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { LogoutButton } from "@/components/LogoutButton";
 
 /**
- * Same primary navigation on every authenticated screen so items never “disappear”
- * when switching routes (e.g. Explore vs dashboard). Home opens the marketing site (/).
+ * Same primary navigation on every authenticated screen. Home is your workspace (`/`).
  */
 export function HeaderNavLoggedIn({
   courseHomeHref,
@@ -17,7 +16,11 @@ export function HeaderNavLoggedIn({
     <>
       <HeaderNavLink
         href="/"
-        match="exact"
+        activeWhen={(p) =>
+          p === "/" ||
+          p === "/dashboard" ||
+          p.startsWith("/dashboard/courses")
+        }
         className="inline-flex items-center gap-1.5"
       >
         <svg
@@ -34,14 +37,6 @@ export function HeaderNavLoggedIn({
           <polyline points="9 22 9 12 15 12 15 22" />
         </svg>
         <span>Home</span>
-      </HeaderNavLink>
-      <HeaderNavLink
-        href="/dashboard"
-        activeWhen={(p) =>
-          p === "/dashboard" || p.startsWith("/dashboard/courses")
-        }
-      >
-        Courses
       </HeaderNavLink>
       <HeaderNavLink href="/explore">Explore</HeaderNavLink>
       <HeaderNavLink

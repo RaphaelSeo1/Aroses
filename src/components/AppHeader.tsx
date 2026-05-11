@@ -1,8 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { BrandLogo } from "@/components/BrandLogo";
-import { APP_NAME } from "@/lib/brand";
-import { ThemeToggle } from "@/components/ThemeToggle";
+import { APP_NAME, INTRO_HREF } from "@/lib/brand";
 
 /** Selected / emphasized nav pill (active route). */
 export const HEADER_NAV_ACCENT =
@@ -25,8 +24,8 @@ export function AppHeader({
     <header className="sticky top-0 z-30 border-b border-brand-border bg-white/90 backdrop-blur-md dark:border-brand-border/30 dark:bg-[#141110]/90">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:h-16 sm:px-6">
         <Link
-          href="/"
-          aria-label={APP_NAME}
+          href={INTRO_HREF}
+          aria-label={`${APP_NAME} — intro`}
           className="group flex min-w-max shrink-0 items-center gap-2.5 sm:gap-3"
         >
           <BrandLogo
@@ -38,7 +37,6 @@ export function AppHeader({
           </span>
         </Link>
         <nav className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
-          <ThemeToggle />
           {right}
         </nav>
       </div>

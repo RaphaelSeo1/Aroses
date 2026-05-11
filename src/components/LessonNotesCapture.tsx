@@ -1,6 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  LESSON_QUOTE_EVENT,
+  type LessonQuoteDetail,
+} from "@/components/LessonQuoteCaptureRegion";
 
 type NoteRow = {
   id: string;
@@ -27,6 +31,7 @@ export function LessonNotesCapture({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,6 +68,31 @@ export function LessonNotesCapture({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const onQuote = (ev: Event) => {
+      const ce = ev as CustomEvent<LessonQuoteDetail>;
+      const d = ce.detail;
+      if (!d || d.lessonIndex !== lessonIndex) return;
+      const t = d.text.trim();
+      if (t.length < 2) return;
+
+      setHighlight((prev) => {
+        const p = prev.trim();
+        if (!p) return t;
+        if (p.includes(t)) return p;
+        return `${p}\n\n---\n\n${t}`;
+      });
+      setMessage("Added selection to highlight — edit or save when ready.");
+      panelRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
+    };
+
+    window.addEventListener(LESSON_QUOTE_EVENT, onQuote);
+    return () => window.removeEventListener(LESSON_QUOTE_EVENT, onQuote);
+  }, [lessonIndex]);
 
   async function save() {
     setSaving(true);
@@ -126,16 +156,21 @@ export function LessonNotesCapture({
   }
 
   return (
-    <div className="mt-8 rounded-2xl border border-zinc-200/90 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/40">
+    <div
+      ref={panelRef}
+      className="mt-8 rounded-2xl border border-zinc-200/90 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/40"
+    >
       <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
         Your notes &amp; highlights
       </p>
       <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-        Private to your account — paste what stood out from{" "}
+        Private to your account — in{" "}
         <span className="font-medium text-zinc-700 dark:text-zinc-200">
           {lessonTitle}
         </span>
-        , then generate focus questions on the practice tab.
+        , drag to highlight any sentence and release to add it to the excerpt
+        below (or paste manually). Save, then build focus questions on the
+        practice tab.
       </p>
       {loading ? (
         <p className="mt-3 text-xs text-zinc-500">Loading…</p>

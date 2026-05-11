@@ -18,6 +18,8 @@ export type CourseLearningSummary = {
   quizCorrect: number;
   quizAccuracyPct: number | null;
   materials: MaterialProgress[];
+  /** Links use `/explore/...` instead of dashboard workspace. */
+  isExploreLearner?: boolean;
 };
 
 export type GlobalLearningTotals = {
@@ -157,5 +159,40 @@ export function buildCourseSummaries(args: {
       coursesStarted: args.courses.length,
       uploadsTotal: gUploads,
     },
+  };
+}
+
+/** Single-course slice — same rules as profile Progress (`CourseLearningCard`). */
+export function summarizeCourseProgress(args: {
+  course: { id: string; title: string; description: string | null };
+  materials: {
+    id: string;
+    course_id: string;
+    file_name: string;
+    course_payload: unknown;
+  }[];
+  completions: { material_id: string; module_id: number }[];
+  attempts: { material_id: string; is_correct: boolean }[];
+}): CourseLearningSummary {
+  const mats = args.materials.filter((m) => m.course_id === args.course.id);
+  const { courses } = buildCourseSummaries({
+    courses: [args.course],
+    materials: mats,
+    completions: args.completions,
+    attempts: args.attempts,
+  });
+  const s = courses[0];
+  if (s) return s;
+  return {
+    courseId: args.course.id,
+    title: args.course.title,
+    description: args.course.description,
+    modulesTotal: 0,
+    modulesCompleted: 0,
+    uploadsCount: mats.length,
+    quizAttempts: 0,
+    quizCorrect: 0,
+    quizAccuracyPct: null,
+    materials: [],
   };
 }

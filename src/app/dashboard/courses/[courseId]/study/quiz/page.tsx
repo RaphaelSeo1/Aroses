@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { CoursePlayer } from "@/components/CoursePlayer";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
+import { summarizeCourseProgress } from "@/lib/learning-stats";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload, SidebarMaterialOutline } from "@/types/course";
@@ -146,6 +148,7 @@ export default async function StudyQuizPracticePage({ params, searchParams }: Pr
 
   const outlineIds = outlineRows.map((r) => r.id);
   const compByMaterial = new Map<string, number[]>();
+  let completionRows: { material_id: string; module_id: number }[] = [];
 
   if (outlineIds.length > 0) {
     const { data: compRows } = await supabase
@@ -153,12 +156,33 @@ export default async function StudyQuizPracticePage({ params, searchParams }: Pr
       .select("material_id, module_id")
       .in("material_id", outlineIds);
 
-    for (const c of compRows ?? []) {
+    completionRows = compRows ?? [];
+    for (const c of completionRows) {
       const arr = compByMaterial.get(c.material_id) ?? [];
       arr.push(c.module_id);
       compByMaterial.set(c.material_id, arr);
     }
   }
+
+  const { data: attemptRows } =
+    outlineIds.length > 0
+      ? await supabase
+          .from("question_attempts")
+          .select("material_id, is_correct")
+          .in("material_id", outlineIds)
+      : { data: [] };
+
+  const courseProgressSummary = summarizeCourseProgress({
+    course: courseRow,
+    materials: outlineRows.map((r) => ({
+      id: r.id,
+      course_id: courseRow.id,
+      file_name: r.file_name,
+      course_payload: r.course_payload,
+    })),
+    completions: completionRows,
+    attempts: attemptRows ?? [],
+  });
 
   sidebarOutlines = outlineRows.map((r) => {
     const p = r.course_payload as CoursePayload;
@@ -209,19 +233,29 @@ export default async function StudyQuizPracticePage({ params, searchParams }: Pr
           </Link>
         </p>
       </div>
-      <CoursePlayer
-        key={`${row.id}-quiz`}
-        courseId={courseId}
-        course={payload}
-        materialId={row.id}
-        sourceLabel={displayMaterialSectionLabel(row.file_name)}
-        initialCompletedModuleIds={completedModuleIds}
-        sidebarOutlines={sidebarOutlines}
-        initialModuleFromUrl={initialModuleFromUrl}
-        mode="quiz"
-        courseManageEnabled={!learnMode}
-        learnMode={learnMode}
-      />
+      <Suspense
+        fallback={
+          <div className="mx-auto max-w-7xl px-4 py-10 text-sm text-zinc-500 dark:text-zinc-400">
+            Loading practice…
+          </div>
+        }
+      >
+        <CoursePlayer
+          key={`${row.id}-quiz`}
+          courseId={courseId}
+          course={payload}
+          materialId={row.id}
+          sourceLabel={displayMaterialSectionLabel(row.file_name)}
+          initialCompletedModuleIds={completedModuleIds}
+          sidebarOutlines={sidebarOutlines}
+          initialModuleFromUrl={initialModuleFromUrl}
+          mode="quiz"
+          courseManageEnabled={!learnMode}
+          learnMode={learnMode}
+          workspaceCourseTitle={courseRow.title}
+          practiceProgressCourseSummary={courseProgressSummary}
+        />
+      </Suspense>
     </>
   );
 }

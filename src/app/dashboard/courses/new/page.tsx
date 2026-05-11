@@ -120,7 +120,7 @@ export default function NewCoursePage() {
               {loading ? "Creating…" : "Continue"}
             </button>
             <Link
-              href="/dashboard"
+              href="/"
               className="inline-flex items-center justify-center rounded-full border border-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-900"
             >
               Cancel
