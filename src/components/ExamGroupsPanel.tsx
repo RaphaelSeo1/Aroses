@@ -18,6 +18,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useState } from "react";
 import { CourseUploadForm } from "@/components/CourseUploadForm";
@@ -501,6 +502,8 @@ export function ExamGroupsPanel({
   const [materialError, setMaterialError] = useState<string | null>(null);
   const [reorderBusy, setReorderBusy] = useState(false);
   const [autoRenameBusy, setAutoRenameBusy] = useState(false);
+  const [materialDeleteId, setMaterialDeleteId] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
     if (!groups.length) return;
@@ -516,7 +519,7 @@ export function ExamGroupsPanel({
       const bo = b.sort_order ?? 0;
       if (ao !== bo) return ao - bo;
       return (
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       );
     });
   }, [materials, activeId]);
@@ -671,14 +674,23 @@ export function ExamGroupsPanel({
     setMaterialBusyId(null);
   }
 
-  async function deleteMaterial(m: MaterialRow) {
-    const ok = window.confirm(
-      `Delete “${displayMaterialSectionLabel(m.file_name)}”? This removes the generated lessons and quizzes for this upload.`
-    );
-    if (!ok) return;
+  function requestDeleteMaterial(m: MaterialRow) {
+    setMaterialError(null);
+    setMaterialDeleteId(m.id);
+  }
+
+  async function confirmDeleteMaterial() {
+    const id = materialDeleteId;
+    if (!id || deleteBusy) return;
+    const m = materials.find((x) => x.id === id);
+    if (!m) {
+      setMaterialDeleteId(null);
+      return;
+    }
 
     setMaterialBusyId(m.id);
     setMaterialError(null);
+    setDeleteBusy(true);
     try {
       const res = await fetch(`/api/study-materials/${m.id}`, {
         method: "DELETE",
@@ -688,15 +700,17 @@ export function ExamGroupsPanel({
         setMaterialError(
           typeof body.error === "string" ? body.error : "Could not delete."
         );
-        setMaterialBusyId(null);
         return;
       }
+      setMaterialDeleteId(null);
       setEditingMaterialId(null);
       router.refresh();
     } catch {
       setMaterialError("Network error.");
+    } finally {
+      setDeleteBusy(false);
+      setMaterialBusyId(null);
     }
-    setMaterialBusyId(null);
   }
 
   if (groups.length === 0) {
@@ -741,7 +755,13 @@ export function ExamGroupsPanel({
     );
   }
 
+  const materialPendingDelete =
+    materialDeleteId != null
+      ? materials.find((x) => x.id === materialDeleteId) ?? null
+      : null;
+
   return (
+    <>
     <section className="mt-12 space-y-8">
       <div className="rounded-3xl border border-zinc-200/90 bg-white/95 p-6 shadow-lg shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-950/95 sm:p-8">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -880,10 +900,32 @@ export function ExamGroupsPanel({
             saveRenameMaterial={saveRenameMaterial}
             cancelRenameMaterial={cancelRenameMaterial}
             beginRenameMaterial={beginRenameMaterial}
-            deleteMaterial={deleteMaterial}
+            deleteMaterial={requestDeleteMaterial}
           />
         </div>
       )}
     </section>
+    <ConfirmDialog
+      open={materialPendingDelete != null}
+      title="Delete this upload?"
+      cancelLabel="Cancel"
+      confirmLabel="Delete"
+      confirmBusy={deleteBusy}
+      onCancel={() => {
+        if (!deleteBusy) setMaterialDeleteId(null);
+      }}
+      onConfirm={confirmDeleteMaterial}
+    >
+      <p>
+        Are you sure you want to delete{" "}
+        <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+          {materialPendingDelete
+            ? displayMaterialSectionLabel(materialPendingDelete.file_name)
+            : "this upload"}
+        </span>
+        ? This removes the generated lessons and quizzes for this upload.
+      </p>
+    </ConfirmDialog>
+    </>
   );
 }

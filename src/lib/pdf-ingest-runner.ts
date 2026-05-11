@@ -115,16 +115,19 @@ async function finalizePdfIngest(
     modules,
   };
 
-  const { data: minRow } = await admin
+  /** Append after existing uploads so the list follows “first added first” (ascending sort_order). */
+  const { data: maxRow } = await admin
     .from("study_materials")
     .select("sort_order")
     .eq("exam_group_id", examGroupId)
-    .order("sort_order", { ascending: true })
+    .order("sort_order", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   const nextSortOrder =
-    typeof minRow?.sort_order === "number" ? minRow.sort_order - 1 : 0;
+    typeof maxRow?.sort_order === "number" && Number.isFinite(maxRow.sort_order)
+      ? maxRow.sort_order + 1
+      : 0;
 
   const stemFromContent = deriveFileStemFromPayload(payload);
   const uploadLabel =

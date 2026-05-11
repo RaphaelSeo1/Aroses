@@ -12,6 +12,13 @@ import {
   STUDY_PDF_INGEST_BUCKET,
 } from "@/lib/study-pdf-ingest";
 
+/** Shown under the upload area while a chunked PDF job runs (outline → per-module expand). */
+type PdfBuildProgressUI = {
+  line: string;
+  /** `indeterminate` during PDF/outline; 0–100 while modules are generated. */
+  bar: number | "indeterminate" | null;
+};
+
 function isPdfFile(f: File): boolean {
   return (
     f.type === "application/pdf" ||
@@ -83,7 +90,7 @@ function jobStartedAtMs(createdAt?: string): number | null {
 /** Poll after `POST /api/process-pdf` returns `202` + `jobId` (chunked: outline in background, then per-module expand). */
 async function pollPdfIngestJob(
   jobId: string,
-  onProgress?: (label: string) => void
+  onProgress?: (info: PdfBuildProgressUI) => void
 ): Promise<{
   materialId?: string;
   error?: string;
@@ -135,7 +142,13 @@ async function pollPdfIngestJob(
         started != null
           ? ` · ${formatElapsedShort(Date.now() - started)}`
           : "";
-      onProgress?.(`Generating course (${next}/${data.modulesTotal})${elapsedPart}…`);
+      onProgress?.({
+        line: `Writing module ${next} of ${data.modulesTotal}${elapsedPart}…`,
+        bar: Math.min(
+          100,
+          ((next - 0.5) / data.modulesTotal) * 100
+        ),
+      });
       let exp: Response;
       try {
         exp = await fetch("/api/process-pdf/expand", {
@@ -154,6 +167,8 @@ async function pollPdfIngestJob(
         error?: string;
         complete?: boolean;
         materialId?: string;
+        modulesBuilt?: number;
+        modulesTotal?: number;
       };
       try {
         expJson = JSON.parse(expRaw) as typeof expJson;
@@ -171,6 +186,25 @@ async function pollPdfIngestJob(
       if (expJson.complete === true && typeof expJson.materialId === "string") {
         return { materialId: expJson.materialId };
       }
+      if (
+        expJson.complete !== true &&
+        typeof expJson.modulesBuilt === "number" &&
+        typeof expJson.modulesTotal === "number" &&
+        expJson.modulesTotal > 0
+      ) {
+        const startedMid = jobStartedAtMs(data.createdAt);
+        const elapsedMid =
+          startedMid != null
+            ? ` · ${formatElapsedShort(Date.now() - startedMid)}`
+            : "";
+        onProgress?.({
+          line: `Finished module ${expJson.modulesBuilt} of ${expJson.modulesTotal}${elapsedMid}. Preparing the next…`,
+          bar: Math.min(
+            100,
+            (expJson.modulesBuilt / expJson.modulesTotal) * 100
+          ),
+        });
+      }
       continue;
     }
 
@@ -183,7 +217,10 @@ async function pollPdfIngestJob(
         started != null
           ? ` · ${formatElapsedShort(Date.now() - started)}`
           : "";
-      onProgress?.(`Generating course…${elapsedPart}`);
+      onProgress?.({
+        line: `Reading your PDF and planning the course outline (modules are created next)${elapsedPart}…`,
+        bar: "indeterminate",
+      });
     }
 
     await sleep(1800);
@@ -209,7 +246,9 @@ export function CourseUploadForm({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [progressLabel, setProgressLabel] = useState<string | null>(null);
+  const [buildProgress, setBuildProgress] = useState<PdfBuildProgressUI | null>(
+    null
+  );
   const [dragOver, setDragOver] = useState(false);
 
   const addPdfFiles = useCallback((list: FileList | File[] | null | undefined) => {
@@ -281,11 +320,13 @@ export function CourseUploadForm({
 
       for (let i = 0; i < queue.length; i++) {
         const file = queue[i];
-        setProgressLabel(
-          total > 1
-            ? `Building ${i + 1} of ${total}: ${file.name} (one file at a time — more reliable than parallel)`
-            : `Building: ${file.name}`
-        );
+        setBuildProgress({
+          line:
+            total > 1
+              ? `File ${i + 1} of ${total}: ${file.name} — uploading to storage…`
+              : `${file.name} — uploading to storage…`,
+          bar: "indeterminate",
+        });
 
         if (file.size > MAX_STUDY_PDF_BYTES) {
           failures.push(
@@ -354,17 +395,13 @@ export function CourseUploadForm({
           if (typeof body.materialId === "string" && body.materialId) {
             materialId = body.materialId;
           } else if (typeof body.jobId === "string" && body.jobId) {
-            setProgressLabel(
-              total > 1
-                ? `${i + 1}/${total} ${file.name}: generating course…`
-                : `${file.name}: generating course…`
-            );
-            const polled = await pollPdfIngestJob(body.jobId, (label) =>
-              setProgressLabel(
-                total > 1
-                  ? `${i + 1}/${total} ${file.name}: ${label}`
-                  : `${file.name}: ${label}`
-              )
+            const prefix =
+              total > 1 ? `File ${i + 1}/${total} · ${file.name}: ` : `${file.name}: `;
+            const polled = await pollPdfIngestJob(body.jobId, (info) =>
+              setBuildProgress({
+                line: `${prefix}${info.line}`,
+                bar: info.bar,
+              })
             );
             if (polled.error) {
               failures.push(`${file.name}: ${polled.error}`);
@@ -386,7 +423,7 @@ export function CourseUploadForm({
         lastMaterialId = materialId;
       }
 
-      setProgressLabel(null);
+      setBuildProgress(null);
       setFiles([]);
 
       if (total === 1 && failures.length === 0 && lastMaterialId) {
@@ -417,7 +454,7 @@ export function CourseUploadForm({
         );
       }
     } catch {
-      setProgressLabel(null);
+      setBuildProgress(null);
       setError("Network error. Check your connection.");
     }
 
@@ -536,10 +573,35 @@ export function CourseUploadForm({
         </p>
       </div>
 
-      {progressLabel && (
-        <p className="text-sm font-medium text-brand dark:text-brand-soft">
-          {progressLabel}
-        </p>
+      {loading && buildProgress && (
+        <div
+          className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-700 dark:bg-zinc-950"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Building your course
+          </p>
+          <p className="mt-1.5 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+            {buildProgress.line}
+          </p>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+            {buildProgress.bar === "indeterminate" ? (
+              <div
+                className="h-full w-full origin-left animate-pulse bg-gradient-to-r from-brand/25 via-brand/60 to-brand/25 dark:from-brand-soft/20 dark:via-brand-soft/55 dark:to-brand-soft/20"
+                style={{ animationDuration: "1.4s" }}
+              />
+            ) : typeof buildProgress.bar === "number" ? (
+              <div
+                className="h-full rounded-full bg-brand transition-[width] duration-300 ease-out dark:bg-brand-soft"
+                style={{
+                  width: `${Math.max(2, Math.min(100, buildProgress.bar))}%`,
+                }}
+              />
+            ) : null}
+          </div>
+        </div>
       )}
 
       {success && (

@@ -21,7 +21,9 @@ export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
  * `POST /api/process-pdf/expand`) so each invocation stays within the serverless wall clock.
  *
  * Default **`fast`**: smaller per-module JSON. Set `COURSE_BUILD_PROFILE=balanced` or `full`
- * for richer courses (more modules / larger outputs per step).
+ * for richer courses. **`balanced`** is tuned for speed (fewer modules than `full`, lighter than before).
+ * Optional: `COURSE_BALANCED_MAX_MODULES`, `COURSE_BALANCED_MAX_LESSON_TITLES`,
+ * `COURSE_BALANCED_MODULE_MAX_TOKENS`, `COURSE_FAST_MAX_LESSON_TITLES`.
  */
 type CourseBuildProfile = "full" | "balanced" | "fast";
 
@@ -117,11 +119,12 @@ QUIZ (critical): Each module needs a practical practice set — **at least 5 que
     quizFooter =
       "Include enough quiz objects per module to meet the minimums above (≥5 per module, including ≥2 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
   } else {
-    sizeRules = `Rules for output size (important): use at least 2 modules and at most 6 unless the source is extremely short. Keep each lesson "content" thorough and instructive but under roughly 800 words so the response stays fast. Every module must include at least one lesson.
+    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 4), 2, 6);
+    sizeRules = `Rules for output size (important): use at least 2 modules and at most ${maxBalMods} unless the source is extremely short. Keep each lesson "content" clear and instructive but under roughly 550 words so generation stays reasonably fast. Every module must include at least one lesson.
 
-QUIZ (critical): Each module needs a strong practice set — **at least 6 questions per module**, with **at least 3 items** whose type is free_response (short written answer). The rest should be mcq. Aim for a solid mix of MCQ and free-response. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, clear rubric — key ideas and acceptable points).`;
+QUIZ (critical): Each module needs a practical practice set — **at least 5 questions per module**, with **at least 2 items** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
     quizFooter =
-      "Include enough quiz objects per module to meet the minimums above (≥6 per module, including ≥3 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+      "Include enough quiz objects per module to meet the minimums above (≥5 per module, including ≥2 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
   }
 
   return `You are an expert course designer and educator. You have been given raw course material (lecture slides, syllabi, notes). Your job is NOT to summarize this material. Your job is to use it as a source to BUILD a complete, professional, structured course that a student would genuinely pay for.
@@ -306,20 +309,25 @@ function outlineInstruction(
   profile: CourseBuildProfile
 ): string {
   let moduleCount: string;
+  let maxLessonTitles: number;
   if (profile === "full") {
     moduleCount =
       "Use **2 to 8** modules depending on how much content the source has.";
+    maxLessonTitles = 5;
   } else if (profile === "fast") {
     const maxModules = clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 8);
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
+    maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 5);
   } else {
-    moduleCount = "Use **2 to 6** modules.";
+    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 4), 2, 6);
+    moduleCount = `Use **2 to ${maxModules}** modules — prefer fewer, broader modules when the material allows (each module is generated separately).`;
+    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 3), 1, 5);
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
 
 ${moduleCount}
-Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to 5** short strings — the titles of lessons you will expand later).
+Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to ${maxLessonTitles}** short strings — the titles of lessons you will expand later).
 
 Exact shape:
 {
@@ -346,7 +354,7 @@ function moduleQuizRules(profile: CourseBuildProfile): string {
     const frMin = clampInt(envInt("COURSE_FAST_FREE_RESPONSE_MIN", 1), 0, quizMin);
     return `QUIZ (this module only): **at least ${quizMin}** questions, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ, 4 choices each.`;
   }
-  return `QUIZ (this module only): **at least 6** questions, with **at least 3** type free_response (reference_answer required). Mix MCQ and free-response. MCQs: exactly 4 choices.`;
+  return `QUIZ (this module only): **at least 5** questions, with **at least 2** type free_response (reference_answer required). Mix MCQ and free-response. MCQs: exactly 4 choices.`;
 }
 
 function moduleInstruction(
@@ -361,11 +369,15 @@ function moduleInstruction(
   const styleRule =
     profile === "fast"
       ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
-      : "";
+      : profile === "balanced"
+        ? `STYLE (balanced): Teach clearly with examples; keep each lesson body focused and under roughly 550 words.`
+        : "";
   const lessonRequirements =
     profile === "fast"
       ? `For EACH lesson: include 2–4 key_terms (term+definition) and exactly 2 real-world examples (short strings).`
-      : `For EACH lesson: include key_terms (term+definition) and examples (strings).`;
+      : profile === "balanced"
+        ? `For EACH lesson: include 2–4 key_terms (term+definition) and 2 short real-world examples (strings).`
+        : `For EACH lesson: include key_terms (term+definition) and examples (strings).`;
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. Module title **must be** ${JSON.stringify(stub.title)}.
 
@@ -574,7 +586,7 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 4096), 1536, 16384);
   }
   if (profile === "full") return 30_720;
-  return 24_576;
+  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 18_432), 8192, 24_576);
 }
 
 /** Expand one module for chunked PDF ingest (separate server invocation). */

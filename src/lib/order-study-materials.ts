@@ -1,6 +1,6 @@
 /**
  * Order study materials the same way as the course dashboard: by section tab
- * order, then `sort_order` within the group (then `created_at` as tiebreaker).
+ * order, then `sort_order` within the group (then `created_at` ascending as tiebreaker).
  */
 export type MaterialOrderFields = {
   exam_group_id: string;
@@ -31,7 +31,7 @@ export function sortStudyMaterialsForDashboard<T extends MaterialOrderFields>(
     if (sa !== sb) return sa - sb;
 
     return (
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
   });
 }
