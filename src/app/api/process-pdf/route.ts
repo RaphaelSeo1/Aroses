@@ -4,6 +4,11 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { PDFParse } from "pdf-parse";
 import { generateCourseFromMaterial } from "@/lib/ai/study-generation";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  MAX_STUDY_PDF_BYTES,
+  STUDY_PDF_INGEST_BUCKET,
+} from "@/lib/study-pdf-ingest";
 import {
   deriveFileStemFromPayload,
   finalizeMaterialSectionLabel,
@@ -12,96 +17,192 @@ import {
 
 export const runtime = "nodejs";
 
-/** Large PDF + Claude generation may exceed default ~60s on some hosts. */
+/** Large PDF + Claude generation — Pro / Fluid; Hobby may still cap lower. */
 export const maxDuration = 300;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const INGEST_OBJECT_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.pdf$/i;
+
+async function removeIngestObject(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  storagePath: string
+) {
+  await admin.storage
+    .from(STUDY_PDF_INGEST_BUCKET)
+    .remove([storagePath])
+    .catch(() => {});
+}
+
 export async function POST(request: Request) {
-  try {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          },
+  const t0 = Date.now();
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll();
         },
-      }
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options)
+          );
+        },
+      },
+    }
+  );
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Expected JSON: courseId, examGroupId, storagePath." },
+      { status: 400 }
     );
+  }
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
 
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const { courseId, examGroupId, storagePath, originalFileName } = body as {
+    courseId?: unknown;
+    examGroupId?: unknown;
+    storagePath?: unknown;
+    originalFileName?: unknown;
+  };
 
-    let form: FormData;
-    try {
-      form = await request.formData();
-    } catch {
-      return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
-    }
+  if (typeof courseId !== "string" || !UUID_RE.test(courseId)) {
+    return NextResponse.json({ error: "Invalid course" }, { status: 400 });
+  }
 
-    const file = form.get("file");
-    const courseId = form.get("courseId");
-    const examGroupId = form.get("examGroupId");
+  if (typeof examGroupId !== "string" || !UUID_RE.test(examGroupId)) {
+    return NextResponse.json(
+      { error: "Choose a section for this upload." },
+      { status: 400 }
+    );
+  }
 
-    if (!(file instanceof File) || typeof courseId !== "string") {
+  if (typeof storagePath !== "string") {
+    return NextResponse.json(
+      { error: "Missing or invalid storagePath." },
+      { status: 400 }
+    );
+  }
+
+  const prefix = `${user.id}/`;
+  if (!storagePath.startsWith(prefix)) {
+    return NextResponse.json(
+      { error: "Upload path does not match your account." },
+      { status: 403 }
+    );
+  }
+
+  const objectKey = storagePath.slice(prefix.length);
+  if (!INGEST_OBJECT_RE.test(objectKey)) {
+    return NextResponse.json(
+      { error: "Invalid ingest file name." },
+      { status: 400 }
+    );
+  }
+
+  if (storagePath.includes("..") || storagePath.includes("\\")) {
+    return NextResponse.json({ error: "Invalid path." }, { status: 400 });
+  }
+
+  const admin = createAdminClient();
+  if (!admin) {
+    return NextResponse.json(
+      { error: "Server is not configured for storage (missing service role)." },
+      { status: 500 }
+    );
+  }
+
+  const { data: courseOwn } = await supabase
+    .from("courses")
+    .select("id")
+    .eq("id", courseId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!courseOwn) {
+    await removeIngestObject(admin, storagePath);
+    return NextResponse.json({ error: "Course not found" }, { status: 403 });
+  }
+
+  const { data: groupOwn } = await supabase
+    .from("exam_groups")
+    .select("id")
+    .eq("id", examGroupId)
+    .eq("course_id", courseId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!groupOwn) {
+    await removeIngestObject(admin, storagePath);
+    return NextResponse.json(
+      { error: "Invalid section for this course." },
+      { status: 403 }
+    );
+  }
+
+  let buf: Buffer;
+  try {
+    const { data: blob, error: dlErr } = await admin.storage
+      .from(STUDY_PDF_INGEST_BUCKET)
+      .download(storagePath);
+
+    if (dlErr || !blob) {
+      console.error("[process-pdf] download", dlErr);
       return NextResponse.json(
-        { error: "Missing file or courseId" },
-        { status: 400 }
+        {
+          error:
+            "Could not read the uploaded PDF from storage. Try uploading again.",
+        },
+        { status: 502 }
       );
     }
 
-    if (typeof examGroupId !== "string" || !UUID_RE.test(examGroupId)) {
-      return NextResponse.json(
-        { error: "Choose a section for this upload." },
-        { status: 400 }
-      );
-    }
+    buf = Buffer.from(await blob.arrayBuffer());
+  } catch (e) {
+    console.error("[process-pdf] download unexpected", e);
+    await removeIngestObject(admin, storagePath);
+    return NextResponse.json(
+      { error: "Could not read the uploaded PDF from storage." },
+      { status: 502 }
+    );
+  }
 
-    if (!UUID_RE.test(courseId)) {
-      return NextResponse.json({ error: "Invalid course" }, { status: 400 });
-    }
+  if (buf.length > MAX_STUDY_PDF_BYTES) {
+    await removeIngestObject(admin, storagePath);
+    return NextResponse.json(
+      {
+        error:
+          "PDF is too large for this server (max 40 MB). Split the file or export fewer pages.",
+      },
+      { status: 413 }
+    );
+  }
 
-    const { data: courseOwn } = await supabase
-      .from("courses")
-      .select("id")
-      .eq("id", courseId)
-      .eq("user_id", user.id)
-      .maybeSingle();
+  console.info("[process-pdf] start", {
+    bytes: buf.length,
+    path: storagePath.slice(0, 80),
+  });
 
-    if (!courseOwn) {
-      return NextResponse.json({ error: "Course not found" }, { status: 403 });
-    }
-
-    const { data: groupOwn } = await supabase
-      .from("exam_groups")
-      .select("id")
-      .eq("id", examGroupId)
-      .eq("course_id", courseId)
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (!groupOwn) {
-      return NextResponse.json(
-        { error: "Invalid section for this course." },
-        { status: 403 }
-      );
-    }
-
-    const buf = Buffer.from(await file.arrayBuffer());
+  try {
     let text = "";
     const parser = new PDFParse({ data: buf });
     try {
@@ -198,8 +299,8 @@ export async function POST(request: Request) {
 
     const stemFromContent = deriveFileStemFromPayload(payload);
     const uploadLabel =
-      typeof file.name === "string" && file.name.trim().length > 0
-        ? file.name.trim()
+      typeof originalFileName === "string" && originalFileName.trim().length > 0
+        ? originalFileName.trim()
         : "upload.pdf";
     const fromUploadStem =
       stripKnownDocumentExtension(uploadLabel) ||
@@ -227,22 +328,39 @@ export async function POST(request: Request) {
       .single();
 
     if (error) {
-      console.error(error);
+      console.error("[process-pdf] insert study_materials", error);
       return NextResponse.json(
-        { error: "Could not save study material." },
+        {
+          error: "Could not save study material.",
+          ...(process.env.NODE_ENV === "development" && {
+            debug: error.message,
+          }),
+        },
         { status: 500 }
       );
     }
 
+    console.info("[process-pdf] ok", {
+      ms: Date.now() - t0,
+      materialId: row.id,
+    });
+
     return NextResponse.json({ materialId: row.id });
   } catch (e) {
     console.error("process-pdf unexpected error", e);
+    const detail =
+      process.env.NODE_ENV === "development" && e instanceof Error
+        ? e.message
+        : undefined;
     return NextResponse.json(
       {
         error:
           "Upload failed unexpectedly on the server. Try again or use a smaller PDF.",
+        ...(detail ? { debug: detail } : {}),
       },
       { status: 500 }
     );
+  } finally {
+    await removeIngestObject(admin, storagePath);
   }
 }

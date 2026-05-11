@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { ProgressRings } from "@/components/progress/ProgressRings";
+import { APP_NAME } from "@/lib/brand";
 
 const RING_EASE =
   "transition-[stroke-dashoffset] duration-[1200ms] cubic-bezier(0.22,0.82,0.28,1)";
@@ -285,7 +286,7 @@ export function PracticeProgressPullTab({
         </div>
 
         <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-          Profile → Progress adds rings and pulse{" "}
+          Open Profile → Progress — your {APP_NAME} overview includes rings{" "}
           <strong className="font-medium text-zinc-800 dark:text-zinc-200">
             across all courses
           </strong>

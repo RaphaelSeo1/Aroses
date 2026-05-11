@@ -39,3 +39,42 @@ export function describeStorageUploadFailure(message: string): string {
     "have been applied in Supabase and try again."
   );
 }
+
+/** Guidance when direct PDF upload to Storage (ingest bucket) fails. */
+export function describePdfIngestUploadFailure(message: string): string {
+  const m = message.toLowerCase();
+
+  if (
+    m.includes("bucket") ||
+    m.includes("not found") ||
+    m.includes("does not exist")
+  ) {
+    return (
+      "PDF ingest storage isn’t set up yet. In Supabase SQL Editor, run migration " +
+      "`019_study_pdf_ingest_bucket.sql` from your repo’s `supabase/migrations/` folder " +
+      "(creates the `study-pdf-ingest` bucket and policies)."
+    );
+  }
+
+  if (
+    m.includes("row-level security") ||
+    m.includes("policy") ||
+    m.includes("permission denied") ||
+    m.includes("violates row-level security") ||
+    m.includes("403")
+  ) {
+    return (
+      "PDF upload was blocked by storage permissions. Apply migration " +
+      "`019_study_pdf_ingest_bucket.sql` in the Supabase SQL Editor, then try again."
+    );
+  }
+
+  if (m.includes("payload too large") || m.includes("413")) {
+    return "PDF is too large for the configured storage limit (40 MB max).";
+  }
+
+  return (
+    "Could not upload the PDF to storage. Confirm migration `019_study_pdf_ingest_bucket.sql` " +
+    "is applied and try again."
+  );
+}

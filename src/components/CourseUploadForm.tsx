@@ -3,6 +3,14 @@
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
 import { useCallback, useRef, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import {
+  describePdfIngestUploadFailure,
+} from "@/lib/storage-upload-errors";
+import {
+  MAX_STUDY_PDF_BYTES,
+  STUDY_PDF_INGEST_BUCKET,
+} from "@/lib/study-pdf-ingest";
 
 function isPdfFile(f: File): boolean {
   return (
@@ -37,12 +45,20 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
     trimmed.startsWith("<!") ||
     trimmed.startsWith("<html") ||
     trimmed.toLowerCase().includes("<head");
+  const noUsefulBody = trimmed.length === 0 || looksLikeHtml;
+
+  if (
+    noUsefulBody &&
+    (res.status === 500 || res.status === 502 || res.status === 503)
+  ) {
+    return `Upload failed (${res.status}): the server stopped before sending a proper response. Common causes: (1) hosting time limits — Vercel Hobby caps serverless routes around ~10s, but PDF + AI often needs 1–3+ minutes (upgrade to Pro or use Fluid Compute); (2) missing ANTHROPIC_API_KEY or SUPABASE_SERVICE_ROLE_KEY on production; (3) out-of-memory on very large PDFs. Check your host logs.`;
+  }
 
   if (trimmed.length > 0 && !looksLikeHtml && trimmed.length < 400) {
     return `${res.status} ${res.statusText}: ${trimmed}`;
   }
 
-  return `Request failed (${res.status} ${res.statusText}). Try a smaller file or retry later.`;
+  return `Request failed (${res.status} ${res.statusText || "error"}). Try a smaller file or retry later.`;
 }
 
 export function CourseUploadForm({
@@ -119,19 +135,70 @@ export function CourseUploadForm({
     let lastMaterialId: string | undefined;
 
     try {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        setError("Session expired. Sign in again and retry.");
+        setLoading(false);
+        return;
+      }
+
       for (let i = 0; i < queue.length; i++) {
         const file = queue[i];
         setProgressLabel(`Building ${i + 1} of ${total}: ${file.name}`);
 
-        const fd = new FormData();
-        fd.append("file", file);
-        fd.append("courseId", courseId);
-        fd.append("examGroupId", examGroupId);
+        if (file.size > MAX_STUDY_PDF_BYTES) {
+          failures.push(
+            `${file.name}: PDF is too large (max 40 MB). Split the file or export fewer pages.`
+          );
+          continue;
+        }
 
-        const res = await fetch("/api/process-pdf", {
-          method: "POST",
-          body: fd,
-        });
+        const storagePath = `${user.id}/${crypto.randomUUID()}.pdf`;
+
+        const { error: upErr } = await supabase.storage
+          .from(STUDY_PDF_INGEST_BUCKET)
+          .upload(storagePath, file, {
+            contentType: "application/pdf",
+            cacheControl: "3600",
+            upsert: false,
+          });
+
+        if (upErr) {
+          const detail =
+            typeof upErr === "object" && upErr && "message" in upErr
+              ? String((upErr as { message: unknown }).message)
+              : String(upErr);
+          failures.push(
+            `${file.name}: ${describePdfIngestUploadFailure(detail)}`
+          );
+          continue;
+        }
+
+        let res: Response;
+        try {
+          res = await fetch("/api/process-pdf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              courseId,
+              examGroupId,
+              storagePath,
+              originalFileName: file.name,
+            }),
+          });
+        } catch {
+          await supabase.storage
+            .from(STUDY_PDF_INGEST_BUCKET)
+            .remove([storagePath])
+            .catch(() => {});
+          failures.push(`${file.name}: Network error while starting build.`);
+          continue;
+        }
+
         const raw = await res.text();
 
         if (!res.ok) {

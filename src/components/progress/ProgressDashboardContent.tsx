@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { APP_NAME } from "@/lib/brand";
 import { ActivityRhythm } from "@/components/progress/ActivityRhythm";
 import { CourseLearningCard } from "@/components/progress/CourseLearningCard";
 import { ProgressRings } from "@/components/progress/ProgressRings";
@@ -38,8 +39,8 @@ export function ProgressDashboardContent({
       {showTopActions ? (
         <div className="flex flex-col gap-5 border-b border-zinc-200/80 pb-8 dark:border-zinc-800">
           <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-              Learning pulse
+            <p className="text-xs font-semibold tracking-wider text-brand dark:text-brand-soft">
+              {APP_NAME}
             </p>
             <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-3xl">
               Your progress

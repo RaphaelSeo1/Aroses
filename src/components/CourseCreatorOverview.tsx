@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { APP_NAME } from "@/lib/brand";
 
 /**
  * Dashboard course page — owner tools only. Personal study metrics live under
@@ -29,18 +30,12 @@ export function CourseCreatorOverview({
               href="/dashboard/profile?tab=progress"
               className="font-semibold text-brand underline-offset-2 hover:underline dark:text-brand-soft"
             >
-              Learning pulse
+              {APP_NAME}
             </Link>
             .
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-3">
-          <Link
-            href="/dashboard/profile?tab=progress"
-            className="rounded-full border border-brand-border bg-white px-4 py-2.5 text-sm font-semibold text-brand-ink shadow-sm hover:bg-white dark:border-brand-border/50 dark:bg-[#1e1616] dark:text-brand-blush dark:hover:bg-[#2a2020]"
-          >
-            Learning pulse
-          </Link>
           <Link
             href={studyHref}
             className="rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-red-600/20 hover:bg-brand-hover dark:bg-brand"

@@ -151,7 +151,7 @@ type Props = {
   initial: UserProfileRow | null;
   /** Open Progress / Account when landing with `?tab=` (server + client sync). */
   initialPanel?: Panel;
-  /** Learning pulse UI (server-rendered slot). */
+  /** Profile → Progress panel (server-rendered slot). */
   progressPanel: ReactNode;
 };
 
