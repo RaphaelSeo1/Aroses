@@ -15,7 +15,6 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.105.4",
-    "@vercel/functions": "^2.2.13",
     "katex": "^0.16.45",
     "next": "16.2.6",
     "pdf-parse": "^2.4.5",

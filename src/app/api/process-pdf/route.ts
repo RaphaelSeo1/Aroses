@@ -1,7 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
-import { waitUntil } from "@vercel/functions";
+import { after, NextResponse } from "next/server";
 import { runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
@@ -10,6 +9,8 @@ export const runtime = "nodejs";
 
 /** Background work can run several minutes on supported plans. */
 export const maxDuration = 300;
+
+export const dynamic = "force-dynamic";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -27,7 +28,7 @@ async function removeIngestObject(
     .catch(() => {});
 }
 
-export async function POST(request: Request) {
+async function handleProcessPdfPost(request: Request): Promise<Response> {
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -182,12 +183,13 @@ export async function POST(request: Request) {
 
   const jobId = jobRow.id;
 
+  /** Vercel sets `VERCEL=1`; run the heavy pipeline after we return 202 so the gateway sees a fast response. */
   if (process.env.VERCEL) {
-    waitUntil(
-      runPdfIngestJob(jobId).catch((e) =>
-        console.error("[process-pdf] background job", jobId, e)
-      )
-    );
+    after(() => {
+      void runPdfIngestJob(jobId).catch((e) =>
+        console.error("[process-pdf] after()", jobId, e)
+      );
+    });
     return NextResponse.json({ jobId }, { status: 202 });
   }
 
@@ -214,4 +216,22 @@ export async function POST(request: Request) {
     },
     { status: 500 }
   );
+}
+
+export async function POST(request: Request) {
+  try {
+    return await handleProcessPdfPost(request);
+  } catch (e) {
+    console.error("[process-pdf] POST uncaught", e);
+    const hint =
+      e instanceof Error ? e.message : "Unknown error starting PDF build.";
+    return NextResponse.json(
+      {
+        error:
+          "Could not start the PDF build on the server. Redeploy the latest code, confirm migration 020_pdf_ingest_jobs.sql is applied in Supabase, then try again.",
+        ...(process.env.NODE_ENV === "development" ? { debug: hint } : {}),
+      },
+      { status: 500 }
+    );
+  }
 }
