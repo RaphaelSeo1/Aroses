@@ -25,6 +25,18 @@ export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
  */
 type CourseBuildProfile = "full" | "balanced" | "fast";
 
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clampInt(n: number, min: number, max: number): number {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
 function resolveCourseBuildProfile(): CourseBuildProfile {
   const p = process.env.COURSE_BUILD_PROFILE?.trim().toLowerCase();
   if (p === "full") return "full";
@@ -37,7 +49,7 @@ export function materialTextForPdfIngest(fullText: string): string {
   const profile = resolveCourseBuildProfile();
   return truncateMaterial(
     fullText.trim(),
-    profile === "fast" ? FAST_MATERIAL_CHARS : MAX_MATERIAL_CHARS
+    materialCharLimit(profile)
   );
 }
 
@@ -56,6 +68,12 @@ function resolveCourseModel(profile: CourseBuildProfile): string {
 const MAX_MATERIAL_CHARS = 120_000;
 /** Aggressively small for `fast` so outline/module calls stay quick. */
 const FAST_MATERIAL_CHARS = 40_000;
+
+function materialCharLimit(profile: CourseBuildProfile): number {
+  if (profile !== "fast") return MAX_MATERIAL_CHARS;
+  const fromEnv = envInt("COURSE_FAST_MATERIAL_CHARS", FAST_MATERIAL_CHARS);
+  return clampInt(fromEnv, 8_000, MAX_MATERIAL_CHARS);
+}
 
 function truncateMaterial(text: string, maxChars: number = MAX_MATERIAL_CHARS): string {
   const t = text.trim();
@@ -292,8 +310,8 @@ function outlineInstruction(
     moduleCount =
       "Use **2 to 8** modules depending on how much content the source has.";
   } else if (profile === "fast") {
-    moduleCount =
-      "Use **2 to 3** modules so the course can be built very quickly.";
+    const maxModules = clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 8);
+    moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
   } else {
     moduleCount = "Use **2 to 6** modules.";
   }
@@ -324,7 +342,9 @@ function moduleQuizRules(profile: CourseBuildProfile): string {
     return `QUIZ (this module only): **at least 8** questions, with **at least 4** type free_response (include reference_answer snake_case). The rest MCQ with exactly 4 choices each.`;
   }
   if (profile === "fast") {
-    return `QUIZ (this module only): **at least 3** questions, with **at least 1** type free_response (reference_answer required). The rest MCQ, 4 choices each.`;
+    const quizMin = clampInt(envInt("COURSE_FAST_QUIZ_MIN", 3), 1, 12);
+    const frMin = clampInt(envInt("COURSE_FAST_FREE_RESPONSE_MIN", 1), 0, quizMin);
+    return `QUIZ (this module only): **at least ${quizMin}** questions, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ, 4 choices each.`;
   }
   return `QUIZ (this module only): **at least 6** questions, with **at least 3** type free_response (reference_answer required). Mix MCQ and free-response. MCQs: exactly 4 choices.`;
 }
@@ -371,7 +391,10 @@ ${brokenAssistantText.slice(0, 60_000)}`;
     anthropic,
     {
       model: resolveCourseModel(profile),
-      max_tokens: profile === "fast" ? 4096 : 8192,
+      max_tokens:
+        profile === "fast"
+          ? clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192)
+          : 8192,
       temperature: 0.1,
       messages: [{ role: "user", content: prompt }],
     },
@@ -436,17 +459,17 @@ export async function generateCourseOutlineFromMaterial(
     maxRetries: 0,
   });
 
-  const trimmed = truncateMaterial(
-    materialText,
-    profile === "fast" ? FAST_MATERIAL_CHARS : MAX_MATERIAL_CHARS
-  );
+  const trimmed = truncateMaterial(materialText, materialCharLimit(profile));
   const instruction = outlineInstruction(trimmed, profile);
 
   const msg = await createMessageWithRetries(
     anthropic,
     {
       model: resolveCourseModel(profile),
-      max_tokens: profile === "fast" ? 4096 : 8192,
+      max_tokens:
+        profile === "fast"
+          ? clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192)
+          : 8192,
       temperature: 0.2,
       messages: [{ role: "user", content: instruction }],
     },
@@ -470,7 +493,9 @@ export async function generateCourseOutlineFromMaterial(
 }
 
 function moduleMaxTokens(profile: CourseBuildProfile): number {
-  if (profile === "fast") return 4_096;
+  if (profile === "fast") {
+    return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 4096), 1536, 16384);
+  }
   if (profile === "full") return 30_720;
   return 24_576;
 }
@@ -496,10 +521,7 @@ export async function generateCourseModuleFromMaterial(
     maxRetries: 0,
   });
 
-  const trimmed = truncateMaterial(
-    materialText,
-    profile === "fast" ? FAST_MATERIAL_CHARS : MAX_MATERIAL_CHARS
-  );
+  const trimmed = truncateMaterial(materialText, materialCharLimit(profile));
   const instruction = moduleInstruction(trimmed, outline, moduleIndex, profile);
 
   const msg = await createMessageWithRetries(
