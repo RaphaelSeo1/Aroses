@@ -586,11 +586,11 @@ export function CourseUploadForm({
           <p className="mt-1.5 text-sm font-medium text-zinc-900 dark:text-zinc-100">
             {buildProgress.line}
           </p>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+          <div className="relative mt-3 h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
             {buildProgress.bar === "indeterminate" ? (
               <div
-                className="h-full w-full origin-left animate-pulse bg-gradient-to-r from-brand/25 via-brand/60 to-brand/25 dark:from-brand-soft/20 dark:via-brand-soft/55 dark:to-brand-soft/20"
-                style={{ animationDuration: "1.4s" }}
+                className="absolute inset-y-0 w-[32%] rounded-full bg-brand shadow-sm shadow-red-500/20 dark:bg-brand-soft dark:shadow-red-900/30 animate-course-upload-indeterminate"
+                aria-hidden
               />
             ) : typeof buildProgress.bar === "number" ? (
               <div

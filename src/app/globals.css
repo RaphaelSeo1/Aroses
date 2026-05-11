@@ -194,3 +194,25 @@ html.dark .bg-app-gradient {
     opacity: 1 !important;
   }
 }
+
+/* Course PDF upload — indeterminate bar must not read as “almost done” (full-width pulse). */
+@keyframes course-upload-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.animate-course-upload-indeterminate {
+  animation: course-upload-indeterminate 1.15s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-course-upload-indeterminate {
+    animation: none;
+    transform: translateX(0);
+    opacity: 0.55;
+  }
+}

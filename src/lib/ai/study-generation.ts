@@ -23,7 +23,10 @@ export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
  * Default **`fast`**: smaller per-module JSON. Set `COURSE_BUILD_PROFILE=balanced` or `full`
  * for richer courses. **`balanced`** is tuned for speed (fewer modules than `full`, lighter than before).
  * Optional: `COURSE_BALANCED_MAX_MODULES`, `COURSE_BALANCED_MAX_LESSON_TITLES`,
- * `COURSE_BALANCED_MODULE_MAX_TOKENS`, `COURSE_FAST_MAX_LESSON_TITLES`.
+ * `COURSE_BALANCED_MODULE_MAX_TOKENS`, `COURSE_BALANCED_MATERIAL_CHARS`, `COURSE_FAST_MAX_LESSON_TITLES`.
+ * **`balanced`**: smaller `COURSE_BALANCED_MATERIAL_CHARS` input; outline defaults to **Haiku**;
+ * modules use **Sonnet** unless `ANTHROPIC_COURSE_MODEL` is set (same model for both). Outline-only:
+ * `ANTHROPIC_OUTLINE_MODEL`.
  */
 type CourseBuildProfile = "full" | "balanced" | "fast";
 
@@ -66,15 +69,40 @@ function resolveCourseModel(profile: CourseBuildProfile): string {
   return "claude-sonnet-4-6";
 }
 
+/**
+ * Compact outline JSON — **`balanced`** uses Haiku when neither `ANTHROPIC_COURSE_MODEL` nor
+ * `ANTHROPIC_OUTLINE_MODEL` is set, so phase 1 stays fast; modules still use Sonnet via
+ * `resolveCourseModel`.
+ */
+function resolveOutlineModel(profile: CourseBuildProfile): string {
+  const outlineOnly = process.env.ANTHROPIC_OUTLINE_MODEL?.trim();
+  if (outlineOnly) return outlineOnly;
+  const courseOverride = process.env.ANTHROPIC_COURSE_MODEL?.trim();
+  if (courseOverride) return courseOverride;
+  if (profile === "fast" || profile === "balanced") return "claude-haiku-4-5";
+  return "claude-sonnet-4-6";
+}
+
 /** Rough input budget — large PDFs + long outputs often hit limits or timeouts. */
 const MAX_MATERIAL_CHARS = 120_000;
 /** Aggressively small for `fast` so outline/module calls stay quick. */
 const FAST_MATERIAL_CHARS = 40_000;
+/** `balanced`: smaller than full — outline + modules stay faster on long slide decks. */
+const BALANCED_MATERIAL_CHARS = 52_000;
 
 function materialCharLimit(profile: CourseBuildProfile): number {
-  if (profile !== "fast") return MAX_MATERIAL_CHARS;
-  const fromEnv = envInt("COURSE_FAST_MATERIAL_CHARS", FAST_MATERIAL_CHARS);
-  return clampInt(fromEnv, 8_000, MAX_MATERIAL_CHARS);
+  if (profile === "fast") {
+    const fromEnv = envInt("COURSE_FAST_MATERIAL_CHARS", FAST_MATERIAL_CHARS);
+    return clampInt(fromEnv, 8_000, MAX_MATERIAL_CHARS);
+  }
+  if (profile === "balanced") {
+    const fromEnv = envInt(
+      "COURSE_BALANCED_MATERIAL_CHARS",
+      BALANCED_MATERIAL_CHARS
+    );
+    return clampInt(fromEnv, 20_000, MAX_MATERIAL_CHARS);
+  }
+  return MAX_MATERIAL_CHARS;
 }
 
 function truncateMaterial(text: string, maxChars: number = MAX_MATERIAL_CHARS): string {
@@ -413,7 +441,7 @@ ${brokenAssistantText.slice(0, 60_000)}`;
   const msg = await createMessageWithRetries(
     anthropic,
     {
-      model: resolveCourseModel(profile),
+      model: resolveOutlineModel(profile),
       max_tokens:
         profile === "fast"
           ? clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192)
@@ -421,7 +449,7 @@ ${brokenAssistantText.slice(0, 60_000)}`;
       temperature: 0.1,
       messages: [{ role: "user", content: prompt }],
     },
-    { maxAttempts: profile === "fast" ? 1 : 3 }
+    { maxAttempts: profile === "fast" ? 1 : profile === "balanced" ? 2 : 3 }
   );
 
   const text = extractTextBlock(msg);
@@ -554,7 +582,7 @@ export async function generateCourseOutlineFromMaterial(
   const msg = await createMessageWithRetries(
     anthropic,
     {
-      model: resolveCourseModel(profile),
+      model: resolveOutlineModel(profile),
       max_tokens:
         profile === "fast"
           ? clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192)
@@ -562,7 +590,7 @@ export async function generateCourseOutlineFromMaterial(
       temperature: 0.2,
       messages: [{ role: "user", content: instruction }],
     },
-    { maxAttempts: profile === "fast" ? 1 : 4 }
+    { maxAttempts: profile === "fast" ? 1 : profile === "balanced" ? 2 : 4 }
   );
 
   const rawText = extractTextBlock(msg);
