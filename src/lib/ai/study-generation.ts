@@ -5,6 +5,7 @@ import {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 import { parseCoursePayload, stripJsonFence } from "@/lib/ai/course-payload";
+import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import type { CoursePayload } from "@/types/course";
 
 const MODEL = "claude-sonnet-4-20250514";
@@ -181,8 +182,8 @@ export async function generateCourseFromMaterial(
   const profile = resolveCourseBuildProfile();
   const anthropic = new Anthropic({
     apiKey,
-    /** Keep below `/api/process-pdf` `maxDuration` (300s on Vercel Pro) so the host does not kill mid-request. */
-    timeout: profile === "full" ? 255_000 : 235_000,
+    /** Stay under `/api/process-pdf` `maxDuration` (see `@/lib/pdf-route-duration`). */
+    timeout: getPdfAnthropicTimeoutMs(),
     maxRetries: 0,
   });
 

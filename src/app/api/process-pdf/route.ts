@@ -8,10 +8,10 @@ import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 export const runtime = "nodejs";
 
 /**
- * Background PDF + AI build. Vercel Pro caps this at **300s**; higher values fail deploy.
- * Enterprise / Fluid can raise the platform limit, then you may increase this number.
+ * Must be a **numeric literal** (Next.js 16). Keep in sync with `PDF_PROCESS_MAX_DURATION_SEC`
+ * in `@/lib/pdf-route-duration`. Hobby: ≤60. Pro: use **300** for long PDF builds.
  */
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 export const dynamic = "force-dynamic";
 
