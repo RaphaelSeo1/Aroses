@@ -8,10 +8,10 @@ import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 export const runtime = "nodejs";
 
 /**
- * Background PDF + AI build. Vercel caps by plan (often 300s; higher on Pro / Fluid).
- * Default course profile is balanced (~few min); use `COURSE_BUILD_PROFILE=full` for max depth.
+ * Background PDF + AI build. Vercel Pro caps this at **300s**; higher values fail deploy.
+ * Enterprise / Fluid can raise the platform limit, then you may increase this number.
  */
-export const maxDuration = 480;
+export const maxDuration = 300;
 
 export const dynamic = "force-dynamic";
 

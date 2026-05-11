@@ -181,8 +181,8 @@ export async function generateCourseFromMaterial(
   const profile = resolveCourseBuildProfile();
   const anthropic = new Anthropic({
     apiKey,
-    /** Stay under route `maxDuration`; balanced runs usually finish sooner. */
-    timeout: profile === "full" ? 520_000 : 380_000,
+    /** Keep below `/api/process-pdf` `maxDuration` (300s on Vercel Pro) so the host does not kill mid-request. */
+    timeout: profile === "full" ? 255_000 : 235_000,
     maxRetries: 0,
   });
 
