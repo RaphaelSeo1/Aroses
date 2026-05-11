@@ -288,7 +288,10 @@ function normalizeLesson(raw: unknown): CourseLesson {
   };
 }
 
-function normalizeModule(raw: unknown): CourseModule {
+function normalizeModule(
+  raw: unknown,
+  opts?: { allowEmptyQuiz?: boolean }
+): CourseModule {
   if (!raw || typeof raw !== "object") throw new Error("Invalid module");
   const o = raw as Record<string, unknown>;
   const id = typeof o.id === "number" ? o.id : Number(o.id);
@@ -303,7 +306,7 @@ function normalizeModule(raw: unknown): CourseModule {
 
   const quizRaw = coerceModuleQuizArray(o);
   const quiz = normalizeQuizItemsLoose(quizRaw);
-  if (quiz.length === 0) {
+  if (!opts?.allowEmptyQuiz && quiz.length === 0) {
     throw new Error("Each module needs at least one valid quiz question");
   }
 
@@ -383,7 +386,31 @@ export function parseCoursePayload(parsed: unknown): CoursePayload {
     throw new Error("Invalid course: need at least one module");
   }
 
-  const modules = obj.modules.map(normalizeModule);
+  const modules = obj.modules.map((m) => normalizeModule(m));
+
+  return {
+    title: obj.title,
+    description: obj.description,
+    modules,
+  };
+}
+
+/**
+ * Same as {@link parseCoursePayload} but allows modules with an empty `quiz` array.
+ * Used for live PDF build previews where outline placeholders have `quiz: []` until expand finishes.
+ */
+export function parseLivePreviewCoursePayload(parsed: unknown): CoursePayload {
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.title !== "string" || typeof obj.description !== "string") {
+    throw new Error("Invalid course: missing title or description");
+  }
+  if (!Array.isArray(obj.modules) || obj.modules.length === 0) {
+    throw new Error("Invalid course: need at least one module");
+  }
+
+  const modules = obj.modules.map((m) =>
+    normalizeModule(m, { allowEmptyQuiz: true })
+  );
 
   return {
     title: obj.title,

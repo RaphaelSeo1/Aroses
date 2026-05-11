@@ -484,13 +484,24 @@ export function ExamGroupsPanel({
   courseId,
   groups,
   materials,
+  initialSectionId,
 }: {
   courseId: string;
   groups: ExamGroupRow[];
   materials: MaterialRow[];
+  /** When set (e.g. from `?section=` after PDF upload redirect), selects that section tab. */
+  initialSectionId?: string;
 }) {
   const router = useRouter();
-  const [activeId, setActiveId] = useState(groups[0]?.id ?? "");
+  const [activeId, setActiveId] = useState(() => {
+    if (
+      initialSectionId &&
+      groups.some((g) => g.id === initialSectionId)
+    ) {
+      return initialSectionId;
+    }
+    return groups[0]?.id ?? "";
+  });
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);

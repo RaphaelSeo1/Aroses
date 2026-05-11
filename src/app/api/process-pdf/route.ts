@@ -189,8 +189,19 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
 
   const jobId = jobRow.id;
 
-  /** Vercel sets `VERCEL=1`; run the heavy pipeline after we return 202 so the gateway sees a fast response. */
-  if (process.env.VERCEL) {
+  /**
+   * Return `202` + `jobId` and run phase 1 in `after()` so the client can redirect to the course
+   * page and poll (same UX as production). On Vercel, `VERCEL=1`. In `next dev`, `NODE_ENV` is
+   * `development` — use chunked there too so local matches the deployed app. For a local
+   * production build (`next start`) without `VERCEL`, set `PDF_INGEST_CHUNKED=1` in `.env` to
+   * opt into this path; otherwise the handler falls through to the monolithic response below.
+   */
+  const useChunkedPdfIngest =
+    process.env.VERCEL === "1" ||
+    process.env.NODE_ENV === "development" ||
+    process.env.PDF_INGEST_CHUNKED === "1";
+
+  if (useChunkedPdfIngest) {
     after(() => {
       void runPdfIngestJob(jobId).catch((e) =>
         console.error("[process-pdf] after()", jobId, e)
@@ -200,7 +211,7 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
   }
 
   await runPdfIngestJob(jobId).catch((e) =>
-    console.error("[process-pdf] dev job phase1", jobId, e)
+    console.error("[process-pdf] monolith job phase1", jobId, e)
   );
 
   for (let step = 0; step < 24; step++) {

@@ -1,6 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { buildLivePreviewCourse } from "@/lib/pdf-ingest-preview";
+import type { CoursePayload } from "@/types/course";
 
 export const runtime = "nodejs";
 /** Align with other PDF-ingest routes on Vercel Pro (Hobby: lower cap may be required). */
@@ -57,7 +59,7 @@ export async function GET(_request: Request, ctx: Params) {
   const { data: row, error } = await supabase
     .from("pdf_ingest_jobs")
     .select(
-      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_modules"
+      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_modules, original_file_name, stream_preview"
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -76,6 +78,10 @@ export async function GET(_request: Request, ctx: Params) {
     Date.now() - updatedAt > staleBudgetMs;
 
   if (stale) {
+    const staleName =
+      typeof row.original_file_name === "string" && row.original_file_name.trim()
+        ? row.original_file_name.trim()
+        : undefined;
     return NextResponse.json({
       status: "failed",
       materialId: undefined,
@@ -88,6 +94,9 @@ export async function GET(_request: Request, ctx: Params) {
         typeof row.created_at === "string" && row.created_at.trim()
           ? row.created_at.trim()
           : undefined,
+      originalFileName: staleName,
+      streamPreview: null,
+      previewCourse: null,
     });
   }
 
@@ -115,6 +124,23 @@ export async function GET(_request: Request, ctx: Params) {
       ? row.created_at.trim()
       : undefined;
 
+  const originalFileName =
+    typeof row.original_file_name === "string" && row.original_file_name.trim()
+      ? row.original_file_name.trim()
+      : undefined;
+
+  const streamPreview =
+    typeof row.stream_preview === "string" ? row.stream_preview : null;
+
+  let previewCourse: CoursePayload | null = null;
+  if (
+    (outlineReady || row.status === "complete") &&
+    outline != null &&
+    typeof outline === "object"
+  ) {
+    previewCourse = buildLivePreviewCourse(outline, modulesArr);
+  }
+
   return NextResponse.json({
     status: row.status,
     materialId: row.material_id ?? undefined,
@@ -126,5 +152,8 @@ export async function GET(_request: Request, ctx: Params) {
     modulesBuilt,
     modulesTotal,
     createdAt,
+    originalFileName,
+    streamPreview,
+    previewCourse,
   });
 }

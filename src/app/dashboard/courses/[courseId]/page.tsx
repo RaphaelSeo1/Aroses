@@ -17,10 +17,18 @@ import type { CoursePayload } from "@/types/course";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type Props = { params: Promise<{ courseId: string }> };
+type Props = {
+  params: Promise<{ courseId: string }>;
+  searchParams: Promise<{ section?: string }>;
+};
 
-export default async function CourseDetailPage({ params }: Props) {
+export default async function CourseDetailPage({ params, searchParams }: Props) {
   const { courseId } = await params;
+  const sp = await searchParams;
+  const sectionFromUrl =
+    typeof sp.section === "string" && UUID_RE.test(sp.section)
+      ? sp.section
+      : null;
 
   if (!UUID_RE.test(courseId)) notFound();
 
@@ -114,6 +122,7 @@ export default async function CourseDetailPage({ params }: Props) {
             courseId={course.id}
             groups={groups}
             materials={materials}
+            initialSectionId={sectionFromUrl ?? undefined}
           />
         </div>
       </main>

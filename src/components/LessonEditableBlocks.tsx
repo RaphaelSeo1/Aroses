@@ -6,7 +6,47 @@ import { EditableSection } from "@/components/EditableSection";
 import { LessonMarkdownEditor } from "@/components/LessonMarkdownEditor";
 import { LessonQuoteCaptureRegion } from "@/components/LessonQuoteCaptureRegion";
 import { LessonRichContent } from "@/components/LessonRichContent";
+import { TypewriterText, useTypewriterString } from "@/components/TypewriterText";
 import type { CourseLesson, KeyTerm } from "@/types/course";
+
+function KeyTermReadOnlyCard({
+  term,
+  definition,
+  animateReveal,
+}: {
+  term: string;
+  definition: string;
+  animateReveal: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/50">
+      <dt className="font-medium text-zinc-900 dark:text-zinc-100">
+        {animateReveal ? (
+          <TypewriterText
+            text={term}
+            instantBelow={0}
+            charDelayMs={36}
+            charsPerTick={1}
+          />
+        ) : (
+          term
+        )}
+      </dt>
+      <dd className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+        {animateReveal ? (
+          <TypewriterText
+            text={definition}
+            instantBelow={0}
+            charDelayMs={11}
+            charsPerTick={1}
+          />
+        ) : (
+          definition
+        )}
+      </dd>
+    </div>
+  );
+}
 
 type Section = "title" | "body" | "key_terms" | "examples" | null;
 
@@ -16,12 +56,15 @@ export function LessonEditableBlocks({
   lessonIndex,
   lesson,
   readOnly = false,
+  animateReveal = false,
 }: {
   materialId: string;
   moduleId: number;
   lessonIndex: number;
   lesson: CourseLesson;
   readOnly?: boolean;
+  /** When `readOnly`, progressively reveal text (live PDF build theater). */
+  animateReveal?: boolean;
 }) {
   const router = useRouter();
   const [section, setSection] = useState<Section>(null);
@@ -36,6 +79,14 @@ export function LessonEditableBlocks({
   const [draftExamples, setDraftExamples] = useState<string[]>(() => [
     ...lesson.examples,
   ]);
+
+  const streamedBody = useTypewriterString(lesson.content ?? "", {
+    mode: "chars",
+    charsPerTick: 1,
+    charDelayMs: 12,
+    instantBelow:
+      readOnly && animateReveal ? 0 : 2_000_000_000,
+  });
 
   useEffect(() => {
     setDraftTitle(lesson.title);
@@ -99,6 +150,31 @@ export function LessonEditableBlocks({
     });
 
   if (readOnly) {
+    const titleEl = animateReveal ? (
+      <h3 className="mt-2 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+        <TypewriterText
+          text={lesson.title}
+          instantBelow={0}
+          charDelayMs={36}
+          charsPerTick={1}
+        />
+      </h3>
+    ) : (
+      <h3 className="mt-2 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+        {lesson.title}
+      </h3>
+    );
+
+    const bodyEl = animateReveal ? (
+      <div className="mt-3">
+        <LessonRichContent markdown={streamedBody} />
+      </div>
+    ) : (
+      <div className="mt-3">
+        <LessonRichContent markdown={lesson.content} />
+      </div>
+    );
+
     return (
       <article className="space-y-6">
         <LessonQuoteCaptureRegion
@@ -109,17 +185,13 @@ export function LessonEditableBlocks({
             <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
               Lesson title
             </p>
-            <h3 className="mt-2 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-              {lesson.title}
-            </h3>
+            {titleEl}
           </div>
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
               Lesson content
             </p>
-            <div className="mt-3">
-              <LessonRichContent markdown={lesson.content} />
-            </div>
+            {bodyEl}
           </div>
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
@@ -133,17 +205,12 @@ export function LessonEditableBlocks({
               ) : (
                 <dl className="grid gap-3 sm:grid-cols-2">
                   {lesson.key_terms.map((kt, ki) => (
-                    <div
-                      key={ki}
-                      className="rounded-xl border border-zinc-200 bg-white/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/50"
-                    >
-                      <dt className="font-medium text-zinc-900 dark:text-zinc-100">
-                        {kt.term}
-                      </dt>
-                      <dd className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                        {kt.definition}
-                      </dd>
-                    </div>
+                    <KeyTermReadOnlyCard
+                      key={`${lessonIndex}-${ki}-${kt.term}`}
+                      term={kt.term}
+                      definition={kt.definition}
+                      animateReveal={animateReveal}
+                    />
                   ))}
                 </dl>
               )}
@@ -161,7 +228,18 @@ export function LessonEditableBlocks({
               ) : (
                 <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
                   {lesson.examples.map((ex, ei) => (
-                    <li key={ei}>{ex}</li>
+                    <li key={`${lessonIndex}-ex-${ei}`}>
+                      {animateReveal ? (
+                        <TypewriterText
+                          text={ex}
+                          instantBelow={0}
+                          charDelayMs={14}
+                          charsPerTick={1}
+                        />
+                      ) : (
+                        ex
+                      )}
+                    </li>
                   ))}
                 </ul>
               )}

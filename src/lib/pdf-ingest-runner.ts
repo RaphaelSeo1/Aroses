@@ -12,6 +12,7 @@ import {
   generateCourseModuleFromMaterial,
   generateCourseOutlineFromMaterial,
   materialTextForPdfIngest,
+  type PdfIngestStreamSink,
 } from "@/lib/ai/study-generation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -49,6 +50,43 @@ async function touchJobProgress(
     .eq("id", jobId);
 }
 
+async function pushJobStreamPreview(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string,
+  text: string
+) {
+  await admin
+    .from("pdf_ingest_jobs")
+    .update({
+      stream_preview: text,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+}
+
+async function clearJobStreamPreview(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+) {
+  await admin
+    .from("pdf_ingest_jobs")
+    .update({
+      stream_preview: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+}
+
+function createPdfStreamSink(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+): PdfIngestStreamSink {
+  return {
+    push: (t) => pushJobStreamPreview(admin, jobId, t),
+    clear: () => clearJobStreamPreview(admin, jobId),
+  };
+}
+
 async function failJob(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
@@ -60,6 +98,7 @@ async function failJob(
     .update({
       status: "failed",
       error_message: truncateErr(message),
+      stream_preview: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);
@@ -175,6 +214,7 @@ async function finalizePdfIngest(
     .update({
       status: "complete",
       material_id: row.id,
+      stream_preview: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);
@@ -294,7 +334,8 @@ export async function runPdfIngestExpandOne(
     newMod = await generateCourseModuleFromMaterial(
       job.ingest_source_text,
       outline,
-      idx
+      idx,
+      createPdfStreamSink(admin, jobId)
     );
   } catch (e) {
     const message = mapAiFailureToMessage(jobId, e);
@@ -308,6 +349,7 @@ export async function runPdfIngestExpandOne(
     .from("pdf_ingest_jobs")
     .update({
       ingest_modules: nextModules,
+      stream_preview: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);
@@ -466,11 +508,12 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
   const storedMaterial = materialTextForPdfIngest(text);
 
   let outline: CourseOutlinePayload;
+  const streamSink = createPdfStreamSink(admin, jobId);
   const heartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
   }, 25_000);
   try {
-    outline = await generateCourseOutlineFromMaterial(text);
+    outline = await generateCourseOutlineFromMaterial(text, streamSink);
   } catch (e) {
     const message = mapAiFailureToMessage(jobId, e);
     await failJob(admin, jobId, storagePath, message);
@@ -485,6 +528,7 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
       ingest_source_text: storedMaterial,
       ingest_outline: outline,
       ingest_modules: [],
+      stream_preview: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);

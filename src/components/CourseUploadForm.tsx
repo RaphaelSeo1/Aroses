@@ -11,16 +11,10 @@ import {
   MAX_STUDY_PDF_BYTES,
   STUDY_PDF_INGEST_BUCKET,
 } from "@/lib/study-pdf-ingest";
+import type { PdfBuildProgressUI } from "@/lib/pdf-ingest-client";
 
 /** Max PDFs building at once; each job is independent, but a cap limits Anthropic / host spikes. */
 const PDF_UPLOAD_CONCURRENCY = 3;
-
-/** Shown under the upload area while a chunked PDF job runs (outline → per-module expand). */
-type PdfBuildProgressUI = {
-  line: string;
-  /** `indeterminate` during PDF/outline; 0–100 while modules are generated. */
-  bar: number | "indeterminate" | null;
-};
 
 function isPdfFile(f: File): boolean {
   return (
@@ -71,10 +65,6 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
   return `Request failed (${res.status} ${res.statusText || "error"}). Try a smaller file or retry later.`;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 /** Run `worker` on each item with at most `concurrency` in flight. */
 async function runPool<T>(
   items: T[],
@@ -96,171 +86,6 @@ async function runPool<T>(
     }
   }
   await Promise.all([...executing]);
-}
-
-function formatElapsedShort(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "";
-  const s = Math.floor(ms / 1000);
-  if (s < 90) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rs = s % 60;
-  return rs > 0 ? `${m}m ${rs}s` : `${m} min`;
-}
-
-function jobStartedAtMs(createdAt?: string): number | null {
-  if (typeof createdAt !== "string" || !createdAt.trim()) return null;
-  const t = Date.parse(createdAt);
-  return Number.isFinite(t) ? t : null;
-}
-
-/** Poll after `POST /api/process-pdf` returns `202` + `jobId` (chunked: outline in background, then per-module expand). */
-async function pollPdfIngestJob(
-  jobId: string,
-  onProgress?: (info: PdfBuildProgressUI) => void
-): Promise<{
-  materialId?: string;
-  error?: string;
-}> {
-  /** Default `express` targets a few minutes; richer profiles may need the full window. */
-  const deadline = Date.now() + 15 * 60 * 1000;
-  while (Date.now() < deadline) {
-    const r = await fetch(`/api/process-pdf/jobs/${jobId}`);
-    const raw = await r.text();
-    let data: {
-      status?: string;
-      materialId?: string;
-      error?: string;
-      outlineReady?: boolean;
-      modulesBuilt?: number;
-      modulesTotal?: number;
-      createdAt?: string;
-    };
-    try {
-      data = JSON.parse(raw) as typeof data;
-    } catch {
-      await sleep(2000);
-      continue;
-    }
-    if (!r.ok) {
-      if (typeof data.error === "string" && data.error.trim()) {
-        return { error: data.error.trim() };
-      }
-      return { error: `Status check failed (${r.status}).` };
-    }
-    if (data.status === "complete" && data.materialId) {
-      return { materialId: data.materialId };
-    }
-    if (data.status === "failed") {
-      return { error: data.error ?? "PDF build failed." };
-    }
-
-    if (
-      data.status === "running" &&
-      data.outlineReady &&
-      typeof data.modulesBuilt === "number" &&
-      typeof data.modulesTotal === "number" &&
-      data.modulesTotal > 0 &&
-      data.modulesBuilt < data.modulesTotal
-    ) {
-      const next = data.modulesBuilt + 1;
-      const started = jobStartedAtMs(data.createdAt);
-      const elapsedPart =
-        started != null
-          ? ` · ${formatElapsedShort(Date.now() - started)}`
-          : "";
-      onProgress?.({
-        line: `Writing module ${next} of ${data.modulesTotal}${elapsedPart}…`,
-        bar: Math.min(
-          100,
-          ((next - 0.5) / data.modulesTotal) * 100
-        ),
-      });
-      let exp: Response;
-      try {
-        exp = await fetch("/api/process-pdf/expand", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jobId }),
-        });
-      } catch {
-        return {
-          error:
-            "Network error while building a module. Check your connection and try uploading again.",
-        };
-      }
-      const expRaw = await exp.text();
-      let expJson: {
-        error?: string;
-        complete?: boolean;
-        materialId?: string;
-        modulesBuilt?: number;
-        modulesTotal?: number;
-      };
-      try {
-        expJson = JSON.parse(expRaw) as typeof expJson;
-      } catch {
-        return { error: "Invalid response while building a module." };
-      }
-      if (!exp.ok) {
-        return {
-          error:
-            typeof expJson.error === "string" && expJson.error.trim()
-              ? expJson.error.trim()
-              : `Module ${next} failed (${exp.status}).`,
-        };
-      }
-      if (expJson.complete === true && typeof expJson.materialId === "string") {
-        return { materialId: expJson.materialId };
-      }
-      if (
-        expJson.complete !== true &&
-        typeof expJson.modulesBuilt === "number" &&
-        typeof expJson.modulesTotal === "number" &&
-        expJson.modulesTotal > 0
-      ) {
-        const startedMid = jobStartedAtMs(data.createdAt);
-        const elapsedMid =
-          startedMid != null
-            ? ` · ${formatElapsedShort(Date.now() - startedMid)}`
-            : "";
-        onProgress?.({
-          line: `Finished module ${expJson.modulesBuilt} of ${expJson.modulesTotal}${elapsedMid}. Preparing the next…`,
-          bar: Math.min(
-            100,
-            (expJson.modulesBuilt / expJson.modulesTotal) * 100
-          ),
-        });
-      }
-      continue;
-    }
-
-    if (
-      (data.status === "running" || data.status === "pending") &&
-      !data.outlineReady
-    ) {
-      const started = jobStartedAtMs(data.createdAt);
-      const elapsedMs = started != null ? Date.now() - started : 0;
-      const elapsedPart =
-        started != null
-          ? ` · ${formatElapsedShort(Date.now() - started)}`
-          : "";
-      /** Server runs PDF download → text extraction (often minutes on big decks) → then outline AI. */
-      const phaseLine =
-        elapsedMs < 90_000
-          ? "Step 1/2: Extracting text from your PDF (huge slide files can take several minutes before any AI runs)…"
-          : "Step 2/2: Planning course outline with AI (then writing each module)…";
-      onProgress?.({
-        line: `${phaseLine}${elapsedPart}`,
-        bar: "indeterminate",
-      });
-    }
-
-    await sleep(1800);
-  }
-  return {
-    error:
-      "Build is taking longer than expected (waited 15 minutes). For `COURSE_BUILD_PROFILE=full` or very large decks, upload one PDF at a time or check the host logs. Refresh the course page — it may still complete.",
-  };
 }
 
 export function CourseUploadForm({
@@ -380,10 +205,25 @@ export function CourseUploadForm({
         });
       };
 
-      async function runOnePdf(
+      type StartOkJob = {
+        ok: true;
+        mode: "job";
+        jobId: string;
+        fileName: string;
+      };
+      type StartOkMat = {
+        ok: true;
+        mode: "material";
+        materialId: string;
+        fileName: string;
+      };
+      type StartFail = { ok: false; failure: string };
+      type StartResult = StartOkJob | StartOkMat | StartFail;
+
+      async function startOnePdf(
         file: File,
         fileIndex: number
-      ): Promise<{ materialId?: string; failure?: string }> {
+      ): Promise<StartResult> {
         emitProgress(fileIndex, {
           line:
             total > 1
@@ -394,6 +234,7 @@ export function CourseUploadForm({
 
         if (file.size > MAX_STUDY_PDF_BYTES) {
           return {
+            ok: false,
             failure: `${file.name}: PDF is too large (max 40 MB). Split the file or export fewer pages.`,
           };
         }
@@ -414,6 +255,7 @@ export function CourseUploadForm({
               ? String((upErr as { message: unknown }).message)
               : String(upErr);
           return {
+            ok: false,
             failure: `${file.name}: ${describePdfIngestUploadFailure(detail)}`,
           };
         }
@@ -436,6 +278,7 @@ export function CourseUploadForm({
             .remove([storagePath])
             .catch(() => {});
           return {
+            ok: false,
             failure: `${file.name}: Network error while starting build.`,
           };
         }
@@ -444,58 +287,96 @@ export function CourseUploadForm({
 
         if (!res.ok) {
           return {
+            ok: false,
             failure: `${file.name}: ${messageFromUploadResponse(res, raw)}`,
           };
         }
 
-        let materialId: string | undefined;
         try {
           const body = JSON.parse(raw) as {
             materialId?: string;
             jobId?: string;
           };
           if (typeof body.materialId === "string" && body.materialId) {
-            materialId = body.materialId;
-          } else if (typeof body.jobId === "string" && body.jobId) {
-            const prefix =
-              total > 1
-                ? `File ${fileIndex + 1}/${total} · ${file.name}: `
-                : `${file.name}: `;
-            const polled = await pollPdfIngestJob(body.jobId, (info) =>
-              emitProgress(fileIndex, {
-                line: `${prefix}${info.line}`,
-                bar: info.bar,
-              })
-            );
-            if (polled.error) {
-              return { failure: `${file.name}: ${polled.error}` };
-            }
-            materialId = polled.materialId;
+            return {
+              ok: true,
+              mode: "material",
+              materialId: body.materialId,
+              fileName: file.name,
+            };
+          }
+          if (typeof body.jobId === "string" && body.jobId) {
+            emitProgress(fileIndex, {
+              line:
+                total > 1
+                  ? `File ${fileIndex + 1}/${total} · ${file.name}: Starting build — follow progress at the top of the course page.`
+                  : `${file.name}: Starting build — follow progress at the top of the course page.`,
+              bar: "indeterminate",
+            });
+            return {
+              ok: true,
+              mode: "job",
+              jobId: body.jobId,
+              fileName: file.name,
+            };
           }
         } catch {
-          return { failure: `${file.name}: Invalid response from server.` };
-        }
-
-        if (!materialId) {
           return {
-            failure: `${file.name}: Invalid response from server (missing material id).`,
+            ok: false,
+            failure: `${file.name}: Invalid response from server.`,
           };
         }
-        return { materialId };
+
+        return {
+          ok: false,
+          failure: `${file.name}: Invalid response from server (missing material id).`,
+        };
       }
 
+      const startResults: StartResult[] = new Array(total);
       await runPool(
         queue,
         Math.min(PDF_UPLOAD_CONCURRENCY, total),
         async (file, fileIndex) => {
-          const r = await runOnePdf(file, fileIndex);
-          if (r.failure) {
-            failures.push(r.failure);
-          } else if (r.materialId) {
-            lastMaterialId = r.materialId;
-          }
+          startResults[fileIndex] = await startOnePdf(file, fileIndex);
         }
       );
+
+      const jobs = startResults.filter(
+        (r): r is StartOkJob => Boolean(r?.ok && r.mode === "job")
+      );
+      const mats = startResults.filter(
+        (r): r is StartOkMat => Boolean(r?.ok && r.mode === "material")
+      );
+      const startFails = startResults.filter(
+        (r): r is StartFail => Boolean(r && !r.ok)
+      );
+
+      for (const f of startFails) {
+        failures.push(f.failure);
+      }
+
+      if (jobs.length > 0) {
+        setBuildProgress(null);
+        setFiles([]);
+        const qs = new URLSearchParams();
+        qs.set("pdfJobs", jobs.map((j) => j.jobId).join(","));
+        qs.set("section", examGroupId);
+        router.push(
+          `/dashboard/courses/${courseId}/study/build?${qs.toString()}`
+        );
+        setLoading(false);
+        if (startFails.length > 0) {
+          setError(
+            `${jobs.length} build(s) opened in study view. These files did not start:\n${startFails.map((x) => x.failure).join("\n")}`
+          );
+        }
+        return;
+      }
+
+      for (const m of mats) {
+        lastMaterialId = m.materialId;
+      }
 
       setBuildProgress(null);
       setFiles([]);
@@ -642,8 +523,10 @@ export function CourseUploadForm({
 
         <p className="mt-2 text-xs text-zinc-500">
           Text must be selectable in the PDF for best results (scanned pages may
-          not extract well). Up to {PDF_UPLOAD_CONCURRENCY} PDFs build in parallel;
-          large decks can still take several minutes—keep this tab open.
+          not extract well). After upload you go to the live study build page: the
+          real lesson layout fills in as Claude generates it. Up to {PDF_UPLOAD_CONCURRENCY}{" "}
+          PDFs start in
+          parallel; large decks can take several minutes—keep this tab open.
         </p>
       </div>
 

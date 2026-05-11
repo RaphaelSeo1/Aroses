@@ -301,6 +301,78 @@ function extractTextBlock(msg: Anthropic.Message): string {
   return block.text;
 }
 
+/** Optional: push live model output during PDF ingest so the UI can show a ChatGPT-style preview. */
+export type PdfIngestStreamSink = {
+  push: (textTail: string) => Promise<void>;
+  clear: () => Promise<void>;
+};
+
+const PDF_STREAM_PREVIEW_CAP = 28_000;
+
+/**
+ * One user-message → assistant text. Uses Anthropic streaming when `streamSink` is set so
+ * `push` receives a growing tail of the JSON as tokens arrive (single attempt; no retries).
+ */
+async function invokeUserMessageForPdfText(
+  anthropic: Anthropic,
+  params: {
+    model: string;
+    max_tokens: number;
+    temperature?: number;
+    messages: Anthropic.MessageCreateParams["messages"];
+  },
+  streamSink: PdfIngestStreamSink | undefined,
+  maxAttemptsWhenNotStreaming: number
+): Promise<string> {
+  if (!streamSink) {
+    const msg = await createMessageWithRetries(
+      anthropic,
+      {
+        model: params.model,
+        max_tokens: params.max_tokens,
+        ...(params.temperature !== undefined
+          ? { temperature: params.temperature }
+          : {}),
+        messages: params.messages,
+      },
+      { maxAttempts: maxAttemptsWhenNotStreaming }
+    );
+    return extractTextBlock(msg);
+  }
+
+  const stream = anthropic.messages.stream({
+    model: params.model,
+    max_tokens: params.max_tokens,
+    ...(params.temperature !== undefined
+      ? { temperature: params.temperature }
+      : {}),
+    messages: params.messages,
+  });
+
+  let accumulated = "";
+  let lastPushAt = 0;
+  const throttleMs = 280;
+
+  for await (const event of stream) {
+    if (event.type === "content_block_delta") {
+      const delta = event.delta as { type?: string; text?: string };
+      if (delta.type === "text_delta" && typeof delta.text === "string") {
+        accumulated += delta.text;
+        const now = Date.now();
+        if (now - lastPushAt >= throttleMs) {
+          lastPushAt = now;
+          await streamSink.push(accumulated.slice(-PDF_STREAM_PREVIEW_CAP));
+        }
+      }
+    }
+  }
+
+  const finalMessage = await stream.finalMessage();
+  const text = extractTextBlock(finalMessage);
+  await streamSink.push(text.slice(-PDF_STREAM_PREVIEW_CAP));
+  return text;
+}
+
 async function repairPayloadJson(
   anthropic: Anthropic,
   brokenAssistantText: string,
@@ -704,7 +776,8 @@ async function ensureModuleLessonFields(
 
 /** Phase 1 of chunked PDF ingest — small JSON, usually finishes quickly. */
 export async function generateCourseOutlineFromMaterial(
-  materialText: string
+  materialText: string,
+  streamSink?: PdfIngestStreamSink
 ): Promise<CourseOutlinePayload> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -724,7 +797,14 @@ export async function generateCourseOutlineFromMaterial(
   );
   const instruction = outlineInstruction(trimmed, profile);
 
-  const msg = await createMessageWithRetries(
+  const maxAttempts =
+    profile === "express" || profile === "fast"
+      ? 1
+      : profile === "balanced"
+        ? 2
+        : 4;
+
+  const rawText = await invokeUserMessageForPdfText(
     anthropic,
     {
       model: resolveOutlineModel(profile),
@@ -732,17 +812,9 @@ export async function generateCourseOutlineFromMaterial(
       temperature: 0.15,
       messages: [{ role: "user", content: instruction }],
     },
-    {
-      maxAttempts:
-        profile === "express" || profile === "fast"
-          ? 1
-          : profile === "balanced"
-            ? 2
-            : 4,
-    }
+    streamSink,
+    maxAttempts
   );
-
-  const rawText = extractTextBlock(msg);
   let parsed: unknown;
   try {
     parsed = JSON.parse(stripJsonFence(rawText));
@@ -773,7 +845,8 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
 export async function generateCourseModuleFromMaterial(
   materialText: string,
   outline: CourseOutlinePayload,
-  moduleIndex: number
+  moduleIndex: number,
+  streamSink?: PdfIngestStreamSink
 ): Promise<CourseModule> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -793,7 +866,14 @@ export async function generateCourseModuleFromMaterial(
   const trimmed = truncateMaterial(materialText, materialCharLimit(profile));
   const instruction = moduleInstruction(trimmed, outline, moduleIndex, profile);
 
-  const msg = await createMessageWithRetries(
+  const maxAttempts =
+    profile === "express" || profile === "fast"
+      ? 1
+      : profile === "balanced"
+        ? 3
+        : 5;
+
+  const rawText = await invokeUserMessageForPdfText(
     anthropic,
     {
       model: resolveCourseModel(profile),
@@ -801,19 +881,9 @@ export async function generateCourseModuleFromMaterial(
       temperature: 0.2,
       messages: [{ role: "user", content: instruction }],
     },
-    {
-      maxAttempts:
-        profile === "express" || profile === "fast" ? 1 : profile === "balanced" ? 3 : 5,
-    }
+    streamSink,
+    maxAttempts
   );
-
-  const rawText = extractTextBlock(msg);
-  const stopReason = (msg as { stop_reason?: string }).stop_reason;
-  if (stopReason === "max_tokens") {
-    console.warn(
-      "[study-generation] module Claude hit max_tokens; attempting repair"
-    );
-  }
 
   let parsed: unknown;
   try {
