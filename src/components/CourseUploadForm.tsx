@@ -95,8 +95,8 @@ async function pollPdfIngestJob(
   materialId?: string;
   error?: string;
 }> {
-  /** Outline + several modules can exceed one serverless cap; allow a longer client wait. */
-  const deadline = Date.now() + 22 * 60 * 1000;
+  /** Default `express` targets a few minutes; richer profiles may need the full window. */
+  const deadline = Date.now() + 15 * 60 * 1000;
   while (Date.now() < deadline) {
     const r = await fetch(`/api/process-pdf/jobs/${jobId}`);
     const raw = await r.text();
@@ -218,7 +218,7 @@ async function pollPdfIngestJob(
           ? ` · ${formatElapsedShort(Date.now() - started)}`
           : "";
       onProgress?.({
-        line: `Reading your PDF and planning the course outline (modules are created next)${elapsedPart}…`,
+        line: `Planning course outline from your PDF (quick pass — full text is used when writing each module)${elapsedPart}…`,
         bar: "indeterminate",
       });
     }
@@ -227,7 +227,7 @@ async function pollPdfIngestJob(
   }
   return {
     error:
-      "Build is taking longer than expected (waited 22 minutes). Refresh the course page — it may still complete.",
+      "Build is taking longer than expected (waited 15 minutes). For `COURSE_BUILD_PROFILE=full` or very large decks, upload one PDF at a time or check the host logs. Refresh the course page — it may still complete.",
   };
 }
 
@@ -568,8 +568,9 @@ export function CourseUploadForm({
 
         <p className="mt-2 text-xs text-zinc-500">
           Text must be selectable in the PDF for best results (scanned pages may
-          not extract well). Multiple files are processed one after another.
-          Keep this tab open while we generate your course.
+          not extract well). Multiple files run one at a time; a long lecture can
+          take a while—keep this tab open. For faster turnaround, upload fewer
+          files per batch.
         </p>
       </div>
 

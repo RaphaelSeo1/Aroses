@@ -17,11 +17,11 @@ type Params = { params: Promise<{ jobId: string }> };
  * - pending: cold start / `after()` queue on Vercel
  * - running: PDF work + **slow outline** (minutes) + each **expand** (up to `maxDuration` per request)
  *
- * The client may wait ~22m (`CourseUploadForm`); running jobs get a matching budget so we do not
- * false-fail healthy chunked builds.
+ * Default **express** jobs should finish in minutes; stale budget still allows slow networks.
+ * Use longer client/server budgets when `COURSE_BUILD_PROFILE=full` or similar.
  */
 const STALE_PENDING_MS = 15 * 60 * 1000 + 30_000;
-const STALE_RUNNING_MS = 23 * 60 * 1000 + 30_000;
+const STALE_RUNNING_MS = 18 * 60 * 1000 + 30_000;
 
 export async function GET(_request: Request, ctx: Params) {
   const { jobId } = await ctx.params;

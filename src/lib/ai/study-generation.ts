@@ -20,17 +20,11 @@ export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
  * PDF ingest uses a **chunked** pipeline (outline in `runPdfIngestJob`, then one module per
  * `POST /api/process-pdf/expand`) so each invocation stays within the serverless wall clock.
  *
- * Default **`fast`**: smaller per-module JSON. Set `COURSE_BUILD_PROFILE=balanced` or `full`
- * for richer courses. **`balanced`** is tuned for speed (fewer modules than `full`, lighter than before).
- * Optional: `COURSE_BALANCED_MAX_MODULES`, `COURSE_BALANCED_MAX_LESSON_TITLES`,
- * `COURSE_BALANCED_MODULE_MAX_TOKENS`, `COURSE_BALANCED_OUTLINE_MAX_TOKENS`,
- * `COURSE_BALANCED_MATERIAL_CHARS`, `COURSE_FULL_MAX_LESSON_TITLES`, `COURSE_FULL_OUTLINE_MAX_TOKENS`,
- * `COURSE_FAST_MAX_LESSON_TITLES`, `COURSE_FAST_MODULE_MAX_TOKENS` (default **8192** for multi-lesson fast builds).
- * **`balanced`**: smaller `COURSE_BALANCED_MATERIAL_CHARS` input; outline defaults to **Haiku**;
- * modules use **Sonnet** unless `ANTHROPIC_COURSE_MODEL` is set (same model for both). Outline-only:
- * `ANTHROPIC_OUTLINE_MODEL`.
+ * **Default `express`**: Haiku, tight caps — targets **~2–5 minutes** for a typical lecture PDF
+ * (network + model latency vary; huge decks may exceed). Use `COURSE_BUILD_PROFILE=fast`,
+ * `balanced`, or `full` for richer, slower output. `ANTHROPIC_COURSE_MODEL` overrides models.
  */
-type CourseBuildProfile = "full" | "balanced" | "fast";
+type CourseBuildProfile = "express" | "fast" | "balanced" | "full";
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -48,7 +42,9 @@ function resolveCourseBuildProfile(): CourseBuildProfile {
   const p = process.env.COURSE_BUILD_PROFILE?.trim().toLowerCase();
   if (p === "full") return "full";
   if (p === "balanced") return "balanced";
-  return "fast";
+  if (p === "fast") return "fast";
+  if (p === "express") return "express";
+  return "express";
 }
 
 /** Same truncation as outline/module generation — store on the job for expand steps. */
@@ -67,21 +63,24 @@ export function materialTextForPdfIngest(fullText: string): string {
 function resolveCourseModel(profile: CourseBuildProfile): string {
   const override = process.env.ANTHROPIC_COURSE_MODEL?.trim();
   if (override) return override;
-  if (profile === "fast") return "claude-haiku-4-5";
+  if (profile === "express" || profile === "fast" || profile === "balanced") {
+    return "claude-haiku-4-5";
+  }
   return "claude-sonnet-4-6";
 }
 
 /**
- * Compact outline JSON — **`balanced`** uses Haiku when neither `ANTHROPIC_COURSE_MODEL` nor
- * `ANTHROPIC_OUTLINE_MODEL` is set, so phase 1 stays fast; modules still use Sonnet via
- * `resolveCourseModel`.
+ * Compact outline JSON — **`express`**, **`fast`**, and **`balanced`** use Haiku for the outline
+ * when neither `ANTHROPIC_OUTLINE_MODEL` nor `ANTHROPIC_COURSE_MODEL` is set.
  */
 function resolveOutlineModel(profile: CourseBuildProfile): string {
   const outlineOnly = process.env.ANTHROPIC_OUTLINE_MODEL?.trim();
   if (outlineOnly) return outlineOnly;
   const courseOverride = process.env.ANTHROPIC_COURSE_MODEL?.trim();
   if (courseOverride) return courseOverride;
-  if (profile === "fast" || profile === "balanced") return "claude-haiku-4-5";
+  if (profile === "express" || profile === "fast" || profile === "balanced") {
+    return "claude-haiku-4-5";
+  }
   return "claude-sonnet-4-6";
 }
 
@@ -89,10 +88,13 @@ function resolveOutlineModel(profile: CourseBuildProfile): string {
 const MAX_MATERIAL_CHARS = 120_000;
 /** Aggressively small for `fast` so outline/module calls stay quick. */
 const FAST_MATERIAL_CHARS = 40_000;
-/** `balanced`: still bounded for latency, but large enough to retain most deck text. */
-const BALANCED_MATERIAL_CHARS = 88_000;
+/** `balanced`: bounded for ~5–15 min class builds on Haiku. */
+const BALANCED_MATERIAL_CHARS = 36_000;
 
 function materialCharLimit(profile: CourseBuildProfile): number {
+  if (profile === "express") {
+    return clampInt(envInt("COURSE_EXPRESS_MATERIAL_CHARS", 20_000), 10_000, 40_000);
+  }
   if (profile === "fast") {
     const fromEnv = envInt("COURSE_FAST_MATERIAL_CHARS", FAST_MATERIAL_CHARS);
     return clampInt(fromEnv, 8_000, MAX_MATERIAL_CHARS);
@@ -105,6 +107,29 @@ function materialCharLimit(profile: CourseBuildProfile): number {
     return clampInt(fromEnv, 20_000, MAX_MATERIAL_CHARS);
   }
   return MAX_MATERIAL_CHARS;
+}
+
+/**
+ * Outline step only — **much smaller** than `materialCharLimit` so the outline model
+ * finishes in ~1–2 minutes. Stored `ingest_source_text` / module expand still uses full
+ * `materialCharLimit`.
+ */
+function outlineMaterialCharLimit(profile: CourseBuildProfile): number {
+  const moduleCap = materialCharLimit(profile);
+  if (profile === "express") {
+    return clampInt(envInt("COURSE_EXPRESS_OUTLINE_MATERIAL_CHARS", 10_000), 6_000, moduleCap);
+  }
+  if (profile === "fast") {
+    return clampInt(envInt("COURSE_FAST_OUTLINE_MATERIAL_CHARS", 18_000), 8_000, moduleCap);
+  }
+  if (profile === "balanced") {
+    return clampInt(
+      envInt("COURSE_BALANCED_OUTLINE_MATERIAL_CHARS", 22_000),
+      12_000,
+      moduleCap
+    );
+  }
+  return clampInt(envInt("COURSE_FULL_OUTLINE_MATERIAL_CHARS", 56_000), 24_000, moduleCap);
 }
 
 function truncateMaterial(text: string, maxChars: number = MAX_MATERIAL_CHARS): string {
@@ -124,7 +149,7 @@ function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
   const core =
     "COVERAGE (critical): You must represent **every major topic, section, heading, and learning objective** in the uploaded material. Do not stop early, skim, or merge distinct concepts to save tokens. If the deck is long or dense, use **more** lesson entries (up to the stated caps) and **more** modules (up to the stated caps) rather than skipping later sections.";
   if (mode === "outline") {
-    return `${core} The outline’s modules and lesson_titles, taken together, should span the **entire** source—including middle and end—so nothing important is missing before any full lesson is written.`;
+    return `${core} The excerpt below may omit the document middle for speed—use headings/numbering in the head and tail to infer later topics. Modules and lesson_titles together should still **map** the full arc of the course; full lessons use a longer excerpt later.`;
   }
   if (mode === "module") {
     return `${core} Output **exactly one full lesson per planned lesson title** below, in the **same order** and **same count**. Do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material.`;
@@ -155,19 +180,28 @@ function courseInstruction(
 QUIZ (critical): Each module needs a rich practice set — **at least 8 questions per module**, with **at least 4 items** whose type is free_response (short written answer). The rest should be mcq. Aim for roughly half MCQ and half free-response overall. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, several sentences of rubric — key ideas and acceptable points).`;
     quizFooter =
       "Include many quiz objects per module (minimum 8 total per module, including ≥4 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+  } else if (profile === "express") {
+    sizeRules = `Rules for output size (critical for speed): use **2 or 3** modules only. At most **3 lessons per module**. Each lesson "content" must be **under 400 words** — concise teaching, not a textbook.
+
+QUIZ (critical): Each module needs **at least 3 questions**, with **at least 1** type free_response (reference_answer required). The rest MCQ with exactly 4 choices.`;
+    quizFooter =
+      "Meet the minimums above (≥3 quiz items per module, including ≥1 free_response). Only return valid JSON. No markdown fences, no extra text. Base everything on the uploaded material.";
   } else if (profile === "fast") {
-    sizeRules = `Rules for output size (important): use at least 2 modules and at most 5 unless the source is extremely short. Keep each lesson "content" clear and instructive but under roughly 550 words. Every module must include at least one lesson.
+    sizeRules = `Rules for output size (important): use at least 2 modules and at most 4 unless the source is extremely short. Keep each lesson "content" clear and instructive but under roughly 500 words. Every module must include at least one lesson.
 
-QUIZ (critical): Each module needs a practical practice set — **at least 5 questions per module**, with **at least 2 items** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
+QUIZ (critical): Each module needs a practical practice set — **at least 4 questions per module**, with **at least 1 item** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
     quizFooter =
-      "Include enough quiz objects per module to meet the minimums above (≥5 per module, including ≥2 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+      "Include enough quiz objects per module to meet the minimums above. Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+  } else if (profile === "balanced") {
+    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 4), 2, 8);
+    sizeRules = `Rules for output size (important): use at least 2 modules and at most ${maxBalMods} unless the source is extremely short. Keep each lesson "content" clear; aim under roughly 500 words per lesson. Every module must include at least one lesson.
+
+QUIZ (critical): Each module needs **at least 4 questions per module**, with **at least 1** type free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
+    quizFooter =
+      "Include enough quiz objects per module to meet the minimums above. Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
   } else {
-    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 6), 2, 8);
-    sizeRules = `Rules for output size (important): use at least 2 modules and at most ${maxBalMods} unless the source is extremely short. Keep each lesson "content" clear and instructive; aim under roughly 650 words per lesson but **completeness beats brevity** when the source is dense. Every module must include at least one lesson.
-
-QUIZ (critical): Each module needs a practical practice set — **at least 5 questions per module**, with **at least 2 items** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
-    quizFooter =
-      "Include enough quiz objects per module to meet the minimums above (≥5 per module, including ≥2 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+    const _bad: never = profile;
+    throw new Error(`Unhandled course build profile: ${String(_bad)}`);
   }
 
   return `You are an expert course designer and educator. You have been given raw course material (lecture slides, syllabi, notes). Your job is NOT to summarize this material. Your job is to use it as a source to BUILD a complete, professional, structured course that a student would genuinely pay for.
@@ -263,15 +297,27 @@ async function repairPayloadJson(
 Broken output (repair it):
 ${brokenAssistantText.slice(0, 120_000)}`;
 
+  const repairPayloadMax =
+    profile === "express"
+      ? 12_288
+      : profile === "fast"
+        ? 16_384
+        : profile === "balanced"
+          ? 24_576
+          : 32_768;
+
   const msg = await createMessageWithRetries(
     anthropic,
     {
       model: resolveCourseModel(profile),
-      max_tokens: profile === "fast" ? 16_384 : 32_768,
+      max_tokens: repairPayloadMax,
       temperature: 0.1,
       messages: [{ role: "user", content: prompt }],
     },
-    { maxAttempts: profile === "fast" ? 2 : 4 }
+    {
+      maxAttempts:
+        profile === "express" ? 1 : profile === "fast" ? 2 : profile === "balanced" ? 3 : 4,
+    }
   );
 
   const text = extractTextBlock(msg);
@@ -304,7 +350,13 @@ export async function generateCourseFromMaterial(
   const instruction = courseInstruction(trimmed, profile);
 
   const monolithMaxTokens =
-    profile === "fast" ? 20_480 : 32_768;
+    profile === "express"
+      ? 14_336
+      : profile === "fast"
+        ? 20_480
+        : profile === "balanced"
+          ? 28_672
+          : 32_768;
 
   const msg = await createMessageWithRetries(
     anthropic,
@@ -314,7 +366,10 @@ export async function generateCourseFromMaterial(
       temperature: 0.2,
       messages: [{ role: "user", content: instruction }],
     },
-    { maxAttempts: profile === "fast" ? 2 : 5 }
+    {
+      maxAttempts:
+        profile === "express" ? 1 : profile === "fast" ? 2 : profile === "balanced" ? 4 : 5,
+    }
   );
 
   const rawText = extractTextBlock(msg);
@@ -350,11 +405,14 @@ export async function generateCourseFromMaterial(
 }
 
 function outlineMaxTokens(profile: CourseBuildProfile): number {
+  if (profile === "express") {
+    return clampInt(envInt("COURSE_EXPRESS_OUTLINE_MAX_TOKENS", 3072), 1024, 6144);
+  }
   if (profile === "fast") {
     return clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_OUTLINE_MAX_TOKENS", 12_288), 6144, 16_384);
+    return clampInt(envInt("COURSE_BALANCED_OUTLINE_MAX_TOKENS", 5120), 4096, 8192);
   }
   return clampInt(envInt("COURSE_FULL_OUTLINE_MAX_TOKENS", 10_240), 4096, 16_384);
 }
@@ -365,24 +423,28 @@ function outlineInstruction(
 ): string {
   let moduleCount: string;
   let maxLessonTitles: number;
-  if (profile === "full") {
+  if (profile === "express") {
+    const maxModules = clampInt(envInt("COURSE_EXPRESS_MAX_MODULES", 3), 2, 3);
+    moduleCount = `Use **2 to ${maxModules}** modules — **prefer 2** so the build finishes in minutes.`;
+    maxLessonTitles = clampInt(envInt("COURSE_EXPRESS_MAX_LESSON_TITLES", 3), 2, 3);
+  } else if (profile === "fast") {
+    const maxModules = clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 6);
+    moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
+    maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 6);
+  } else if (profile === "balanced") {
+    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 4), 2, 6);
+    moduleCount = `Use **2 to ${maxModules}** modules. Prefer a compact plan that still covers the excerpt.`;
+    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 4), 2, 8);
+  } else {
     moduleCount =
       "Use **2 to 8** modules depending on how much content the source has.";
     maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 8), 2, 12);
-  } else if (profile === "fast") {
-    const maxModules = clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 8);
-    moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
-    maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 5), 1, 8);
-  } else {
-    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 6), 2, 8);
-    moduleCount = `Use **2 to ${maxModules}** modules. When the PDF is long or has many sections, lean toward **more** modules and **more** lesson_titles so nothing important is left out of the plan (each module is expanded separately later).`;
-    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 8), 2, 12);
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
 
 ${moduleCount}
-Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to ${maxLessonTitles}** short strings — the titles of lessons you will expand later). For dense decks, use many distinct titles (up to the max) so each major idea or slide block can get its own lesson later.
+Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to ${maxLessonTitles}** short strings — concise titles only, under 100 characters each, no pasted paragraphs). For dense excerpts, use many distinct titles (up to the max) so each major idea can get its own lesson later.
 
 Exact shape:
 {
@@ -406,12 +468,19 @@ function moduleQuizRules(profile: CourseBuildProfile): string {
   if (profile === "full") {
     return `QUIZ (this module only): **at least 8** questions, with **at least 4** type free_response (include reference_answer snake_case). The rest MCQ with exactly 4 choices each.`;
   }
+  if (profile === "express") {
+    return `QUIZ (this module only): **at least 3** questions — **at least 1** type free_response (reference_answer required). The rest MCQ with exactly 4 choices each.`;
+  }
   if (profile === "fast") {
-    const quizMin = clampInt(envInt("COURSE_FAST_QUIZ_MIN", 3), 1, 12);
+    const quizMin = clampInt(envInt("COURSE_FAST_QUIZ_MIN", 4), 1, 12);
     const frMin = clampInt(envInt("COURSE_FAST_FREE_RESPONSE_MIN", 1), 0, quizMin);
     return `QUIZ (this module only): **at least ${quizMin}** questions, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ, 4 choices each.`;
   }
-  return `QUIZ (this module only): **at least 5** questions, with **at least 2** type free_response (reference_answer required). Mix MCQ and free-response. MCQs: exactly 4 choices.`;
+  if (profile === "balanced") {
+    return `QUIZ (this module only): **at least 4** questions, with **at least 1** type free_response (reference_answer required). The rest MCQ with exactly 4 choices each.`;
+  }
+  const _never: never = profile;
+  return _never;
 }
 
 function moduleInstruction(
@@ -424,17 +493,21 @@ function moduleInstruction(
   const n = outline.modules.length;
   const titles = stub.lesson_titles.map((t) => JSON.stringify(t)).join(", ");
   const styleRule =
-    profile === "fast"
-      ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
-      : profile === "balanced"
-        ? `STYLE (balanced): Teach clearly with examples; aim ~650 words per lesson but **do not truncate** a topic to stay short—split detail across lessons if needed.`
-        : "";
+    profile === "express"
+      ? `STYLE (express): Short, high-signal lessons (**under ~400 words** each). Clarity beats length.`
+      : profile === "fast"
+        ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
+        : profile === "balanced"
+          ? `STYLE (balanced): Teach clearly with examples; aim **under ~500 words** per lesson.`
+          : "";
   const lessonRequirements =
-    profile === "fast"
-      ? `For EACH lesson: include 2–4 key_terms (term+definition) and exactly 2 real-world examples (short strings).`
-      : profile === "balanced"
-        ? `For EACH lesson: include 2–4 key_terms (term+definition) and 2 short real-world examples (strings).`
-        : `For EACH lesson: include key_terms (term+definition) and examples (strings).`;
+    profile === "express"
+      ? `For EACH lesson: include **2** key_terms (term+definition) and **2** short examples (strings).`
+      : profile === "fast"
+        ? `For EACH lesson: include 2–4 key_terms (term+definition) and exactly 2 real-world examples (short strings).`
+        : profile === "balanced"
+          ? `For EACH lesson: include 2–4 key_terms (term+definition) and 2 short real-world examples (strings).`
+          : `For EACH lesson: include key_terms (term+definition) and examples (strings).`;
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. Module title **must be** ${JSON.stringify(stub.title)}.
 
@@ -477,7 +550,14 @@ ${brokenAssistantText.slice(0, 60_000)}`;
       temperature: 0.1,
       messages: [{ role: "user", content: prompt }],
     },
-    { maxAttempts: profile === "fast" ? 1 : profile === "balanced" ? 2 : 3 }
+    {
+      maxAttempts:
+        profile === "express" || profile === "fast"
+          ? 1
+          : profile === "balanced"
+            ? 2
+            : 3,
+    }
   );
 
   const text = extractTextBlock(msg);
@@ -496,9 +576,11 @@ async function repairModuleJson(
   profile: CourseBuildProfile
 ): Promise<CourseModule> {
   const requirements =
-    profile === "fast"
-      ? `Requirements for EACH lesson (fast): include 2–4 key_terms (term+definition) and at least 2 examples (short strings). Do not leave key_terms empty.`
-      : `Requirements for EACH lesson: include key_terms (term+definition) and examples (strings).`;
+    profile === "express"
+      ? `Requirements for EACH lesson (express): include 2 key_terms (term+definition) and 2 examples (short strings). Do not leave key_terms empty.`
+      : profile === "fast"
+        ? `Requirements for EACH lesson (fast): include 2–4 key_terms (term+definition) and at least 2 examples (short strings). Do not leave key_terms empty.`
+        : `Requirements for EACH lesson: include key_terms (term+definition) and examples (strings).`;
 
   const prompt = `You returned JSON that could not be parsed or did not meet requirements for a single course "module" (id, title, lessons[], quiz[]). Output ONLY: { "module": { ... } } with valid JSON. No markdown.
 
@@ -508,7 +590,13 @@ Broken output (repair):
 ${brokenAssistantText.slice(0, 100_000)}`;
 
   const moduleRepairMax =
-    profile === "fast" ? 12_288 : profile === "balanced" ? 28_672 : 24_576;
+    profile === "express"
+      ? 6144
+      : profile === "fast"
+        ? 8192
+        : profile === "balanced"
+          ? 12_288
+          : 24_576;
 
   const msg = await createMessageWithRetries(
     anthropic,
@@ -518,7 +606,7 @@ ${brokenAssistantText.slice(0, 100_000)}`;
       temperature: 0.1,
       messages: [{ role: "user", content: prompt }],
     },
-    { maxAttempts: profile === "fast" ? 2 : 3 }
+    { maxAttempts: profile === "express" || profile === "fast" ? 2 : 3 }
   );
 
   const text = extractTextBlock(msg);
@@ -558,7 +646,13 @@ Rules:
 ${clipped}`;
 
   const glossaryRepairMax =
-    profile === "fast" ? 10_240 : profile === "balanced" ? 24_576 : 18_432;
+    profile === "express"
+      ? 5120
+      : profile === "fast"
+        ? 8192
+        : profile === "balanced"
+          ? 10_240
+          : 18_432;
 
   const msg = await createMessageWithRetries(
     anthropic,
@@ -610,7 +704,10 @@ export async function generateCourseOutlineFromMaterial(
     maxRetries: 0,
   });
 
-  const trimmed = truncateMaterial(materialText, materialCharLimit(profile));
+  const trimmed = truncateMaterial(
+    materialText,
+    outlineMaterialCharLimit(profile)
+  );
   const instruction = outlineInstruction(trimmed, profile);
 
   const msg = await createMessageWithRetries(
@@ -618,10 +715,17 @@ export async function generateCourseOutlineFromMaterial(
     {
       model: resolveOutlineModel(profile),
       max_tokens: outlineMaxTokens(profile),
-      temperature: 0.2,
+      temperature: 0.15,
       messages: [{ role: "user", content: instruction }],
     },
-    { maxAttempts: profile === "fast" ? 1 : profile === "balanced" ? 2 : 4 }
+    {
+      maxAttempts:
+        profile === "express" || profile === "fast"
+          ? 1
+          : profile === "balanced"
+            ? 2
+            : 4,
+    }
   );
 
   const rawText = extractTextBlock(msg);
@@ -641,11 +745,14 @@ export async function generateCourseOutlineFromMaterial(
 }
 
 function moduleMaxTokens(profile: CourseBuildProfile): number {
+  if (profile === "express") {
+    return clampInt(envInt("COURSE_EXPRESS_MODULE_MAX_TOKENS", 5120), 3072, 8192);
+  }
   if (profile === "fast") {
-    return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 8192), 2048, 16_384);
+    return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 6144), 2048, 12_288);
   }
   if (profile === "full") return 30_720;
-  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 28_672), 12_288, 30_720);
+  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 10_240), 8192, 24_576);
 }
 
 /** Expand one module for chunked PDF ingest (separate server invocation). */
@@ -680,7 +787,10 @@ export async function generateCourseModuleFromMaterial(
       temperature: 0.2,
       messages: [{ role: "user", content: instruction }],
     },
-    { maxAttempts: profile === "fast" ? 1 : 5 }
+    {
+      maxAttempts:
+        profile === "express" || profile === "fast" ? 1 : profile === "balanced" ? 3 : 5,
+    }
   );
 
   const rawText = extractTextBlock(msg);
