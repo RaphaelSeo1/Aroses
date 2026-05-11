@@ -39,6 +39,16 @@ function truncateErr(msg: string, max = 400): string {
   return t.length <= max ? t : `${t.slice(0, max)}…`;
 }
 
+async function touchJobProgress(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+) {
+  await admin
+    .from("pdf_ingest_jobs")
+    .update({ updated_at: new Date().toISOString() })
+    .eq("id", jobId);
+}
+
 async function failJob(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
@@ -272,6 +282,7 @@ export async function runPdfIngestExpandOne(
   }
 
   const idx = prefix.length;
+  await touchJobProgress(admin, jobId);
   let newMod: CourseModule;
   try {
     newMod = await generateCourseModuleFromMaterial(
@@ -441,6 +452,9 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     );
     return;
   }
+
+  /** So job polling does not treat a long outline model call as “stuck” (see job GET stale rules). */
+  await touchJobProgress(admin, jobId);
 
   const storedMaterial = materialTextForPdfIngest(text);
 

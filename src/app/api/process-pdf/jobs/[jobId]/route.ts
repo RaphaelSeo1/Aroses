@@ -8,10 +8,16 @@ const UUID_RE =
 type Params = { params: Promise<{ jobId: string }> };
 
 /**
- * Vercel Pro `maxDuration` is 300s — if the worker dies, `running` sticks until we synthesize failure.
- * Use ~6.5m so users are not stuck until the 11m client poll.
+ * If the worker dies without updating the row, the UI would poll forever. We synthesize `failed`
+ * when `updated_at` is too old. Thresholds must exceed:
+ * - pending: cold start / `after()` queue on Vercel
+ * - running: PDF work + **slow outline** (minutes) + each **expand** (up to `maxDuration` per request)
+ *
+ * The client may wait ~22m (`CourseUploadForm`); running jobs get a matching budget so we do not
+ * false-fail healthy chunked builds.
  */
-const STALE_MS = 6 * 60 * 1000 + 30_000;
+const STALE_PENDING_MS = 15 * 60 * 1000 + 30_000;
+const STALE_RUNNING_MS = 23 * 60 * 1000 + 30_000;
 
 export async function GET(_request: Request, ctx: Params) {
   const { jobId } = await ctx.params;
@@ -56,17 +62,19 @@ export async function GET(_request: Request, ctx: Params) {
 
   const updatedAt =
     typeof row.updated_at === "string" ? Date.parse(row.updated_at) : NaN;
+  const staleBudgetMs =
+    row.status === "pending" ? STALE_PENDING_MS : STALE_RUNNING_MS;
   const stale =
     (row.status === "pending" || row.status === "running") &&
     Number.isFinite(updatedAt) &&
-    Date.now() - updatedAt > STALE_MS;
+    Date.now() - updatedAt > staleBudgetMs;
 
   if (stale) {
     return NextResponse.json({
       status: "failed",
       materialId: undefined,
       error:
-        "This build stopped responding (likely hit the server time limit or was interrupted). Try uploading the PDF again. On Vercel Pro, confirm `maxDuration` is 300 in code and deployed.",
+        "This build stopped making progress for a long time (the server may have hit a time limit or lost the connection). Try uploading the PDF again on a stable network. Hard-refresh the page first so your browser runs the latest upload code. Confirm migrations 020–021 are applied in Supabase and the service role key is set on the host.",
       outlineReady: false,
       modulesBuilt: 0,
       modulesTotal: 0,
