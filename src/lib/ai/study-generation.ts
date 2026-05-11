@@ -93,7 +93,7 @@ const BALANCED_MATERIAL_CHARS = 36_000;
 
 function materialCharLimit(profile: CourseBuildProfile): number {
   if (profile === "express") {
-    return clampInt(envInt("COURSE_EXPRESS_MATERIAL_CHARS", 20_000), 10_000, 40_000);
+    return clampInt(envInt("COURSE_EXPRESS_MATERIAL_CHARS", 18_000), 10_000, 40_000);
   }
   if (profile === "fast") {
     const fromEnv = envInt("COURSE_FAST_MATERIAL_CHARS", FAST_MATERIAL_CHARS);
@@ -117,7 +117,7 @@ function materialCharLimit(profile: CourseBuildProfile): number {
 function outlineMaterialCharLimit(profile: CourseBuildProfile): number {
   const moduleCap = materialCharLimit(profile);
   if (profile === "express") {
-    return clampInt(envInt("COURSE_EXPRESS_OUTLINE_MATERIAL_CHARS", 10_000), 6_000, moduleCap);
+    return clampInt(envInt("COURSE_EXPRESS_OUTLINE_MATERIAL_CHARS", 6_000), 4_000, moduleCap);
   }
   if (profile === "fast") {
     return clampInt(envInt("COURSE_FAST_OUTLINE_MATERIAL_CHARS", 18_000), 8_000, moduleCap);
@@ -144,7 +144,21 @@ async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-/** Injected into outline / module / monolith prompts so dense PDFs are not under-planned. */
+/** Shorter outline coverage for express/fast (fewer input tokens); full/balanced use `sourceCoverageRules`. */
+function outlineCoverageBlock(profile: CourseBuildProfile): string {
+  if (profile === "express") {
+    return "COVERAGE: From this excerpt only, list the **main ideas** as **2 compact modules** (prefer 2) with short lesson_titles — skip fine detail.";
+  }
+  if (profile === "fast") {
+    return "COVERAGE: Map obvious sections in this excerpt to modules; stay within the caps above.";
+  }
+  if (profile === "balanced") {
+    return "COVERAGE: Cover this excerpt well; use headings to infer structure—keep the outline compact.";
+  }
+  return sourceCoverageRules("outline");
+}
+
+/** Injected into module / monolith prompts (and full outline via `outlineCoverageBlock`). */
 function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
   const core =
     "COVERAGE (critical): You must represent **every major topic, section, heading, and learning objective** in the uploaded material. Do not stop early, skim, or merge distinct concepts to save tokens. If the deck is long or dense, use **more** lesson entries (up to the stated caps) and **more** modules (up to the stated caps) rather than skipping later sections.";
@@ -406,7 +420,7 @@ export async function generateCourseFromMaterial(
 
 function outlineMaxTokens(profile: CourseBuildProfile): number {
   if (profile === "express") {
-    return clampInt(envInt("COURSE_EXPRESS_OUTLINE_MAX_TOKENS", 3072), 1024, 6144);
+    return clampInt(envInt("COURSE_EXPRESS_OUTLINE_MAX_TOKENS", 2048), 1024, 4096);
   }
   if (profile === "fast") {
     return clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192);
@@ -455,7 +469,7 @@ Exact shape:
   ]
 }
 
-${sourceCoverageRules("outline")}
+${outlineCoverageBlock(profile)}
 
 Rules: base everything on the material; do not invent unrelated topics. No markdown fences, no commentary.
 

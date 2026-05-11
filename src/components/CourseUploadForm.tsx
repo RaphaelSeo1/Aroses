@@ -213,12 +213,18 @@ async function pollPdfIngestJob(
       !data.outlineReady
     ) {
       const started = jobStartedAtMs(data.createdAt);
+      const elapsedMs = started != null ? Date.now() - started : 0;
       const elapsedPart =
         started != null
           ? ` · ${formatElapsedShort(Date.now() - started)}`
           : "";
+      /** Server runs PDF download → text extraction (often minutes on big decks) → then outline AI. */
+      const phaseLine =
+        elapsedMs < 90_000
+          ? "Step 1/2: Extracting text from your PDF (huge slide files can take several minutes before any AI runs)…"
+          : "Step 2/2: Planning course outline with AI (then writing each module)…";
       onProgress?.({
-        line: `Planning course outline from your PDF (quick pass — full text is used when writing each module)${elapsedPart}…`,
+        line: `${phaseLine}${elapsedPart}`,
         bar: "indeterminate",
       });
     }

@@ -419,6 +419,8 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     return;
   }
 
+  await touchJobProgress(admin, jobId);
+
   if (buf.length > MAX_STUDY_PDF_BYTES) {
     await failJob(
       admin,
@@ -459,18 +461,22 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     return;
   }
 
-  /** So job polling does not treat a long outline model call as “stuck” (see job GET stale rules). */
   await touchJobProgress(admin, jobId);
 
   const storedMaterial = materialTextForPdfIngest(text);
 
   let outline: CourseOutlinePayload;
+  const heartbeat = setInterval(() => {
+    void touchJobProgress(admin, jobId);
+  }, 25_000);
   try {
     outline = await generateCourseOutlineFromMaterial(text);
   } catch (e) {
     const message = mapAiFailureToMessage(jobId, e);
     await failJob(admin, jobId, storagePath, message);
     return;
+  } finally {
+    clearInterval(heartbeat);
   }
 
   const { error: outlineErr } = await admin
