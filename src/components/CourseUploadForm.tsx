@@ -51,7 +51,7 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
     noUsefulBody &&
     (res.status === 500 || res.status === 502 || res.status === 503)
   ) {
-    return `Upload failed (${res.status}): the server stopped before sending a proper response. Common causes: (1) hosting time limits — Vercel Hobby caps serverless routes around ~10s, but PDF + AI often needs 1–3+ minutes (upgrade to Pro or use Fluid Compute); (2) missing ANTHROPIC_API_KEY or SUPABASE_SERVICE_ROLE_KEY on production; (3) out-of-memory on very large PDFs. Check your host logs.`;
+    return `Upload failed (${res.status}): the server stopped before sending a proper response. Check your host logs, confirm ANTHROPIC_API_KEY and SUPABASE_SERVICE_ROLE_KEY on production, and that migration 020_pdf_ingest_jobs.sql is applied in Supabase.`;
   }
 
   if (trimmed.length > 0 && !looksLikeHtml && trimmed.length < 400) {
@@ -59,6 +59,46 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
   }
 
   return `Request failed (${res.status} ${res.statusText || "error"}). Try a smaller file or retry later.`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Poll after `POST /api/process-pdf` returns `202` + `jobId` (background build on Vercel). */
+async function pollPdfIngestJob(jobId: string): Promise<{
+  materialId?: string;
+  error?: string;
+}> {
+  const deadline = Date.now() + 7 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const r = await fetch(`/api/process-pdf/jobs/${jobId}`);
+    const raw = await r.text();
+    let data: { status?: string; materialId?: string; error?: string };
+    try {
+      data = JSON.parse(raw) as typeof data;
+    } catch {
+      await sleep(2000);
+      continue;
+    }
+    if (!r.ok) {
+      if (typeof data.error === "string" && data.error.trim()) {
+        return { error: data.error.trim() };
+      }
+      return { error: `Status check failed (${r.status}).` };
+    }
+    if (data.status === "complete" && data.materialId) {
+      return { materialId: data.materialId };
+    }
+    if (data.status === "failed") {
+      return { error: data.error ?? "PDF build failed." };
+    }
+    await sleep(1800);
+  }
+  return {
+    error:
+      "Build is taking longer than expected. Refresh the course page — it may still complete.",
+  };
 }
 
 export function CourseUploadForm({
@@ -210,13 +250,35 @@ export function CourseUploadForm({
 
         let materialId: string | undefined;
         try {
-          const body = JSON.parse(raw) as { materialId?: string };
-          materialId = body.materialId;
+          const body = JSON.parse(raw) as {
+            materialId?: string;
+            jobId?: string;
+          };
+          if (typeof body.materialId === "string" && body.materialId) {
+            materialId = body.materialId;
+          } else if (typeof body.jobId === "string" && body.jobId) {
+            setProgressLabel(
+              `Building ${i + 1} of ${total}: ${file.name} (this can take a few minutes)`
+            );
+            const polled = await pollPdfIngestJob(body.jobId);
+            if (polled.error) {
+              failures.push(`${file.name}: ${polled.error}`);
+              continue;
+            }
+            materialId = polled.materialId;
+          }
         } catch {
           failures.push(`${file.name}: Invalid response from server.`);
           continue;
         }
-        if (materialId) lastMaterialId = materialId;
+
+        if (!materialId) {
+          failures.push(
+            `${file.name}: Invalid response from server (missing material id).`
+          );
+          continue;
+        }
+        lastMaterialId = materialId;
       }
 
       setProgressLabel(null);

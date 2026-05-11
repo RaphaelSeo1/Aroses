@@ -1,23 +1,14 @@
-import { RateLimitError, APIError } from "@anthropic-ai/sdk";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { PDFParse } from "pdf-parse";
-import { generateCourseFromMaterial } from "@/lib/ai/study-generation";
+import { waitUntil } from "@vercel/functions";
+import { runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import { createAdminClient } from "@/lib/supabase/admin";
-import {
-  MAX_STUDY_PDF_BYTES,
-  STUDY_PDF_INGEST_BUCKET,
-} from "@/lib/study-pdf-ingest";
-import {
-  deriveFileStemFromPayload,
-  finalizeMaterialSectionLabel,
-  stripKnownDocumentExtension,
-} from "@/lib/study-material-display-name";
+import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 
 export const runtime = "nodejs";
 
-/** Large PDF + Claude generation — Pro / Fluid; Hobby may still cap lower. */
+/** Background work can run several minutes on supported plans. */
 export const maxDuration = 300;
 
 const UUID_RE =
@@ -37,7 +28,6 @@ async function removeIngestObject(
 }
 
 export async function POST(request: Request) {
-  const t0 = Date.now();
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -159,208 +149,69 @@ export async function POST(request: Request) {
     );
   }
 
-  let buf: Buffer;
-  try {
-    const { data: blob, error: dlErr } = await admin.storage
-      .from(STUDY_PDF_INGEST_BUCKET)
-      .download(storagePath);
+  const { data: jobRow, error: jobInsErr } = await supabase
+    .from("pdf_ingest_jobs")
+    .insert({
+      user_id: user.id,
+      course_id: courseId,
+      exam_group_id: examGroupId,
+      storage_path: storagePath,
+      original_file_name:
+        typeof originalFileName === "string" && originalFileName.trim().length > 0
+          ? originalFileName.trim()
+          : null,
+      status: "pending",
+    })
+    .select("id")
+    .single();
 
-    if (dlErr || !blob) {
-      console.error("[process-pdf] download", dlErr);
-      return NextResponse.json(
-        {
-          error:
-            "Could not read the uploaded PDF from storage. Try uploading again.",
-        },
-        { status: 502 }
-      );
-    }
-
-    buf = Buffer.from(await blob.arrayBuffer());
-  } catch (e) {
-    console.error("[process-pdf] download unexpected", e);
-    await removeIngestObject(admin, storagePath);
-    return NextResponse.json(
-      { error: "Could not read the uploaded PDF from storage." },
-      { status: 502 }
-    );
-  }
-
-  if (buf.length > MAX_STUDY_PDF_BYTES) {
+  if (jobInsErr || !jobRow) {
+    console.error("[process-pdf] insert pdf_ingest_jobs", jobInsErr);
     await removeIngestObject(admin, storagePath);
     return NextResponse.json(
       {
         error:
-          "PDF is too large for this server (max 40 MB). Split the file or export fewer pages.",
-      },
-      { status: 413 }
-    );
-  }
-
-  console.info("[process-pdf] start", {
-    bytes: buf.length,
-    path: storagePath.slice(0, 80),
-  });
-
-  try {
-    let text = "";
-    const parser = new PDFParse({ data: buf });
-    try {
-      const parsed = await parser.getText();
-      text = (parsed.text ?? "").trim();
-    } catch {
-      return NextResponse.json(
-        { error: "Could not read PDF. Try another file." },
-        { status: 422 }
-      );
-    } finally {
-      await parser.destroy();
-    }
-
-    if (text.length < 80) {
-      return NextResponse.json(
-        {
-          error:
-            "Not enough text extracted from this PDF. Try slides with selectable text or another file.",
-        },
-        { status: 422 }
-      );
-    }
-
-    let payload;
-    try {
-      payload = await generateCourseFromMaterial(text);
-    } catch (e) {
-      console.error(e);
-      if (e instanceof RateLimitError) {
-        return NextResponse.json(
-          {
-            error:
-              "The AI service rate limit was hit. Wait one minute and try again.",
-          },
-          { status: 429 }
-        );
-      }
-      if (e instanceof APIError && typeof e.status === "number") {
-        if (e.status === 529 || e.status === 503) {
-          return NextResponse.json(
-            {
-              error:
-                "The AI service is temporarily overloaded. Try again in a few minutes.",
-            },
-            { status: 503 }
-          );
-        }
-        if (e.status === 429) {
-          return NextResponse.json(
-            {
-              error:
-                "Too many AI requests right now. Wait a minute and retry this file.",
-            },
-            { status: 429 }
-          );
-        }
-      }
-      const msg = e instanceof Error ? e.message : "";
-      if (msg === "Missing ANTHROPIC_API_KEY") {
-        return NextResponse.json(
-          { error: "Server is not configured for AI. Contact support." },
-          { status: 500 }
-        );
-      }
-      if (msg.includes("Claude did not return valid JSON")) {
-        return NextResponse.json(
-          {
-            error:
-              "The model returned an incomplete response. Try uploading again, or use a smaller PDF.",
-          },
-          { status: 502 }
-        );
-      }
-      return NextResponse.json(
-        {
-          error:
-            "AI processing failed (network or model timeout). Try again in a moment.",
-        },
-        { status: 502 }
-      );
-    }
-
-    const { data: minRow } = await supabase
-      .from("study_materials")
-      .select("sort_order")
-      .eq("exam_group_id", examGroupId)
-      .order("sort_order", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    const nextSortOrder =
-      typeof minRow?.sort_order === "number" ? minRow.sort_order - 1 : 0;
-
-    const stemFromContent = deriveFileStemFromPayload(payload);
-    const uploadLabel =
-      typeof originalFileName === "string" && originalFileName.trim().length > 0
-        ? originalFileName.trim()
-        : "upload.pdf";
-    const fromUploadStem =
-      stripKnownDocumentExtension(uploadLabel) ||
-      finalizeMaterialSectionLabel(uploadLabel);
-    const storedFileName = stemFromContent
-      ? finalizeMaterialSectionLabel(stemFromContent)
-      : fromUploadStem.length > 0
-        ? fromUploadStem
-        : "Material";
-
-    const { data: row, error } = await supabase
-      .from("study_materials")
-      .insert({
-        user_id: user.id,
-        course_id: courseId,
-        exam_group_id: examGroupId,
-        file_name: storedFileName,
-        summary: payload.description,
-        key_concepts: [] as string[],
-        questions: [] as unknown[],
-        course_payload: payload,
-        sort_order: nextSortOrder,
-      })
-      .select("id")
-      .single();
-
-    if (error) {
-      console.error("[process-pdf] insert study_materials", error);
-      return NextResponse.json(
-        {
-          error: "Could not save study material.",
-          ...(process.env.NODE_ENV === "development" && {
-            debug: error.message,
-          }),
-        },
-        { status: 500 }
-      );
-    }
-
-    console.info("[process-pdf] ok", {
-      ms: Date.now() - t0,
-      materialId: row.id,
-    });
-
-    return NextResponse.json({ materialId: row.id });
-  } catch (e) {
-    console.error("process-pdf unexpected error", e);
-    const detail =
-      process.env.NODE_ENV === "development" && e instanceof Error
-        ? e.message
-        : undefined;
-    return NextResponse.json(
-      {
-        error:
-          "Upload failed unexpectedly on the server. Try again or use a smaller PDF.",
-        ...(detail ? { debug: detail } : {}),
+          "Could not start PDF build. Apply database migration `020_pdf_ingest_jobs.sql` in Supabase, then try again.",
+        ...(process.env.NODE_ENV === "development" && jobInsErr
+          ? { debug: jobInsErr.message }
+          : {}),
       },
       { status: 500 }
     );
-  } finally {
-    await removeIngestObject(admin, storagePath);
   }
+
+  const jobId = jobRow.id;
+
+  if (process.env.VERCEL) {
+    waitUntil(
+      runPdfIngestJob(jobId).catch((e) =>
+        console.error("[process-pdf] background job", jobId, e)
+      )
+    );
+    return NextResponse.json({ jobId }, { status: 202 });
+  }
+
+  await runPdfIngestJob(jobId).catch((e) =>
+    console.error("[process-pdf] dev job", jobId, e)
+  );
+
+  const { data: done } = await admin
+    .from("pdf_ingest_jobs")
+    .select("status, material_id, error_message")
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (done?.status === "complete" && done.material_id) {
+    return NextResponse.json({ materialId: done.material_id });
+  }
+
+  return NextResponse.json(
+    {
+      error:
+        typeof done?.error_message === "string" && done.error_message.trim()
+          ? done.error_message.trim()
+          : "PDF build failed. Check the server log and try again.",
+    },
+    { status: 500 }
+  );
 }
