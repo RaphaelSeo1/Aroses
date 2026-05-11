@@ -46,7 +46,7 @@ export async function GET(_request: Request, ctx: Params) {
 
   const { data: row, error } = await supabase
     .from("pdf_ingest_jobs")
-    .select("status, material_id, error_message, updated_at")
+    .select("status, material_id, error_message, updated_at, ingest_outline, ingest_modules")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -67,8 +67,30 @@ export async function GET(_request: Request, ctx: Params) {
       materialId: undefined,
       error:
         "This build stopped responding (likely hit the server time limit or was interrupted). Try uploading the PDF again. On Vercel Pro, confirm `maxDuration` is 300 in code and deployed.",
+      outlineReady: false,
+      modulesBuilt: 0,
+      modulesTotal: 0,
     });
   }
+
+  const outline = row.ingest_outline as { modules?: unknown[] } | null;
+  const modulesArr = Array.isArray(row.ingest_modules)
+    ? (row.ingest_modules as unknown[])
+    : [];
+  const outlineReady =
+    row.status === "running" &&
+    outline != null &&
+    typeof outline === "object" &&
+    Array.isArray(outline.modules) &&
+    outline.modules.length > 0;
+  const modulesTotal =
+    outlineReady && Array.isArray(outline.modules) ? outline.modules.length : 0;
+  const modulesBuilt =
+    outlineReady && row.status === "running"
+      ? modulesArr.length
+      : row.status === "complete"
+        ? modulesTotal
+        : 0;
 
   return NextResponse.json({
     status: row.status,
@@ -77,5 +99,8 @@ export async function GET(_request: Request, ctx: Params) {
       typeof row.error_message === "string" && row.error_message.trim()
         ? row.error_message.trim()
         : undefined,
+    outlineReady,
+    modulesBuilt,
+    modulesTotal,
   });
 }

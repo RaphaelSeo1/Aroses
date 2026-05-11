@@ -4,13 +4,24 @@ import {
   APIError,
   RateLimitError,
 } from "@anthropic-ai/sdk";
-import { parseCoursePayload, stripJsonFence } from "@/lib/ai/course-payload";
+import {
+  type CourseOutlinePayload,
+  parseCourseModule,
+  parseCourseOutlinePayload,
+  parseCoursePayload,
+  stripJsonFence,
+} from "@/lib/ai/course-payload";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
-import type { CoursePayload } from "@/types/course";
+import type { CourseModule, CoursePayload } from "@/types/course";
+
+export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
 
 /**
- * Default **`fast`**: small enough JSON to usually finish under Vercel’s ~5m function cap.
- * Set `COURSE_BUILD_PROFILE=balanced` or `full` for richer courses (slower / more timeouts).
+ * PDF ingest uses a **chunked** pipeline (outline in `runPdfIngestJob`, then one module per
+ * `POST /api/process-pdf/expand`) so each invocation stays within the serverless wall clock.
+ *
+ * Default **`fast`**: smaller per-module JSON. Set `COURSE_BUILD_PROFILE=balanced` or `full`
+ * for richer courses (more modules / larger outputs per step).
  */
 type CourseBuildProfile = "full" | "balanced" | "fast";
 
@@ -19,6 +30,15 @@ function resolveCourseBuildProfile(): CourseBuildProfile {
   if (p === "full") return "full";
   if (p === "balanced") return "balanced";
   return "fast";
+}
+
+/** Same truncation as outline/module generation — store on the job for expand steps. */
+export function materialTextForPdfIngest(fullText: string): string {
+  const profile = resolveCourseBuildProfile();
+  return truncateMaterial(
+    fullText.trim(),
+    profile === "fast" ? FAST_MATERIAL_CHARS : MAX_MATERIAL_CHARS
+  );
 }
 
 /**
@@ -259,5 +279,264 @@ export async function generateCourseFromMaterial(
     } catch {
       throw e;
     }
+  }
+}
+
+function outlineInstruction(
+  materialText: string,
+  profile: CourseBuildProfile
+): string {
+  let moduleCount: string;
+  if (profile === "full") {
+    moduleCount =
+      "Use **2 to 8** modules depending on how much content the source has.";
+  } else if (profile === "fast") {
+    moduleCount = "Use **2 to 5** modules.";
+  } else {
+    moduleCount = "Use **2 to 6** modules.";
+  }
+
+  return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
+
+${moduleCount}
+Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to 5** short strings — the titles of lessons you will expand later).
+
+Exact shape:
+{
+  "title": "course title",
+  "description": "compelling course description",
+  "modules": [
+    { "id": 1, "title": "module title", "lesson_titles": ["Lesson one", "Lesson two"] }
+  ]
+}
+
+Rules: base everything on the material; do not invent unrelated topics. No markdown fences, no commentary.
+
+--- MATERIAL START ---
+${materialText}
+--- MATERIAL END ---`;
+}
+
+function moduleQuizRules(profile: CourseBuildProfile): string {
+  if (profile === "full") {
+    return `QUIZ (this module only): **at least 8** questions, with **at least 4** type free_response (include reference_answer snake_case). The rest MCQ with exactly 4 choices each.`;
+  }
+  if (profile === "fast") {
+    return `QUIZ (this module only): **at least 5** questions, with **at least 2** type free_response (reference_answer required). The rest MCQ, 4 choices each.`;
+  }
+  return `QUIZ (this module only): **at least 6** questions, with **at least 3** type free_response (reference_answer required). Mix MCQ and free-response. MCQs: exactly 4 choices.`;
+}
+
+function moduleInstruction(
+  materialText: string,
+  outline: CourseOutlinePayload,
+  moduleIndex: number,
+  profile: CourseBuildProfile
+): string {
+  const stub = outline.modules[moduleIndex];
+  const n = outline.modules.length;
+  const titles = stub.lesson_titles.map((t) => JSON.stringify(t)).join(", ");
+
+  return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. Module title **must be** ${JSON.stringify(stub.title)}.
+
+Create one full module object: lessons (one per planned lesson title below, in order — same count as lesson_titles, each with rich "content", "key_terms", "examples"), plus quiz.
+
+Planned lesson titles for this module: ${titles}.
+
+${moduleQuizRules(profile)}
+
+Return ONLY valid JSON in this exact wrapper (no markdown):
+{ "module": { "id": ${stub.id}, "title": ${JSON.stringify(stub.title)}, "lessons": [...], "quiz": [...] } }
+
+Base all teaching strictly on the source material.
+
+--- MATERIAL START ---
+${materialText}
+--- MATERIAL END ---`;
+}
+
+async function repairOutlineJson(
+  anthropic: Anthropic,
+  brokenAssistantText: string,
+  profile: CourseBuildProfile
+): Promise<CourseOutlinePayload> {
+  const prompt = `You returned JSON that could not be parsed as a course outline (title, description, modules with id, title, lesson_titles arrays). Output ONLY one valid JSON object. No markdown.
+
+Broken output (repair):
+${brokenAssistantText.slice(0, 60_000)}`;
+
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: resolveCourseModel(profile),
+      max_tokens: 8192,
+      temperature: 0.1,
+      messages: [{ role: "user", content: prompt }],
+    },
+    { maxAttempts: profile === "fast" ? 2 : 3 }
+  );
+
+  const text = extractTextBlock(msg);
+  let repaired: unknown;
+  try {
+    repaired = JSON.parse(stripJsonFence(text));
+  } catch {
+    throw new Error("Claude did not return valid JSON after outline repair");
+  }
+  return parseCourseOutlinePayload(repaired);
+}
+
+async function repairModuleJson(
+  anthropic: Anthropic,
+  brokenAssistantText: string,
+  profile: CourseBuildProfile
+): Promise<CourseModule> {
+  const prompt = `You returned JSON that could not be parsed as a single course "module" (id, title, lessons[], quiz[]). Output ONLY: { "module": { ... } } with valid JSON. No markdown.
+
+Broken output (repair):
+${brokenAssistantText.slice(0, 100_000)}`;
+
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: resolveCourseModel(profile),
+      max_tokens: profile === "fast" ? 12_288 : 20_480,
+      temperature: 0.1,
+      messages: [{ role: "user", content: prompt }],
+    },
+    { maxAttempts: profile === "fast" ? 2 : 3 }
+  );
+
+  const text = extractTextBlock(msg);
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(stripJsonFence(text)) as Record<string, unknown>;
+  } catch {
+    throw new Error("Claude did not return valid JSON after module repair");
+  }
+  const mod = parsed.module;
+  return parseCourseModule(mod);
+}
+
+/** Phase 1 of chunked PDF ingest — small JSON, usually finishes quickly. */
+export async function generateCourseOutlineFromMaterial(
+  materialText: string
+): Promise<CourseOutlinePayload> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing ANTHROPIC_API_KEY");
+  }
+
+  const profile = resolveCourseBuildProfile();
+  const anthropic = new Anthropic({
+    apiKey,
+    timeout: getPdfAnthropicTimeoutMs(),
+    maxRetries: 0,
+  });
+
+  const trimmed = truncateMaterial(
+    materialText,
+    profile === "fast" ? FAST_MATERIAL_CHARS : MAX_MATERIAL_CHARS
+  );
+  const instruction = outlineInstruction(trimmed, profile);
+
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: resolveCourseModel(profile),
+      max_tokens: profile === "fast" ? 6144 : 8192,
+      temperature: 0.2,
+      messages: [{ role: "user", content: instruction }],
+    },
+    { maxAttempts: profile === "fast" ? 2 : 4 }
+  );
+
+  const rawText = extractTextBlock(msg);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonFence(rawText));
+  } catch {
+    return repairOutlineJson(anthropic, rawText, profile);
+  }
+
+  try {
+    return parseCourseOutlinePayload(parsed);
+  } catch (e) {
+    console.warn("[study-generation] outline validation failed; repairing", e);
+    return repairOutlineJson(anthropic, rawText, profile);
+  }
+}
+
+function moduleMaxTokens(profile: CourseBuildProfile): number {
+  if (profile === "fast") return 14_336;
+  if (profile === "full") return 30_720;
+  return 24_576;
+}
+
+/** Expand one module for chunked PDF ingest (separate server invocation). */
+export async function generateCourseModuleFromMaterial(
+  materialText: string,
+  outline: CourseOutlinePayload,
+  moduleIndex: number
+): Promise<CourseModule> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing ANTHROPIC_API_KEY");
+  }
+  if (moduleIndex < 0 || moduleIndex >= outline.modules.length) {
+    throw new Error("Invalid module index");
+  }
+
+  const profile = resolveCourseBuildProfile();
+  const anthropic = new Anthropic({
+    apiKey,
+    timeout: getPdfAnthropicTimeoutMs(),
+    maxRetries: 0,
+  });
+
+  const trimmed = truncateMaterial(
+    materialText,
+    profile === "fast" ? FAST_MATERIAL_CHARS : MAX_MATERIAL_CHARS
+  );
+  const instruction = moduleInstruction(trimmed, outline, moduleIndex, profile);
+
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: resolveCourseModel(profile),
+      max_tokens: moduleMaxTokens(profile),
+      temperature: 0.2,
+      messages: [{ role: "user", content: instruction }],
+    },
+    { maxAttempts: profile === "fast" ? 2 : 5 }
+  );
+
+  const rawText = extractTextBlock(msg);
+  const stopReason = (msg as { stop_reason?: string }).stop_reason;
+  if (stopReason === "max_tokens") {
+    console.warn(
+      "[study-generation] module Claude hit max_tokens; attempting repair"
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonFence(rawText));
+  } catch {
+    return repairModuleJson(anthropic, rawText, profile);
+  }
+
+  try {
+    const obj = parsed as Record<string, unknown>;
+    const mod = obj.module;
+    const courseMod = parseCourseModule(mod);
+    const expectedId = outline.modules[moduleIndex].id;
+    if (courseMod.id !== expectedId) {
+      return { ...courseMod, id: expectedId };
+    }
+    return courseMod;
+  } catch (e) {
+    console.warn("[study-generation] module validation failed; repairing", e);
+    return repairModuleJson(anthropic, rawText, profile);
   }
 }

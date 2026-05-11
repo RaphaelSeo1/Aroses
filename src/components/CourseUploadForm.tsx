@@ -51,7 +51,7 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
     noUsefulBody &&
     (res.status === 500 || res.status === 502 || res.status === 503)
   ) {
-    return `Upload failed (${res.status}): the server stopped before sending a proper response. Check your host logs, confirm ANTHROPIC_API_KEY and SUPABASE_SERVICE_ROLE_KEY on production, and that migration 020_pdf_ingest_jobs.sql is applied in Supabase.`;
+    return `Upload failed (${res.status}): the server stopped before sending a proper response. Check your host logs, confirm ANTHROPIC_API_KEY and SUPABASE_SERVICE_ROLE_KEY on production, and that migrations 020 and 021 (pdf ingest) are applied in Supabase.`;
   }
 
   if (trimmed.length > 0 && !looksLikeHtml && trimmed.length < 400) {
@@ -65,17 +65,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Poll after `POST /api/process-pdf` returns `202` + `jobId` (background build on Vercel). */
-async function pollPdfIngestJob(jobId: string): Promise<{
+/** Poll after `POST /api/process-pdf` returns `202` + `jobId` (chunked: outline in background, then per-module expand). */
+async function pollPdfIngestJob(
+  jobId: string,
+  onProgress?: (label: string) => void
+): Promise<{
   materialId?: string;
   error?: string;
 }> {
-  /** Stay above server `maxDuration` (seconds) so we don’t give up while the job may still run. */
-  const deadline = Date.now() + 11 * 60 * 1000;
+  /** Outline + several modules can exceed one serverless cap; allow a longer client wait. */
+  const deadline = Date.now() + 22 * 60 * 1000;
   while (Date.now() < deadline) {
     const r = await fetch(`/api/process-pdf/jobs/${jobId}`);
     const raw = await r.text();
-    let data: { status?: string; materialId?: string; error?: string };
+    let data: {
+      status?: string;
+      materialId?: string;
+      error?: string;
+      outlineReady?: boolean;
+      modulesBuilt?: number;
+      modulesTotal?: number;
+    };
     try {
       data = JSON.parse(raw) as typeof data;
     } catch {
@@ -94,11 +104,66 @@ async function pollPdfIngestJob(jobId: string): Promise<{
     if (data.status === "failed") {
       return { error: data.error ?? "PDF build failed." };
     }
+
+    if (
+      data.status === "running" &&
+      data.outlineReady &&
+      typeof data.modulesBuilt === "number" &&
+      typeof data.modulesTotal === "number" &&
+      data.modulesTotal > 0 &&
+      data.modulesBuilt < data.modulesTotal
+    ) {
+      const next = data.modulesBuilt + 1;
+      onProgress?.(
+        `Building module ${next} of ${data.modulesTotal}… (each step has its own server time limit)`
+      );
+      let exp: Response;
+      try {
+        exp = await fetch("/api/process-pdf/expand", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId }),
+        });
+      } catch {
+        return {
+          error:
+            "Network error while building a module. Check your connection and try uploading again.",
+        };
+      }
+      const expRaw = await exp.text();
+      let expJson: {
+        error?: string;
+        complete?: boolean;
+        materialId?: string;
+      };
+      try {
+        expJson = JSON.parse(expRaw) as typeof expJson;
+      } catch {
+        return { error: "Invalid response while building a module." };
+      }
+      if (!exp.ok) {
+        return {
+          error:
+            typeof expJson.error === "string" && expJson.error.trim()
+              ? expJson.error.trim()
+              : `Module ${next} failed (${exp.status}).`,
+        };
+      }
+      if (expJson.complete === true && typeof expJson.materialId === "string") {
+        return { materialId: expJson.materialId };
+      }
+      continue;
+    }
+
+    if (data.status === "running" && !data.outlineReady) {
+      onProgress?.("Reading PDF and drafting course outline…");
+    }
+
     await sleep(1800);
   }
   return {
     error:
-      "Build is taking longer than expected (waited 11 minutes). Refresh the course page — it may still complete.",
+      "Build is taking longer than expected (waited 22 minutes). Refresh the course page — it may still complete.",
   };
 }
 
@@ -267,7 +332,13 @@ export function CourseUploadForm({
                 ? `${i + 1}/${total} ${file.name}: generating course…`
                 : `${file.name}: generating course…`
             );
-            const polled = await pollPdfIngestJob(body.jobId);
+            const polled = await pollPdfIngestJob(body.jobId, (label) =>
+              setProgressLabel(
+                total > 1
+                  ? `${i + 1}/${total} ${file.name}: ${label}`
+                  : `${file.name}: ${label}`
+              )
+            );
             if (polled.error) {
               failures.push(`${file.name}: ${polled.error}`);
               continue;

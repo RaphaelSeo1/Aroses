@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
-import { runPdfIngestJob } from "@/lib/pdf-ingest-runner";
+import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 
@@ -178,7 +178,7 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     return NextResponse.json(
       {
         error:
-          "Could not start PDF build. Apply database migration `020_pdf_ingest_jobs.sql` in Supabase, then try again.",
+          "Could not start PDF build. Apply database migrations `020_pdf_ingest_jobs.sql` and `021_pdf_ingest_chunked.sql` in Supabase, then try again.",
         ...(process.env.NODE_ENV === "development" && jobInsErr
           ? { debug: jobInsErr.message }
           : {}),
@@ -200,8 +200,18 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
   }
 
   await runPdfIngestJob(jobId).catch((e) =>
-    console.error("[process-pdf] dev job", jobId, e)
+    console.error("[process-pdf] dev job phase1", jobId, e)
   );
+
+  for (let step = 0; step < 24; step++) {
+    const r = await runPdfIngestExpandOne(jobId);
+    if (r.kind === "complete") {
+      return NextResponse.json({ materialId: r.materialId });
+    }
+    if (r.kind === "failed") {
+      return NextResponse.json({ error: r.message }, { status: 500 });
+    }
+  }
 
   const { data: done } = await admin
     .from("pdf_ingest_jobs")
@@ -234,7 +244,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Could not start the PDF build on the server. Redeploy the latest code, confirm migration 020_pdf_ingest_jobs.sql is applied in Supabase, then try again.",
+          "Could not start the PDF build on the server. Redeploy the latest code, confirm migrations 020 and 021 (pdf ingest) are applied in Supabase, then try again.",
         ...(process.env.NODE_ENV === "development" ? { debug: hint } : {}),
       },
       { status: 500 }

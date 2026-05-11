@@ -261,6 +261,64 @@ export function renumberModules(modules: CourseModule[]): CourseModule[] {
   return modules.map((m, i) => ({ ...m, id: i + 1 }));
 }
 
+/** One module from model JSON (used by chunked PDF ingest). */
+export function parseCourseModule(raw: unknown): CourseModule {
+  return normalizeModule(raw);
+}
+
+export type CourseOutlineStub = {
+  id: number;
+  title: string;
+  lesson_titles: string[];
+};
+
+export type CourseOutlinePayload = {
+  title: string;
+  description: string;
+  modules: CourseOutlineStub[];
+};
+
+function normalizeOutlineStub(raw: unknown): CourseOutlineStub {
+  if (!raw || typeof raw !== "object") throw new Error("Invalid outline module");
+  const o = raw as Record<string, unknown>;
+  const id = typeof o.id === "number" ? o.id : Number(o.id);
+  if (!Number.isFinite(id)) throw new Error("Invalid outline module id");
+  if (typeof o.title !== "string" || !o.title.trim()) {
+    throw new Error("Invalid outline module title");
+  }
+  const lt = o.lesson_titles ?? o.lessonTitles;
+  if (!Array.isArray(lt) || lt.length === 0) {
+    throw new Error("Outline module needs at least one lesson_titles entry");
+  }
+  const lesson_titles = lt
+    .map((x) => (typeof x === "string" ? x.trim() : String(x)))
+    .filter((s) => s.length > 0);
+  if (lesson_titles.length === 0) {
+    throw new Error("Outline lesson_titles must be non-empty strings");
+  }
+  return { id, title: o.title.trim(), lesson_titles };
+}
+
+/** Validate outline JSON for phase 1 of chunked ingest. */
+export function parseCourseOutlinePayload(parsed: unknown): CourseOutlinePayload {
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.title !== "string" || !obj.title.trim()) {
+    throw new Error("Invalid outline: missing title");
+  }
+  if (typeof obj.description !== "string" || !obj.description.trim()) {
+    throw new Error("Invalid outline: missing description");
+  }
+  if (!Array.isArray(obj.modules) || obj.modules.length === 0) {
+    throw new Error("Invalid outline: need at least one module");
+  }
+  const modules = obj.modules.map(normalizeOutlineStub);
+  return {
+    title: obj.title.trim(),
+    description: obj.description.trim(),
+    modules,
+  };
+}
+
 /** Validate & normalize parsed JSON into CoursePayload (same rules as generation). */
 export function parseCoursePayload(parsed: unknown): CoursePayload {
   const obj = parsed as Record<string, unknown>;
