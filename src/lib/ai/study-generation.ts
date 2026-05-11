@@ -358,12 +358,23 @@ function moduleInstruction(
   const stub = outline.modules[moduleIndex];
   const n = outline.modules.length;
   const titles = stub.lesson_titles.map((t) => JSON.stringify(t)).join(", ");
+  const styleRule =
+    profile === "fast"
+      ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
+      : "";
+  const lessonRequirements =
+    profile === "fast"
+      ? `For EACH lesson: include 2–4 key_terms (term+definition) and exactly 2 real-world examples (short strings).`
+      : `For EACH lesson: include key_terms (term+definition) and examples (strings).`;
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. Module title **must be** ${JSON.stringify(stub.title)}.
 
 Create one full module object: lessons (one per planned lesson title below, in order — same count as lesson_titles, each with rich "content", "key_terms", "examples"), plus quiz.
 
 Planned lesson titles for this module: ${titles}.
+
+${styleRule}
+${lessonRequirements}
 
 ${moduleQuizRules(profile)}
 
@@ -416,7 +427,14 @@ async function repairModuleJson(
   brokenAssistantText: string,
   profile: CourseBuildProfile
 ): Promise<CourseModule> {
-  const prompt = `You returned JSON that could not be parsed as a single course "module" (id, title, lessons[], quiz[]). Output ONLY: { "module": { ... } } with valid JSON. No markdown.
+  const requirements =
+    profile === "fast"
+      ? `Requirements for EACH lesson (fast): include 2–4 key_terms (term+definition) and at least 2 examples (short strings). Do not leave key_terms empty.`
+      : `Requirements for EACH lesson: include key_terms (term+definition) and examples (strings).`;
+
+  const prompt = `You returned JSON that could not be parsed or did not meet requirements for a single course "module" (id, title, lessons[], quiz[]). Output ONLY: { "module": { ... } } with valid JSON. No markdown.
+
+${requirements}
 
 Broken output (repair):
 ${brokenAssistantText.slice(0, 100_000)}`;
@@ -441,6 +459,65 @@ ${brokenAssistantText.slice(0, 100_000)}`;
   }
   const mod = parsed.module;
   return parseCourseModule(mod);
+}
+
+function moduleNeedsLessonGlossary(m: CourseModule): boolean {
+  return m.lessons.some(
+    (l) => l.key_terms.length === 0 || l.examples.length === 0
+  );
+}
+
+/** Second pass: model omitted glossary fields but JSON was otherwise valid. */
+async function repairModuleMissingLessonFields(
+  anthropic: Anthropic,
+  module: CourseModule,
+  profile: CourseBuildProfile
+): Promise<CourseModule> {
+  const payload = JSON.stringify({ module });
+  const clipped =
+    payload.length > 115_000 ? `${payload.slice(0, 115_000)}\n…(truncated)` : payload;
+  const prompt = `You are given JSON for one course "module". Return ONLY valid JSON: { "module": { ... } }.
+
+Rules:
+- Keep the same module id, module title, lesson titles, lesson content, and quiz as much as possible.
+- REQUIRED: every lesson must have non-empty key_terms (array of objects with "term" and "definition" strings). At least 2 per lesson.
+- REQUIRED: every lesson must have non-empty examples (array of strings). At least 2 per lesson.
+- Use snake_case keys: "key_terms" and "examples" (not camelCase).
+
+${clipped}`;
+
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: resolveCourseModel(profile),
+      max_tokens: profile === "fast" ? 10_240 : 18_432,
+      temperature: 0.15,
+      messages: [{ role: "user", content: prompt }],
+    },
+    { maxAttempts: profile === "fast" ? 2 : 3 }
+  );
+
+  const text = extractTextBlock(msg);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonFence(text));
+  } catch {
+    throw new Error("Claude did not return valid JSON after glossary repair");
+  }
+  const obj = parsed as Record<string, unknown>;
+  return parseCourseModule(obj.module);
+}
+
+async function ensureModuleLessonFields(
+  anthropic: Anthropic,
+  module: CourseModule,
+  profile: CourseBuildProfile
+): Promise<CourseModule> {
+  let out = module;
+  for (let i = 0; i < 2 && moduleNeedsLessonGlossary(out); i++) {
+    out = await repairModuleMissingLessonFields(anthropic, out, profile);
+  }
+  return out;
 }
 
 /** Phase 1 of chunked PDF ingest — small JSON, usually finishes quickly. */
@@ -547,7 +624,9 @@ export async function generateCourseModuleFromMaterial(
   try {
     parsed = JSON.parse(stripJsonFence(rawText));
   } catch {
-    return repairModuleJson(anthropic, rawText, profile);
+    let repaired = await repairModuleJson(anthropic, rawText, profile);
+    repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
+    return repaired;
   }
 
   try {
@@ -555,12 +634,13 @@ export async function generateCourseModuleFromMaterial(
     const mod = obj.module;
     const courseMod = parseCourseModule(mod);
     const expectedId = outline.modules[moduleIndex].id;
-    if (courseMod.id !== expectedId) {
-      return { ...courseMod, id: expectedId };
-    }
-    return courseMod;
+    const normalized = courseMod.id !== expectedId ? { ...courseMod, id: expectedId } : courseMod;
+
+    return await ensureModuleLessonFields(anthropic, normalized, profile);
   } catch (e) {
     console.warn("[study-generation] module validation failed; repairing", e);
-    return repairModuleJson(anthropic, rawText, profile);
+    let repaired = await repairModuleJson(anthropic, rawText, profile);
+    repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
+    return repaired;
   }
 }

@@ -74,16 +74,6 @@ function formatElapsedShort(ms: number): string {
   return rs > 0 ? `${m}m ${rs}s` : `${m} min`;
 }
 
-/** Remaining wall time for this + following module server calls (each often ~1–4 min). */
-function modulePhaseEtaLabel(modulesRemainingIncludingCurrent: number): string {
-  if (modulesRemainingIncludingCurrent <= 0) return "";
-  const lowMin = Math.max(1, modulesRemainingIncludingCurrent * 1);
-  const highMin = Math.max(lowMin, modulesRemainingIncludingCurrent * 4);
-  return lowMin === highMin
-    ? `~${lowMin} min left (rough guess)`
-    : `~${lowMin}–${highMin} min left (rough guess)`;
-}
-
 function jobStartedAtMs(createdAt?: string): number | null {
   if (typeof createdAt !== "string" || !createdAt.trim()) return null;
   const t = Date.parse(createdAt);
@@ -140,15 +130,12 @@ async function pollPdfIngestJob(
       data.modulesBuilt < data.modulesTotal
     ) {
       const next = data.modulesBuilt + 1;
-      const remaining = data.modulesTotal - data.modulesBuilt;
       const started = jobStartedAtMs(data.createdAt);
       const elapsedPart =
         started != null
-          ? ` · ${formatElapsedShort(Date.now() - started)} so far`
+          ? ` · ${formatElapsedShort(Date.now() - started)}`
           : "";
-      onProgress?.(
-        `Module ${next} of ${data.modulesTotal} — this step often takes ~1–3 min. ${modulePhaseEtaLabel(remaining)}${elapsedPart}.`
-      );
+      onProgress?.(`Generating course (${next}/${data.modulesTotal})${elapsedPart}…`);
       let exp: Response;
       try {
         exp = await fetch("/api/process-pdf/expand", {
@@ -194,11 +181,9 @@ async function pollPdfIngestJob(
       const started = jobStartedAtMs(data.createdAt);
       const elapsedPart =
         started != null
-          ? ` Elapsed: ${formatElapsedShort(Date.now() - started)}.`
+          ? ` · ${formatElapsedShort(Date.now() - started)}`
           : "";
-      onProgress?.(
-        `Outline step: download → extract text → AI drafts the course structure (~1–5 min total; most of that is usually the model, not reading the PDF).${elapsedPart} Then each module is another AI step (~5–25 min typical full run).`
-      );
+      onProgress?.(`Generating course…${elapsedPart}`);
     }
 
     await sleep(1800);
@@ -547,9 +532,7 @@ export function CourseUploadForm({
         <p className="mt-2 text-xs text-zinc-500">
           Text must be selectable in the PDF for best results (scanned pages may
           not extract well). Multiple files are processed one after another.
-          Builds run through this app in several server steps (outline, then
-          each module), so they are slower than pasting the same PDF once into a
-          chat. Keep this tab open until the spinner finishes.
+          Keep this tab open while we generate your course.
         </p>
       </div>
 

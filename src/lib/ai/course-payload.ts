@@ -196,22 +196,65 @@ function coerceModuleQuizArray(o: Record<string, unknown>): unknown[] {
   return fallback ?? [];
 }
 
+function readLooseStringField(
+  rec: Record<string, unknown>,
+  keys: string[]
+): string | undefined {
+  for (const k of keys) {
+    const v = rec[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  for (const kk of Object.keys(rec)) {
+    const low = kk.toLowerCase();
+    for (const k of keys) {
+      if (low === k.toLowerCase()) {
+        const v = rec[kk];
+        if (typeof v === "string" && v.trim()) return v.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Accepts `key_terms`, camelCase `keyTerms`, alternate keys, or `"term: def"` strings. */
 function normalizeKeyTerms(raw: unknown): KeyTerm[] {
   if (!Array.isArray(raw)) return [];
   const out: KeyTerm[] = [];
   for (const x of raw) {
-    if (
-      x &&
-      typeof x === "object" &&
-      "term" in x &&
-      "definition" in x &&
-      typeof (x as { term: unknown }).term === "string" &&
-      typeof (x as { definition: unknown }).definition === "string"
-    ) {
-      out.push({
-        term: (x as { term: string }).term,
-        definition: (x as { definition: string }).definition,
-      });
+    if (typeof x === "string") {
+      const s = x.trim();
+      const idx = s.indexOf(":");
+      if (idx > 0 && idx < s.length - 1) {
+        const term = s.slice(0, idx).trim();
+        const definition = s.slice(idx + 1).trim();
+        if (term.length >= 2 && definition.length >= 4) {
+          out.push({ term, definition });
+        }
+      }
+      continue;
+    }
+    if (!x || typeof x !== "object") continue;
+    const rec = x as Record<string, unknown>;
+    const term =
+      readLooseStringField(rec, [
+        "term",
+        "Term",
+        "name",
+        "keyword",
+        "title",
+        "concept",
+      ]) ?? "";
+    const definition =
+      readLooseStringField(rec, [
+        "definition",
+        "Definition",
+        "meaning",
+        "explanation",
+        "description",
+        "def",
+      ]) ?? "";
+    if (term.length >= 2 && definition.length >= 4) {
+      out.push({ term, definition });
     }
   }
   return out;
@@ -223,13 +266,24 @@ function normalizeLesson(raw: unknown): CourseLesson {
   if (typeof o.title !== "string" || typeof o.content !== "string") {
     throw new Error("Invalid lesson title/content");
   }
-  const examples = Array.isArray(o.examples)
-    ? o.examples.filter((e): e is string => typeof e === "string")
+  const examplesRaw =
+    o.examples ?? o.real_world_examples ?? o.realWorldExamples ?? o.RealWorldExamples;
+  const examples = Array.isArray(examplesRaw)
+    ? examplesRaw
+        .map((e) => {
+          if (typeof e === "string") return e.trim();
+          if (e && typeof e === "object" && typeof (e as { text: unknown }).text === "string") {
+            return String((e as { text: string }).text).trim();
+          }
+          return "";
+        })
+        .filter((s) => s.length > 0)
     : [];
+  const keyTermsRaw = o.key_terms ?? o.keyTerms ?? o.KeyTerms ?? o["Key terms"];
   return {
     title: o.title,
     content: o.content,
-    key_terms: normalizeKeyTerms(o.key_terms),
+    key_terms: normalizeKeyTerms(keyTermsRaw),
     examples,
   };
 }
