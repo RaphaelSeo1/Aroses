@@ -8,18 +8,25 @@ import { parseCoursePayload, stripJsonFence } from "@/lib/ai/course-payload";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import type { CoursePayload } from "@/types/course";
 
-const MODEL = "claude-sonnet-4-20250514";
+/** Default Sonnet; set `ANTHROPIC_COURSE_MODEL` for a faster model (see Anthropic model IDs). */
+function resolveCourseModel(): string {
+  return (
+    process.env.ANTHROPIC_COURSE_MODEL?.trim() ||
+    "claude-sonnet-4-20250514"
+  );
+}
 
 /**
- * `balanced` (default): still in-depth, smaller output target → faster builds.
- * `full`: maximum quiz/lesson depth (slowest).
+ * Default **`fast`**: small enough JSON to usually finish under Vercel’s ~5m function cap.
+ * Set `COURSE_BUILD_PROFILE=balanced` or `full` for richer courses (slower / more timeouts).
  */
-type CourseBuildProfile = "full" | "balanced";
+type CourseBuildProfile = "full" | "balanced" | "fast";
 
 function resolveCourseBuildProfile(): CourseBuildProfile {
   const p = process.env.COURSE_BUILD_PROFILE?.trim().toLowerCase();
   if (p === "full") return "full";
-  return "balanced";
+  if (p === "balanced") return "balanced";
+  return "fast";
 }
 
 /** Rough input budget — large PDFs + long outputs often hit limits or timeouts. */
@@ -51,19 +58,28 @@ function courseInstruction(
   materialText: string,
   profile: CourseBuildProfile
 ): string {
-  const sizeRules =
-    profile === "full"
-      ? `Rules for output size (important): use at least 2 modules and at most 8 unless the source is extremely short. Keep each lesson "content" thorough but under roughly 1000 words so the full answer fits in one response. Every module must include at least one lesson.
+  let sizeRules: string;
+  let quizFooter: string;
 
-QUIZ (critical): Each module needs a rich practice set — **at least 8 questions per module**, with **at least 4 items** whose type is free_response (short written answer). The rest should be mcq. Aim for roughly half MCQ and half free-response overall. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, several sentences of rubric — key ideas and acceptable points).`
-      : `Rules for output size (important): use at least 2 modules and at most 6 unless the source is extremely short. Keep each lesson "content" thorough and instructive but under roughly 800 words so the response stays fast. Every module must include at least one lesson.
+  if (profile === "full") {
+    sizeRules = `Rules for output size (important): use at least 2 modules and at most 8 unless the source is extremely short. Keep each lesson "content" thorough but under roughly 1000 words so the full answer fits in one response. Every module must include at least one lesson.
+
+QUIZ (critical): Each module needs a rich practice set — **at least 8 questions per module**, with **at least 4 items** whose type is free_response (short written answer). The rest should be mcq. Aim for roughly half MCQ and half free-response overall. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, several sentences of rubric — key ideas and acceptable points).`;
+    quizFooter =
+      "Include many quiz objects per module (minimum 8 total per module, including ≥4 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+  } else if (profile === "fast") {
+    sizeRules = `Rules for output size (important): use at least 2 modules and at most 5 unless the source is extremely short. Keep each lesson "content" clear and instructive but under roughly 550 words. Every module must include at least one lesson.
+
+QUIZ (critical): Each module needs a practical practice set — **at least 5 questions per module**, with **at least 2 items** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
+    quizFooter =
+      "Include enough quiz objects per module to meet the minimums above (≥5 per module, including ≥2 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+  } else {
+    sizeRules = `Rules for output size (important): use at least 2 modules and at most 6 unless the source is extremely short. Keep each lesson "content" thorough and instructive but under roughly 800 words so the response stays fast. Every module must include at least one lesson.
 
 QUIZ (critical): Each module needs a strong practice set — **at least 6 questions per module**, with **at least 3 items** whose type is free_response (short written answer). The rest should be mcq. Aim for a solid mix of MCQ and free-response. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, clear rubric — key ideas and acceptable points).`;
-
-  const quizFooter =
-    profile === "full"
-      ? "Include many quiz objects per module (minimum 8 total per module, including ≥4 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information."
-      : "Include enough quiz objects per module to meet the minimums above (≥6 per module, including ≥3 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+    quizFooter =
+      "Include enough quiz objects per module to meet the minimums above (≥6 per module, including ≥3 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+  }
 
   return `You are an expert course designer and educator. You have been given raw course material (lecture slides, syllabi, notes). Your job is NOT to summarize this material. Your job is to use it as a source to BUILD a complete, professional, structured course that a student would genuinely pay for.
 
@@ -155,7 +171,7 @@ Broken output (repair it):
 ${brokenAssistantText.slice(0, 120_000)}`;
 
   const msg = await createMessageWithRetries(anthropic, {
-    model: MODEL,
+    model: resolveCourseModel(),
     max_tokens: 32768,
     temperature: 0.1,
     messages: [{ role: "user", content: prompt }],
@@ -191,8 +207,8 @@ export async function generateCourseFromMaterial(
   const instruction = courseInstruction(trimmed, profile);
 
   const msg = await createMessageWithRetries(anthropic, {
-    model: MODEL,
-    max_tokens: 32768,
+    model: resolveCourseModel(),
+    max_tokens: profile === "fast" ? 24_576 : 32_768,
     temperature: 0.2,
     messages: [{ role: "user", content: instruction }],
   });

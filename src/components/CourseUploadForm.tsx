@@ -187,134 +187,105 @@ export function CourseUploadForm({
         return;
       }
 
-      if (total > 1) {
+      for (let i = 0; i < queue.length; i++) {
+        const file = queue[i];
         setProgressLabel(
-          `Building ${total} PDFs in parallel — often much faster than one file at a time`
+          total > 1
+            ? `Building ${i + 1} of ${total}: ${file.name} (one file at a time — more reliable than parallel)`
+            : `Building: ${file.name}`
         );
-      }
 
-      type BuildRow = {
-        index: number;
-        file: File;
-        materialId?: string;
-        error?: string;
-      };
+        if (file.size > MAX_STUDY_PDF_BYTES) {
+          failures.push(
+            `${file.name}: PDF is too large (max 40 MB). Split the file or export fewer pages.`
+          );
+          continue;
+        }
 
-      const buildRows: BuildRow[] = await Promise.all(
-        queue.map(async (file, i) => {
-          if (total === 1) {
-            setProgressLabel(`Building: ${file.name}`);
-          }
+        const storagePath = `${user.id}/${crypto.randomUUID()}.pdf`;
 
-          if (file.size > MAX_STUDY_PDF_BYTES) {
-            return {
-              index: i,
-              file,
-              error:
-                "PDF is too large (max 40 MB). Split the file or export fewer pages.",
-            };
-          }
+        const { error: upErr } = await supabase.storage
+          .from(STUDY_PDF_INGEST_BUCKET)
+          .upload(storagePath, file, {
+            contentType: "application/pdf",
+            cacheControl: "3600",
+            upsert: false,
+          });
 
-          const storagePath = `${user.id}/${crypto.randomUUID()}.pdf`;
+        if (upErr) {
+          const detail =
+            typeof upErr === "object" && upErr && "message" in upErr
+              ? String((upErr as { message: unknown }).message)
+              : String(upErr);
+          failures.push(
+            `${file.name}: ${describePdfIngestUploadFailure(detail)}`
+          );
+          continue;
+        }
 
-          const { error: upErr } = await supabase.storage
+        let res: Response;
+        try {
+          res = await fetch("/api/process-pdf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              courseId,
+              examGroupId,
+              storagePath,
+              originalFileName: file.name,
+            }),
+          });
+        } catch {
+          await supabase.storage
             .from(STUDY_PDF_INGEST_BUCKET)
-            .upload(storagePath, file, {
-              contentType: "application/pdf",
-              cacheControl: "3600",
-              upsert: false,
-            });
+            .remove([storagePath])
+            .catch(() => {});
+          failures.push(`${file.name}: Network error while starting build.`);
+          continue;
+        }
 
-          if (upErr) {
-            const detail =
-              typeof upErr === "object" && upErr && "message" in upErr
-                ? String((upErr as { message: unknown }).message)
-                : String(upErr);
-            return {
-              index: i,
-              file,
-              error: describePdfIngestUploadFailure(detail),
-            };
-          }
+        const raw = await res.text();
 
-          let res: Response;
-          try {
-            res = await fetch("/api/process-pdf", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                courseId,
-                examGroupId,
-                storagePath,
-                originalFileName: file.name,
-              }),
-            });
-          } catch {
-            await supabase.storage
-              .from(STUDY_PDF_INGEST_BUCKET)
-              .remove([storagePath])
-              .catch(() => {});
-            return {
-              index: i,
-              file,
-              error: "Network error while starting build.",
-            };
-          }
+        if (!res.ok) {
+          failures.push(
+            `${file.name}: ${messageFromUploadResponse(res, raw)}`
+          );
+          continue;
+        }
 
-          const raw = await res.text();
-
-          if (!res.ok) {
-            return {
-              index: i,
-              file,
-              error: messageFromUploadResponse(res, raw),
-            };
-          }
-
-          let materialId: string | undefined;
-          try {
-            const body = JSON.parse(raw) as {
-              materialId?: string;
-              jobId?: string;
-            };
-            if (typeof body.materialId === "string" && body.materialId) {
-              materialId = body.materialId;
-            } else if (typeof body.jobId === "string" && body.jobId) {
-              if (total === 1) {
-                setProgressLabel(`${file.name}: generating course…`);
-              }
-              const polled = await pollPdfIngestJob(body.jobId);
-              if (polled.error) {
-                return { index: i, file, error: polled.error };
-              }
-              materialId = polled.materialId;
+        let materialId: string | undefined;
+        try {
+          const body = JSON.parse(raw) as {
+            materialId?: string;
+            jobId?: string;
+          };
+          if (typeof body.materialId === "string" && body.materialId) {
+            materialId = body.materialId;
+          } else if (typeof body.jobId === "string" && body.jobId) {
+            setProgressLabel(
+              total > 1
+                ? `${i + 1}/${total} ${file.name}: generating course…`
+                : `${file.name}: generating course…`
+            );
+            const polled = await pollPdfIngestJob(body.jobId);
+            if (polled.error) {
+              failures.push(`${file.name}: ${polled.error}`);
+              continue;
             }
-          } catch {
-            return { index: i, file, error: "Invalid response from server." };
+            materialId = polled.materialId;
           }
-
-          if (!materialId) {
-            return {
-              index: i,
-              file,
-              error:
-                "Invalid response from server (missing material id).",
-            };
-          }
-          return { index: i, file, materialId };
-        })
-      );
-
-      buildRows.sort((a, b) => a.index - b.index);
-      for (const row of buildRows) {
-        if (row.error) {
-          failures.push(`${row.file.name}: ${row.error}`);
+        } catch {
+          failures.push(`${file.name}: Invalid response from server.`);
+          continue;
         }
-      }
-      for (const row of buildRows) {
-        if (row.materialId) {
-          lastMaterialId = row.materialId;
+
+        if (!materialId) {
+          failures.push(
+            `${file.name}: Invalid response from server (missing material id).`
+          );
+          continue;
         }
+        lastMaterialId = materialId;
       }
 
       setProgressLabel(null);

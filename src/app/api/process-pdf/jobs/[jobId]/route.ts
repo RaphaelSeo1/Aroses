@@ -7,6 +7,9 @@ const UUID_RE =
 
 type Params = { params: Promise<{ jobId: string }> };
 
+/** If the serverless worker dies (e.g. Vercel wall), `running` may never flip — treat as failed for polling UX. */
+const STALE_MS = 7 * 60 * 1000;
+
 export async function GET(_request: Request, ctx: Params) {
   const { jobId } = await ctx.params;
   if (!UUID_RE.test(jobId)) {
@@ -40,12 +43,28 @@ export async function GET(_request: Request, ctx: Params) {
 
   const { data: row, error } = await supabase
     .from("pdf_ingest_jobs")
-    .select("status, material_id, error_message")
+    .select("status, material_id, error_message, updated_at")
     .eq("id", jobId)
     .maybeSingle();
 
   if (error || !row) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
+  }
+
+  const updatedAt =
+    typeof row.updated_at === "string" ? Date.parse(row.updated_at) : NaN;
+  const stale =
+    (row.status === "pending" || row.status === "running") &&
+    Number.isFinite(updatedAt) &&
+    Date.now() - updatedAt > STALE_MS;
+
+  if (stale) {
+    return NextResponse.json({
+      status: "failed",
+      materialId: undefined,
+      error:
+        "This build stopped responding (likely hit the server time limit or was interrupted). Try uploading the PDF again. On Vercel Pro, confirm `maxDuration` is 300 in code and deployed.",
+    });
   }
 
   return NextResponse.json({
