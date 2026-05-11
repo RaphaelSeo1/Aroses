@@ -72,6 +72,9 @@ function mapAiFailureToMessage(jobId: string, e: unknown): string {
     return "The AI service rate limit was hit. Wait one minute and try again.";
   }
   if (e instanceof APIError && typeof e.status === "number") {
+    if (e.status === 404) {
+      return "The configured AI model is not available (404). Update ANTHROPIC_COURSE_MODEL or redeploy — fast profile uses Claude Haiku 4.5.";
+    }
     if (e.status === 529 || e.status === 503) {
       return "The AI service is temporarily overloaded. Try again in a few minutes.";
     }

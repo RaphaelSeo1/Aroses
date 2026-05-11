@@ -43,12 +43,12 @@ export function materialTextForPdfIngest(fullText: string): string {
 
 /**
  * Optional `ANTHROPIC_COURSE_MODEL` overrides everything.
- * `fast` defaults to Haiku so one job usually finishes inside the Vercel wall clock.
+ * `fast` defaults to **Claude Haiku 4.5** (3.5 Haiku IDs are removed from the API — 404).
  */
 function resolveCourseModel(profile: CourseBuildProfile): string {
   const override = process.env.ANTHROPIC_COURSE_MODEL?.trim();
   if (override) return override;
-  if (profile === "fast") return "claude-3-5-haiku-20241022";
+  if (profile === "fast") return "claude-haiku-4-5";
   return "claude-sonnet-4-6";
 }
 

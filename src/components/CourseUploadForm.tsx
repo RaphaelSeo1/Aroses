@@ -65,6 +65,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function formatElapsedShort(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const s = Math.floor(ms / 1000);
+  if (s < 90) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return rs > 0 ? `${m}m ${rs}s` : `${m} min`;
+}
+
+/** Remaining wall time for this + following module server calls (each often ~1–4 min). */
+function modulePhaseEtaLabel(modulesRemainingIncludingCurrent: number): string {
+  if (modulesRemainingIncludingCurrent <= 0) return "";
+  const lowMin = Math.max(1, modulesRemainingIncludingCurrent * 1);
+  const highMin = Math.max(lowMin, modulesRemainingIncludingCurrent * 4);
+  return lowMin === highMin
+    ? `~${lowMin} min left (rough guess)`
+    : `~${lowMin}–${highMin} min left (rough guess)`;
+}
+
+function jobStartedAtMs(createdAt?: string): number | null {
+  if (typeof createdAt !== "string" || !createdAt.trim()) return null;
+  const t = Date.parse(createdAt);
+  return Number.isFinite(t) ? t : null;
+}
+
 /** Poll after `POST /api/process-pdf` returns `202` + `jobId` (chunked: outline in background, then per-module expand). */
 async function pollPdfIngestJob(
   jobId: string,
@@ -85,6 +110,7 @@ async function pollPdfIngestJob(
       outlineReady?: boolean;
       modulesBuilt?: number;
       modulesTotal?: number;
+      createdAt?: string;
     };
     try {
       data = JSON.parse(raw) as typeof data;
@@ -114,8 +140,14 @@ async function pollPdfIngestJob(
       data.modulesBuilt < data.modulesTotal
     ) {
       const next = data.modulesBuilt + 1;
+      const remaining = data.modulesTotal - data.modulesBuilt;
+      const started = jobStartedAtMs(data.createdAt);
+      const elapsedPart =
+        started != null
+          ? ` · ${formatElapsedShort(Date.now() - started)} so far`
+          : "";
       onProgress?.(
-        `Building module ${next} of ${data.modulesTotal}… (each step has its own server time limit)`
+        `Module ${next} of ${data.modulesTotal} — this step often takes ~1–3 min. ${modulePhaseEtaLabel(remaining)}${elapsedPart}.`
       );
       let exp: Response;
       try {
@@ -155,8 +187,18 @@ async function pollPdfIngestJob(
       continue;
     }
 
-    if (data.status === "running" && !data.outlineReady) {
-      onProgress?.("Reading PDF and drafting course outline…");
+    if (
+      (data.status === "running" || data.status === "pending") &&
+      !data.outlineReady
+    ) {
+      const started = jobStartedAtMs(data.createdAt);
+      const elapsedPart =
+        started != null
+          ? ` Elapsed: ${formatElapsedShort(Date.now() - started)}.`
+          : "";
+      onProgress?.(
+        `Reading your PDF + drafting outline — usually ~1–5 min.${elapsedPart} Next: each course module is built one at a time (typical full run ~5–25 min; big PDFs longer).`
+      );
     }
 
     await sleep(1800);

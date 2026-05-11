@@ -56,7 +56,9 @@ export async function GET(_request: Request, ctx: Params) {
 
   const { data: row, error } = await supabase
     .from("pdf_ingest_jobs")
-    .select("status, material_id, error_message, updated_at, ingest_outline, ingest_modules")
+    .select(
+      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_modules"
+    )
     .eq("id", jobId)
     .maybeSingle();
 
@@ -82,6 +84,10 @@ export async function GET(_request: Request, ctx: Params) {
       outlineReady: false,
       modulesBuilt: 0,
       modulesTotal: 0,
+      createdAt:
+        typeof row.created_at === "string" && row.created_at.trim()
+          ? row.created_at.trim()
+          : undefined,
     });
   }
 
@@ -104,6 +110,11 @@ export async function GET(_request: Request, ctx: Params) {
         ? modulesTotal
         : 0;
 
+  const createdAt =
+    typeof row.created_at === "string" && row.created_at.trim()
+      ? row.created_at.trim()
+      : undefined;
+
   return NextResponse.json({
     status: row.status,
     materialId: row.material_id ?? undefined,
@@ -114,5 +125,6 @@ export async function GET(_request: Request, ctx: Params) {
     outlineReady,
     modulesBuilt,
     modulesTotal,
+    createdAt,
   });
 }
