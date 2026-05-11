@@ -7,8 +7,11 @@ import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 
 export const runtime = "nodejs";
 
-/** Background work can run several minutes on supported plans. */
-export const maxDuration = 300;
+/**
+ * Background PDF + AI build. Vercel caps by plan (often 300s; higher on Pro / Fluid).
+ * Default course profile is balanced (~few min); use `COURSE_BUILD_PROFILE=full` for max depth.
+ */
+export const maxDuration = 480;
 
 export const dynamic = "force-dynamic";
 
@@ -117,7 +120,10 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
   const admin = createAdminClient();
   if (!admin) {
     return NextResponse.json(
-      { error: "Server is not configured for storage (missing service role)." },
+      {
+        error:
+          "Server is not configured for storage. Set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY (and NEXT_PUBLIC_SUPABASE_URL or SUPABASE_URL) on the host, then redeploy.",
+      },
       { status: 500 }
     );
   }
