@@ -23,7 +23,9 @@ export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
  * Default **`fast`**: smaller per-module JSON. Set `COURSE_BUILD_PROFILE=balanced` or `full`
  * for richer courses. **`balanced`** is tuned for speed (fewer modules than `full`, lighter than before).
  * Optional: `COURSE_BALANCED_MAX_MODULES`, `COURSE_BALANCED_MAX_LESSON_TITLES`,
- * `COURSE_BALANCED_MODULE_MAX_TOKENS`, `COURSE_BALANCED_MATERIAL_CHARS`, `COURSE_FAST_MAX_LESSON_TITLES`.
+ * `COURSE_BALANCED_MODULE_MAX_TOKENS`, `COURSE_BALANCED_OUTLINE_MAX_TOKENS`,
+ * `COURSE_BALANCED_MATERIAL_CHARS`, `COURSE_FULL_MAX_LESSON_TITLES`, `COURSE_FULL_OUTLINE_MAX_TOKENS`,
+ * `COURSE_FAST_MAX_LESSON_TITLES`, `COURSE_FAST_MODULE_MAX_TOKENS` (default **8192** for multi-lesson fast builds).
  * **`balanced`**: smaller `COURSE_BALANCED_MATERIAL_CHARS` input; outline defaults to **Haiku**;
  * modules use **Sonnet** unless `ANTHROPIC_COURSE_MODEL` is set (same model for both). Outline-only:
  * `ANTHROPIC_OUTLINE_MODEL`.
@@ -87,8 +89,8 @@ function resolveOutlineModel(profile: CourseBuildProfile): string {
 const MAX_MATERIAL_CHARS = 120_000;
 /** Aggressively small for `fast` so outline/module calls stay quick. */
 const FAST_MATERIAL_CHARS = 40_000;
-/** `balanced`: smaller than full — outline + modules stay faster on long slide decks. */
-const BALANCED_MATERIAL_CHARS = 52_000;
+/** `balanced`: still bounded for latency, but large enough to retain most deck text. */
+const BALANCED_MATERIAL_CHARS = 88_000;
 
 function materialCharLimit(profile: CourseBuildProfile): number {
   if (profile === "fast") {
@@ -115,6 +117,19 @@ function truncateMaterial(text: string, maxChars: number = MAX_MATERIAL_CHARS): 
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
+}
+
+/** Injected into outline / module / monolith prompts so dense PDFs are not under-planned. */
+function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
+  const core =
+    "COVERAGE (critical): You must represent **every major topic, section, heading, and learning objective** in the uploaded material. Do not stop early, skim, or merge distinct concepts to save tokens. If the deck is long or dense, use **more** lesson entries (up to the stated caps) and **more** modules (up to the stated caps) rather than skipping later sections.";
+  if (mode === "outline") {
+    return `${core} The outline’s modules and lesson_titles, taken together, should span the **entire** source—including middle and end—so nothing important is missing before any full lesson is written.`;
+  }
+  if (mode === "module") {
+    return `${core} Output **exactly one full lesson per planned lesson title** below, in the **same order** and **same count**. Do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material.`;
+  }
+  return `${core} Across the full course JSON, every substantive part of the source should appear in some lesson; do not only cover the introduction.`;
 }
 
 function isRetryableApiError(err: unknown): boolean {
@@ -147,8 +162,8 @@ QUIZ (critical): Each module needs a practical practice set — **at least 5 que
     quizFooter =
       "Include enough quiz objects per module to meet the minimums above (≥5 per module, including ≥2 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
   } else {
-    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 4), 2, 6);
-    sizeRules = `Rules for output size (important): use at least 2 modules and at most ${maxBalMods} unless the source is extremely short. Keep each lesson "content" clear and instructive but under roughly 550 words so generation stays reasonably fast. Every module must include at least one lesson.
+    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 6), 2, 8);
+    sizeRules = `Rules for output size (important): use at least 2 modules and at most ${maxBalMods} unless the source is extremely short. Keep each lesson "content" clear and instructive; aim under roughly 650 words per lesson but **completeness beats brevity** when the source is dense. Every module must include at least one lesson.
 
 QUIZ (critical): Each module needs a practical practice set — **at least 5 questions per module**, with **at least 2 items** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
     quizFooter =
@@ -158,6 +173,8 @@ QUIZ (critical): Each module needs a practical practice set — **at least 5 que
   return `You are an expert course designer and educator. You have been given raw course material (lecture slides, syllabi, notes). Your job is NOT to summarize this material. Your job is to use it as a source to BUILD a complete, professional, structured course that a student would genuinely pay for.
 
 ${sizeRules}
+
+${sourceCoverageRules("monolith")}
 
 Generate the course in this exact JSON format:
 {
@@ -283,17 +300,17 @@ export async function generateCourseFromMaterial(
     maxRetries: 0,
   });
 
-  const trimmed = truncateMaterial(
-    materialText,
-    profile === "fast" ? FAST_MATERIAL_CHARS : MAX_MATERIAL_CHARS
-  );
+  const trimmed = truncateMaterial(materialText, materialCharLimit(profile));
   const instruction = courseInstruction(trimmed, profile);
+
+  const monolithMaxTokens =
+    profile === "fast" ? 20_480 : 32_768;
 
   const msg = await createMessageWithRetries(
     anthropic,
     {
       model: resolveCourseModel(profile),
-      max_tokens: profile === "fast" ? 18_432 : 32_768,
+      max_tokens: monolithMaxTokens,
       temperature: 0.2,
       messages: [{ role: "user", content: instruction }],
     },
@@ -332,6 +349,16 @@ export async function generateCourseFromMaterial(
   }
 }
 
+function outlineMaxTokens(profile: CourseBuildProfile): number {
+  if (profile === "fast") {
+    return clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192);
+  }
+  if (profile === "balanced") {
+    return clampInt(envInt("COURSE_BALANCED_OUTLINE_MAX_TOKENS", 12_288), 6144, 16_384);
+  }
+  return clampInt(envInt("COURSE_FULL_OUTLINE_MAX_TOKENS", 10_240), 4096, 16_384);
+}
+
 function outlineInstruction(
   materialText: string,
   profile: CourseBuildProfile
@@ -341,21 +368,21 @@ function outlineInstruction(
   if (profile === "full") {
     moduleCount =
       "Use **2 to 8** modules depending on how much content the source has.";
-    maxLessonTitles = 5;
+    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 8), 2, 12);
   } else if (profile === "fast") {
     const maxModules = clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 8);
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
-    maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 5);
+    maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 5), 1, 8);
   } else {
-    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 4), 2, 6);
-    moduleCount = `Use **2 to ${maxModules}** modules — prefer fewer, broader modules when the material allows (each module is generated separately).`;
-    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 3), 1, 5);
+    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 6), 2, 8);
+    moduleCount = `Use **2 to ${maxModules}** modules. When the PDF is long or has many sections, lean toward **more** modules and **more** lesson_titles so nothing important is left out of the plan (each module is expanded separately later).`;
+    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 8), 2, 12);
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
 
 ${moduleCount}
-Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to ${maxLessonTitles}** short strings — the titles of lessons you will expand later).
+Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to ${maxLessonTitles}** short strings — the titles of lessons you will expand later). For dense decks, use many distinct titles (up to the max) so each major idea or slide block can get its own lesson later.
 
 Exact shape:
 {
@@ -365,6 +392,8 @@ Exact shape:
     { "id": 1, "title": "module title", "lesson_titles": ["Lesson one", "Lesson two"] }
   ]
 }
+
+${sourceCoverageRules("outline")}
 
 Rules: base everything on the material; do not invent unrelated topics. No markdown fences, no commentary.
 
@@ -398,7 +427,7 @@ function moduleInstruction(
     profile === "fast"
       ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
       : profile === "balanced"
-        ? `STYLE (balanced): Teach clearly with examples; keep each lesson body focused and under roughly 550 words.`
+        ? `STYLE (balanced): Teach clearly with examples; aim ~650 words per lesson but **do not truncate** a topic to stay short—split detail across lessons if needed.`
         : "";
   const lessonRequirements =
     profile === "fast"
@@ -412,6 +441,8 @@ function moduleInstruction(
 Create one full module object: lessons (one per planned lesson title below, in order — same count as lesson_titles, each with rich "content", "key_terms", "examples"), plus quiz.
 
 Planned lesson titles for this module: ${titles}.
+
+${sourceCoverageRules("module")}
 
 ${styleRule}
 ${lessonRequirements}
@@ -442,10 +473,7 @@ ${brokenAssistantText.slice(0, 60_000)}`;
     anthropic,
     {
       model: resolveOutlineModel(profile),
-      max_tokens:
-        profile === "fast"
-          ? clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192)
-          : 8192,
+      max_tokens: outlineMaxTokens(profile),
       temperature: 0.1,
       messages: [{ role: "user", content: prompt }],
     },
@@ -479,11 +507,14 @@ ${requirements}
 Broken output (repair):
 ${brokenAssistantText.slice(0, 100_000)}`;
 
+  const moduleRepairMax =
+    profile === "fast" ? 12_288 : profile === "balanced" ? 28_672 : 24_576;
+
   const msg = await createMessageWithRetries(
     anthropic,
     {
       model: resolveCourseModel(profile),
-      max_tokens: profile === "fast" ? 12_288 : 20_480,
+      max_tokens: moduleRepairMax,
       temperature: 0.1,
       messages: [{ role: "user", content: prompt }],
     },
@@ -526,11 +557,14 @@ Rules:
 
 ${clipped}`;
 
+  const glossaryRepairMax =
+    profile === "fast" ? 10_240 : profile === "balanced" ? 24_576 : 18_432;
+
   const msg = await createMessageWithRetries(
     anthropic,
     {
       model: resolveCourseModel(profile),
-      max_tokens: profile === "fast" ? 10_240 : 18_432,
+      max_tokens: glossaryRepairMax,
       temperature: 0.15,
       messages: [{ role: "user", content: prompt }],
     },
@@ -583,10 +617,7 @@ export async function generateCourseOutlineFromMaterial(
     anthropic,
     {
       model: resolveOutlineModel(profile),
-      max_tokens:
-        profile === "fast"
-          ? clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192)
-          : 8192,
+      max_tokens: outlineMaxTokens(profile),
       temperature: 0.2,
       messages: [{ role: "user", content: instruction }],
     },
@@ -611,10 +642,10 @@ export async function generateCourseOutlineFromMaterial(
 
 function moduleMaxTokens(profile: CourseBuildProfile): number {
   if (profile === "fast") {
-    return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 4096), 1536, 16384);
+    return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 8192), 2048, 16_384);
   }
   if (profile === "full") return 30_720;
-  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 18_432), 8192, 24_576);
+  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 28_672), 12_288, 30_720);
 }
 
 /** Expand one module for chunked PDF ingest (separate server invocation). */

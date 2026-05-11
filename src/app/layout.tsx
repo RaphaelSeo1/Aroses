@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
+import { ScrollRestoration } from "@/components/ScrollRestoration";
 import { APP_NAME } from "@/lib/brand";
 import { THEME_INLINE_SCRIPT } from "@/lib/theme-inline-script";
 import "./globals.css";
@@ -39,6 +40,12 @@ export default function RootLayout({
         <Script id="theme-init" strategy="beforeInteractive">
           {THEME_INLINE_SCRIPT}
         </Script>
+        <Script id="scroll-restoration-init" strategy="beforeInteractive">
+          {
+            "try{if(typeof history!==\"undefined\"&&\"scrollRestoration\"in history){history.scrollRestoration=\"manual\";}}catch(e){}"
+          }
+        </Script>
+        <ScrollRestoration />
         {children}
       </body>
     </html>
