@@ -12,6 +12,9 @@ import {
   STUDY_PDF_INGEST_BUCKET,
 } from "@/lib/study-pdf-ingest";
 
+/** Max PDFs building at once; each job is independent, but a cap limits Anthropic / host spikes. */
+const PDF_UPLOAD_CONCURRENCY = 3;
+
 /** Shown under the upload area while a chunked PDF job runs (outline → per-module expand). */
 type PdfBuildProgressUI = {
   line: string;
@@ -70,6 +73,29 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Run `worker` on each item with at most `concurrency` in flight. */
+async function runPool<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  if (items.length === 0) return;
+  const n = Math.max(1, Math.min(concurrency, items.length));
+  const executing = new Set<Promise<void>>();
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    const index = i;
+    const p = worker(item, index).finally(() => {
+      executing.delete(p);
+    });
+    executing.add(p);
+    if (executing.size >= n) {
+      await Promise.race(executing);
+    }
+  }
+  await Promise.all([...executing]);
 }
 
 function formatElapsedShort(ms: number): string {
@@ -324,24 +350,55 @@ export function CourseUploadForm({
         return;
       }
 
-      for (let i = 0; i < queue.length; i++) {
-        const file = queue[i];
+      const userId = user.id;
+
+      const lineByIndex = new Map<number, PdfBuildProgressUI>();
+      const emitProgress = (fileIndex: number, p: PdfBuildProgressUI) => {
+        if (total === 1) {
+          setBuildProgress(p);
+          return;
+        }
+        lineByIndex.set(fileIndex, p);
+        const ordered = [...lineByIndex.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, v]) => v.line);
+        const bars = [...lineByIndex.values()].map((v) => v.bar);
+        let bar: PdfBuildProgressUI["bar"] = "indeterminate";
+        if (!bars.some((b) => b === "indeterminate" || b === null)) {
+          const nums = bars.filter((x): x is number => typeof x === "number");
+          bar = nums.length
+            ? nums.reduce((a, b) => a + b, 0) / nums.length
+            : null;
+        } else if (bars.every((b) => b === null)) {
+          bar = null;
+        }
         setBuildProgress({
           line:
+            `Up to ${Math.min(PDF_UPLOAD_CONCURRENCY, total)} PDFs in parallel (${total} total)\n` +
+            ordered.join("\n"),
+          bar,
+        });
+      };
+
+      async function runOnePdf(
+        file: File,
+        fileIndex: number
+      ): Promise<{ materialId?: string; failure?: string }> {
+        emitProgress(fileIndex, {
+          line:
             total > 1
-              ? `File ${i + 1} of ${total}: ${file.name} — uploading to storage…`
+              ? `File ${fileIndex + 1} of ${total}: ${file.name} — uploading to storage…`
               : `${file.name} — uploading to storage…`,
           bar: "indeterminate",
         });
 
         if (file.size > MAX_STUDY_PDF_BYTES) {
-          failures.push(
-            `${file.name}: PDF is too large (max 40 MB). Split the file or export fewer pages.`
-          );
-          continue;
+          return {
+            failure: `${file.name}: PDF is too large (max 40 MB). Split the file or export fewer pages.`,
+          };
         }
 
-        const storagePath = `${user.id}/${crypto.randomUUID()}.pdf`;
+        const storagePath = `${userId}/${crypto.randomUUID()}.pdf`;
 
         const { error: upErr } = await supabase.storage
           .from(STUDY_PDF_INGEST_BUCKET)
@@ -356,10 +413,9 @@ export function CourseUploadForm({
             typeof upErr === "object" && upErr && "message" in upErr
               ? String((upErr as { message: unknown }).message)
               : String(upErr);
-          failures.push(
-            `${file.name}: ${describePdfIngestUploadFailure(detail)}`
-          );
-          continue;
+          return {
+            failure: `${file.name}: ${describePdfIngestUploadFailure(detail)}`,
+          };
         }
 
         let res: Response;
@@ -379,17 +435,17 @@ export function CourseUploadForm({
             .from(STUDY_PDF_INGEST_BUCKET)
             .remove([storagePath])
             .catch(() => {});
-          failures.push(`${file.name}: Network error while starting build.`);
-          continue;
+          return {
+            failure: `${file.name}: Network error while starting build.`,
+          };
         }
 
         const raw = await res.text();
 
         if (!res.ok) {
-          failures.push(
-            `${file.name}: ${messageFromUploadResponse(res, raw)}`
-          );
-          continue;
+          return {
+            failure: `${file.name}: ${messageFromUploadResponse(res, raw)}`,
+          };
         }
 
         let materialId: string | undefined;
@@ -402,32 +458,44 @@ export function CourseUploadForm({
             materialId = body.materialId;
           } else if (typeof body.jobId === "string" && body.jobId) {
             const prefix =
-              total > 1 ? `File ${i + 1}/${total} · ${file.name}: ` : `${file.name}: `;
+              total > 1
+                ? `File ${fileIndex + 1}/${total} · ${file.name}: `
+                : `${file.name}: `;
             const polled = await pollPdfIngestJob(body.jobId, (info) =>
-              setBuildProgress({
+              emitProgress(fileIndex, {
                 line: `${prefix}${info.line}`,
                 bar: info.bar,
               })
             );
             if (polled.error) {
-              failures.push(`${file.name}: ${polled.error}`);
-              continue;
+              return { failure: `${file.name}: ${polled.error}` };
             }
             materialId = polled.materialId;
           }
         } catch {
-          failures.push(`${file.name}: Invalid response from server.`);
-          continue;
+          return { failure: `${file.name}: Invalid response from server.` };
         }
 
         if (!materialId) {
-          failures.push(
-            `${file.name}: Invalid response from server (missing material id).`
-          );
-          continue;
+          return {
+            failure: `${file.name}: Invalid response from server (missing material id).`,
+          };
         }
-        lastMaterialId = materialId;
+        return { materialId };
       }
+
+      await runPool(
+        queue,
+        Math.min(PDF_UPLOAD_CONCURRENCY, total),
+        async (file, fileIndex) => {
+          const r = await runOnePdf(file, fileIndex);
+          if (r.failure) {
+            failures.push(r.failure);
+          } else if (r.materialId) {
+            lastMaterialId = r.materialId;
+          }
+        }
+      );
 
       setBuildProgress(null);
       setFiles([]);
@@ -574,9 +642,8 @@ export function CourseUploadForm({
 
         <p className="mt-2 text-xs text-zinc-500">
           Text must be selectable in the PDF for best results (scanned pages may
-          not extract well). Multiple files run one at a time; a long lecture can
-          take a while—keep this tab open. For faster turnaround, upload fewer
-          files per batch.
+          not extract well). Up to {PDF_UPLOAD_CONCURRENCY} PDFs build in parallel;
+          large decks can still take several minutes—keep this tab open.
         </p>
       </div>
 
@@ -590,7 +657,7 @@ export function CourseUploadForm({
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
             Building your course
           </p>
-          <p className="mt-1.5 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+          <p className="mt-1.5 whitespace-pre-line text-sm font-medium text-zinc-900 dark:text-zinc-100">
             {buildProgress.line}
           </p>
           <div className="relative mt-3 h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
