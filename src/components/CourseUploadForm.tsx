@@ -11,6 +11,40 @@ function isPdfFile(f: File): boolean {
   );
 }
 
+/** Prefer API `{ error: string }`; otherwise explain status / body so we never hide gateway/HTML failures. */
+function messageFromUploadResponse(res: Response, rawBody: string): string {
+  try {
+    const parsed = JSON.parse(rawBody) as { error?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+  } catch {
+    /* not JSON */
+  }
+
+  if (res.status === 413) {
+    return "File is too large for the server. Try a smaller PDF or split the document.";
+  }
+  if (res.status === 401) {
+    return "Session expired. Sign in again and retry.";
+  }
+  if (res.status === 408 || res.status === 504) {
+    return "Request timed out. Try a smaller PDF or upload again in a moment.";
+  }
+
+  const trimmed = rawBody.trim().replace(/\s+/g, " ");
+  const looksLikeHtml =
+    trimmed.startsWith("<!") ||
+    trimmed.startsWith("<html") ||
+    trimmed.toLowerCase().includes("<head");
+
+  if (trimmed.length > 0 && !looksLikeHtml && trimmed.length < 400) {
+    return `${res.status} ${res.statusText}: ${trimmed}`;
+  }
+
+  return `Request failed (${res.status} ${res.statusText}). Try a smaller file or retry later.`;
+}
+
 export function CourseUploadForm({
   courseId,
   examGroupId,
@@ -69,7 +103,7 @@ export function CourseUploadForm({
     setError(null);
     setSuccess(null);
     if (!examGroupId) {
-      setError("Select an exam group first.");
+      setError("Select a section first.");
       return;
     }
     if (files.length === 0) {
@@ -98,18 +132,23 @@ export function CourseUploadForm({
           method: "POST",
           body: fd,
         });
-        const body = await res.json().catch(() => ({}));
+        const raw = await res.text();
 
         if (!res.ok) {
-          const msg =
-            typeof body.error === "string"
-              ? body.error
-              : "Upload failed.";
-          failures.push(`${file.name}: ${msg}`);
+          failures.push(
+            `${file.name}: ${messageFromUploadResponse(res, raw)}`
+          );
           continue;
         }
 
-        const materialId = body.materialId as string | undefined;
+        let materialId: string | undefined;
+        try {
+          const body = JSON.parse(raw) as { materialId?: string };
+          materialId = body.materialId;
+        } catch {
+          failures.push(`${file.name}: Invalid response from server.`);
+          continue;
+        }
         if (materialId) lastMaterialId = materialId;
       }
 
@@ -134,7 +173,7 @@ export function CourseUploadForm({
             : failures.join("\n")
         );
         if (okCount > 0) {
-          setSuccess(`${okCount} upload(s) ready under this exam group.`);
+          setSuccess(`${okCount} upload(s) ready under this section.`);
         }
       } else {
         setSuccess(
@@ -186,7 +225,7 @@ export function CourseUploadForm({
   if (!examGroupId) {
     return (
       <p className="text-sm text-zinc-500">
-        Select an exam group tab above to enable uploads.
+        Select a section tab above to enable uploads.
       </p>
     );
   }

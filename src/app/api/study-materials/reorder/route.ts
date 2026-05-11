@@ -67,7 +67,7 @@ export async function POST(request: Request) {
     .maybeSingle();
 
   if (!groupOk) {
-    return NextResponse.json({ error: "Exam group not found." }, { status: 403 });
+    return NextResponse.json({ error: "Section not found." }, { status: 403 });
   }
 
   const { data: rows, error: fetchErr } = await supabase

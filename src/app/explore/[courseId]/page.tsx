@@ -81,33 +81,56 @@ export default async function ExploreCoursePage({ params }: Props) {
         <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
           <Link
             href="/explore"
-            className="text-sm font-medium text-brand hover:underline dark:text-brand-soft"
+            className="inline-flex items-center gap-1 text-sm font-semibold text-brand transition hover:gap-2 dark:text-brand-soft"
           >
-            ← All listings
+            <span aria-hidden>←</span> All listings
           </Link>
-          <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-            Community course
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            {course.title}
-          </h1>
-          <p className="mt-3 text-xs text-zinc-500">
-            Listed{" "}
-            {new Date(course.created_at).toLocaleDateString(undefined, {
-              month: "long",
-              day: "numeric",
-              year: "numeric",
-            })}
-          </p>
-          {course.description ? (
-            <p className="mt-8 whitespace-pre-wrap leading-relaxed text-zinc-700 dark:text-zinc-300">
-              {course.description}
+
+          <div className="relative mt-8 overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/80 p-6 shadow-xl shadow-zinc-900/[0.06] ring-1 ring-white/70 backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-950/75 dark:shadow-black/25 dark:ring-zinc-600/40 sm:p-8">
+            <div
+              className="pointer-events-none absolute -left-20 top-0 h-48 w-48 rounded-full bg-gradient-to-br from-brand/12 to-transparent blur-3xl dark:from-brand/20"
+              aria-hidden
+            />
+            <div className="relative">
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
+                Community course
+              </p>
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-4xl">
+                {course.title}
+              </h1>
+              <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200/90 bg-zinc-50/90 px-2.5 py-0.5 font-medium text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-300">
+                  Listed{" "}
+                  {new Date(course.created_at).toLocaleDateString(undefined, {
+                    month: "long",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
+                </span>
+              </p>
+              {course.description ? (
+                <p className="mt-6 whitespace-pre-wrap border-t border-zinc-100 pt-6 text-base leading-relaxed text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
+                  {course.description}
+                </p>
+              ) : (
+                <p className="mt-6 border-t border-zinc-100 pt-6 text-sm italic text-zinc-500 dark:border-zinc-800">
+                  No description provided.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center">
+            <Link
+              href={studyHref}
+              className="inline-flex w-full items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/30 ring-2 ring-white/25 transition hover:bg-brand-hover hover:shadow-xl hover:shadow-red-600/35 sm:w-auto dark:bg-brand dark:ring-white/10 dark:hover:bg-brand-soft"
+            >
+              Start learning
+            </Link>
+            <p className="max-w-md text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+              Full lessons, diagrams where available, and quizzes — opens in study mode.
             </p>
-          ) : (
-            <p className="mt-8 text-sm italic text-zinc-500">
-              No description provided.
-            </p>
-          )}
+          </div>
 
           {outlineError ? (
             <p className="mt-8 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
@@ -135,15 +158,6 @@ export default async function ExploreCoursePage({ params }: Props) {
               whenever you&apos;re ready for full lessons and quizzes.
             </p>
           ) : null}
-
-          <div className="mt-10">
-            <Link
-              href={studyHref}
-              className="inline-flex w-full items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover sm:w-auto dark:bg-brand dark:hover:bg-brand-soft"
-            >
-              Start learning
-            </Link>
-          </div>
 
           {isOwner ? (
             <p className="mt-10 rounded-xl border border-brand-border bg-brand-blush/80 px-4 py-3 text-sm text-brand-ink dark:border-brand-border/40 dark:bg-brand-blush/8 dark:text-brand-blush">

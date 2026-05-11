@@ -63,9 +63,9 @@ export default function NewCoursePage() {
             </h1>
             <p className="mt-4 leading-relaxed text-zinc-600 dark:text-zinc-400">
               Name your course and describe what you&apos;re learning. Next,
-              you&apos;ll create exam groups (Midterm 1, Final, …), then upload
-              PDFs into each group — we turn each upload into lessons and
-              quizzes for that exam only.
+              you&apos;ll add sections (weeks, units, topics — whatever fits),
+              then upload PDFs into each one — we turn each upload into lessons
+              and quizzes scoped to that part of the course.
             </p>
 
             <form onSubmit={(e) => void onSubmit(e)} className="mt-10 space-y-6">

@@ -614,7 +614,7 @@ export function ExamGroupsPanel({
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setCreateError(
-          typeof body.error === "string" ? body.error : "Could not add group."
+          typeof body.error === "string" ? body.error : "Could not add section."
         );
         setCreating(false);
         return;
@@ -703,24 +703,24 @@ export function ExamGroupsPanel({
     return (
       <section className="mt-12 rounded-3xl border border-amber-200/90 bg-amber-50/80 p-8 dark:border-amber-900/60 dark:bg-amber-950/40">
         <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-          Step 1: Create exam groups
+          Step 1: Add course sections
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-          Before uploading lectures, add labels for how your class is tested —
-          for example <strong>Midterm 1</strong>, <strong>Midterm 2</strong>,
-          and <strong>Final</strong>. Each upload will live in one group so you
-          only study what belongs on that exam.
+          Before uploading, split your course into sections — for example{" "}
+          <strong>Week 1</strong>, <strong>Unit A</strong>, or{" "}
+          <strong>Midterm prep</strong>. Each PDF lives in one section so
+          materials stay organized and don&apos;t get mixed together.
         </p>
         <form onSubmit={(e) => void createGroup(e)} className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="min-w-0 flex-1">
             <label htmlFor="first-group" className="sr-only">
-              Exam group name
+              Section name
             </label>
             <input
               id="first-group"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="e.g. Midterm 1"
+              placeholder="e.g. Week 1"
               className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-zinc-900 outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
             />
           </div>
@@ -729,7 +729,7 @@ export function ExamGroupsPanel({
             disabled={creating || !newName.trim()}
             className="shrink-0 rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 hover:bg-brand-hover disabled:opacity-50 dark:bg-brand"
           >
-            {creating ? "Adding…" : "Add group"}
+            {creating ? "Adding…" : "Add section"}
           </button>
         </form>
         {createError && (
@@ -747,11 +747,11 @@ export function ExamGroupsPanel({
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-              Exam groups & uploads
+              Sections & uploads
             </h2>
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              Pick a tab, then upload PDFs for that exam only. Each upload is
-              separate — MT1 won&apos;t mix with MT2.
+              Pick a tab, then upload PDFs for that section only. Each upload
+              stays in its tab — nothing spills into another part of the course.
             </p>
           </div>
           <form
@@ -761,7 +761,7 @@ export function ExamGroupsPanel({
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="Add group (e.g. Final)"
+              placeholder="Add section (e.g. Week 2)"
               className="min-w-0 flex-1 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 sm:w-52"
             />
             <button
@@ -808,11 +808,11 @@ export function ExamGroupsPanel({
           <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
             Upload for{" "}
             <span className="text-brand dark:text-brand-soft">
-              {groups.find((g) => g.id === activeId)?.name ?? "this group"}
+              {groups.find((g) => g.id === activeId)?.name ?? "this section"}
             </span>
           </h3>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Slides or readings for this exam segment only.
+            Slides or readings for this section only.
           </p>
           <div className="mt-6">
             <CourseUploadForm courseId={courseId} examGroupId={activeId} />
@@ -825,7 +825,7 @@ export function ExamGroupsPanel({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                Materials in this group
+                Materials in this section
               </h3>
               {materialsForActive.length > 1 ? (
                 <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">

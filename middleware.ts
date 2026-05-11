@@ -1,6 +1,10 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { parseSafeInternalNext } from "@/lib/internal-next-path";
+import {
+  emailMatchesAllowedDomains,
+  parseAllowedAuthEmailDomains,
+} from "@/lib/school-email-policy";
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -36,6 +40,30 @@ export async function middleware(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
   const fullPath = `${pathname}${request.nextUrl.search}`;
+
+  const allowedDomains = parseAllowedAuthEmailDomains();
+  const authPublicRoutes =
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/signup") ||
+    pathname.startsWith("/auth/");
+
+  if (
+    user &&
+    allowedDomains.length > 0 &&
+    !emailMatchesAllowedDomains(user.email, allowedDomains) &&
+    !authPublicRoutes
+  ) {
+    await supabase.auth.signOut();
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/login";
+    loginUrl.search = "";
+    loginUrl.searchParams.set("auth_error", "school_email");
+    const redirectResponse = NextResponse.redirect(loginUrl);
+    supabaseResponse.cookies.getAll().forEach((c) => {
+      redirectResponse.cookies.set(c.name, c.value);
+    });
+    return redirectResponse;
+  }
 
   if (!user && pathname.startsWith("/dashboard")) {
     const url = request.nextUrl.clone();

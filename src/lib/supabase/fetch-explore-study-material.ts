@@ -119,7 +119,7 @@ export async function fetchStudyMaterialsOutlineRowsForPublicExplore(
   return (ad ?? []) as ExploreStudyMaterialOutlineRow[];
 }
 
-/** Exam group order for sorting materials (RLS or admin fallback). */
+/** Section order for sorting materials (RLS or admin fallback). */
 export async function fetchExamGroupIdsOrderForPublicExplore(
   supabase: SupabaseClient,
   courseId: string

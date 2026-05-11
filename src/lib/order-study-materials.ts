@@ -1,5 +1,5 @@
 /**
- * Order study materials the same way as the course dashboard: by exam group tab
+ * Order study materials the same way as the course dashboard: by section tab
  * order, then `sort_order` within the group (then `created_at` as tiebreaker).
  */
 export type MaterialOrderFields = {

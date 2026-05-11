@@ -84,7 +84,7 @@ export function CourseDashboardList({
 
   async function removeCourse(courseId: string, title: string) {
     const ok = window.confirm(
-      `Delete “${title}”? All uploads, exam groups, and progress for this course will be removed. This cannot be undone.`
+      `Delete “${title}”? All uploads, sections, and progress for this course will be removed. This cannot be undone.`
     );
     if (!ok) return;
 
@@ -153,9 +153,13 @@ export function CourseDashboardList({
 
           return (
             <li key={c.id}>
-              <div className="flex h-full flex-col rounded-2xl border border-zinc-200/90 bg-white/95 p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/95">
+              <div className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 pt-7 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50">
+                <div
+                  className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-red-500 to-brand-soft opacity-90"
+                  aria-hidden
+                />
                 {isEditing ? (
-                  <div className="flex flex-1 flex-col gap-3">
+                  <div className="flex flex-1 flex-col gap-3 px-6 pb-6">
                     <label className="sr-only" htmlFor={`edit-title-${c.id}`}>
                       Title
                     </label>
@@ -200,16 +204,18 @@ export function CourseDashboardList({
                   </div>
                 ) : (
                   <>
-                    <div className="flex flex-1 flex-col gap-2">
+                    <div
+                      className={`flex flex-1 flex-col gap-2 px-6 pt-0 ${canManage ? "pb-1" : "pb-6"}`}
+                    >
                       <div className="flex flex-wrap items-center gap-2">
                         <Link
                           href={`/dashboard/courses/${c.id}`}
-                          className="text-lg font-semibold text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-50"
+                          className="text-lg font-semibold tracking-tight text-zinc-900 underline-offset-2 transition group-hover:text-brand dark:text-zinc-50 dark:group-hover:text-brand-soft"
                         >
                           {c.title}
                         </Link>
                         {c.is_public ? (
-                          <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">
+                          <span className="rounded-full border border-emerald-200/80 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
                             On Explore
                           </span>
                         ) : null}
@@ -225,14 +231,17 @@ export function CourseDashboardList({
                       )}
                       <Link
                         href={`/dashboard/courses/${c.id}`}
-                        className="mt-3 inline-flex items-center text-sm font-semibold text-brand dark:text-brand-soft"
+                        className="mt-4 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-4 py-2 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
                       >
-                        Open course →
+                        Open course
+                        <span aria-hidden className="transition group-hover:translate-x-0.5">
+                          →
+                        </span>
                       </Link>
                     </div>
 
                     {canManage ? (
-                      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-800">
+                      <div className="mx-6 mb-6 mt-5 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-800">
                         <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
                           Order
                         </span>
@@ -293,47 +302,58 @@ export function StudyingCoursesSection({
 
   return (
     <section className="space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-          Continue learning
-        </h2>
-        <p className="mt-2 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
-          Community courses you&apos;ve started — resume on Explore (read-only;
-          you don&apos;t manage these).
-        </p>
+      <div className="flex flex-wrap items-start gap-4">
+        <span
+          className="mt-1 hidden h-10 w-1 shrink-0 rounded-full bg-gradient-to-b from-emerald-600 to-teal-400 sm:block"
+          aria-hidden
+        />
+        <div>
+          <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
+            Continue learning
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+            Community courses you&apos;ve started — resume on Explore (read-only;
+            you don&apos;t manage these).
+          </p>
+        </div>
       </div>
       <ul className="grid gap-5 sm:grid-cols-2">
         {courses.map((c) => (
           <li key={c.id}>
-            <div className="flex h-full flex-col rounded-2xl border border-emerald-200/80 bg-emerald-50/40 p-6 shadow-sm dark:border-emerald-900/50 dark:bg-emerald-950/20">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-800 dark:text-emerald-300">
+            <div className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-emerald-200/70 bg-gradient-to-b from-emerald-50/90 to-white/95 pt-7 shadow-md shadow-emerald-900/[0.06] ring-1 ring-emerald-100/80 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-lg hover:shadow-emerald-900/10 motion-reduce:hover:translate-y-0 dark:border-emerald-900/45 dark:from-emerald-950/40 dark:to-zinc-950/95 dark:ring-emerald-900/30 dark:hover:border-emerald-700/60">
+              <div
+                className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-emerald-600 via-teal-500 to-emerald-400"
+                aria-hidden
+              />
+              <span className="px-6 text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-800 dark:text-emerald-300">
                 From Explore
               </span>
               <Link
                 href={`/explore/${c.id}`}
-                className="mt-2 text-lg font-semibold text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-50"
+                className="mt-3 px-6 text-lg font-semibold tracking-tight text-zinc-900 underline-offset-2 transition group-hover:text-emerald-800 dark:text-zinc-50 dark:group-hover:text-emerald-300"
               >
                 {c.title}
               </Link>
               {c.description ? (
-                <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                <p className="mt-2 line-clamp-3 px-6 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                   {c.description}
                 </p>
               ) : (
-                <p className="mt-2 text-sm italic text-zinc-500 dark:text-zinc-500">
+                <p className="mt-2 px-6 text-sm italic text-zinc-500 dark:text-zinc-500">
                   No description
                 </p>
               )}
-              <div className="mt-4 flex flex-wrap gap-3">
+              <div className="mt-auto flex flex-wrap gap-3 px-6 pb-6 pt-4">
                 <Link
                   href={`/explore/${c.id}/study`}
-                  className="inline-flex text-sm font-semibold text-brand hover:underline dark:text-brand-soft"
+                  className="inline-flex items-center gap-1 rounded-full border border-brand/30 bg-white/90 px-4 py-2 text-sm font-semibold text-brand shadow-sm transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-zinc-900/80 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
                 >
-                  Continue studying →
+                  Continue studying
+                  <span aria-hidden>→</span>
                 </Link>
                 <Link
                   href={`/explore/${c.id}`}
-                  className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                  className="inline-flex items-center rounded-full px-3 py-2 text-sm font-medium text-zinc-600 transition hover:bg-emerald-100/80 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-emerald-950/50 dark:hover:text-zinc-100"
                 >
                   Outline
                 </Link>

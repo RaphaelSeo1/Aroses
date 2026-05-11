@@ -22,9 +22,9 @@ function friendlyExamGroupError(error: PostgrestError): string {
     combined.toLowerCase().includes("row-level security") ||
     combined.toLowerCase().includes("violates row-level security")
   ) {
-    return "Could not save the exam group (permission denied). Try signing out and back in.";
+    return "Could not save the section (permission denied). Try signing out and back in.";
   }
-  return "Could not create exam group.";
+  return "Could not create section.";
 }
 
 export async function POST(request: Request) {
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
   const name = typeof b.name === "string" ? b.name.trim() : "";
   if (name.length < 1 || name.length > 120) {
     return NextResponse.json(
-      { error: "Group name must be 1–120 characters." },
+      { error: "Section name must be 1–120 characters." },
       { status: 400 }
     );
   }
@@ -136,7 +136,7 @@ export async function POST(request: Request) {
       {
         error: insertError
           ? friendlyExamGroupError(insertError)
-          : "Could not create exam group.",
+          : "Could not create section.",
         ...(process.env.NODE_ENV === "development" &&
           insertError && { debug: insertError.message }),
       },
