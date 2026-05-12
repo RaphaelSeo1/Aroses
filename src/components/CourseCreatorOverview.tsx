@@ -48,24 +48,24 @@ export function CourseCreatorOverview({
       <div className="mt-8 grid gap-4 sm:grid-cols-2">
         <div className="rounded-2xl border border-brand-border bg-white p-4 dark:border-brand-border/40 dark:bg-[#1e1616]/80">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-muted">
-            Lesson units
+            Source materials
           </p>
           <p className="mt-2 text-2xl font-semibold tabular-nums text-brand-ink dark:text-white">
             {uploadsCount}
           </p>
           <p className="mt-1 text-xs text-brand-muted dark:text-brand-soft">
-            PDFs / materials in this course (below)
+            Uploaded files across all sections
           </p>
         </div>
         <div className="rounded-2xl border border-brand-border bg-white p-4 dark:border-brand-border/40 dark:bg-[#1e1616]/80">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-muted">
-            Modules generated
+            Lessons
           </p>
           <p className="mt-2 text-2xl font-semibold tabular-nums text-brand-ink dark:text-white">
             {modulesTotal}
           </p>
           <p className="mt-1 text-xs text-brand-muted dark:text-brand-soft">
-            Total lesson modules across all uploads
+            AI-generated lessons from your materials
           </p>
         </div>
       </div>
@@ -86,8 +86,7 @@ export function CourseCreatorOverview({
             study sidebar.
           </li>
           <li>
-            Drag materials between sections and rename uploads in the area
-            below.
+            Drag source files between sections and rename them below.
           </li>
           <li>
             Turn on Explore when you&apos;re ready for others to discover this

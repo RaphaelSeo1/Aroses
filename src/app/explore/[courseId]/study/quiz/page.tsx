@@ -18,7 +18,11 @@ const UUID_RE =
 
 type Props = {
   params: Promise<{ courseId: string }>;
-  searchParams: Promise<{ material?: string; module?: string }>;
+  searchParams: Promise<{
+    material?: string;
+    module?: string;
+    practice?: string;
+  }>;
 };
 
 export default async function ExploreStudyQuizPage({
@@ -26,13 +30,15 @@ export default async function ExploreStudyQuizPage({
   searchParams,
 }: Props) {
   const { courseId } = await params;
-  const { material: materialId, module: moduleParam } = await searchParams;
+  const sp = await searchParams;
 
   const moduleNum =
-    typeof moduleParam === "string" ? Number(moduleParam) : Number.NaN;
+    typeof sp.module === "string" ? Number(sp.module) : Number.NaN;
   const initialModuleFromUrl = Number.isFinite(moduleNum)
     ? moduleNum
     : undefined;
+  const materialId =
+    typeof sp.material === "string" ? sp.material : undefined;
 
   if (!UUID_RE.test(courseId)) notFound();
 
@@ -40,6 +46,24 @@ export default async function ExploreStudyQuizPage({
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  const quizBase = `/explore/${courseId}/study/quiz`;
+  const quizQs = new URLSearchParams();
+  if (typeof sp.material === "string" && UUID_RE.test(sp.material)) {
+    quizQs.set("material", sp.material);
+  }
+  if (typeof sp.module === "string" && sp.module.trim().length > 0) {
+    quizQs.set("module", sp.module.trim());
+  }
+  if (typeof sp.practice === "string" && sp.practice.trim().length > 0) {
+    quizQs.set("practice", sp.practice.trim());
+  }
+  const quizNext =
+    quizQs.toString().length > 0 ? `${quizBase}?${quizQs}` : quizBase;
+
+  if (!user) {
+    redirect(`/login?next=${encodeURIComponent(quizNext)}`);
+  }
 
   const { data: courseRow } = await supabase
     .from("courses")

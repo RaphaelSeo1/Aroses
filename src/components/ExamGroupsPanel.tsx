@@ -20,9 +20,12 @@ import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { CourseUploadForm } from "@/components/CourseUploadForm";
-import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
+import {
+  displayMaterialSectionLabel,
+  suggestMaterialLabelFromPayload,
+} from "@/lib/study-material-display-name";
 
 export type ExamGroupRow = {
   id: string;
@@ -36,6 +39,8 @@ export type MaterialRow = {
   created_at: string;
   exam_group_id: string;
   sort_order: number;
+  /** Present on dashboard load — used for smarter rename / auto-rename on server. */
+  course_payload?: unknown;
 };
 
 function DragHandleIcon() {
@@ -63,6 +68,10 @@ function SortableMaterialRow({
   onBeginRename,
   onDelete,
   dragDisabled,
+  showSelection,
+  selected,
+  selectionDisabled,
+  onToggleSelect,
 }: {
   material: MaterialRow;
   courseId: string;
@@ -75,6 +84,10 @@ function SortableMaterialRow({
   onBeginRename: (m: MaterialRow) => void;
   onDelete: (m: MaterialRow) => void | Promise<void>;
   dragDisabled: boolean;
+  showSelection: boolean;
+  selected: boolean;
+  selectionDisabled: boolean;
+  onToggleSelect: (id: string) => void;
 }) {
   const {
     attributes,
@@ -143,6 +156,18 @@ function SortableMaterialRow({
   return (
     <li ref={setNodeRef} style={style} className="bg-white dark:bg-zinc-950">
       <div className="flex flex-wrap items-center gap-2 px-3 py-3 text-sm sm:flex-nowrap sm:gap-3 sm:px-5 sm:py-4">
+        {showSelection ? (
+          <input
+            type="checkbox"
+            className="h-4 w-4 shrink-0 rounded border-zinc-300 text-brand focus:ring-brand disabled:opacity-40 dark:border-zinc-600 dark:bg-zinc-900"
+            checked={selected}
+            disabled={selectionDisabled}
+            onChange={() => onToggleSelect(m.id)}
+            aria-label={`Select ${displayMaterialSectionLabel(m.file_name)}`}
+          />
+        ) : (
+          <span className="w-4 shrink-0 sm:w-4" aria-hidden />
+        )}
         {!dragDisabled ? (
           <button
             type="button"
@@ -214,6 +239,10 @@ function PlainMaterialRow(
     onBeginRename,
     onDelete,
     showGripPlaceholder = false,
+    showSelection,
+    selected,
+    selectionDisabled,
+    onToggleSelect,
   } = props;
 
   if (editing) {
@@ -264,6 +293,18 @@ function PlainMaterialRow(
     return (
       <li className="bg-white dark:bg-zinc-950">
         <div className="flex flex-wrap items-center gap-2 px-3 py-3 text-sm sm:flex-nowrap sm:gap-3 sm:px-5 sm:py-4">
+          {showSelection ? (
+            <input
+              type="checkbox"
+              className="h-4 w-4 shrink-0 rounded border-zinc-300 text-brand focus:ring-brand disabled:opacity-40 dark:border-zinc-600 dark:bg-zinc-900"
+              checked={selected}
+              disabled={selectionDisabled}
+              onChange={() => onToggleSelect(m.id)}
+              aria-label={`Select ${displayMaterialSectionLabel(m.file_name)}`}
+            />
+          ) : (
+            <span className="w-4 shrink-0" aria-hidden />
+          )}
           <span
             className="touch-none rounded-lg p-2 text-zinc-400 dark:text-zinc-500"
             aria-hidden
@@ -314,6 +355,18 @@ function PlainMaterialRow(
   return (
     <li className="bg-white dark:bg-zinc-950">
       <div className="flex flex-wrap items-center gap-3 px-5 py-4 text-sm sm:flex-nowrap">
+        {showSelection ? (
+          <input
+            type="checkbox"
+            className="h-4 w-4 shrink-0 rounded border-zinc-300 text-brand focus:ring-brand disabled:opacity-40 dark:border-zinc-600 dark:bg-zinc-900"
+            checked={selected}
+            disabled={selectionDisabled}
+            onChange={() => onToggleSelect(m.id)}
+            aria-label={`Select ${displayMaterialSectionLabel(m.file_name)}`}
+          />
+        ) : (
+          <span className="w-4 shrink-0" aria-hidden />
+        )}
         <Link
           href={`/dashboard/courses/${courseId}/study?material=${m.id}`}
           className="min-w-0 flex-1 truncate font-medium text-brand hover:underline dark:text-brand-soft"
@@ -369,6 +422,10 @@ function MaterialBuildsList({
   cancelRenameMaterial,
   beginRenameMaterial,
   deleteMaterial,
+  showSelection,
+  selectedIds,
+  selectionDisabled,
+  onToggleSelectMaterial,
 }: {
   courseId: string;
   materials: MaterialRow[];
@@ -383,6 +440,10 @@ function MaterialBuildsList({
   cancelRenameMaterial: () => void;
   beginRenameMaterial: (m: MaterialRow) => void;
   deleteMaterial: (m: MaterialRow) => void | Promise<void>;
+  showSelection: boolean;
+  selectedIds: Set<string>;
+  selectionDisabled: boolean;
+  onToggleSelectMaterial: (id: string) => void;
 }) {
   const ulClass =
     "mt-3 divide-y divide-zinc-100 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-sm dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-950";
@@ -399,6 +460,7 @@ function MaterialBuildsList({
     const busy = materialBusyId === m.id || reorderBusy;
     const editing = editingMaterialId === m.id;
     const dragDisabled = busy || editing || !sortable;
+    const selected = selectedIds.has(m.id);
 
     if (!sortable) {
       return (
@@ -414,6 +476,10 @@ function MaterialBuildsList({
           onCancelRename={cancelRenameMaterial}
           onBeginRename={beginRenameMaterial}
           onDelete={deleteMaterial}
+          showSelection={showSelection}
+          selected={selected}
+          selectionDisabled={selectionDisabled}
+          onToggleSelect={onToggleSelectMaterial}
         />
       );
     }
@@ -433,6 +499,10 @@ function MaterialBuildsList({
           onBeginRename={beginRenameMaterial}
           onDelete={deleteMaterial}
           showGripPlaceholder={!editing}
+          showSelection={showSelection}
+          selected={selected}
+          selectionDisabled={selectionDisabled}
+          onToggleSelect={onToggleSelectMaterial}
         />
       );
     }
@@ -451,6 +521,10 @@ function MaterialBuildsList({
         onBeginRename={beginRenameMaterial}
         onDelete={deleteMaterial}
         dragDisabled={dragDisabled}
+        showSelection={showSelection}
+        selected={selected}
+        selectionDisabled={selectionDisabled}
+        onToggleSelect={onToggleSelectMaterial}
       />
     );
   });
@@ -513,8 +587,14 @@ export function ExamGroupsPanel({
   const [materialError, setMaterialError] = useState<string | null>(null);
   const [reorderBusy, setReorderBusy] = useState(false);
   const [autoRenameBusy, setAutoRenameBusy] = useState(false);
-  const [materialDeleteId, setMaterialDeleteId] = useState<string | null>(null);
+  const [deletePendingIds, setDeletePendingIds] = useState<string[] | null>(
+    null
+  );
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const selectAllInSectionRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!groups.length) return;
@@ -534,6 +614,44 @@ export function ExamGroupsPanel({
       );
     });
   }, [materials, activeId]);
+
+  useEffect(() => {
+    setSelectedMaterialIds(new Set());
+  }, [activeId]);
+
+  const selectedInSectionCount = useMemo(() => {
+    let n = 0;
+    for (const m of materialsForActive) {
+      if (selectedMaterialIds.has(m.id)) n += 1;
+    }
+    return n;
+  }, [materialsForActive, selectedMaterialIds]);
+
+  const allInSectionSelected =
+    materialsForActive.length > 0 &&
+    selectedInSectionCount === materialsForActive.length;
+
+  useEffect(() => {
+    const el = selectAllInSectionRef.current;
+    if (!el) return;
+    el.indeterminate =
+      selectedInSectionCount > 0 && !allInSectionSelected;
+  }, [selectedInSectionCount, allInSectionSelected]);
+
+  const selectionDisabled =
+    autoRenameBusy ||
+    reorderBusy ||
+    Boolean(materialBusyId) ||
+    Boolean(editingMaterialId) ||
+    deleteBusy;
+  const showRowSelection = editingMaterialId == null;
+
+  const pendingDeleteRows = useMemo(() => {
+    if (!deletePendingIds?.length) return [];
+    return deletePendingIds
+      .map((id) => materials.find((x) => x.id === id))
+      .filter((x): x is MaterialRow => Boolean(x));
+  }, [deletePendingIds, materials]);
 
   async function persistMaterialOrder(orderedIds: string[]) {
     setReorderBusy(true);
@@ -646,7 +764,10 @@ export function ExamGroupsPanel({
   function beginRenameMaterial(m: MaterialRow) {
     setMaterialError(null);
     setEditingMaterialId(m.id);
-    setRenameDraft(displayMaterialSectionLabel(m.file_name));
+    const suggested = suggestMaterialLabelFromPayload(m.course_payload);
+    setRenameDraft(
+      suggested ?? displayMaterialSectionLabel(m.file_name)
+    );
   }
 
   function cancelRenameMaterial() {
@@ -685,26 +806,62 @@ export function ExamGroupsPanel({
     setMaterialBusyId(null);
   }
 
+  function toggleSelectMaterial(id: string) {
+    setSelectedMaterialIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllInSection() {
+    const ids = materialsForActive.map((m) => m.id);
+    setSelectedMaterialIds((prev) => {
+      const allSelected =
+        ids.length > 0 && ids.every((id) => prev.has(id));
+      if (allSelected) {
+        const next = new Set(prev);
+        for (const id of ids) next.delete(id);
+        return next;
+      }
+      const next = new Set(prev);
+      for (const id of ids) next.add(id);
+      return next;
+    });
+  }
+
+  function clearRowSelection() {
+    setSelectedMaterialIds(new Set());
+  }
+
   function requestDeleteMaterial(m: MaterialRow) {
     setMaterialError(null);
-    setMaterialDeleteId(m.id);
+    setDeletePendingIds([m.id]);
+  }
+
+  function requestDeleteSelected() {
+    if (selectedInSectionCount < 1) return;
+    const ids = materialsForActive
+      .filter((m) => selectedMaterialIds.has(m.id))
+      .map((m) => m.id);
+    if (ids.length < 1) return;
+    setMaterialError(null);
+    setDeletePendingIds(ids);
   }
 
   async function confirmDeleteMaterial() {
-    const id = materialDeleteId;
-    if (!id || deleteBusy) return;
-    const m = materials.find((x) => x.id === id);
-    if (!m) {
-      setMaterialDeleteId(null);
-      return;
-    }
+    const ids = deletePendingIds;
+    if (!ids?.length || deleteBusy) return;
 
-    setMaterialBusyId(m.id);
     setMaterialError(null);
     setDeleteBusy(true);
+    setMaterialBusyId(ids[0] ?? null);
     try {
-      const res = await fetch(`/api/study-materials/${m.id}`, {
-        method: "DELETE",
+      const res = await fetch("/api/study-materials/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ courseId, materialIds: ids }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -713,8 +870,13 @@ export function ExamGroupsPanel({
         );
         return;
       }
-      setMaterialDeleteId(null);
+      setDeletePendingIds(null);
       setEditingMaterialId(null);
+      setSelectedMaterialIds((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
       router.refresh();
     } catch {
       setMaterialError("Network error.");
@@ -765,11 +927,6 @@ export function ExamGroupsPanel({
       </section>
     );
   }
-
-  const materialPendingDelete =
-    materialDeleteId != null
-      ? materials.find((x) => x.id === materialDeleteId) ?? null
-      : null;
 
   return (
     <>
@@ -867,8 +1024,9 @@ export function ExamGroupsPanel({
                 <span className="font-medium text-zinc-600 dark:text-zinc-300">
                   Auto-rename
                 </span>{" "}
-                sets each filename from the generated course title for that PDF
-                (from your slides&apos; text). If two match, we add{" "}
+                picks a short name from your generated study (module and lesson
+                titles first, then the course title or description). Duplicate
+                names get{" "}
                 <span className="font-medium text-zinc-600 dark:text-zinc-300">
                   (2)
                 </span>
@@ -876,7 +1034,7 @@ export function ExamGroupsPanel({
                 <span className="font-medium text-zinc-600 dark:text-zinc-300">
                   (3)
                 </span>
-                , …
+                , … Use checkboxes to delete several uploads at once.
               </p>
             </div>
             <button
@@ -885,7 +1043,8 @@ export function ExamGroupsPanel({
                 autoRenameBusy ||
                 reorderBusy ||
                 Boolean(materialBusyId) ||
-                Boolean(editingMaterialId)
+                Boolean(editingMaterialId) ||
+                deleteBusy
               }
               onClick={() => void autoRenameBuildsInGroup()}
               className="shrink-0 rounded-full border border-zinc-300 bg-white px-4 py-2 text-xs font-semibold text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
@@ -898,6 +1057,45 @@ export function ExamGroupsPanel({
               {materialError}
             </p>
           )}
+          {materialsForActive.length > 0 && showRowSelection ? (
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400">
+              <label className="inline-flex cursor-pointer items-center gap-2 font-medium text-zinc-700 dark:text-zinc-200">
+                <input
+                  ref={selectAllInSectionRef}
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-zinc-300 text-brand focus:ring-brand disabled:opacity-40 dark:border-zinc-600 dark:bg-zinc-900"
+                  checked={allInSectionSelected}
+                  disabled={selectionDisabled}
+                  onChange={toggleSelectAllInSection}
+                  aria-label="Select all materials in this section"
+                />
+                Select all
+              </label>
+              {selectedInSectionCount > 0 ? (
+                <>
+                  <span className="text-zinc-500">
+                    {selectedInSectionCount} selected
+                  </span>
+                  <button
+                    type="button"
+                    disabled={selectionDisabled}
+                    onClick={clearRowSelection}
+                    className="font-semibold text-brand hover:underline disabled:opacity-40 dark:text-brand-soft"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectionDisabled}
+                    onClick={() => requestDeleteSelected()}
+                    className="font-semibold text-red-700 hover:underline disabled:opacity-40 dark:text-red-400"
+                  >
+                    Delete selected…
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
           <MaterialBuildsList
             courseId={courseId}
             materials={materialsForActive}
@@ -912,30 +1110,63 @@ export function ExamGroupsPanel({
             cancelRenameMaterial={cancelRenameMaterial}
             beginRenameMaterial={beginRenameMaterial}
             deleteMaterial={requestDeleteMaterial}
+            showSelection={showRowSelection}
+            selectedIds={selectedMaterialIds}
+            selectionDisabled={selectionDisabled}
+            onToggleSelectMaterial={toggleSelectMaterial}
           />
         </div>
       )}
     </section>
     <ConfirmDialog
-      open={materialPendingDelete != null}
-      title="Delete this upload?"
+      open={Boolean(deletePendingIds?.length)}
+      title={
+        deletePendingIds && deletePendingIds.length > 1
+          ? `Delete ${deletePendingIds.length} uploads?`
+          : "Delete this upload?"
+      }
       cancelLabel="Cancel"
       confirmLabel="Delete"
       confirmBusy={deleteBusy}
       onCancel={() => {
-        if (!deleteBusy) setMaterialDeleteId(null);
+        if (!deleteBusy) setDeletePendingIds(null);
       }}
       onConfirm={confirmDeleteMaterial}
     >
-      <p>
-        Are you sure you want to delete{" "}
-        <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-          {materialPendingDelete
-            ? displayMaterialSectionLabel(materialPendingDelete.file_name)
-            : "this upload"}
-        </span>
-        ? This removes the generated lessons and quizzes for this upload.
-      </p>
+      {pendingDeleteRows.length === 1 ? (
+        <p>
+          Are you sure you want to delete{" "}
+          <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+            {displayMaterialSectionLabel(pendingDeleteRows[0].file_name)}
+          </span>
+          ? This removes the generated lessons and quizzes for this upload.
+        </p>
+      ) : (
+        <>
+          <p>
+            This removes the generated lessons and quizzes for these uploads
+            ({deletePendingIds?.length ?? 0} total):
+          </p>
+          <ul className="mt-2 max-h-44 list-disc space-y-1 overflow-y-auto pl-5 text-zinc-800 dark:text-zinc-200">
+            {pendingDeleteRows.slice(0, 20).map((row) => (
+              <li key={row.id}>
+                {displayMaterialSectionLabel(row.file_name)}
+              </li>
+            ))}
+          </ul>
+          {pendingDeleteRows.length > 20 ? (
+            <p className="mt-2 text-xs text-zinc-500">
+              …and {pendingDeleteRows.length - 20} more (all will be deleted).
+            </p>
+          ) : null}
+          {pendingDeleteRows.length === 0 && (deletePendingIds?.length ?? 0) > 0 ? (
+            <p className="mt-2 text-sm text-amber-800 dark:text-amber-200">
+              Could not load names for this list; the selected uploads will still
+              be removed if you confirm.
+            </p>
+          ) : null}
+        </>
+      )}
     </ConfirmDialog>
     </>
   );

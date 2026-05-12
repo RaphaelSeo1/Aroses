@@ -35,13 +35,15 @@ type Props = {
 
 export default async function ExploreStudyPage({ params, searchParams }: Props) {
   const { courseId } = await params;
-  const { material: materialId, module: moduleParam } = await searchParams;
+  const sp = await searchParams;
 
   const moduleNum =
-    typeof moduleParam === "string" ? Number(moduleParam) : Number.NaN;
+    typeof sp.module === "string" ? Number(sp.module) : Number.NaN;
   const initialModuleFromUrl = Number.isFinite(moduleNum)
     ? moduleNum
     : undefined;
+  const materialId =
+    typeof sp.material === "string" ? sp.material : undefined;
 
   if (!UUID_RE.test(courseId)) notFound();
 
@@ -49,6 +51,21 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  const studyPath = `/explore/${courseId}/study`;
+  const studyQs = new URLSearchParams();
+  if (typeof sp.material === "string" && UUID_RE.test(sp.material)) {
+    studyQs.set("material", sp.material);
+  }
+  if (typeof sp.module === "string" && sp.module.trim().length > 0) {
+    studyQs.set("module", sp.module.trim());
+  }
+  const studyNext =
+    studyQs.toString().length > 0 ? `${studyPath}?${studyQs}` : studyPath;
+
+  if (!user) {
+    redirect(`/login?next=${encodeURIComponent(studyNext)}`);
+  }
 
   const { data: courseRow } = await supabase
     .from("courses")

@@ -56,7 +56,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
 
   const { data: materialsRaw } = await supabase
     .from("study_materials")
-    .select("id, file_name, created_at, exam_group_id, sort_order")
+    .select("id, file_name, created_at, exam_group_id, sort_order, course_payload")
     .eq("course_id", course.id);
 
   const materials: MaterialRow[] = sortStudyMaterialsForDashboard(
@@ -66,27 +66,26 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
           typeof m.exam_group_id === "string" && m.exam_group_id.length > 0
       )
       .map((m) => ({
-        ...m,
+        id: m.id,
+        file_name: m.file_name,
+        created_at: m.created_at,
+        exam_group_id: m.exam_group_id,
         sort_order:
           typeof m.sort_order === "number" && Number.isFinite(m.sort_order)
             ? m.sort_order
             : 0,
+        course_payload: m.course_payload ?? undefined,
       })),
     groups.map((g) => g.id)
   );
 
-  const { data: statsMaterials } = await supabase
-    .from("study_materials")
-    .select("id, course_payload")
-    .eq("course_id", course.id);
-
   let modulesTotal = 0;
-  for (const m of statsMaterials ?? []) {
+  for (const m of materialsRaw ?? []) {
     const pl = m.course_payload as CoursePayload | null;
     modulesTotal += pl?.modules?.length ?? 0;
   }
 
-  const uploadsCount = statsMaterials?.length ?? 0;
+  const uploadsCount = materialsRaw?.length ?? 0;
 
   return (
     <>

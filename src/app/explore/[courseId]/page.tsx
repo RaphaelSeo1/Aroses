@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { ExploreCourseOutline } from "@/components/ExploreCourseOutline";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
@@ -39,6 +39,10 @@ export default async function ExploreCoursePage({ params }: Props) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect(`/login?next=${encodeURIComponent(`/explore/${courseId}`)}`);
+  }
 
   const { data: course } = await supabase
     .from("courses")

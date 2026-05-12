@@ -14,9 +14,9 @@
  * signs out anyone whose email does not match.
  *
  * **`AUTH_EMAIL_DOMAIN_ALLOWLIST_ENFORCED`**
- * - `false` or `0` — ignore the domain list for sign-in gating (any email allowed).
- * - `true` or `1` — enforce the list when it is non-empty.
- * - **Unset** — enforce **if and only if** the domain list is non-empty (legacy default).
+ * - `true` or `1` — enforce the domain list when it is non-empty (sign-in + middleware).
+ * - `false`, `0`, or **unset** — do **not** enforce; any email may sign in. The domain
+ *   list env vars are ignored for gating unless enforcement is explicitly on.
  *
  * **Soft “preferred school Google” copy (not a rule)**
  * By default, login/signup show a short neutral line (no domain names). Override with
@@ -55,17 +55,18 @@ export function parseAllowedAuthEmailDomains(): string[] {
 }
 
 /**
- * When true, middleware and login/signup may reject non-matching emails.
- * @see module doc for `AUTH_EMAIL_DOMAIN_ALLOWLIST_ENFORCED`
+ * When true, middleware and login/signup reject non-matching emails.
+ * Opt-in only: set `AUTH_EMAIL_DOMAIN_ALLOWLIST_ENFORCED=true` (or `1`) together with
+ * `ALLOWED_AUTH_EMAIL_DOMAINS`. If unset or false, the domain list is not enforced.
  */
 export function isAuthEmailDomainAllowlistEnforced(): boolean {
   const raw =
     process.env.AUTH_EMAIL_DOMAIN_ALLOWLIST_ENFORCED?.trim().toLowerCase();
-  if (raw === "false" || raw === "0") return false;
+  if (raw === "false" || raw === "0" || raw === "") return false;
   if (raw === "true" || raw === "1") {
     return parseAllowedAuthEmailDomains().length > 0;
   }
-  return parseAllowedAuthEmailDomains().length > 0;
+  return false;
 }
 
 const DEFAULT_SCHOOL_GOOGLE_PREFERRED_HINT =
