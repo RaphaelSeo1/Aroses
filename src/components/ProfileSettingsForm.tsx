@@ -12,26 +12,10 @@ import {
 } from "react";
 import { LogoutButton } from "@/components/LogoutButton";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { createClient } from "@/lib/supabase/client";
 import type { UserProfileRow } from "@/types/profile";
 
-const COMMON_TIMEZONES = [
-  "Pacific/Honolulu",
-  "America/Los_Angeles",
-  "America/Denver",
-  "America/Chicago",
-  "America/New_York",
-  "America/Sao_Paulo",
-  "Europe/London",
-  "Europe/Paris",
-  "Europe/Berlin",
-  "Africa/Johannesburg",
-  "Asia/Dubai",
-  "Asia/Kolkata",
-  "Asia/Singapore",
-  "Asia/Tokyo",
-  "Australia/Sydney",
-  "Pacific/Auckland",
-];
+type Panel = "general" | "account" | "progress";
 
 const STUDY_FOCUS_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "Select" },
@@ -51,7 +35,27 @@ const FIELD_WIDE =
 const SELECT_CHEVRON =
   "appearance-none bg-[length:1rem] bg-[right_0.65rem_center] bg-no-repeat pr-9 dark:bg-[length:1rem]";
 
-type Panel = "general" | "account" | "progress";
+async function fileToResizedJpegBlob(file: File, maxEdge: number): Promise<Blob> {
+  const img = await createImageBitmap(file);
+  const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    img.close();
+    throw new Error("Could not prepare image.");
+  }
+  ctx.drawImage(img, 0, 0, w, h);
+  img.close();
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/jpeg", 0.88)
+  );
+  if (!blob) throw new Error("Could not encode image.");
+  return blob;
+}
 
 function tabToPanel(tab: string | null | undefined): Panel {
   if (tab === "progress") return "progress";
@@ -184,27 +188,19 @@ export function ProfileSettingsForm({
     initial?.birthday ? String(initial.birthday).slice(0, 10) : ""
   );
   const [bio, setBio] = useState(initial?.bio ?? "");
-  const [timezone, setTimezone] = useState(initial?.timezone ?? "");
   const [studyFocus, setStudyFocus] = useState(initial?.study_focus ?? "");
+  const [avatarUrl, setAvatarUrl] = useState(initial?.avatar_url ?? null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const seededTimezone = useRef(false);
 
   useEffect(() => {
-    if (seededTimezone.current) return;
-    if ((initial?.timezone ?? "").trim().length > 0) {
-      seededTimezone.current = true;
-      return;
-    }
-    seededTimezone.current = true;
-    try {
-      const guessed = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      if (guessed) setTimezone(guessed);
-    } catch {
-      /* ignore */
-    }
-  }, [initial?.timezone]);
+    // Keep in sync when `router.refresh()` updates server-passed `initial`.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional prop → state sync
+    setAvatarUrl(initial?.avatar_url ?? null);
+  }, [initial?.avatar_url]);
 
   const avatarLetter = useMemo(() => {
     const n = displayName.trim();
@@ -224,7 +220,6 @@ export function ProfileSettingsForm({
           display_name: displayName,
           birthday: birthday.trim() || null,
           bio,
-          timezone,
           study_focus: studyFocus,
         }),
       });
@@ -242,7 +237,90 @@ export function ProfileSettingsForm({
     } finally {
       setBusy(false);
     }
-  }, [bio, birthday, displayName, router, studyFocus, timezone]);
+  }, [bio, birthday, displayName, router, studyFocus]);
+
+  const persistAvatarUrl = useCallback(
+    async (nextUrl: string | null) => {
+      setMessage(null);
+      setError(null);
+      try {
+        const res = await fetch("/api/profile", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ avatar_url: nextUrl }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(
+            typeof j.error === "string" ? j.error : "Could not update avatar."
+          );
+          return false;
+        }
+        setAvatarUrl(nextUrl);
+        setMessage(nextUrl ? "Avatar updated." : "Avatar removed.");
+        router.refresh();
+        return true;
+      } catch {
+        setError("Network error.");
+        return false;
+      }
+    },
+    [router]
+  );
+
+  const onAvatarFile = useCallback(
+    async (fileList: FileList | null) => {
+      const file = fileList?.[0];
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        setError("Please choose an image file.");
+        return;
+      }
+      if (file.size > 8 * 1024 * 1024) {
+        setError("Image is too large (max 8 MB before resize).");
+        return;
+      }
+      setMessage(null);
+      setError(null);
+      setAvatarBusy(true);
+      try {
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) {
+          setError("You need to be signed in to change your avatar.");
+          return;
+        }
+        const blob = await fileToResizedJpegBlob(file, 512);
+        const path = `${user.id}/${crypto.randomUUID()}.jpg`;
+        const { error: upErr } = await supabase.storage
+          .from("avatars")
+          .upload(path, blob, { contentType: "image/jpeg", upsert: false });
+        if (upErr) {
+          setError(upErr.message || "Could not upload image.");
+          return;
+        }
+        const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
+        const publicUrl = pub.publicUrl;
+        await persistAvatarUrl(publicUrl);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not process image.");
+      } finally {
+        setAvatarBusy(false);
+      }
+    },
+    [persistAvatarUrl]
+  );
+
+  const clearAvatar = useCallback(async () => {
+    setAvatarBusy(true);
+    try {
+      await persistAvatarUrl(null);
+    } finally {
+      setAvatarBusy(false);
+    }
+  }, [persistAvatarUrl]);
 
   const navBtn =
     "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/80 dark:hover:text-zinc-100";
@@ -307,24 +385,55 @@ export function ProfileSettingsForm({
                 <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   <SettingsRow
                     label="Avatar"
-                    hint="Shown in your dashboard header and profile."
+                    hint="Shown on your profile. Saves as soon as you choose a photo."
                     alignTop
                   >
-                    <div className="flex items-center gap-4 sm:justify-end">
-                      <div
-                        className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-zinc-200 to-zinc-300 text-lg font-semibold text-zinc-700 shadow-inner dark:from-zinc-700 dark:to-zinc-600 dark:text-zinc-100"
-                        aria-hidden
-                      >
-                        {avatarLetter}
+                    <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+                      <input
+                        ref={avatarInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        className="hidden"
+                        onChange={(e) => {
+                          void onAvatarFile(e.target.files);
+                          e.target.value = "";
+                        }}
+                      />
+                      {avatarUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- user-provided public Storage URL
+                        <img
+                          src={avatarUrl}
+                          alt=""
+                          className="h-14 w-14 shrink-0 rounded-full object-cover ring-2 ring-zinc-200 dark:ring-zinc-700"
+                        />
+                      ) : (
+                        <div
+                          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-zinc-200 to-zinc-300 text-lg font-semibold text-zinc-700 shadow-inner dark:from-zinc-700 dark:to-zinc-600 dark:text-zinc-100"
+                          aria-hidden
+                        >
+                          {avatarLetter}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={avatarBusy}
+                          onClick={() => avatarInputRef.current?.click()}
+                          className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-900"
+                        >
+                          {avatarBusy ? "Working…" : "Change"}
+                        </button>
+                        {avatarUrl ? (
+                          <button
+                            type="button"
+                            disabled={avatarBusy}
+                            onClick={() => void clearAvatar()}
+                            className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-500 transition hover:text-zinc-800 disabled:opacity-50 dark:text-zinc-400 dark:hover:text-zinc-200"
+                          >
+                            Remove
+                          </button>
+                        ) : null}
                       </div>
-                      <button
-                        type="button"
-                        disabled
-                        title="Coming soon"
-                        className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-400 dark:border-zinc-700 dark:text-zinc-500"
-                      >
-                        Change
-                      </button>
                     </div>
                   </SettingsRow>
 
@@ -402,27 +511,6 @@ export function ProfileSettingsForm({
                 </h2>
                 <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   <SettingsRow
-                    label="Time zone"
-                    hint="Used when we show dates or rhythm charts."
-                  >
-                    <input
-                      id="timezone"
-                      type="text"
-                      list="common-timezones"
-                      maxLength={100}
-                      value={timezone}
-                      onChange={(e) => setTimezone(e.target.value)}
-                      placeholder="e.g. America/New_York"
-                      className={FIELD}
-                    />
-                    <datalist id="common-timezones">
-                      {COMMON_TIMEZONES.map((tz) => (
-                        <option key={tz} value={tz} />
-                      ))}
-                    </datalist>
-                  </SettingsRow>
-
-                  <SettingsRow
                     label="Appearance"
                     hint="Stored on this browser — light, dark, or match the system."
                   >
@@ -445,8 +533,10 @@ export function ProfileSettingsForm({
                       {error}
                     </p>
                   ) : (
-                    <p className="text-xs text-zinc-400 dark:text-zinc-500">
-                      Changes apply after you save.
+                    <p className="text-xs leading-relaxed text-zinc-400 dark:text-zinc-500">
+                      Theme applies immediately on this device. Name, birthday,
+                      study focus, and notes update when you tap Save changes.
+                      Your avatar saves when you choose a photo.
                     </p>
                   )}
                 </div>

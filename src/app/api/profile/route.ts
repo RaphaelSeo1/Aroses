@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import type { PostgrestError } from "@supabase/supabase-js";
-import { isStudyFocusColumnError } from "@/lib/profile-db-errors";
+import {
+  isAvatarUrlColumnError,
+  isStudyFocusColumnError,
+} from "@/lib/profile-db-errors";
 import { createClient } from "@/lib/supabase/server";
 
 const DISPLAY_MAX = 120;
 const BIO_MAX = 500;
 const TZ_MAX = 100;
+const AVATAR_URL_MAX = 2048;
 const STUDY_FOCUS_ALLOWED = new Set([
   "",
   "student",
@@ -32,6 +36,33 @@ function parseBirthday(raw: unknown): string | null | undefined {
     return undefined;
   }
   return s;
+}
+
+function parseAvatarUrl(
+  raw: unknown,
+  userId: string,
+  supabaseUrl: string | undefined
+):
+  | { ok: true; value: string | null }
+  | { ok: false; error: string } {
+  if (raw === null || raw === "") return { ok: true, value: null };
+  if (typeof raw !== "string") {
+    return { ok: false, error: "avatar_url must be a string." };
+  }
+  const t = raw.trim();
+  if (t.length === 0) return { ok: true, value: null };
+  if (t.length > AVATAR_URL_MAX) {
+    return { ok: false, error: "avatar_url is too long." };
+  }
+  const base = (supabaseUrl ?? "").replace(/\/$/, "");
+  if (!base) {
+    return { ok: false, error: "Server configuration error." };
+  }
+  const prefix = `${base}/storage/v1/object/public/avatars/${userId}/`;
+  if (!t.startsWith(prefix)) {
+    return { ok: false, error: "Invalid avatar_url." };
+  }
+  return { ok: true, value: t };
 }
 
 function userFacingSaveError(err: PostgrestError): string {
@@ -75,45 +106,31 @@ export async function PATCH(request: Request) {
 
   const b = body as Record<string, unknown>;
 
-  let prev:
-    | {
-        display_name: string | null;
-        bio: string | null;
-        birthday: string | null;
-        timezone: string | null;
-        study_focus?: string | null;
-      }
-    | null = null;
+  type PrevRow = {
+    display_name: string | null;
+    bio: string | null;
+    birthday: string | null;
+    timezone: string | null;
+    study_focus?: string | null;
+    avatar_url?: string | null;
+  };
 
-  const selFull = await supabase
+  let prev: PrevRow | null = null;
+
+  const sel = await supabase
     .from("profiles")
-    .select("display_name, bio, birthday, timezone, study_focus")
+    .select("*")
     .eq("id", user.id)
     .maybeSingle();
 
-  if (selFull.error && isStudyFocusColumnError(selFull.error.message)) {
-    const selBase = await supabase
-      .from("profiles")
-      .select("display_name, bio, birthday, timezone")
-      .eq("id", user.id)
-      .maybeSingle();
-    if (selBase.error) {
-      console.error(selBase.error);
-      return NextResponse.json(
-        { error: userFacingSaveError(selBase.error) },
-        { status: 500 }
-      );
-    }
-    prev = selBase.data;
-  } else if (selFull.error) {
-    console.error(selFull.error);
+  if (sel.error) {
+    console.error(sel.error);
     return NextResponse.json(
-      { error: userFacingSaveError(selFull.error) },
+      { error: userFacingSaveError(sel.error) },
       { status: 500 }
     );
-  } else {
-    prev = selFull.data;
   }
+  prev = sel.data as PrevRow | null;
 
   let displayName = prev?.display_name ?? null;
   if (Object.prototype.hasOwnProperty.call(b, "display_name")) {
@@ -183,30 +200,46 @@ export async function PATCH(request: Request) {
     studyFocus = key.length === 0 ? null : key;
   }
 
-  const baseRow = {
+  let avatarUrl = prev?.avatar_url ?? null;
+  if (Object.prototype.hasOwnProperty.call(b, "avatar_url")) {
+    const parsed = parseAvatarUrl(
+      b.avatar_url,
+      user.id,
+      process.env.NEXT_PUBLIC_SUPABASE_URL
+    );
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
+    avatarUrl = parsed.value;
+  }
+
+  let row: Record<string, unknown> = {
     id: user.id,
     display_name: displayName,
     bio,
     birthday,
     timezone,
+    study_focus: studyFocus,
+    avatar_url: avatarUrl,
   };
 
-  const withStudy = { ...baseRow, study_focus: studyFocus };
-
-  let { error } = await supabase
-    .from("profiles")
-    .upsert(withStudy, { onConflict: "id" });
-
-  if (
-    error &&
-    (error.code === "42703" || isStudyFocusColumnError(error.message))
-  ) {
-    ({ error } = await supabase
+  for (let i = 0; i < 4; i++) {
+    const { error } = await supabase
       .from("profiles")
-      .upsert(baseRow, { onConflict: "id" }));
-  }
-
-  if (error) {
+      .upsert(row, { onConflict: "id" });
+    if (!error) {
+      return NextResponse.json({ ok: true });
+    }
+    if (isStudyFocusColumnError(error.message) && "study_focus" in row) {
+      const { study_focus: _sf, ...next } = row;
+      row = next;
+      continue;
+    }
+    if (isAvatarUrlColumnError(error.message) && "avatar_url" in row) {
+      const { avatar_url: _av, ...next } = row;
+      row = next;
+      continue;
+    }
     console.error(error);
     return NextResponse.json(
       { error: userFacingSaveError(error) },
@@ -214,5 +247,8 @@ export async function PATCH(request: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json(
+    { error: "Could not save profile after retries." },
+    { status: 500 }
+  );
 }

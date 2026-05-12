@@ -22,16 +22,16 @@ export function ModuleMosaic({
   const unit = completed === total && total > 0;
 
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-wrap gap-1.5">
       {Array.from({ length: tiles }).map((_, i) => (
         <span
           key={i}
-          className={`h-2.5 w-2.5 rounded-sm transition-[background-color,opacity,transform] duration-200 ease-out sm:h-3 sm:w-3 ${
+          className={`h-3 w-3 rounded transition-[background-color,opacity,transform] duration-200 ease-out sm:h-3.5 sm:w-3.5 ${
             i < filled
               ? unit
-                ? "bg-brand shadow-sm shadow-red-600/25"
-                : "bg-gradient-to-br from-brand to-brand-hover"
-              : "bg-brand-border dark:bg-zinc-700"
+                ? "bg-brand shadow-sm shadow-red-600/20 ring-1 ring-black/5 dark:ring-white/10"
+                : "bg-gradient-to-br from-brand to-brand-hover ring-1 ring-black/5 dark:ring-white/10"
+              : "bg-zinc-200/95 ring-1 ring-zinc-300/80 dark:bg-zinc-700/90 dark:ring-zinc-600/80"
           }`}
           title={
             i < filled

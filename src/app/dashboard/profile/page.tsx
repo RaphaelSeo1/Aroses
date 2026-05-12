@@ -5,7 +5,6 @@ import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { ProfileSettingsForm } from "@/components/ProfileSettingsForm";
 import { ProgressDashboardContent } from "@/components/progress/ProgressDashboardContent";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
-import { isStudyFocusColumnError } from "@/lib/profile-db-errors";
 import { createClient } from "@/lib/supabase/server";
 import type { UserProfileRow } from "@/types/profile";
 
@@ -43,7 +42,7 @@ export default async function ProfilePage({ searchParams }: PageProps) {
 
   const selProfiles = await supabase
     .from("profiles")
-    .select("display_name, birthday, bio, timezone, study_focus")
+    .select("*")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -51,23 +50,12 @@ export default async function ProfilePage({ searchParams }: PageProps) {
     display_name: string | null;
     birthday: unknown;
     bio: string | null;
-    timezone: string | null;
     study_focus?: string | null;
+    avatar_url?: string | null;
   };
 
-  let profileRow: ProfileFields | null =
-    selProfiles.data as ProfileFields | null;
-  let profileErr = selProfiles.error;
-
-  if (profileErr && isStudyFocusColumnError(profileErr.message)) {
-    const base = await supabase
-      .from("profiles")
-      .select("display_name, birthday, bio, timezone")
-      .eq("id", user.id)
-      .maybeSingle();
-    profileRow = base.data as ProfileFields | null;
-    profileErr = base.error;
-  }
+  const profileRow = selProfiles.data as ProfileFields | null;
+  const profileErr = selProfiles.error;
 
   let initial: UserProfileRow | null = null;
   if (!profileErr && profileRow) {
@@ -78,7 +66,7 @@ export default async function ProfilePage({ searchParams }: PageProps) {
           ? String(profileRow.birthday).slice(0, 10)
           : null,
       bio: profileRow.bio,
-      timezone: profileRow.timezone,
+      avatar_url: profileRow.avatar_url ?? null,
       study_focus: profileRow.study_focus ?? null,
     };
   }

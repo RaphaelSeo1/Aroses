@@ -1,17 +1,31 @@
 /**
  * Optional school / organization auth policy (configure via env).
  *
- * **Google Workspace “school login”**
- * Set `NEXT_PUBLIC_SCHOOL_GOOGLE_HD` to your institution’s Google hosted domain
- * (e.g. `myschool.edu`). `signInWithOAuth` passes Google’s `hd` hint so the account
- * chooser targets that organization — users use the same Google sign-in your school
- * already uses.
+ * **Google Workspace “school login” (optional)**
+ * To restrict the Google account picker to one Workspace domain, render
+ * `GoogleSignInButton` with `restrictToSchoolWorkspace` and optionally set
+ * `NEXT_PUBLIC_SCHOOL_GOOGLE_HD` — the button passes Google’s `hd` hint only in
+ * that mode. By default the button does **not** send `hd`, so personal Gmail and
+ * any Google account work.
  *
- * **Who may hold a session**
+ * **Who may hold a session (optional hard gate)**
  * Set `ALLOWED_AUTH_EMAIL_DOMAINS` or `NEXT_PUBLIC_ALLOWED_AUTH_EMAIL_DOMAINS` to a
- * comma-separated list (no `@`): `berkeley.edu,mail.berkeley.edu`. If non-empty,
- * middleware signs out anyone whose email does not match. Prefer the non-public
- * `ALLOWED_AUTH_EMAIL_DOMAINS` in production if you don’t want the list in client JS.
+ * comma-separated list (no `@`). When **enforcement** is on (see below), middleware
+ * signs out anyone whose email does not match.
+ *
+ * **`AUTH_EMAIL_DOMAIN_ALLOWLIST_ENFORCED`**
+ * - `false` or `0` — ignore the domain list for sign-in gating (any email allowed).
+ * - `true` or `1` — enforce the list when it is non-empty.
+ * - **Unset** — enforce **if and only if** the domain list is non-empty (legacy default).
+ *
+ * **Soft “preferred school Google” copy (not a rule)**
+ * By default, login/signup show a short neutral line (no domain names). Override with
+ * `NEXT_PUBLIC_SCHOOL_GOOGLE_PREFERRED_HINT`, or set it to `-` to hide the line entirely.
+ *
+ * **Client components:** `ALLOWED_AUTH_EMAIL_DOMAINS` is not available in the browser
+ * bundle — pass the result of `parseAllowedAuthEmailDomains()` from a Server
+ * Component as props, or duplicate the list in `NEXT_PUBLIC_ALLOWED_AUTH_EMAIL_DOMAINS`
+ * for UI-only hints.
  *
  * **Disable email/password**
  * `NEXT_PUBLIC_SCHOOL_ONLY_NO_EMAIL_PASSWORD=true` hides email/password forms.
@@ -38,6 +52,31 @@ export function parseAllowedAuthEmailDomains(): string[] {
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter((s) => s.length > 0 && DOMAIN_PART.test(s));
+}
+
+/**
+ * When true, middleware and login/signup may reject non-matching emails.
+ * @see module doc for `AUTH_EMAIL_DOMAIN_ALLOWLIST_ENFORCED`
+ */
+export function isAuthEmailDomainAllowlistEnforced(): boolean {
+  const raw =
+    process.env.AUTH_EMAIL_DOMAIN_ALLOWLIST_ENFORCED?.trim().toLowerCase();
+  if (raw === "false" || raw === "0") return false;
+  if (raw === "true" || raw === "1") {
+    return parseAllowedAuthEmailDomains().length > 0;
+  }
+  return parseAllowedAuthEmailDomains().length > 0;
+}
+
+const DEFAULT_SCHOOL_GOOGLE_PREFERRED_HINT =
+  "School or institutional Google is preferred if you have one — personal Gmail works too.";
+
+/** Friendly copy on auth pages — not enforced. */
+export function getSchoolGooglePreferredHint(): string {
+  const raw = process.env.NEXT_PUBLIC_SCHOOL_GOOGLE_PREFERRED_HINT?.trim();
+  if (raw === "-" || raw === "none") return "";
+  if (raw) return raw;
+  return DEFAULT_SCHOOL_GOOGLE_PREFERRED_HINT;
 }
 
 export function emailMatchesAllowedDomains(

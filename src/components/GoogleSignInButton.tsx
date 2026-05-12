@@ -17,11 +17,12 @@ type Props = {
   label?: string;
   /**
    * Google Workspace hosted domain (e.g. school.edu). Passed as OAuth `hd`.
-   * Defaults to `NEXT_PUBLIC_SCHOOL_GOOGLE_HD` when omitted.
+   * When `restrictToSchoolWorkspace` is true, defaults to `NEXT_PUBLIC_SCHOOL_GOOGLE_HD`.
    */
   hostedDomain?: string;
   /**
-   * When false, do not send `hd` even if env has a default (personal Google).
+   * When true, pass Google’s `hd` hint so the account chooser targets that Workspace
+   * domain. Default is false so personal Gmail / any Google account works.
    */
   restrictToSchoolWorkspace?: boolean;
 };
@@ -31,7 +32,7 @@ export function GoogleSignInButton({
   disabled = false,
   label = "Continue with Google",
   hostedDomain: hostedDomainProp,
-  restrictToSchoolWorkspace = true,
+  restrictToSchoolWorkspace = false,
 }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

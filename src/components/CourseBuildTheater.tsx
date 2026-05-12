@@ -537,11 +537,10 @@ export function CourseBuildTheater({
               ) : null}
               {restartAckByJob[activeJob] ? (
                 <p className="mt-2 text-xs text-emerald-800 dark:text-emerald-300/90">
-                  Server reset this build at{" "}
-                  {formatIsoLocal(restartAckByJob[activeJob]!)}. The status line above
-                  should show module 1 of N right after a restart when a preview existed;
-                  it then follows the server again (if the new outline still has two
-                  modules, you will see module 2 of 2 again—that is the new run).
+                  Restart confirmed at{" "}
+                  {formatIsoLocal(restartAckByJob[activeJob]!)}. This upload is
+                  building again from the start — you will see fresh progress in
+                  the status line above.
                 </p>
               ) : null}
               <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">

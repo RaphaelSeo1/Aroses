@@ -12,8 +12,8 @@ export function ProgressRings({
   /** Tailwind classes for stroke dash animation (speedometer-style sweep). */
   strokeTransitionClass = "transition-[stroke-dashoffset] duration-700 ease-out",
   /**
-   * `below` keeps the ring center to modules only and prints quiz % under the graphic
-   * (clearer in tight marketing cards and small sizes).
+   * `below` = quiz % is not stacked in the center (inner ring only); pair with larger
+   * layouts that explain quiz elsewhere. Small rings always print “Modules” under the SVG.
    */
   quizLabelPlacement = "center",
 }: {
@@ -25,12 +25,13 @@ export function ProgressRings({
   strokeTransitionClass?: string;
   quizLabelPlacement?: "center" | "below";
 }) {
-  const dim = size === "lg" ? 160 : 112;
+  /** Slightly larger small layout so the donut hole clears both strokes + numeric center. */
+  const dim = size === "lg" ? 160 : 128;
   const c = dim / 2;
-  const outerR = size === "lg" ? 58 : 40;
-  const innerR = size === "lg" ? 42 : 28;
-  const outerW = size === "lg" ? 9 : 6;
-  const innerW = size === "lg" ? 7 : 5;
+  const outerR = size === "lg" ? 58 : 46;
+  const innerR = size === "lg" ? 42 : 32;
+  const outerW = size === "lg" ? 9 : 5;
+  const innerW = size === "lg" ? 7 : 4;
   const cOuter = 2 * Math.PI * outerR;
   const cInner = 2 * Math.PI * innerR;
   const modClamped = Math.min(100, Math.max(0, modulePct));
@@ -43,10 +44,13 @@ export function ProgressRings({
   const quizBelow =
     quizLabelPlacement === "below" && quizClamped != null;
 
+  /** Small rings: keep only numbers inside the donut; label reads cleaner underneath. */
+  const moduleLabelBelow = size === "sm";
+
   const centerPctClass =
     size === "lg"
       ? "text-2xl"
-      : quizBelow
+      : quizBelow || moduleLabelBelow
         ? "text-xl"
         : quizClamped != null
           ? "text-[1.0625rem]"
@@ -54,13 +58,13 @@ export function ProgressRings({
 
   /** Flex centering sits visually high on numeric + caption stacks; nudge toward donut hole center. */
   const centerAnchorClass =
-    !quizBelow && quizClamped != null
+    !quizBelow && quizClamped != null && !moduleLabelBelow
       ? size === "lg"
         ? "left-1/2 top-[calc(50%+0.28rem)] -translate-x-1/2 -translate-y-1/2"
         : "left-1/2 top-[calc(50%+0.35rem)] -translate-x-1/2 -translate-y-1/2"
       : size === "lg"
         ? "left-1/2 top-[calc(50%+0.14rem)] -translate-x-1/2 -translate-y-1/2"
-        : "left-1/2 top-[calc(50%+0.22rem)] -translate-x-1/2 -translate-y-1/2";
+        : "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2";
 
   const ringsInner = (
     <>
@@ -147,16 +151,18 @@ export function ProgressRings({
         />
       </svg>
       <div
-        className={`pointer-events-none absolute flex flex-col items-center px-1 text-center ${centerAnchorClass}`}
+        className={`pointer-events-none absolute z-10 flex max-w-[min(100%,5.5rem)] flex-col items-center px-1 text-center ${centerAnchorClass}`}
       >
         <span
           className={`block font-bold tabular-nums leading-none text-brand-ink dark:text-white ${centerPctClass}`}
         >
           {modClamped}%
         </span>
-        <span className="mt-0.5 block text-[10px] font-medium uppercase leading-none tracking-wide text-brand-muted dark:text-brand-soft">
-          modules
-        </span>
+        {!moduleLabelBelow ? (
+          <span className="mt-0.5 block text-[10px] font-medium uppercase leading-none tracking-wide text-brand-muted dark:text-brand-soft">
+            modules
+          </span>
+        ) : null}
         {!quizBelow && quizClamped != null ? (
           <span
             className={`mt-1.5 tabular-nums font-semibold leading-none text-brand-ink/90 dark:text-brand-soft ${size === "lg" ? "text-[11px]" : "text-[10px]"}`}
@@ -169,11 +175,15 @@ export function ProgressRings({
   );
 
   return (
-    <div
-      className={`relative shrink-0 ${className}`}
-      style={{ width: dim, height: dim }}
-    >
-      {ringsInner}
+    <div className={`flex shrink-0 flex-col items-center ${className}`}>
+      <div className="relative" style={{ width: dim, height: dim }}>
+        {ringsInner}
+      </div>
+      {moduleLabelBelow ? (
+        <p className="mt-1.5 text-center text-[10px] font-semibold uppercase leading-none tracking-wide text-zinc-500 dark:text-zinc-400">
+          Modules
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -36,14 +36,14 @@ function SweepBar({
         </span>
       </div>
       <div
-        className="mt-2 h-4 overflow-hidden rounded-full border border-zinc-200/80 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800/90"
+        className="mt-2 h-3.5 overflow-hidden rounded-full border border-zinc-200/90 bg-zinc-100/90 shadow-inner shadow-zinc-900/5 dark:border-zinc-600 dark:bg-zinc-800/80 dark:shadow-black/20"
         role="progressbar"
         aria-valuenow={Math.round(w)}
         aria-valuemin={0}
         aria-valuemax={100}
       >
         <div
-          className={`h-full rounded-full transition-[width] duration-[1200ms] cubic-bezier(0.22,0.82,0.28,1) ${
+          className={`h-full rounded-full shadow-sm ring-1 ring-black/5 transition-[width] duration-[1200ms] cubic-bezier(0.22,0.82,0.28,1) dark:ring-white/10 ${
             variant === "modules"
               ? "bg-gradient-to-r from-brand to-brand-hover"
               : "bg-gradient-to-r from-red-400 via-brand to-brand-hover"

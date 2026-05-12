@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { parseSafeInternalNext } from "@/lib/internal-next-path";
 import {
   emailMatchesAllowedDomains,
+  isAuthEmailDomainAllowlistEnforced,
   parseAllowedAuthEmailDomains,
 } from "@/lib/school-email-policy";
 
@@ -41,7 +42,9 @@ export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const fullPath = `${pathname}${request.nextUrl.search}`;
 
-  const allowedDomains = parseAllowedAuthEmailDomains();
+  const allowedDomains = isAuthEmailDomainAllowlistEnforced()
+    ? parseAllowedAuthEmailDomains()
+    : [];
   const authPublicRoutes =
     pathname.startsWith("/login") ||
     pathname.startsWith("/signup") ||
