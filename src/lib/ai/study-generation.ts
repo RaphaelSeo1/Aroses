@@ -22,7 +22,9 @@ export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
  *
  * **Default `express`**: Haiku, tight caps — targets **~2–5 minutes** for a typical lecture PDF
  * (network + model latency vary; huge decks may exceed). Use `COURSE_BUILD_PROFILE=fast`,
- * `balanced`, or `full` for richer, slower output. `ANTHROPIC_COURSE_MODEL` overrides models.
+ * `balanced`, or `full` for richer, slower output. `balanced` defaults are tuned to stay a bit
+ * richer than `fast` without the old “~2× wall-clock” gap (see module/outline retries and caps).
+ * `ANTHROPIC_COURSE_MODEL` overrides models.
  */
 type CourseBuildProfile = "express" | "fast" | "balanced" | "full";
 
@@ -88,7 +90,7 @@ function resolveOutlineModel(profile: CourseBuildProfile): string {
 const MAX_MATERIAL_CHARS = 120_000;
 /** Aggressively small for `fast` so outline/module calls stay quick. */
 const FAST_MATERIAL_CHARS = 40_000;
-/** `balanced`: bounded for ~5–15 min class builds on Haiku. */
+/** `balanced`: default input budget; override with `COURSE_BALANCED_MATERIAL_CHARS`. */
 const BALANCED_MATERIAL_CHARS = 36_000;
 
 function materialCharLimit(profile: CourseBuildProfile): number {
@@ -207,7 +209,7 @@ QUIZ (critical): Each module needs a practical practice set — **at least 4 que
     quizFooter =
       "Include enough quiz objects per module to meet the minimums above. Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
   } else if (profile === "balanced") {
-    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 4), 2, 8);
+    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 6);
     sizeRules = `Rules for output size (important): use at least 2 modules and at most ${maxBalMods} unless the source is extremely short. Keep each lesson "content" clear; aim under roughly 500 words per lesson. Every module must include at least one lesson.
 
 QUIZ (critical): Each module needs **at least 4 questions per module**, with **at least 1** type free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
@@ -498,7 +500,7 @@ function outlineMaxTokens(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_OUTLINE_MAX_TOKENS", 4096), 1024, 8192);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_OUTLINE_MAX_TOKENS", 5120), 4096, 8192);
+    return clampInt(envInt("COURSE_BALANCED_OUTLINE_MAX_TOKENS", 4096), 4096, 8192);
   }
   return clampInt(envInt("COURSE_FULL_OUTLINE_MAX_TOKENS", 10_240), 4096, 16_384);
 }
@@ -518,9 +520,9 @@ function outlineInstruction(
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
     maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 6);
   } else if (profile === "balanced") {
-    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 4), 2, 6);
+    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 6);
     moduleCount = `Use **2 to ${maxModules}** modules. Prefer a compact plan that still covers the excerpt.`;
-    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 4), 2, 8);
+    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 6), 2, 8);
   } else {
     moduleCount =
       "Use **2 to 8** modules depending on how much content the source has.";
@@ -637,12 +639,7 @@ ${brokenAssistantText.slice(0, 60_000)}`;
       messages: [{ role: "user", content: prompt }],
     },
     {
-      maxAttempts:
-        profile === "express" || profile === "fast"
-          ? 1
-          : profile === "balanced"
-            ? 2
-            : 3,
+      maxAttempts: profile === "full" ? 3 : 1,
     }
   );
 
@@ -681,7 +678,7 @@ ${brokenAssistantText.slice(0, 100_000)}`;
       : profile === "fast"
         ? 8192
         : profile === "balanced"
-          ? 12_288
+          ? 10_240
           : 24_576;
 
   const msg = await createMessageWithRetries(
@@ -692,7 +689,12 @@ ${brokenAssistantText.slice(0, 100_000)}`;
       temperature: 0.1,
       messages: [{ role: "user", content: prompt }],
     },
-    { maxAttempts: profile === "express" || profile === "fast" ? 2 : 3 }
+    {
+      maxAttempts:
+        profile === "express" || profile === "fast" || profile === "balanced"
+          ? 2
+          : 3,
+    }
   );
 
   const text = extractTextBlock(msg);
@@ -737,7 +739,7 @@ ${clipped}`;
       : profile === "fast"
         ? 8192
         : profile === "balanced"
-          ? 10_240
+          ? 8192
           : 18_432;
 
   const msg = await createMessageWithRetries(
@@ -748,7 +750,10 @@ ${clipped}`;
       temperature: 0.15,
       messages: [{ role: "user", content: prompt }],
     },
-    { maxAttempts: profile === "fast" ? 2 : 3 }
+    {
+      maxAttempts:
+        profile === "fast" || profile === "balanced" ? 2 : 3,
+    }
   );
 
   const text = extractTextBlock(msg);
@@ -798,11 +803,9 @@ export async function generateCourseOutlineFromMaterial(
   const instruction = outlineInstruction(trimmed, profile);
 
   const maxAttempts =
-    profile === "express" || profile === "fast"
+    profile === "express" || profile === "fast" || profile === "balanced"
       ? 1
-      : profile === "balanced"
-        ? 2
-        : 4;
+      : 4;
 
   const rawText = await invokeUserMessageForPdfText(
     anthropic,
@@ -838,7 +841,7 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 6144), 2048, 12_288);
   }
   if (profile === "full") return 30_720;
-  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 10_240), 8192, 24_576);
+  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 8192), 6144, 24_576);
 }
 
 /** Expand one module for chunked PDF ingest (separate server invocation). */
@@ -870,7 +873,7 @@ export async function generateCourseModuleFromMaterial(
     profile === "express" || profile === "fast"
       ? 1
       : profile === "balanced"
-        ? 3
+        ? 2
         : 5;
 
   const rawText = await invokeUserMessageForPdfText(

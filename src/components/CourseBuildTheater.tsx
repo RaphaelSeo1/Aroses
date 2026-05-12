@@ -24,6 +24,15 @@ type RowState = {
 
 type PollOutcome = { materialId?: string; error?: string };
 
+function formatIsoLocal(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toLocaleString(undefined, {
+    dateStyle: "short",
+    timeStyle: "medium",
+  });
+}
+
 function PdfJobPoll({
   jobId,
   nonce,
@@ -87,6 +96,9 @@ export function CourseBuildTheater({
   const [moduleIdx, setModuleIdx] = useState(0);
   const [retryBusy, setRetryBusy] = useState(false);
   const [retryErr, setRetryErr] = useState<string | null>(null);
+  const [restartAckByJob, setRestartAckByJob] = useState<Record<string, string>>(
+    {}
+  );
 
   const courseHome = `/dashboard/courses/${courseId}`;
   const courseHomeWithSection =
@@ -141,6 +153,7 @@ export function CourseBuildTheater({
     setPhase("boot");
     setSummary(null);
     setRetryErr(null);
+    setRestartAckByJob({});
   }, [jobIds.join(",")]);
 
   useEffect(() => {
@@ -283,6 +296,20 @@ export function CourseBuildTheater({
         setRetryErr(msg);
         return;
       }
+      try {
+        const okBody = JSON.parse(raw) as { ok?: boolean; restartedAt?: string };
+        if (okBody.ok === true && typeof okBody.restartedAt === "string") {
+          const ts = okBody.restartedAt;
+          setRestartAckByJob((p) => ({ ...p, [id]: ts }));
+        }
+      } catch {
+        /* ignore */
+      }
+      const hintedTotal = previewByJob[id]?.modules?.length ?? 0;
+      const restartLine =
+        hintedTotal > 0
+          ? `Build restarted — next: module 1 of ${hintedTotal} (this count is from your last preview; the new outline can change it).`
+          : "Build restarted — starting again from step 1 (extract → outline → modules)…";
       setPreviewByJob((p) => ({ ...p, [id]: null }));
       setTerminalByJob((p) => ({ ...p, [id]: null }));
       setRestartNonce((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
@@ -290,7 +317,7 @@ export function CourseBuildTheater({
         ...p,
         [id]: {
           ...(p[id] ?? { label: "PDF", line: "", bar: "indeterminate" as const }),
-          line: "Restarting build from your uploaded PDF…",
+          line: restartLine,
           bar: "indeterminate",
           error: undefined,
           materialId: undefined,
@@ -395,6 +422,15 @@ export function CourseBuildTheater({
               {retryErr ? (
                 <p className="mt-2 text-xs text-red-600 dark:text-red-400">
                   {retryErr}
+                </p>
+              ) : null}
+              {restartAckByJob[activeJob] ? (
+                <p className="mt-2 text-xs text-emerald-800 dark:text-emerald-300/90">
+                  Server reset this build at{" "}
+                  {formatIsoLocal(restartAckByJob[activeJob]!)}. The status line above
+                  should show module 1 of N right after a restart when a preview existed;
+                  it then follows the server again (if the new outline still has two
+                  modules, you will see module 2 of 2 again—that is the new run).
                 </p>
               ) : null}
               <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">

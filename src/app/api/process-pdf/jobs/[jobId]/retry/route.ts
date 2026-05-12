@@ -107,6 +107,8 @@ export async function POST(_request: Request, ctx: Params) {
     );
   }
 
+  const restartedAt = new Date().toISOString();
+
   const { error: upErr } = await admin
     .from("pdf_ingest_jobs")
     .update({
@@ -117,7 +119,7 @@ export async function POST(_request: Request, ctx: Params) {
       ingest_outline: null,
       ingest_modules: [],
       stream_preview: null,
-      updated_at: new Date().toISOString(),
+      updated_at: restartedAt,
     })
     .eq("id", jobId)
     .eq("user_id", user.id);
@@ -147,5 +149,5 @@ export async function POST(_request: Request, ctx: Params) {
     );
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true as const, restartedAt });
 }
