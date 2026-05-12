@@ -6,4 +6,6 @@ export type UserProfileRow = {
   avatar_url: string | null;
   /** student | instructor | professional | hobby | other */
   study_focus: string | null;
+  /** University or school from onboarding / settings. */
+  school_name: string | null;
 };

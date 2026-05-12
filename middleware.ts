@@ -7,6 +7,7 @@ import {
   isAuthEmailDomainAllowlistEnforced,
   parseAllowedAuthEmailDomains,
 } from "@/lib/school-email-policy";
+import { profileNeedsOnboarding } from "@/lib/onboarding-gate";
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -41,6 +42,31 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
+
+  function pathAllowedDuringOnboarding(p: string) {
+    return (
+      p === "/onboarding" ||
+      p.startsWith("/onboarding/") ||
+      p.startsWith("/auth/") ||
+      p.startsWith("/api/") ||
+      p.startsWith("/legal/")
+    );
+  }
+
+  const needsOnboarding = user?.id
+    ? await profileNeedsOnboarding(supabase, user.id)
+    : false;
+
+  if (user && needsOnboarding && !pathAllowedDuringOnboarding(pathname)) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/onboarding";
+    url.search = "";
+    const redirectResponse = NextResponse.redirect(url);
+    supabaseResponse.cookies.getAll().forEach((c) => {
+      redirectResponse.cookies.set(c.name, c.value);
+    });
+    return redirectResponse;
+  }
   const fullPath = `${pathname}${request.nextUrl.search}`;
 
   const allowedDomains = isAuthEmailDomainAllowlistEnforced()
@@ -96,7 +122,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (user && (pathname === "/login" || pathname === "/signup")) {
+  if (user && !needsOnboarding && (pathname === "/login" || pathname === "/signup")) {
     const next = parseSafeInternalNext(
       request.nextUrl.searchParams.get("next")
     );

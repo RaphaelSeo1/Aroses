@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { PostgrestError } from "@supabase/supabase-js";
 import {
   isAvatarUrlColumnError,
+  isSchoolNameColumnError,
   isStudyFocusColumnError,
 } from "@/lib/profile-db-errors";
 import { createClient } from "@/lib/supabase/server";
@@ -10,6 +11,7 @@ const DISPLAY_MAX = 120;
 const BIO_MAX = 500;
 const TZ_MAX = 100;
 const AVATAR_URL_MAX = 2048;
+const SCHOOL_NAME_MAX = 200;
 const STUDY_FOCUS_ALLOWED = new Set([
   "",
   "student",
@@ -113,6 +115,7 @@ export async function PATCH(request: Request) {
     timezone: string | null;
     study_focus?: string | null;
     avatar_url?: string | null;
+    school_name?: string | null;
   };
 
   let prev: PrevRow | null = null;
@@ -213,6 +216,19 @@ export async function PATCH(request: Request) {
     avatarUrl = parsed.value;
   }
 
+  let schoolName = prev?.school_name ?? null;
+  if (Object.prototype.hasOwnProperty.call(b, "school_name")) {
+    const raw = b.school_name;
+    if (raw !== null && typeof raw !== "string") {
+      return NextResponse.json(
+        { error: "school_name must be a string." },
+        { status: 400 }
+      );
+    }
+    const t = typeof raw === "string" ? raw.trim() : "";
+    schoolName = t.length === 0 ? null : t.slice(0, SCHOOL_NAME_MAX);
+  }
+
   let row: Record<string, unknown> = {
     id: user.id,
     display_name: displayName,
@@ -221,9 +237,10 @@ export async function PATCH(request: Request) {
     timezone,
     study_focus: studyFocus,
     avatar_url: avatarUrl,
+    school_name: schoolName,
   };
 
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 6; i++) {
     const { error } = await supabase
       .from("profiles")
       .upsert(row, { onConflict: "id" });
@@ -237,6 +254,11 @@ export async function PATCH(request: Request) {
     }
     if (isAvatarUrlColumnError(error.message) && "avatar_url" in row) {
       const { avatar_url: _av, ...next } = row;
+      row = next;
+      continue;
+    }
+    if (isSchoolNameColumnError(error.message) && "school_name" in row) {
+      const { school_name: _sn, ...next } = row;
       row = next;
       continue;
     }

@@ -189,6 +189,7 @@ export function ProfileSettingsForm({
   );
   const [bio, setBio] = useState(initial?.bio ?? "");
   const [studyFocus, setStudyFocus] = useState(initial?.study_focus ?? "");
+  const [schoolName, setSchoolName] = useState(initial?.school_name ?? "");
   const [avatarUrl, setAvatarUrl] = useState(initial?.avatar_url ?? null);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -201,6 +202,11 @@ export function ProfileSettingsForm({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional prop → state sync
     setAvatarUrl(initial?.avatar_url ?? null);
   }, [initial?.avatar_url]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional prop → state sync
+    setSchoolName(initial?.school_name ?? "");
+  }, [initial?.school_name]);
 
   const avatarLetter = useMemo(() => {
     const n = displayName.trim();
@@ -221,6 +227,7 @@ export function ProfileSettingsForm({
           birthday: birthday.trim() || null,
           bio,
           study_focus: studyFocus,
+          school_name: schoolName.trim() || null,
         }),
       });
       const j = await res.json().catch(() => ({}));
@@ -237,7 +244,7 @@ export function ProfileSettingsForm({
     } finally {
       setBusy(false);
     }
-  }, [bio, birthday, displayName, router, studyFocus]);
+  }, [bio, birthday, displayName, router, schoolName, studyFocus]);
 
   const persistAvatarUrl = useCallback(
     async (nextUrl: string | null) => {
@@ -485,6 +492,22 @@ export function ProfileSettingsForm({
                   </SettingsRow>
 
                   <SettingsRow
+                    label="School"
+                    hint="Where you study or teach. Shown here if you added it during onboarding — you can change it anytime."
+                  >
+                    <input
+                      id="school_name"
+                      type="text"
+                      autoComplete="organization"
+                      maxLength={200}
+                      value={schoolName}
+                      onChange={(e) => setSchoolName(e.target.value)}
+                      placeholder="e.g. State University"
+                      className={FIELD}
+                    />
+                  </SettingsRow>
+
+                  <SettingsRow
                     label="Study goals & notes"
                     hint="Context we can use for summaries and study chat — keep it short."
                     alignTop
@@ -535,7 +558,7 @@ export function ProfileSettingsForm({
                   ) : (
                     <p className="text-xs leading-relaxed text-zinc-400 dark:text-zinc-500">
                       Theme applies immediately on this device. Name, birthday,
-                      study focus, and notes update when you tap Save changes.
+                      school, study focus, and notes update when you tap Save changes.
                       Your avatar saves when you choose a photo.
                     </p>
                   )}

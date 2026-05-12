@@ -41,6 +41,7 @@ html.dark {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: Georgia, "Times New Roman", ui-serif, serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
   --color-brand: #dc2626;
@@ -276,5 +277,26 @@ html.dark .bg-app-gradient {
     animation: none;
     transform: translateX(0);
     opacity: 0.55;
+  }
+}
+
+@keyframes onboardingFade {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-onboarding-step {
+  animation: onboardingFade 0.38s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-onboarding-step {
+    animation: none;
   }
 }

@@ -52,6 +52,7 @@ export default async function ProfilePage({ searchParams }: PageProps) {
     bio: string | null;
     study_focus?: string | null;
     avatar_url?: string | null;
+    school_name?: string | null;
   };
 
   const profileRow = selProfiles.data as ProfileFields | null;
@@ -68,6 +69,7 @@ export default async function ProfilePage({ searchParams }: PageProps) {
       bio: profileRow.bio,
       avatar_url: profileRow.avatar_url ?? null,
       study_focus: profileRow.study_focus ?? null,
+      school_name: profileRow.school_name ?? null,
     };
   }
 
