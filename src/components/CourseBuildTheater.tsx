@@ -11,6 +11,7 @@ import { TypewriterText } from "@/components/TypewriterText";
 import {
   pollPdfIngestJob,
   type PdfBuildProgressUI,
+  type PollPdfIngestJobSnapshot,
 } from "@/lib/pdf-ingest-client";
 import type { CoursePayload } from "@/types/course";
 
@@ -23,6 +24,53 @@ type RowState = {
 };
 
 type PollOutcome = { materialId?: string; error?: string };
+
+function tabStatusLine(
+  terminal: PollOutcome | null | undefined,
+  preview: CoursePayload | null | undefined,
+  snap: PollPdfIngestJobSnapshot | undefined,
+  phase: "boot" | "running" | "done"
+): { line: string; detail: string } {
+  if (terminal?.error) {
+    return { line: "Failed", detail: terminal.error };
+  }
+  if (terminal?.materialId) {
+    return { line: "Done", detail: "Open in study editor from the course list." };
+  }
+  if (preview) {
+    return {
+      line: "Live preview",
+      detail:
+        "Outline is visible; lessons fill in as each module finishes (order can differ from other PDFs in this batch).",
+    };
+  }
+  if (snap?.outlineReady) {
+    return {
+      line: "Writing modules…",
+      detail: "Outline is saved; the page layout appears when the first module body is ready.",
+    };
+  }
+  if (snap?.status === "pending") {
+    return {
+      line: "Queued…",
+      detail: "This build starts shortly after upload (multi-PDF batches are staggered on purpose).",
+    };
+  }
+  if (phase === "boot") {
+    return { line: "Starting…", detail: "Loading file names and job state." };
+  }
+  if (snap) {
+    return {
+      line: "Extracting…",
+      detail:
+        "Step 1/2: reading PDF text. Large slide decks can take several minutes before a preview — other PDFs may show a layout first.",
+    };
+  }
+  return {
+    line: "Syncing…",
+    detail: "Waiting for the first status update from the server.",
+  };
+}
 
 function formatIsoLocal(iso: string): string {
   const t = Date.parse(iso);
@@ -38,12 +86,14 @@ function PdfJobPoll({
   nonce,
   onProgress,
   onPreview,
+  onJobSnapshot,
   onDone,
 }: {
   jobId: string;
   nonce: number;
   onProgress: (id: string, info: PdfBuildProgressUI) => void;
   onPreview: (id: string, course: CoursePayload | null) => void;
+  onJobSnapshot: (id: string, snap: PollPdfIngestJobSnapshot) => void;
   onDone: (id: string, result: PollOutcome) => void;
 }) {
   useEffect(() => {
@@ -59,12 +109,15 @@ function PdfJobPoll({
           onPreviewCourse: (course) => {
             if (!ac.signal.aborted) onPreview(jobId, course);
           },
+          onJobSnapshot: (snap) => {
+            if (!ac.signal.aborted) onJobSnapshot(jobId, snap);
+          },
         }
       );
       if (!ac.signal.aborted) onDone(jobId, polled);
     })();
     return () => ac.abort();
-  }, [jobId, nonce, onProgress, onPreview, onDone]);
+  }, [jobId, nonce, onProgress, onPreview, onJobSnapshot, onDone]);
   return null;
 }
 
@@ -99,6 +152,9 @@ export function CourseBuildTheater({
   const [restartAckByJob, setRestartAckByJob] = useState<Record<string, string>>(
     {}
   );
+  const [snapshotByJob, setSnapshotByJob] = useState<
+    Record<string, PollPdfIngestJobSnapshot>
+  >({});
 
   const courseHome = `/dashboard/courses/${courseId}`;
   const courseHomeWithSection =
@@ -142,6 +198,13 @@ export function CourseBuildTheater({
     setPreviewByJob((prev) => ({ ...prev, [id]: course }));
   }, []);
 
+  const onJobSnapshot = useCallback(
+    (id: string, snap: PollPdfIngestJobSnapshot) => {
+      setSnapshotByJob((prev) => ({ ...prev, [id]: snap }));
+    },
+    []
+  );
+
   const onDone = useCallback((id: string, result: PollOutcome) => {
     setTerminalByJob((prev) => ({ ...prev, [id]: result }));
   }, []);
@@ -154,6 +217,7 @@ export function CourseBuildTheater({
     setSummary(null);
     setRetryErr(null);
     setRestartAckByJob({});
+    setSnapshotByJob({});
   }, [jobIds.join(",")]);
 
   useEffect(() => {
@@ -310,6 +374,11 @@ export function CourseBuildTheater({
         hintedTotal > 0
           ? `Build restarted — next: module 1 of ${hintedTotal} (this count is from your last preview; the new outline can change it).`
           : "Build restarted — starting again from step 1 (extract → outline → modules)…";
+      setSnapshotByJob((p) => {
+        const next = { ...p };
+        delete next[id];
+        return next;
+      });
       setPreviewByJob((p) => ({ ...p, [id]: null }));
       setTerminalByJob((p) => ({ ...p, [id]: null }));
       setRestartNonce((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
@@ -352,6 +421,7 @@ export function CourseBuildTheater({
               nonce={restartNonce[id] ?? 0}
               onProgress={onProgress}
               onPreview={onPreview}
+              onJobSnapshot={onJobSnapshot}
               onDone={onDone}
             />
           ))
@@ -375,25 +445,66 @@ export function CourseBuildTheater({
           <AiStudyDisclaimer className="mb-6" />
 
           {jobIds.length > 1 ? (
-            <div className="mb-6 flex flex-wrap gap-2 border-b border-zinc-100 pb-4 dark:border-zinc-800">
-              {jobIds.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => {
-                    setActiveJob(id);
-                    setModuleIdx(0);
-                    setRetryErr(null);
-                  }}
-                  className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
-                    id === activeJob
-                      ? "bg-brand text-white dark:bg-brand"
-                      : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-                  }`}
-                >
-                  {rows[id]?.label ?? "PDF"}
-                </button>
-              ))}
+            <div className="mb-6 space-y-2 border-b border-zinc-100 pb-4 dark:border-zinc-800">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Tabs stay in the order you uploaded. Each PDF finishes extraction on its
+                own schedule, so previews can appear in a different order than the
+                list — use the
+                status under each name to see which step each file is on.
+              </p>
+              <div className="flex flex-wrap gap-2" role="tablist" aria-label="PDF builds">
+                {jobIds.map((id, idx) => {
+                  const { line, detail } = tabStatusLine(
+                    terminalByJob[id],
+                    previewByJob[id] ?? null,
+                    snapshotByJob[id],
+                    phase
+                  );
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      title={detail}
+                      aria-selected={id === activeJob}
+                      onClick={() => {
+                        setActiveJob(id);
+                        setModuleIdx(0);
+                        setRetryErr(null);
+                      }}
+                      className={`flex max-w-[min(100%,18rem)] flex-col items-start gap-0.5 rounded-2xl border px-3 py-2 text-left text-xs font-semibold transition ${
+                        id === activeJob
+                          ? "border-brand bg-brand text-white dark:border-brand dark:bg-brand"
+                          : "border-zinc-200 bg-zinc-100 text-zinc-800 hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                      }`}
+                    >
+                      <span className="w-full truncate">
+                        <span
+                          className={
+                            id === activeJob
+                              ? "text-white/80"
+                              : "text-zinc-500 dark:text-zinc-400"
+                          }
+                        >
+                          {idx + 1}/{jobIds.length}
+                        </span>{" "}
+                        <span className="font-semibold">
+                          {rows[id]?.label ?? "PDF"}
+                        </span>
+                      </span>
+                      <span
+                        className={
+                          id === activeJob
+                            ? "text-[11px] font-medium text-white/90"
+                            : "text-[11px] font-medium text-zinc-600 dark:text-zinc-300"
+                        }
+                      >
+                        {line}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           ) : null}
 
@@ -454,12 +565,24 @@ export function CourseBuildTheater({
           {!preview ? (
             <div className="flex min-h-[40vh] flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 px-6 py-16 text-center dark:border-zinc-800 dark:bg-zinc-900/20">
               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                Blank page — your course will fill in here as soon as the outline
-                is ready.
+                {jobIds.length > 1
+                  ? `No live layout yet for “${row?.label ?? "this PDF"}”.`
+                  : "Blank page — your course will fill in here as soon as the outline is ready."}
               </p>
               <p className="mt-2 max-w-md text-xs text-zinc-500 dark:text-zinc-400">
-                Titles, lessons, key terms, and examples appear in the same layout
-                as study mode, updated as each part finishes generating.
+                {jobIds.length > 1 ? (
+                  <>
+                    Extraction and outline work complete in parallel across your
+                    uploads, so another tab can show a preview while this file is
+                    still reading pages. The status line above matches this PDF only;
+                    switch tabs to watch others.
+                  </>
+                ) : (
+                  <>
+                    Titles, lessons, key terms, and examples appear in the same layout
+                    as study mode, updated as each part finishes generating.
+                  </>
+                )}
               </p>
             </div>
           ) : (

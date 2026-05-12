@@ -20,6 +20,10 @@ import { buildQuizSessionItems } from "@/lib/quiz-session";
 import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
 import { PracticeProgressPullTab } from "@/components/PracticeProgressPullTab";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
+import {
+  AROSES_COURSE_REFINED_EVENT,
+  type ArosesCourseRefinedDetail,
+} from "@/lib/refine-course-events";
 import type {
   CourseModule,
   CoursePayload,
@@ -80,13 +84,13 @@ function buildStudySearchParams(
 }
 
 function pickInitialModuleId(
-  course: CoursePayload,
+  payload: CoursePayload,
   urlModule?: number
 ): number {
-  const first = course.modules[0]?.id ?? 1;
+  const first = payload.modules[0]?.id ?? 1;
   if (
     urlModule != null &&
-    course.modules.some((m) => m.id === urlModule)
+    payload.modules.some((m) => m.id === urlModule)
   ) {
     return urlModule;
   }
@@ -164,6 +168,41 @@ export function CoursePlayer({
   const [progressPanelOpen, setProgressPanelOpen] = useState(false);
   const [personalBankEpoch, setPersonalBankEpoch] = useState(0);
   const [focusItemCount, setFocusItemCount] = useState(0);
+  const [refineApplyFlash, setRefineApplyFlash] = useState(false);
+  const refineClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+
+  useEffect(() => {
+    setRefineApplyFlash(false);
+    if (refineClearTimerRef.current) {
+      clearTimeout(refineClearTimerRef.current);
+      refineClearTimerRef.current = null;
+    }
+  }, [materialId]);
+
+  useEffect(() => {
+    function onRefined(ev: Event) {
+      const d = (ev as CustomEvent<ArosesCourseRefinedDetail>).detail;
+      if (!d || d.materialId !== materialId) return;
+      setRefineApplyFlash(true);
+      router.refresh();
+      if (refineClearTimerRef.current) clearTimeout(refineClearTimerRef.current);
+      refineClearTimerRef.current = setTimeout(() => {
+        setRefineApplyFlash(false);
+        refineClearTimerRef.current = null;
+      }, 2200);
+    }
+    window.addEventListener(AROSES_COURSE_REFINED_EVENT, onRefined);
+    return () => {
+      window.removeEventListener(AROSES_COURSE_REFINED_EVENT, onRefined);
+      if (refineClearTimerRef.current) {
+        clearTimeout(refineClearTimerRef.current);
+        refineClearTimerRef.current = null;
+      }
+    };
+  }, [materialId, router]);
+
   const bumpPersonalBank = useCallback(() => {
     setPersonalBankEpoch((n) => n + 1);
   }, []);
@@ -689,6 +728,24 @@ export function CoursePlayer({
 
   return (
     <>
+      {refineApplyFlash && courseManageEnabled ? (
+        <div className="border-b border-zinc-200 bg-zinc-50/95 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/80">
+          <div className="mx-auto max-w-3xl">
+            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              Updating study content
+            </p>
+            <p className="mt-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+              Merging your edits into this page…
+            </p>
+            <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+              <div
+                className="absolute inset-y-0 w-[28%] rounded-full bg-brand/90 dark:bg-brand-soft animate-course-upload-indeterminate"
+                aria-hidden
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     <div className="flex min-h-[calc(100vh-3.5rem)] flex-col lg:flex-row">
       <aside className="border-b border-zinc-200/90 bg-gradient-to-b from-zinc-50 to-white lg:w-[22rem] lg:shrink-0 lg:border-r lg:border-b-0 dark:border-zinc-800 dark:from-zinc-950 dark:to-zinc-950">
         <div className="sticky top-16 space-y-6 p-6 lg:top-0 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto">

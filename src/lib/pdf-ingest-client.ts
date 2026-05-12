@@ -30,12 +30,22 @@ function jobStartedAtMs(createdAt?: string): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+/** Latest server row fields from `GET /jobs/:id` (each poll). Use for multi-PDF UI so tab order stays upload order while previews land in completion order. */
+export type PollPdfIngestJobSnapshot = {
+  status: string;
+  outlineReady: boolean;
+  modulesBuilt?: number;
+  modulesTotal?: number;
+};
+
 export type PollPdfIngestOptions = {
   signal?: AbortSignal;
   /** Latest Claude output tail while the model streams (outline / module JSON). */
   onStreamPreview?: (text: string | null) => void;
   /** Merged course preview (outline + partial modules) for the study-style live UI. */
   onPreviewCourse?: (course: CoursePayload | null) => void;
+  /** Fires after every successful job GET parse (status, outline gate, module counts). */
+  onJobSnapshot?: (snapshot: PollPdfIngestJobSnapshot) => void;
 };
 
 /** Poll after `POST /api/process-pdf` returns `202` + `jobId` (chunked pipeline). */
@@ -72,6 +82,17 @@ export async function pollPdfIngestJob(
       await sleep(2000);
       continue;
     }
+
+    const snapStatus = typeof data.status === "string" ? data.status : "unknown";
+    options?.onJobSnapshot?.({
+      status: snapStatus,
+      outlineReady: Boolean(data.outlineReady),
+      modulesBuilt:
+        typeof data.modulesBuilt === "number" ? data.modulesBuilt : undefined,
+      modulesTotal:
+        typeof data.modulesTotal === "number" ? data.modulesTotal : undefined,
+    });
+
     if (!r.ok) {
       if (typeof data.error === "string" && data.error.trim()) {
         return { error: data.error.trim() };
@@ -105,23 +126,31 @@ export async function pollPdfIngestJob(
       return { error: data.error ?? "PDF build failed." };
     }
 
-    if (
+    // Drive `POST /expand`: (a) next module when built < total, (b) finalize-only when
+    // built === total but job is still `running` (server saves all modules then finalizes;
+    // if the client never got the completion response from the last module expand, or
+    // finalize lagged, GET can sit at N/N + running — without another expand the UI
+    // would spin on "Writing module N of N" forever).
+    const built = data.modulesBuilt;
+    const total = data.modulesTotal;
+    const inModulePhase =
       data.status === "running" &&
       data.outlineReady &&
-      typeof data.modulesBuilt === "number" &&
-      typeof data.modulesTotal === "number" &&
-      data.modulesTotal > 0 &&
-      data.modulesBuilt < data.modulesTotal
-    ) {
-      const next = data.modulesBuilt + 1;
+      typeof built === "number" &&
+      typeof total === "number" &&
+      total > 0 &&
+      built <= total;
+
+    if (inModulePhase && built < total) {
+      const next = built + 1;
       const started = jobStartedAtMs(data.createdAt);
       const elapsedPart =
         started != null
           ? ` · ${formatElapsedShort(Date.now() - started)}`
           : "";
       onProgress?.({
-        line: `Writing module ${next} of ${data.modulesTotal}${elapsedPart}…`,
-        bar: Math.min(100, ((next - 0.5) / data.modulesTotal) * 100),
+        line: `Writing module ${next} of ${total}${elapsedPart}…`,
+        bar: Math.min(100, ((next - 0.5) / total) * 100),
       });
       let exp: Response;
       try {
@@ -180,6 +209,58 @@ export async function pollPdfIngestJob(
             (expJson.modulesBuilt / expJson.modulesTotal) * 100
           ),
         });
+      }
+      continue;
+    }
+
+    if (inModulePhase && built === total) {
+      const started = jobStartedAtMs(data.createdAt);
+      const elapsedPart =
+        started != null
+          ? ` · ${formatElapsedShort(Date.now() - started)}`
+          : "";
+      onProgress?.({
+        line: `Saving your study set (${total} module${total === 1 ? "" : "s"})…${elapsedPart}`,
+        bar: 100,
+      });
+      let exp: Response;
+      try {
+        exp = await fetch("/api/process-pdf/expand", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId }),
+          signal,
+        });
+      } catch {
+        if (signal?.aborted) return { error: "Cancelled." };
+        return {
+          error:
+            "Network error while saving the study set. Check your connection — the build may still finish; refresh the course page.",
+        };
+      }
+      const expRaw = await exp.text();
+      let expJson: {
+        error?: string;
+        complete?: boolean;
+        materialId?: string;
+        modulesBuilt?: number;
+        modulesTotal?: number;
+      };
+      try {
+        expJson = JSON.parse(expRaw) as typeof expJson;
+      } catch {
+        return { error: "Invalid response while saving the study set." };
+      }
+      if (!exp.ok) {
+        return {
+          error:
+            typeof expJson.error === "string" && expJson.error.trim()
+              ? expJson.error.trim()
+              : `Save step failed (${exp.status}).`,
+        };
+      }
+      if (expJson.complete === true && typeof expJson.materialId === "string") {
+        return { materialId: expJson.materialId };
       }
       continue;
     }

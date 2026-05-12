@@ -87,15 +87,7 @@ ${brokenAssistantText.slice(0, 140_000)}`;
   return parseCoursePayload(parsed);
 }
 
-export async function refineCourseWithInstruction(
-  current: CoursePayload,
-  instruction: string
-): Promise<CoursePayload> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing ANTHROPIC_API_KEY");
-  }
-
+function buildRefineUserPrompt(current: CoursePayload, instruction: string): string {
   const serialized = JSON.stringify(current);
   const capped =
     serialized.length > 170_000
@@ -103,7 +95,7 @@ export async function refineCourseWithInstruction(
         "\n…[truncated for model input; preserve structure and all modules in output]"
       : serialized;
 
-  const userPrompt = `You are revising a structured course JSON object that was generated from the student's uploaded materials.
+  return `You are revising a structured course JSON object that was generated from the student's uploaded materials.
 
 CURRENT_COURSE_JSON:
 ${capped}
@@ -134,22 +126,13 @@ Rules:
 - Preserve module ids when possible; renumber only if you split or merge modules (consecutive from 1).
 
 Output ONLY valid JSON. No markdown fences. No commentary before or after the JSON.`;
+}
 
-  const anthropic = new Anthropic({
-    apiKey,
-    timeout: 300_000,
-    maxRetries: 0,
-  });
-
-  const msg = await createMessageWithRetries(anthropic, {
-    model: MODEL,
-    max_tokens: REFINE_MAX_OUTPUT_TOKENS,
-    temperature: 0.15,
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  const rawText = extractTextBlock(msg);
-  const stopReason = (msg as { stop_reason?: string }).stop_reason;
+async function coursePayloadFromAssistantText(
+  anthropic: Anthropic,
+  rawText: string,
+  stopReason?: string
+): Promise<CoursePayload> {
   if (stopReason === "max_tokens") {
     console.warn("[refine-course] Claude hit max_tokens; attempting repair");
   }
@@ -175,4 +158,71 @@ Output ONLY valid JSON. No markdown fences. No commentary before or after the JS
       throw e;
     }
   }
+}
+
+export async function refineCourseWithInstruction(
+  current: CoursePayload,
+  instruction: string
+): Promise<CoursePayload> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing ANTHROPIC_API_KEY");
+  }
+
+  const anthropic = new Anthropic({
+    apiKey,
+    timeout: 300_000,
+    maxRetries: 0,
+  });
+
+  const userPrompt = buildRefineUserPrompt(current, instruction);
+
+  const msg = await createMessageWithRetries(anthropic, {
+    model: MODEL,
+    max_tokens: REFINE_MAX_OUTPUT_TOKENS,
+    temperature: 0.15,
+    messages: [{ role: "user", content: userPrompt }],
+  });
+
+  const rawText = extractTextBlock(msg);
+  const stopReason = (msg as { stop_reason?: string }).stop_reason;
+  return coursePayloadFromAssistantText(anthropic, rawText, stopReason);
+}
+
+/**
+ * Same model + prompt as {@link refineCourseWithInstruction}, but consumes a streaming
+ * response so the connection stays alive on long generations (no raw token UI required).
+ */
+export async function refineCourseWithInstructionStreaming(
+  current: CoursePayload,
+  instruction: string
+): Promise<CoursePayload> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing ANTHROPIC_API_KEY");
+  }
+
+  const anthropic = new Anthropic({
+    apiKey,
+    timeout: 300_000,
+    maxRetries: 0,
+  });
+
+  const userPrompt = buildRefineUserPrompt(current, instruction);
+
+  const stream = anthropic.messages.stream({
+    model: MODEL,
+    max_tokens: REFINE_MAX_OUTPUT_TOKENS,
+    temperature: 0.15,
+    messages: [{ role: "user", content: userPrompt }],
+  });
+
+  for await (const evt of stream) {
+    void evt;
+  }
+
+  const finalMessage = await stream.finalMessage();
+  const rawText = extractTextBlock(finalMessage);
+  const stopReason = (finalMessage as { stop_reason?: string }).stop_reason;
+  return coursePayloadFromAssistantText(anthropic, rawText, stopReason);
 }

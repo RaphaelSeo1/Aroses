@@ -3,6 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
+import {
+  AROSES_COURSE_REFINED_EVENT,
+  type ArosesCourseRefinedDetail,
+} from "@/lib/refine-course-events";
 
 const PRESETS = [
   "Remove tangents and stay tighter on the core topics from my slides.",
@@ -11,10 +15,45 @@ const PRESETS = [
   "Improve module titles and lesson flow so it reads like one coherent course.",
 ] as const;
 
+/** Rotating copy in the same spirit as PDF build / module writing (no raw JSON). */
+const REFINE_TRANSITION_LINES = [
+  "Re-reading your modules and lessons so edits stay on-topic…",
+  "Adjusting tone, length, and flow to match what you asked for…",
+  "Large courses take longer — the page will update as soon as the save finishes.",
+  "You can leave this drawer open; the timer shows the request is still running.",
+] as const;
+
 type Props = {
   materialId: string;
   docked?: boolean;
 };
+
+function formatElapsedShort(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const s = Math.floor(ms / 1000);
+  if (s < 90) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return rs > 0 ? `${m}m ${rs}s` : `${m} min`;
+}
+
+function parseNdjsonBuffer(
+  buffer: string
+): { lines: unknown[]; rest: string } {
+  const parts = buffer.split("\n");
+  const rest = parts.pop() ?? "";
+  const lines: unknown[] = [];
+  for (const line of parts) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      lines.push(JSON.parse(t) as unknown);
+    } catch {
+      /* skip malformed chunk */
+    }
+  }
+  return { lines, rest };
+}
 
 export function CourseRefineDrawer({ materialId, docked = false }: Props) {
   const router = useRouter();
@@ -22,7 +61,11 @@ export function CourseRefineDrawer({ materialId, docked = false }: Props) {
   const [instruction, setInstruction] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phaseMessage, setPhaseMessage] = useState<string | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [rotateIndex, setRotateIndex] = useState(0);
   const panelRef = useRef<HTMLDivElement>(null);
+  const startedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -41,19 +84,113 @@ export function CourseRefineDrawer({ materialId, docked = false }: Props) {
     return () => window.clearTimeout(t);
   }, [open]);
 
+  useEffect(() => {
+    if (!loading) {
+      startedAtRef.current = null;
+      setElapsedMs(0);
+      return;
+    }
+    startedAtRef.current = Date.now();
+    const id = window.setInterval(() => {
+      const t0 = startedAtRef.current;
+      if (t0 == null) return;
+      setElapsedMs(Date.now() - t0);
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [loading]);
+
+  useEffect(() => {
+    if (!loading) return;
+    const id = window.setInterval(() => {
+      setRotateIndex((i) => (i + 1) % REFINE_TRANSITION_LINES.length);
+    }, 9_000);
+    return () => window.clearInterval(id);
+  }, [loading]);
+
   const apply = useCallback(async () => {
     const text = instruction.trim();
     if (text.length < 8 || loading) return;
 
     setError(null);
     setLoading(true);
+    setPhaseMessage(null);
+    setRotateIndex(0);
 
     try {
       const res = await fetch("/api/refine-course", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ materialId, instruction: text }),
+        body: JSON.stringify({ materialId, instruction: text, stream: true }),
       });
+
+      const ct = res.headers.get("content-type") ?? "";
+
+      if (ct.includes("ndjson") && res.body) {
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        let sawDone = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (value) buf += dec.decode(value, { stream: true });
+          const { lines, rest } = parseNdjsonBuffer(buf);
+          buf = rest;
+
+          for (const row of lines) {
+            if (!row || typeof row !== "object") continue;
+            const r = row as { type?: string; message?: string };
+            if (r.type === "phase" && typeof r.message === "string") {
+              setPhaseMessage(r.message);
+            } else if (r.type === "error" && typeof r.message === "string") {
+              setError(r.message);
+              setLoading(false);
+              return;
+            } else if (r.type === "done") {
+              sawDone = true;
+            }
+          }
+
+          if (done) break;
+        }
+
+        if (buf.trim()) {
+          const { lines } = parseNdjsonBuffer(buf + "\n");
+          for (const row of lines) {
+            if (!row || typeof row !== "object") continue;
+            const r = row as { type?: string; message?: string };
+            if (r.type === "error" && typeof r.message === "string") {
+              setError(r.message);
+              setLoading(false);
+              return;
+            }
+            if (r.type === "done") sawDone = true;
+          }
+        }
+
+        if (!res.ok) {
+          setError("Could not apply edits.");
+          setLoading(false);
+          return;
+        }
+
+        if (!sawDone) {
+          setError("No completion signal from the server.");
+          setLoading(false);
+          return;
+        }
+
+        const detail: ArosesCourseRefinedDetail = { materialId };
+        window.dispatchEvent(
+          new CustomEvent(AROSES_COURSE_REFINED_EVENT, { detail })
+        );
+        setOpen(false);
+        setInstruction("");
+        setPhaseMessage(null);
+        setLoading(false);
+        return;
+      }
+
       const body = await res.json().catch(() => ({}));
 
       if (!res.ok) {
@@ -66,14 +203,29 @@ export function CourseRefineDrawer({ materialId, docked = false }: Props) {
         return;
       }
 
+      if (body.ok === true) {
+        window.dispatchEvent(
+          new CustomEvent(AROSES_COURSE_REFINED_EVENT, {
+            detail: { materialId } satisfies ArosesCourseRefinedDetail,
+          })
+        );
+      } else {
+        router.refresh();
+      }
+
       setOpen(false);
       setInstruction("");
-      router.refresh();
     } catch {
       setError("Network error.");
     }
     setLoading(false);
   }, [instruction, loading, materialId, router]);
+
+  const elapsedPart =
+    elapsedMs > 0 ? ` · ${formatElapsedShort(elapsedMs)}` : "";
+  const primaryLine = phaseMessage
+    ? `${phaseMessage}${elapsedPart}`
+    : `Step 1/2: Revising your course with AI…${elapsedPart}`;
 
   return (
     <>
@@ -155,6 +307,31 @@ export function CourseRefineDrawer({ materialId, docked = false }: Props) {
               />
             </label>
 
+            {loading ? (
+              <div
+                className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-700 dark:bg-zinc-950"
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
+              >
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Applying your edit
+                </p>
+                <p className="mt-1.5 whitespace-pre-line text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                  {primaryLine}
+                </p>
+                <p className="mt-2 text-xs leading-snug text-zinc-500 dark:text-zinc-400">
+                  {REFINE_TRANSITION_LINES[rotateIndex]}
+                </p>
+                <div className="relative mt-3 h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                  <div
+                    className="absolute inset-y-0 w-[32%] rounded-full bg-brand shadow-sm shadow-red-500/20 dark:bg-brand-soft dark:shadow-red-900/30 animate-course-upload-indeterminate"
+                    aria-hidden
+                  />
+                </div>
+              </div>
+            ) : null}
+
             {error ? (
               <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
             ) : null}
@@ -167,7 +344,7 @@ export function CourseRefineDrawer({ materialId, docked = false }: Props) {
               onClick={() => void apply()}
               className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white shadow-md shadow-red-600/20 hover:bg-brand-hover disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
             >
-              {loading ? "Applying edits…" : "Apply & save"}
+              {loading ? "Working…" : "Apply & save"}
             </button>
           </div>
         </div>

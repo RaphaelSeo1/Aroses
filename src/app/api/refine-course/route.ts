@@ -6,7 +6,10 @@ import {
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { refineCourseWithInstruction } from "@/lib/ai/refine-course";
+import {
+  refineCourseWithInstruction,
+  refineCourseWithInstructionStreaming,
+} from "@/lib/ai/refine-course";
 import type { CoursePayload } from "@/types/course";
 
 export const runtime = "nodejs";
@@ -80,7 +83,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const b = body as { materialId?: string; instruction?: string };
+  const b = body as {
+    materialId?: string;
+    instruction?: string;
+    stream?: boolean;
+  };
 
   if (typeof b.materialId !== "string" || !UUID_RE.test(b.materialId)) {
     return NextResponse.json({ error: "Invalid materialId" }, { status: 400 });
@@ -118,6 +125,76 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Nothing to refine yet" }, { status: 422 });
   }
 
+  const wantStream = b.stream === true;
+
+  async function saveRevised(revised: CoursePayload) {
+    const { error: saveErr } = await supabase
+      .from("study_materials")
+      .update({
+        course_payload: revised,
+        summary: revised.description,
+      })
+      .eq("id", b.materialId);
+
+    if (saveErr) {
+      console.error(saveErr);
+      return false;
+    }
+    return true;
+  }
+
+  if (wantStream) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (obj: unknown) => {
+          controller.enqueue(encoder.encode(`${JSON.stringify(obj)}\n`));
+        };
+
+        send({
+          type: "phase",
+          message:
+            "Step 1/2: Revising your course with AI (longer courses need more time)…",
+        });
+
+        let revised: CoursePayload;
+        try {
+          revised = await refineCourseWithInstructionStreaming(
+            current,
+            instruction
+          );
+        } catch (e) {
+          console.error(e);
+          send({ type: "error", message: refineFailureMessage(e) });
+          controller.close();
+          return;
+        }
+
+        send({
+          type: "phase",
+          message: "Step 2/2: Saving your updated study set…",
+        });
+
+        const ok = await saveRevised(revised);
+        if (!ok) {
+          send({ type: "error", message: "Could not save revised course." });
+          controller.close();
+          return;
+        }
+
+        send({ type: "done" });
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
   let revised: CoursePayload;
   try {
     revised = await refineCourseWithInstruction(current, instruction);
@@ -129,16 +206,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const { error: saveErr } = await supabase
-    .from("study_materials")
-    .update({
-      course_payload: revised,
-      summary: revised.description,
-    })
-    .eq("id", b.materialId);
-
-  if (saveErr) {
-    console.error(saveErr);
+  const ok = await saveRevised(revised);
+  if (!ok) {
     return NextResponse.json(
       { error: "Could not save revised course." },
       { status: 500 }
