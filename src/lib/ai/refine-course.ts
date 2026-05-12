@@ -7,7 +7,17 @@ import {
 import type { CoursePayload } from "@/types/course";
 import { parseCoursePayload, stripJsonFence } from "@/lib/ai/course-payload";
 
-const MODEL = "claude-sonnet-4-6";
+/**
+ * Refine applies edits to an existing course JSON (not a cold build from PDF).
+ * Default **Haiku** matches `express`/`fast`/`balanced` course generation — much lower
+ * latency than Sonnet on long JSON round-trips. Set `ANTHROPIC_REFINE_MODEL` to e.g.
+ * `claude-sonnet-4-6` if you prefer maximum fidelity over speed.
+ */
+function resolveRefineModel(): string {
+  const override = process.env.ANTHROPIC_REFINE_MODEL?.trim();
+  if (override) return override;
+  return "claude-haiku-4-5";
+}
 
 /** Large courses need plenty of headroom for full JSON round-trip. */
 const REFINE_MAX_OUTPUT_TOKENS = 64_000;
@@ -71,7 +81,7 @@ Broken output (repair it completely):
 ${brokenAssistantText.slice(0, 140_000)}`;
 
   const msg = await createMessageWithRetries(anthropic, {
-    model: MODEL,
+    model: resolveRefineModel(),
     max_tokens: REFINE_MAX_OUTPUT_TOKENS,
     temperature: 0.05,
     messages: [{ role: "user", content: prompt }],
@@ -178,7 +188,7 @@ export async function refineCourseWithInstruction(
   const userPrompt = buildRefineUserPrompt(current, instruction);
 
   const msg = await createMessageWithRetries(anthropic, {
-    model: MODEL,
+    model: resolveRefineModel(),
     max_tokens: REFINE_MAX_OUTPUT_TOKENS,
     temperature: 0.15,
     messages: [{ role: "user", content: userPrompt }],
@@ -211,7 +221,7 @@ export async function refineCourseWithInstructionStreaming(
   const userPrompt = buildRefineUserPrompt(current, instruction);
 
   const stream = anthropic.messages.stream({
-    model: MODEL,
+    model: resolveRefineModel(),
     max_tokens: REFINE_MAX_OUTPUT_TOKENS,
     temperature: 0.15,
     messages: [{ role: "user", content: userPrompt }],

@@ -5,9 +5,6 @@ import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import type { AdminActivityItem, AdminUserRow } from "@/lib/admin-dashboard-data";
 
-const INK = "#1a0505";
-const ACCENT = "#DC2626";
-
 /** Bounded vertical scroll for large tables — keeps the admin page compact. */
 const TABLE_BODY_SCROLL =
   "max-h-[min(17rem,38vh)] overflow-y-auto overflow-x-auto overscroll-contain [scrollbar-gutter:stable] sm:max-h-[min(21rem,42vh)] lg:max-h-[min(26rem,46vh)]";
@@ -138,17 +135,14 @@ function MetricCard({
   iconClass: string;
 }) {
   return (
-    <div className="rounded-xl border border-zinc-200/80 bg-white p-3.5 shadow-sm shadow-zinc-900/[0.02]">
+    <div className="rounded-xl border border-zinc-200/80 bg-white p-3.5 shadow-sm shadow-zinc-900/[0.02] dark:border-zinc-700/90 dark:bg-zinc-900/70 dark:shadow-black/20">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
           {label}
         </p>
         <span className={iconClass}>{icon}</span>
       </div>
-      <p
-        className="mt-2 text-xl font-semibold tabular-nums tracking-tight sm:text-2xl"
-        style={{ color: INK }}
-      >
+      <p className="mt-2 text-xl font-semibold tabular-nums tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
         {value.toLocaleString()}
       </p>
     </div>
@@ -178,8 +172,7 @@ function CopyTextButton({
     <button
       type="button"
       onClick={onCopy}
-      className="inline-flex shrink-0 items-center rounded-md border border-zinc-200/90 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 transition hover:border-zinc-300 hover:bg-zinc-50"
-      style={{ color: INK }}
+      className="inline-flex shrink-0 items-center rounded-md border border-zinc-200/90 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:border-zinc-500 dark:hover:bg-zinc-700"
       aria-label={label}
     >
       {done ? "Copied" : "Copy"}
@@ -254,35 +247,26 @@ export function AdminDashboardClient({
   );
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] bg-zinc-50/50">
+    <div className="min-h-[calc(100vh-4rem)]">
       <div className="mx-auto max-w-5xl px-4 py-6 sm:px-5 sm:py-8">
         <div className="flex flex-wrap items-center gap-2">
           <span
-            className="inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-            style={{ backgroundColor: `${ACCENT}12`, color: ACCENT }}
+            className="inline-flex items-center rounded-md bg-red-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-600 dark:bg-red-500/15 dark:text-red-400"
           >
             Admin
           </span>
         </div>
-        <h1
-          className="mt-3 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-[1.65rem]"
-          style={{ color: INK }}
-        >
+        <h1 className="mt-3 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-[1.65rem]">
           Site operations
         </h1>
-        <p className="mt-2 max-w-xl text-sm leading-relaxed text-zinc-500">
+        <p className="mt-2 max-w-xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
           Manage courses, accounts, and a light activity feed. Changes here affect
           the whole platform.
         </p>
 
         {loadError ? (
           <div
-            className="mt-5 rounded-lg border px-3 py-3 text-xs leading-relaxed"
-            style={{
-              borderColor: `${ACCENT}55`,
-              backgroundColor: `${ACCENT}0d`,
-              color: INK,
-            }}
+            className="mt-5 rounded-lg border border-red-200/80 bg-red-50/90 px-3 py-3 text-xs leading-relaxed text-red-950 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-100"
           >
             {loadError}
           </div>
@@ -300,7 +284,7 @@ export function AdminDashboardClient({
               label="Total users"
               value={stats.totalUsers}
               icon={<IconUsers />}
-              iconClass="text-zinc-400"
+              iconClass="text-zinc-400 dark:text-zinc-500"
             />
             <MetricCard
               label="Public courses"
@@ -312,7 +296,7 @@ export function AdminDashboardClient({
               label="Private courses"
               value={stats.privateCourses}
               icon={<IconLock />}
-              iconClass="text-zinc-400"
+              iconClass="text-zinc-400 dark:text-zinc-500"
             />
           </div>
         ) : null}
@@ -321,10 +305,10 @@ export function AdminDashboardClient({
           <section className="mt-8">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <h2 className="text-base font-semibold tracking-tight text-zinc-900">
+                <h2 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                   User directory
                 </h2>
-                <p className="mt-1 max-w-xl text-xs leading-relaxed text-zinc-500">
+                <p className="mt-1 max-w-xl text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
                   Auth sign-in email and profile fields — separate from the activity
                   feed below.
                 </p>
@@ -336,28 +320,22 @@ export function AdminDashboardClient({
                   placeholder="Search users…"
                   value={userQuery}
                   onChange={(e) => setUserQuery(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-800 shadow-sm outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-2 focus:ring-[#DC2626]/15"
+                  className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-800 shadow-sm outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-2 focus:ring-[#DC2626]/15 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-red-500/25"
                 />
               </label>
             </div>
 
             {usersError ? (
-              <div
-                className="mt-3 rounded-lg border px-3 py-2 text-xs text-zinc-700"
-                style={{
-                  borderColor: `${ACCENT}44`,
-                  backgroundColor: `${ACCENT}08`,
-                }}
-              >
+              <div className="mt-3 rounded-lg border border-red-200/80 bg-red-50/80 px-3 py-2 text-xs text-red-900 dark:border-red-900/40 dark:bg-red-950/25 dark:text-red-100">
                 Could not load Auth users: {usersError}
               </div>
             ) : null}
 
-            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200/90 bg-white shadow-sm">
+            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200/90 bg-white shadow-sm dark:border-zinc-700/90 dark:bg-zinc-900/60 dark:shadow-black/30">
               <div className={TABLE_BODY_SCROLL}>
                 <table className="min-w-full border-collapse text-left">
-                  <thead className="sticky top-0 z-[1] border-b border-zinc-200 bg-zinc-100/95 shadow-[0_1px_0_0_rgba(0,0,0,0.04)] backdrop-blur-sm">
-                    <tr className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                  <thead className="sticky top-0 z-[1] border-b border-zinc-200 bg-zinc-100/95 shadow-[0_1px_0_0_rgba(0,0,0,0.04)] backdrop-blur-sm dark:border-zinc-700 dark:bg-zinc-800/95 dark:shadow-none">
+                    <tr className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                       <th className="px-3 py-2 font-semibold sm:px-3.5">
                         Email
                       </th>
@@ -384,12 +362,12 @@ export function AdminDashboardClient({
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="text-xs text-zinc-600">
+                  <tbody className="text-xs text-zinc-600 dark:text-zinc-300">
                     {filteredUsers.length === 0 ? (
                       <tr>
                         <td
                           colSpan={8}
-                          className="px-3 py-8 text-center text-xs text-zinc-400"
+                          className="px-3 py-8 text-center text-xs text-zinc-500 dark:text-zinc-400"
                         >
                           {initialUsers.length === 0
                             ? "No Auth users returned."
@@ -401,15 +379,14 @@ export function AdminDashboardClient({
                         <tr
                           key={u.id}
                           className={
-                            index % 2 === 0 ? "bg-white" : "bg-zinc-50/60"
+                            index % 2 === 0
+                              ? "bg-white dark:bg-zinc-950/50"
+                              : "bg-zinc-50/60 dark:bg-zinc-900/35"
                           }
                         >
-                          <td className="border-t border-zinc-100/90 px-3 py-2 sm:px-3.5">
+                          <td className="border-t border-zinc-100/90 px-3 py-2 dark:border-zinc-800 sm:px-3.5">
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <span
-                                className="font-medium text-zinc-800"
-                                style={{ color: INK }}
-                              >
+                              <span className="font-medium text-zinc-800 dark:text-zinc-100">
                                 {u.email}
                               </span>
                               {u.email !== "—" ? (
@@ -421,25 +398,25 @@ export function AdminDashboardClient({
                             </div>
                             <div className="mt-1.5 flex flex-col gap-0.5 lg:hidden">
                               {u.displayName ? (
-                                <span className="text-[11px] text-zinc-500">
+                                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
                                   {u.displayName}
                                 </span>
                               ) : null}
                               {u.username ? (
-                                <span className="text-[11px] text-zinc-400">
+                                <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
                                   @{u.username}
                                 </span>
                               ) : null}
-                              <span className="font-mono text-[10px] text-zinc-400">
+                              <span className="font-mono text-[10px] text-zinc-400 dark:text-zinc-500">
                                 {u.id.slice(0, 12)}…
                               </span>
                               <CopyTextButton text={u.id} label="Copy user ID" />
                             </div>
                           </td>
-                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 text-zinc-600 lg:table-cell lg:px-3.5">
+                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 text-zinc-600 dark:border-zinc-800 dark:text-zinc-300 lg:table-cell lg:px-3.5">
                             {u.displayName?.trim() || "—"}
                           </td>
-                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 text-zinc-600 xl:table-cell xl:px-3.5">
+                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 text-zinc-600 dark:border-zinc-800 dark:text-zinc-300 xl:table-cell xl:px-3.5">
                             {u.username ? (
                               <span className="font-mono text-[11px]">
                                 @{u.username}
@@ -448,10 +425,10 @@ export function AdminDashboardClient({
                               "—"
                             )}
                           </td>
-                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 md:table-cell md:px-3.5">
+                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 md:table-cell md:px-3.5 dark:border-zinc-800">
                             <div className="flex max-w-[11rem] items-center gap-1">
                               <span
-                                className="truncate font-mono text-[10px] text-zinc-500"
+                                className="truncate font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                                 title={u.id}
                               >
                                 {u.id}
@@ -459,38 +436,38 @@ export function AdminDashboardClient({
                               <CopyTextButton text={u.id} label="Copy user ID" />
                             </div>
                           </td>
-                          <td className="border-t border-zinc-100/90 px-3 py-2 text-[11px] text-zinc-500 sm:px-3.5">
+                          <td className="border-t border-zinc-100/90 px-3 py-2 text-[11px] text-zinc-500 dark:border-zinc-800 dark:text-zinc-400 sm:px-3.5">
                             <time dateTime={u.signedUpAt}>
                               {formatWhenCompact(u.signedUpAt)}
                             </time>
                           </td>
-                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 text-[11px] text-zinc-500 lg:table-cell lg:px-3.5">
+                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 text-[11px] text-zinc-500 dark:border-zinc-800 dark:text-zinc-400 lg:table-cell lg:px-3.5">
                             {u.lastSignInAt ? (
                               <time dateTime={u.lastSignInAt}>
                                 {formatWhenCompact(u.lastSignInAt)}
                               </time>
                             ) : (
-                              <span className="text-zinc-400">—</span>
+                              <span className="text-zinc-400 dark:text-zinc-500">—</span>
                             )}
                           </td>
-                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 sm:table-cell sm:px-3.5">
+                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 sm:table-cell sm:px-3.5 dark:border-zinc-800">
                             {u.emailConfirmedAt ? (
-                              <span className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 ring-1 ring-emerald-600/12">
+                              <span className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 ring-1 ring-emerald-600/12 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-500/25">
                                 Yes
                               </span>
                             ) : (
-                              <span className="inline-flex rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-900 ring-1 ring-amber-600/15">
+                              <span className="inline-flex rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-900 ring-1 ring-amber-600/15 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-500/30">
                                 Pending
                               </span>
                             )}
                           </td>
-                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 xl:table-cell xl:px-3.5">
+                          <td className="hidden border-t border-zinc-100/90 px-3 py-2 xl:table-cell xl:px-3.5 dark:border-zinc-800">
                             {u.onboardingCompletedAt ? (
-                              <span className="text-[11px] text-emerald-700">
+                              <span className="text-[11px] text-emerald-700 dark:text-emerald-400">
                                 Done
                               </span>
                             ) : (
-                              <span className="text-[11px] text-zinc-400">—</span>
+                              <span className="text-[11px] text-zinc-400 dark:text-zinc-500">—</span>
                             )}
                           </td>
                         </tr>
@@ -507,10 +484,10 @@ export function AdminDashboardClient({
           <section className="mt-8">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-base font-semibold tracking-tight text-zinc-900">
+                <h2 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                   All courses
                 </h2>
-                <span className="rounded-md bg-zinc-200/60 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-600">
+                <span className="rounded-md bg-zinc-200/60 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                   {filtered.length}
                   {query.trim() ? ` / ${initialCourses.length}` : ""}
                 </span>
@@ -522,16 +499,16 @@ export function AdminDashboardClient({
                   placeholder="Search courses…"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-800 shadow-sm outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-2 focus:ring-[#DC2626]/15"
+                  className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-800 shadow-sm outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-2 focus:ring-[#DC2626]/15 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-red-500/25"
                 />
               </label>
             </div>
 
-            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200/90 bg-white shadow-sm">
+            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200/90 bg-white shadow-sm dark:border-zinc-700/90 dark:bg-zinc-900/60 dark:shadow-black/30">
               <div className={TABLE_BODY_SCROLL}>
                 <table className="min-w-full border-collapse text-left">
-                  <thead className="sticky top-0 z-[1] border-b border-zinc-200 bg-zinc-100/95 shadow-[0_1px_0_0_rgba(0,0,0,0.04)] backdrop-blur-sm">
-                    <tr className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                  <thead className="sticky top-0 z-[1] border-b border-zinc-200 bg-zinc-100/95 shadow-[0_1px_0_0_rgba(0,0,0,0.04)] backdrop-blur-sm dark:border-zinc-700 dark:bg-zinc-800/95 dark:shadow-none">
+                    <tr className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                       <th className="px-3 py-2 font-semibold sm:px-3.5">
                         Course
                       </th>
@@ -546,12 +523,12 @@ export function AdminDashboardClient({
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="text-xs text-zinc-600">
+                  <tbody className="text-xs text-zinc-600 dark:text-zinc-300">
                     {filtered.length === 0 ? (
                       <tr>
                         <td
                           colSpan={4}
-                          className="px-3 py-8 text-center text-xs text-zinc-400"
+                          className="px-3 py-8 text-center text-xs text-zinc-500 dark:text-zinc-400"
                         >
                           No courses match your search.
                         </td>
@@ -564,19 +541,16 @@ export function AdminDashboardClient({
                             key={c.id}
                             className={
                               index % 2 === 0
-                                ? "bg-white"
-                                : "bg-zinc-50/60"
+                                ? "bg-white dark:bg-zinc-950/50"
+                                : "bg-zinc-50/60 dark:bg-zinc-900/35"
                             }
                           >
-                            <td className="border-t border-zinc-100/90 px-3 py-2 sm:px-3.5">
-                              <span
-                                className="font-medium text-zinc-800"
-                                style={{ color: INK }}
-                              >
+                            <td className="border-t border-zinc-100/90 px-3 py-2 dark:border-zinc-800 sm:px-3.5">
+                              <span className="font-medium text-zinc-800 dark:text-zinc-100">
                                 {c.title?.trim() || "Untitled"}
                               </span>
                               <div className="mt-1 md:hidden">
-                                <span className="font-mono text-[10px] text-zinc-400">
+                                <span className="font-mono text-[10px] text-zinc-400 dark:text-zinc-500">
                                   {c.user_id.slice(0, 10)}…
                                 </span>
                                 <CopyTextButton
@@ -585,10 +559,10 @@ export function AdminDashboardClient({
                                 />
                               </div>
                             </td>
-                            <td className="hidden border-t border-zinc-100/90 px-3 py-2 md:table-cell md:px-3.5">
+                            <td className="hidden border-t border-zinc-100/90 px-3 py-2 md:table-cell md:px-3.5 dark:border-zinc-800">
                               <div className="flex max-w-[14rem] items-center gap-1">
                                 <span
-                                  className="truncate font-mono text-[10px] text-zinc-500"
+                                  className="truncate font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                                   title={c.user_id}
                                 >
                                   {c.user_id}
@@ -599,22 +573,22 @@ export function AdminDashboardClient({
                                 />
                               </div>
                             </td>
-                            <td className="border-t border-zinc-100/90 px-3 py-2 sm:px-3.5">
+                            <td className="border-t border-zinc-100/90 px-3 py-2 dark:border-zinc-800 sm:px-3.5">
                               {isPublic ? (
-                                <span className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 ring-1 ring-emerald-600/12">
+                                <span className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 ring-1 ring-emerald-600/12 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-500/25">
                                   Public
                                 </span>
                               ) : (
-                                <span className="inline-flex rounded-md bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 ring-1 ring-zinc-300/50">
+                                <span className="inline-flex rounded-md bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 ring-1 ring-zinc-300/50 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-600/40">
                                   Private
                                 </span>
                               )}
                             </td>
-                            <td className="border-t border-zinc-100/90 px-3 py-2 text-right sm:px-3.5">
+                            <td className="border-t border-zinc-100/90 px-3 py-2 text-right dark:border-zinc-800 sm:px-3.5">
                               <div className="flex flex-wrap justify-end gap-1.5">
                                 <Link
                                   href={`/dashboard/courses/${c.id}`}
-                                  className="inline-flex rounded-md border border-zinc-200/90 bg-white px-2 py-1 text-[10px] font-semibold text-zinc-600 transition hover:bg-zinc-50"
+                                  className="inline-flex rounded-md border border-zinc-200/90 bg-white px-2 py-1 text-[10px] font-semibold text-zinc-600 transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                                 >
                                   View
                                 </Link>
@@ -627,8 +601,7 @@ export function AdminDashboardClient({
                                       c.title?.trim() || "Untitled"
                                     )
                                   }
-                                  className="inline-flex rounded-md px-2 py-1 text-[10px] font-semibold text-white transition enabled:hover:opacity-90 disabled:opacity-50"
-                                  style={{ backgroundColor: ACCENT }}
+                                  className="inline-flex rounded-md bg-red-600 px-2 py-1 text-[10px] font-semibold text-white transition enabled:hover:bg-red-700 disabled:opacity-50 dark:bg-red-600 dark:enabled:hover:bg-red-500"
                                 >
                                   {deletingId === c.id ? "…" : "Delete"}
                                 </button>
@@ -647,15 +620,15 @@ export function AdminDashboardClient({
 
         {!fatalConfigError && activity.length > 0 ? (
           <section className="mt-8 pb-4">
-            <h2 className="text-base font-semibold tracking-tight text-zinc-900">
+            <h2 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
               Activity timeline
             </h2>
-            <p className="mt-1 max-w-xl text-xs leading-relaxed text-zinc-500">
+            <p className="mt-1 max-w-xl text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
               Recent course creations and sign-ups — not a full audit log.
             </p>
-            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200/90 bg-white shadow-sm">
+            <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200/90 bg-white shadow-sm dark:border-zinc-700/90 dark:bg-zinc-900/60 dark:shadow-black/30">
               <ul
-                className={`divide-y divide-zinc-100 ${ACTIVITY_SCROLL}`}
+                className={`divide-y divide-zinc-100 dark:divide-zinc-800 ${ACTIVITY_SCROLL}`}
                 role="list"
               >
                 {activity.map((a) => (
@@ -664,13 +637,15 @@ export function AdminDashboardClient({
                     className="flex flex-col gap-0.5 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-3.5"
                   >
                     <div>
-                      <p className="text-[11px] font-semibold text-zinc-700">
+                      <p className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-200">
                         {a.detail}
                       </p>
-                      <p className="text-xs text-zinc-500">{a.title}</p>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                        {a.title}
+                      </p>
                     </div>
                     <time
-                      className="shrink-0 text-[10px] font-medium text-zinc-400 sm:text-right"
+                      className="shrink-0 text-[10px] font-medium text-zinc-400 dark:text-zinc-500 sm:text-right"
                       dateTime={a.at}
                     >
                       {formatWhenCompact(a.at)}

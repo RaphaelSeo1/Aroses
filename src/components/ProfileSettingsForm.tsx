@@ -13,6 +13,7 @@ import {
 import { LogoutButton } from "@/components/LogoutButton";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { createClient } from "@/lib/supabase/client";
+import { parseUsername } from "@/lib/onboarding";
 import type { UserProfileRow } from "@/types/profile";
 
 type Panel = "general" | "account" | "progress";
@@ -184,6 +185,11 @@ export function ProfileSettingsForm({
     }
   }
   const [displayName, setDisplayName] = useState(initial?.display_name ?? "");
+  const [usernameInput, setUsernameInput] = useState(initial?.username ?? "");
+  const [usernameDirty, setUsernameDirty] = useState(false);
+  const [usernameStatus, setUsernameStatus] = useState<
+    "idle" | "checking" | "available" | "taken" | "invalid"
+  >("idle");
   const [birthday, setBirthday] = useState(
     initial?.birthday ? String(initial.birthday).slice(0, 10) : ""
   );
@@ -208,6 +214,61 @@ export function ProfileSettingsForm({
     setSchoolName(initial?.school_name ?? "");
   }, [initial?.school_name]);
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional prop → state sync
+    setUsernameInput(initial?.username ?? "");
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional prop → state sync
+    setUsernameDirty(false);
+  }, [initial?.username]);
+
+  const normalizedInitialUsername = useMemo(
+    () => (initial?.username ? parseUsername(initial.username) : null),
+    [initial?.username]
+  );
+
+  const parsedUsername = useMemo(
+    () => parseUsername(usernameInput),
+    [usernameInput]
+  );
+
+  useEffect(() => {
+    if (!parsedUsername) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync validation with input
+      setUsernameStatus(usernameInput.trim().length === 0 ? "idle" : "invalid");
+      return;
+    }
+    if (
+      normalizedInitialUsername &&
+      parsedUsername === normalizedInitialUsername
+    ) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- current handle is valid
+      setUsernameStatus("available");
+      return;
+    }
+    const t = setTimeout(() => {
+      setUsernameStatus("checking");
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/profile/username-available?u=${encodeURIComponent(usernameInput)}`
+          );
+          const j = (await res.json()) as {
+            available?: boolean;
+            ok?: boolean;
+          };
+          if (!res.ok) {
+            setUsernameStatus("invalid");
+            return;
+          }
+          setUsernameStatus(j.available ? "available" : "taken");
+        } catch {
+          setUsernameStatus("invalid");
+        }
+      })();
+    }, 380);
+    return () => clearTimeout(t);
+  }, [parsedUsername, usernameInput, normalizedInitialUsername]);
+
   const avatarLetter = useMemo(() => {
     const n = displayName.trim();
     const base = n || email.split("@")[0] || "?";
@@ -218,17 +279,50 @@ export function ProfileSettingsForm({
     setBusy(true);
     setMessage(null);
     setError(null);
+    const nextUsername = parseUsername(usernameInput);
+    const body: Record<string, unknown> = {
+      display_name: displayName,
+      birthday: birthday.trim() || null,
+      bio,
+      study_focus: studyFocus,
+      school_name: schoolName.trim() || null,
+    };
+
+    if (usernameDirty) {
+      if (usernameInput.trim() !== "" && !nextUsername) {
+        setError(
+          "Username must be 3–30 characters: lowercase letters, numbers, and underscores."
+        );
+        setBusy(false);
+        return;
+      }
+      if (normalizedInitialUsername && !nextUsername) {
+        setError("Username cannot be empty.");
+        setBusy(false);
+        return;
+      }
+      if (
+        nextUsername &&
+        nextUsername !== normalizedInitialUsername &&
+        usernameStatus !== "available"
+      ) {
+        setError("Choose an available username before saving.");
+        setBusy(false);
+        return;
+      }
+      if (usernameStatus === "checking") {
+        setError("Still checking username — try again in a moment.");
+        setBusy(false);
+        return;
+      }
+      body.username = nextUsername ?? null;
+    }
+
     try {
       const res = await fetch("/api/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          display_name: displayName,
-          birthday: birthday.trim() || null,
-          bio,
-          study_focus: studyFocus,
-          school_name: schoolName.trim() || null,
-        }),
+        body: JSON.stringify(body),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -244,7 +338,18 @@ export function ProfileSettingsForm({
     } finally {
       setBusy(false);
     }
-  }, [bio, birthday, displayName, router, schoolName, studyFocus]);
+  }, [
+    bio,
+    birthday,
+    displayName,
+    normalizedInitialUsername,
+    router,
+    schoolName,
+    studyFocus,
+    usernameDirty,
+    usernameInput,
+    usernameStatus,
+  ]);
 
   const persistAvatarUrl = useCallback(
     async (nextUrl: string | null) => {
@@ -461,6 +566,63 @@ export function ProfileSettingsForm({
                   </SettingsRow>
 
                   <SettingsRow
+                    label="Username"
+                    hint="Public handle (lowercase, letters, numbers, underscores). Shown as @username where your profile appears."
+                  >
+                    <div className="relative w-full sm:max-w-xs md:max-w-sm">
+                      <input
+                        id="profile_username"
+                        type="text"
+                        autoComplete="username"
+                        maxLength={30}
+                        value={usernameInput}
+                        onChange={(e) => {
+                          setUsernameDirty(true);
+                          setUsernameInput(
+                            e.target.value
+                              .toLowerCase()
+                              .replace(/[^a-z0-9_]/g, "")
+                          );
+                        }}
+                        placeholder="your_handle"
+                        className={`${FIELD} pr-10`}
+                      />
+                      <span className="pointer-events-none absolute right-2.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center">
+                        {usernameStatus === "checking" ? (
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600 dark:border-zinc-600 dark:border-t-zinc-200" />
+                        ) : usernameStatus === "available" ? (
+                          <span
+                            className="text-sm font-semibold text-emerald-600 dark:text-emerald-400"
+                            aria-label="Available"
+                          >
+                            ✓
+                          </span>
+                        ) : usernameStatus === "taken" ||
+                          usernameStatus === "invalid" ? (
+                          usernameInput.trim().length > 0 ? (
+                            <span
+                              className="text-sm font-semibold text-red-600 dark:text-red-400"
+                              aria-label="Unavailable"
+                            >
+                              ✗
+                            </span>
+                          ) : null
+                        ) : null}
+                      </span>
+                    </div>
+                    {usernameStatus === "invalid" && usernameInput.trim() !== "" ? (
+                      <p className="mt-2 text-right text-xs text-red-600 dark:text-red-400">
+                        Use 3–30 characters: lowercase letters, numbers, underscores.
+                      </p>
+                    ) : null}
+                    {usernameStatus === "taken" ? (
+                      <p className="mt-2 text-right text-xs text-red-600 dark:text-red-400">
+                        That username is taken. Try another.
+                      </p>
+                    ) : null}
+                  </SettingsRow>
+
+                  <SettingsRow
                     label="Birthday"
                     hint="Optional. Private to your account."
                   >
@@ -557,15 +719,20 @@ export function ProfileSettingsForm({
                     </p>
                   ) : (
                     <p className="text-xs leading-relaxed text-zinc-400 dark:text-zinc-500">
-                      Theme applies immediately on this device. Name, birthday,
-                      school, study focus, and notes update when you tap Save changes.
-                      Your avatar saves when you choose a photo.
+                      Theme applies immediately on this device. Name, username,
+                      birthday, school, study focus, and notes update when you tap
+                      Save changes. Your avatar saves when you choose a photo.
                     </p>
                   )}
                 </div>
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={
+                    busy ||
+                    (usernameDirty &&
+                      (usernameStatus === "checking" ||
+                        usernameStatus === "taken"))
+                  }
                   onClick={() => void save()}
                   className="inline-flex shrink-0 items-center justify-center rounded-full bg-zinc-900 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
                 >

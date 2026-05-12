@@ -1,5 +1,7 @@
 export type UserProfileRow = {
   display_name: string | null;
+  /** Public handle, lowercase a-z0-9_ (3–30 chars). */
+  username: string | null;
   birthday: string | null;
   bio: string | null;
   /** Public Storage URL for profile image, or null. */

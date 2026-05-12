@@ -77,7 +77,7 @@ export default async function AdminDashboardPage() {
       <AppHeader
         right={<HeaderNavLoggedIn />}
       />
-      <main>
+      <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <AdminDashboardClient
           courses={courses}
           stats={{

@@ -4,8 +4,10 @@ import {
   isAvatarUrlColumnError,
   isSchoolNameColumnError,
   isStudyFocusColumnError,
+  isUsernameColumnError,
 } from "@/lib/profile-db-errors";
 import { createClient } from "@/lib/supabase/server";
+import { parseUsername } from "@/lib/onboarding";
 
 const DISPLAY_MAX = 120;
 const BIO_MAX = 500;
@@ -113,6 +115,7 @@ export async function PATCH(request: Request) {
     bio: string | null;
     birthday: string | null;
     timezone: string | null;
+    username?: string | null;
     study_focus?: string | null;
     avatar_url?: string | null;
     school_name?: string | null;
@@ -229,6 +232,55 @@ export async function PATCH(request: Request) {
     schoolName = t.length === 0 ? null : t.slice(0, SCHOOL_NAME_MAX);
   }
 
+  let username: string | null = prev?.username ?? null;
+  if (Object.prototype.hasOwnProperty.call(b, "username")) {
+    const raw = b.username;
+    if (raw !== null && typeof raw !== "string") {
+      return NextResponse.json(
+        { error: "username must be a string or null." },
+        { status: 400 }
+      );
+    }
+    if (raw === null || raw === "") {
+      username = null;
+    } else {
+      const parsed = parseUsername(raw);
+      if (!parsed) {
+        return NextResponse.json(
+          {
+            error:
+              "Username must be 3–30 characters: lowercase letters, numbers, and underscores only.",
+          },
+          { status: 400 }
+        );
+      }
+      const prevNorm =
+        prev?.username && typeof prev.username === "string"
+          ? parseUsername(prev.username)
+          : null;
+      if (parsed !== prevNorm) {
+        const { data: avail, error: availErr } = await supabase.rpc(
+          "profile_username_available",
+          { p_username: parsed }
+        );
+        if (availErr) {
+          console.error(availErr);
+          return NextResponse.json(
+            { error: "Could not verify username. Try again." },
+            { status: 503 }
+          );
+        }
+        if (!avail) {
+          return NextResponse.json(
+            { error: "Username is taken." },
+            { status: 409 }
+          );
+        }
+      }
+      username = parsed;
+    }
+  }
+
   let row: Record<string, unknown> = {
     id: user.id,
     display_name: displayName,
@@ -238,6 +290,7 @@ export async function PATCH(request: Request) {
     study_focus: studyFocus,
     avatar_url: avatarUrl,
     school_name: schoolName,
+    username,
   };
 
   for (let i = 0; i < 6; i++) {
@@ -261,6 +314,17 @@ export async function PATCH(request: Request) {
       const { school_name: _sn, ...next } = row;
       row = next;
       continue;
+    }
+    if (isUsernameColumnError(error.message) && "username" in row) {
+      const { username: _un, ...next } = row;
+      row = next;
+      continue;
+    }
+    if (/unique|duplicate|profiles_username_lower_key/i.test(error.message)) {
+      return NextResponse.json(
+        { error: "Username is taken." },
+        { status: 409 }
+      );
     }
     console.error(error);
     return NextResponse.json(

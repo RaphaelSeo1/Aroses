@@ -48,6 +48,7 @@ export default async function ProfilePage({ searchParams }: PageProps) {
 
   type ProfileFields = {
     display_name: string | null;
+    username?: string | null;
     birthday: unknown;
     bio: string | null;
     study_focus?: string | null;
@@ -62,6 +63,7 @@ export default async function ProfilePage({ searchParams }: PageProps) {
   if (!profileErr && profileRow) {
     initial = {
       display_name: profileRow.display_name,
+      username: profileRow.username ?? null,
       birthday:
         profileRow.birthday != null
           ? String(profileRow.birthday).slice(0, 10)

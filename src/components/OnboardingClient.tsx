@@ -267,7 +267,8 @@ export function OnboardingClient() {
         setSubmitting(false);
         return;
       }
-      await router.refresh();
+      // Do not call router.refresh() here: the server /onboarding page redirects
+      // to "/" when onboarding is already complete, which would skip this "done" step.
       setPhase("done");
     } catch {
       setSubmitError("Network error.");
