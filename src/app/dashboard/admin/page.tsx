@@ -1,8 +1,9 @@
 import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
-import type { AdminActivityItem } from "@/lib/admin-dashboard-data";
+import type { AdminActivityItem, AdminUserRow } from "@/lib/admin-dashboard-data";
 import {
   countAllAuthUsers,
+  fetchAdminUserDirectory,
   fetchRecentAdminActivity,
 } from "@/lib/admin-dashboard-data";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -24,23 +25,34 @@ export default async function AdminDashboardPage() {
   let publicCourses = 0;
   let totalUsers = 0;
   let activity: AdminActivityItem[] = [];
+  let users: AdminUserRow[] = [];
+  let usersError: string | null = null;
 
   if (!admin) {
     loadError =
       "Service role key is not configured. Set SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY) so this dashboard can load platform data.";
   } else {
-    const [countRes, publicRes, listRes] = await Promise.all([
-      admin.from("courses").select("*", { count: "exact", head: true }),
-      admin
-        .from("courses")
-        .select("*", { count: "exact", head: true })
-        .eq("is_public", true),
-      admin
-        .from("courses")
-        .select("id, title, user_id, created_at, is_public")
-        .order("created_at", { ascending: false })
-        .limit(500),
-    ]);
+    const [countRes, publicRes, listRes, usersRes, usersN, act] =
+      await Promise.all([
+        admin.from("courses").select("*", { count: "exact", head: true }),
+        admin
+          .from("courses")
+          .select("*", { count: "exact", head: true })
+          .eq("is_public", true),
+        admin
+          .from("courses")
+          .select("id, title, user_id, created_at, is_public")
+          .order("created_at", { ascending: false })
+          .limit(500),
+        fetchAdminUserDirectory(admin),
+        countAllAuthUsers(admin),
+        fetchRecentAdminActivity(admin),
+      ]);
+
+    users = usersRes.users;
+    usersError = usersRes.error;
+    totalUsers = usersN;
+    activity = act;
 
     if (listRes.error) {
       console.error("[admin] courses", listRes.error);
@@ -58,15 +70,6 @@ export default async function AdminDashboardPage() {
         loadError = "Could not load course statistics.";
       }
     }
-
-    if (!loadError) {
-      const [usersN, act] = await Promise.all([
-        countAllAuthUsers(admin),
-        fetchRecentAdminActivity(admin),
-      ]);
-      totalUsers = usersN;
-      activity = act;
-    }
   }
 
   return (
@@ -83,6 +86,8 @@ export default async function AdminDashboardPage() {
             publicCourses,
             privateCourses: Math.max(0, totalCourses - publicCourses),
           }}
+          users={users}
+          usersError={usersError}
           activity={activity}
           loadError={loadError}
         />

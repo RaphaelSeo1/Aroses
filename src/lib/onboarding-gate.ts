@@ -15,10 +15,15 @@ export async function profileNeedsOnboarding(
     .maybeSingle();
 
   if (error) {
-    if (
-      /onboarding_completed_at|column|schema cache/i.test(error.message ?? "")
-    ) {
-      return false;
+    const msg = error.message ?? "";
+    // If migration 026 is not applied yet, PostgREST errors on this column.
+    // Returning true sends the user to `/onboarding` (complete API will 503 until migrated).
+    const missingOnboardingColumn =
+      /onboarding_completed_at/i.test(msg) &&
+      (/does not exist|schema cache|could not find|42703/i.test(msg) ||
+        /column/i.test(msg));
+    if (missingOnboardingColumn) {
+      return true;
     }
     console.error("profileNeedsOnboarding:", error.message);
     return false;

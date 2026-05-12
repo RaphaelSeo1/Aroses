@@ -1,6 +1,7 @@
 import { DashboardHomeContent } from "@/components/DashboardHomeContent";
 import { loadDashboardCourseLists } from "@/lib/load-dashboard-courses";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
+import { profileNeedsOnboarding } from "@/lib/onboarding-gate";
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 
@@ -12,6 +13,10 @@ export default async function Home() {
 
   if (!user?.email || !user.id) {
     redirect("/intro");
+  }
+
+  if (await profileNeedsOnboarding(supabase, user.id)) {
+    redirect("/onboarding");
   }
 
   const [{ owned, studying }, progress] = await Promise.all([

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
-import type { AdminActivityItem } from "@/lib/admin-dashboard-data";
+import type { AdminActivityItem, AdminUserRow } from "@/lib/admin-dashboard-data";
 
 const INK = "#1a0505";
 const ACCENT = "#DC2626";
@@ -24,6 +24,8 @@ type Props = {
     publicCourses: number;
     privateCourses: number;
   };
+  users: AdminUserRow[];
+  usersError: string | null;
   activity: AdminActivityItem[];
   loadError: string | null;
 };
@@ -143,7 +145,14 @@ function MetricCard({
   );
 }
 
-function CopyOwnerButton({ text }: { text: string }) {
+function CopyTextButton({
+  text,
+  label,
+}: {
+  text: string;
+  /** e.g. "Copy email" */
+  label: string;
+}) {
   const [done, setDone] = useState(false);
   const onCopy = useCallback(async () => {
     try {
@@ -161,7 +170,7 @@ function CopyOwnerButton({ text }: { text: string }) {
       onClick={onCopy}
       className="inline-flex shrink-0 items-center rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs font-medium text-zinc-600 transition hover:border-zinc-300 hover:bg-zinc-50"
       style={{ color: INK }}
-      aria-label={done ? "Copied" : "Copy owner ID"}
+      aria-label={label}
     >
       {done ? "Copied" : "Copy"}
     </button>
@@ -171,12 +180,35 @@ function CopyOwnerButton({ text }: { text: string }) {
 export function AdminDashboardClient({
   courses: initialCourses,
   stats,
+  users: initialUsers,
+  usersError,
   activity,
   loadError,
 }: Props) {
   const router = useRouter();
   const [query, setQuery] = useState("");
+  const [userQuery, setUserQuery] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const fatalConfigError = Boolean(
+    loadError && loadError.includes("Service role")
+  );
+
+  const filteredUsers = useMemo(() => {
+    const q = userQuery.trim().toLowerCase();
+    if (!q) return initialUsers;
+    return initialUsers.filter((u) => {
+      const hay = [
+        u.email,
+        u.id,
+        u.displayName ?? "",
+        u.username ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [initialUsers, userQuery]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -246,7 +278,7 @@ export function AdminDashboardClient({
           </div>
         ) : null}
 
-        {!loadError ? (
+        {!fatalConfigError ? (
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard
               label="Total courses"
@@ -275,7 +307,196 @@ export function AdminDashboardClient({
           </div>
         ) : null}
 
-        {!loadError ? (
+        {!fatalConfigError ? (
+          <section className="mt-14">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2
+                  className="text-xl font-bold tracking-tight sm:text-2xl"
+                  style={{ color: INK }}
+                >
+                  User directory
+                </h2>
+                <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-500">
+                  Sign-in email and account metadata from Supabase Auth, plus
+                  profile fields when present. This is separate from the activity
+                  timeline below (which is not a formal audit log).
+                </p>
+              </div>
+              <label className="block w-full sm:max-w-xs">
+                <span className="sr-only">Search users</span>
+                <input
+                  type="search"
+                  placeholder="Search by email, name, username, ID…"
+                  value={userQuery}
+                  onChange={(e) => setUserQuery(e.target.value)}
+                  className="w-full rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-900 shadow-inner shadow-zinc-900/[0.02] outline-none ring-0 placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-2 focus:ring-[#DC2626]/20"
+                />
+              </label>
+            </div>
+
+            {usersError ? (
+              <div
+                className="mt-4 rounded-xl border px-4 py-3 text-sm text-zinc-800"
+                style={{
+                  borderColor: `${ACCENT}44`,
+                  backgroundColor: `${ACCENT}0a`,
+                }}
+              >
+                Could not load Auth users: {usersError}
+              </div>
+            ) : null}
+
+            <div className="mt-6 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="min-w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr
+                      className="border-b border-zinc-200 bg-zinc-50/90"
+                      style={{ color: INK }}
+                    >
+                      <th className="px-4 py-3.5 font-semibold sm:px-5">
+                        Sign-in email
+                      </th>
+                      <th className="hidden px-4 py-3.5 font-semibold lg:table-cell lg:px-5">
+                        Display name
+                      </th>
+                      <th className="hidden px-4 py-3.5 font-semibold xl:table-cell xl:px-5">
+                        Username
+                      </th>
+                      <th className="hidden px-4 py-3.5 font-semibold md:table-cell md:px-5">
+                        User ID
+                      </th>
+                      <th className="px-4 py-3.5 font-semibold sm:px-5">
+                        Signed up
+                      </th>
+                      <th className="hidden px-4 py-3.5 font-semibold lg:table-cell lg:px-5">
+                        Last sign-in
+                      </th>
+                      <th className="hidden px-4 py-3.5 font-semibold sm:table-cell sm:px-5">
+                        Confirmed
+                      </th>
+                      <th className="hidden px-4 py-3.5 font-semibold xl:table-cell xl:px-5">
+                        Onboarding
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredUsers.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          className="px-5 py-10 text-center text-zinc-500"
+                        >
+                          {initialUsers.length === 0
+                            ? "No Auth users returned."
+                            : "No users match your search."}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredUsers.map((u, index) => (
+                        <tr
+                          key={u.id}
+                          className={
+                            index % 2 === 0 ? "bg-white" : "bg-zinc-50/70"
+                          }
+                        >
+                          <td className="border-t border-zinc-100 px-4 py-3.5 sm:px-5">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className="font-medium text-zinc-900"
+                                style={{ color: INK }}
+                              >
+                                {u.email}
+                              </span>
+                              {u.email !== "—" ? (
+                                <CopyTextButton
+                                  text={u.email}
+                                  label="Copy email"
+                                />
+                              ) : null}
+                            </div>
+                            <div className="mt-2 flex flex-col gap-1 lg:hidden">
+                              {u.displayName ? (
+                                <span className="text-xs text-zinc-600">
+                                  {u.displayName}
+                                </span>
+                              ) : null}
+                              {u.username ? (
+                                <span className="text-xs text-zinc-500">
+                                  @{u.username}
+                                </span>
+                              ) : null}
+                              <span className="font-mono text-xs text-zinc-500">
+                                {u.id.slice(0, 12)}…
+                              </span>
+                              <CopyTextButton text={u.id} label="Copy user ID" />
+                            </div>
+                          </td>
+                          <td className="hidden border-t border-zinc-100 px-4 py-3.5 text-zinc-700 lg:table-cell lg:px-5">
+                            {u.displayName?.trim() || "—"}
+                          </td>
+                          <td className="hidden border-t border-zinc-100 px-4 py-3.5 text-zinc-700 xl:table-cell xl:px-5">
+                            {u.username ? (
+                              <span className="font-mono text-xs">@{u.username}</span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td className="hidden border-t border-zinc-100 px-4 py-3.5 md:table-cell md:px-5">
+                            <div className="flex max-w-[220px] items-center gap-2">
+                              <span
+                                className="truncate font-mono text-xs text-zinc-600"
+                                title={u.id}
+                              >
+                                {u.id}
+                              </span>
+                              <CopyTextButton text={u.id} label="Copy user ID" />
+                            </div>
+                          </td>
+                          <td className="border-t border-zinc-100 px-4 py-3.5 text-xs text-zinc-600 sm:px-5">
+                            <time dateTime={u.signedUpAt}>
+                              {formatWhen(u.signedUpAt)}
+                            </time>
+                          </td>
+                          <td className="hidden border-t border-zinc-100 px-4 py-3.5 text-xs text-zinc-600 lg:table-cell lg:px-5">
+                            {u.lastSignInAt ? (
+                              <time dateTime={u.lastSignInAt}>
+                                {formatWhen(u.lastSignInAt)}
+                              </time>
+                            ) : (
+                              <span className="text-zinc-400">Never</span>
+                            )}
+                          </td>
+                          <td className="hidden border-t border-zinc-100 px-4 py-3.5 sm:table-cell sm:px-5">
+                            {u.emailConfirmedAt ? (
+                              <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/15">
+                                Yes
+                              </span>
+                            ) : (
+                              <span className="inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900 ring-1 ring-amber-600/20">
+                                Pending
+                              </span>
+                            )}
+                          </td>
+                          <td className="hidden border-t border-zinc-100 px-4 py-3.5 xl:table-cell xl:px-5">
+                            {u.onboardingCompletedAt ? (
+                              <span className="text-xs text-emerald-700">Done</span>
+                            ) : (
+                              <span className="text-xs text-zinc-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        ) : null}
+
+        {!fatalConfigError ? (
           <section className="mt-14">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
               <div className="flex flex-wrap items-center gap-3">
@@ -357,7 +578,10 @@ export function AdminDashboardClient({
                                 <span className="text-xs text-zinc-500">
                                   {c.user_id.slice(0, 10)}…
                                 </span>
-                                <CopyOwnerButton text={c.user_id} />
+                                <CopyTextButton
+                                  text={c.user_id}
+                                  label="Copy owner ID"
+                                />
                               </div>
                             </td>
                             <td className="hidden border-t border-zinc-100 px-4 py-3.5 md:table-cell md:px-5">
@@ -368,7 +592,10 @@ export function AdminDashboardClient({
                                 >
                                   {c.user_id}
                                 </span>
-                                <CopyOwnerButton text={c.user_id} />
+                                <CopyTextButton
+                                  text={c.user_id}
+                                  label="Copy owner ID"
+                                />
                               </div>
                             </td>
                             <td className="border-t border-zinc-100 px-4 py-3.5 sm:px-5">
@@ -417,17 +644,18 @@ export function AdminDashboardClient({
           </section>
         ) : null}
 
-        {!loadError && activity.length > 0 ? (
+        {!fatalConfigError && activity.length > 0 ? (
           <section className="mt-16">
             <h2
               className="text-xl font-bold tracking-tight sm:text-2xl"
               style={{ color: INK }}
             >
-              Recent activity
+              Activity timeline
             </h2>
-            <p className="mt-2 text-sm text-zinc-500">
-              Newest events from course creation and new accounts. Scroll the
-              list when it grows.
+            <p className="mt-2 max-w-2xl text-sm text-zinc-500">
+              Lightweight feed of recent course creations and new sign-ups (merged
+              and sorted). This is not a full audit log — use the user directory
+              above for account-level details.
             </p>
             <div className="mt-6 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
               <ul
