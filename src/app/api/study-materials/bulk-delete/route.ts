@@ -49,7 +49,6 @@ export async function POST(request: Request) {
     .from("courses")
     .select("id")
     .eq("id", courseId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!courseOk) {
@@ -60,8 +59,7 @@ export async function POST(request: Request) {
     .from("study_materials")
     .select("id")
     .in("id", materialIds)
-    .eq("course_id", courseId)
-    .eq("user_id", user.id);
+    .eq("course_id", courseId);
 
   if (selErr) {
     console.error(selErr);
@@ -79,7 +77,6 @@ export async function POST(request: Request) {
     .from("study_materials")
     .delete()
     .in("id", materialIds)
-    .eq("user_id", user.id)
     .eq("course_id", courseId);
 
   if (delErr) {

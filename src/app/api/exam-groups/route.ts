@@ -60,14 +60,15 @@ export async function POST(request: Request) {
 
   const { data: course } = await supabase
     .from("courses")
-    .select("id")
+    .select("id, user_id")
     .eq("id", b.courseId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
-  if (!course) {
+  if (!course || typeof course.user_id !== "string" || !course.user_id) {
     return NextResponse.json({ error: "Course not found" }, { status: 404 });
   }
+
+  const courseOwnerId = course.user_id;
 
   const admin = createAdminClient();
   const reader = admin ?? supabase;
@@ -98,7 +99,7 @@ export async function POST(request: Request) {
 
   const insertPayload = {
     course_id: b.courseId,
-    user_id: user.id,
+    user_id: courseOwnerId,
     name,
     sort_order: nextOrder,
   };

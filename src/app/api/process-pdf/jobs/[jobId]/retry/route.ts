@@ -126,8 +126,7 @@ export async function POST(_request: Request, ctx: Params) {
       ingest_epoch: prevEpoch + 1,
       updated_at: restartedAt,
     })
-    .eq("id", jobId)
-    .eq("user_id", user.id);
+    .eq("id", jobId);
 
   if (upErr) {
     console.error("[process-pdf/retry] update", jobId, upErr);

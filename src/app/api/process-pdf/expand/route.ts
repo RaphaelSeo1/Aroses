@@ -59,7 +59,6 @@ export async function POST(request: Request) {
     .from("pdf_ingest_jobs")
     .select("id")
     .eq("id", jobId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (error || !row) {

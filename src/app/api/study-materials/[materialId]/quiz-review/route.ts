@@ -46,7 +46,6 @@ export async function GET(request: Request, ctx: Params) {
     .from("question_attempts")
     .select("question_index, is_correct, answered_at, selected_choice")
     .eq("material_id", materialId)
-    .eq("user_id", user.id)
     .order("answered_at", { ascending: false });
 
   if (error) {

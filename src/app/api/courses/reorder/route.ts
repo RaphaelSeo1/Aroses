@@ -38,7 +38,6 @@ export async function POST(request: Request) {
   const { data: rows, error: fetchErr } = await supabase
     .from("courses")
     .select("id")
-    .eq("user_id", user.id)
     .in("id", ids);
 
   if (fetchErr) {
@@ -57,8 +56,7 @@ export async function POST(request: Request) {
     const { error } = await supabase
       .from("courses")
       .update({ sort_order: i })
-      .eq("id", ids[i])
-      .eq("user_id", user.id);
+      .eq("id", ids[i]);
     if (error) {
       console.error(error);
       return NextResponse.json({ error: "Could not save order." }, { status: 500 });

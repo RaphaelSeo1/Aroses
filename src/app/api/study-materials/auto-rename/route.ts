@@ -39,7 +39,6 @@ export async function POST(request: Request) {
     .from("courses")
     .select("id")
     .eq("id", courseId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!courseOk) {
@@ -51,7 +50,6 @@ export async function POST(request: Request) {
     .select("id")
     .eq("id", examGroupId)
     .eq("course_id", courseId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!groupOk) {
@@ -63,7 +61,6 @@ export async function POST(request: Request) {
     .select("id, file_name, course_payload")
     .eq("course_id", courseId)
     .eq("exam_group_id", examGroupId)
-    .eq("user_id", user.id)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: false });
 
@@ -97,8 +94,7 @@ export async function POST(request: Request) {
     const { error } = await supabase
       .from("study_materials")
       .update({ file_name: fileNames[i] })
-      .eq("id", rows[i].id)
-      .eq("user_id", user.id);
+      .eq("id", rows[i].id);
 
     if (error) {
       console.error(error);

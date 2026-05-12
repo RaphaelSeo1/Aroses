@@ -66,7 +66,6 @@ export async function POST(request: Request, ctx: Params) {
       .select("highlight_excerpt, note_body")
       .eq("material_id", materialId)
       .eq("module_id", moduleId)
-      .eq("user_id", user.id)
       .in("id", ids);
 
     if (error) {

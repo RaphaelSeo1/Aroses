@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { parseSafeInternalNext } from "@/lib/internal-next-path";
+import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import {
   emailMatchesAllowedDomains,
   isAuthEmailDomainAllowlistEnforced,
@@ -77,6 +78,15 @@ export async function middleware(request: NextRequest) {
         : fullPath;
     url.searchParams.set("next", nextPath);
     return NextResponse.redirect(url);
+  }
+
+  if (user && pathname.startsWith("/dashboard/admin")) {
+    if (!isAppAdminEnvUser(user)) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
   }
 
   if (!user && pathname.startsWith("/explore")) {

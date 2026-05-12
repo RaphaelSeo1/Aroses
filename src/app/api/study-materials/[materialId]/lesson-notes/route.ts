@@ -49,8 +49,7 @@ export async function GET(request: Request, ctx: Params) {
     .from("user_lesson_notes")
     .select("id, lesson_index, highlight_excerpt, note_body, updated_at")
     .eq("material_id", materialId)
-    .eq("module_id", moduleId)
-    .eq("user_id", user.id);
+    .eq("module_id", moduleId);
 
   if (Number.isFinite(lessonFilter)) {
     q = q.eq("lesson_index", lessonFilter);
@@ -195,7 +194,6 @@ export async function PATCH(request: Request, ctx: Params) {
     .from("user_lesson_notes")
     .update(patch)
     .eq("id", id)
-    .eq("user_id", user.id)
     .eq("material_id", materialId)
     .select("id, lesson_index, highlight_excerpt, note_body, updated_at")
     .maybeSingle();
@@ -235,7 +233,6 @@ export async function DELETE(request: Request, ctx: Params) {
     .from("user_lesson_notes")
     .delete()
     .eq("id", id)
-    .eq("user_id", user.id)
     .eq("material_id", materialId);
 
   if (error) {

@@ -66,7 +66,6 @@ export async function PATCH(request: Request, ctx: Params) {
     .from("courses")
     .update(patch)
     .eq("id", courseId)
-    .eq("user_id", user.id)
     .select("id")
     .maybeSingle();
 
@@ -118,7 +117,6 @@ export async function DELETE(_request: Request, ctx: Params) {
     .from("courses")
     .delete()
     .eq("id", courseId)
-    .eq("user_id", user.id)
     .select("id")
     .maybeSingle();
 

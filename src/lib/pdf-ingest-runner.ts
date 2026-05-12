@@ -252,7 +252,6 @@ function parseStoredModules(raw: unknown): CourseModule[] {
 async function finalizePdfIngest(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
-  userId: string,
   courseId: string,
   examGroupId: string,
   storagePath: string,
@@ -266,6 +265,29 @@ async function finalizePdfIngest(
     description: outline.description,
     modules,
   };
+
+  const { data: courseOwnerRow, error: ownerErr } = await admin
+    .from("courses")
+    .select("user_id")
+    .eq("id", courseId)
+    .maybeSingle();
+
+  const materialOwnerId =
+    typeof courseOwnerRow?.user_id === "string" &&
+    courseOwnerRow.user_id.length > 0
+      ? courseOwnerRow.user_id
+      : null;
+
+  if (ownerErr || !materialOwnerId) {
+    console.error("[pdf-ingest] course owner for study_materials", jobId, ownerErr);
+    await failJob(
+      admin,
+      jobId,
+      storagePath,
+      "Could not resolve course owner for this upload."
+    );
+    return null;
+  }
 
   /** Append after existing uploads so the list follows “first added first” (ascending sort_order). */
   const { data: maxRow } = await admin
@@ -298,7 +320,7 @@ async function finalizePdfIngest(
   const { data: row, error: insErr } = await admin
     .from("study_materials")
     .insert({
-      user_id: userId,
+      user_id: materialOwnerId,
       course_id: courseId,
       exam_group_id: examGroupId,
       file_name: storedFileName,
@@ -433,7 +455,6 @@ export async function runPdfIngestExpandOne(
     const fin = await finalizePdfIngest(
       admin,
       jobId,
-      job.user_id,
       job.course_id,
       job.exam_group_id,
       storagePath,
@@ -528,7 +549,6 @@ export async function runPdfIngestExpandOne(
     const fin = await finalizePdfIngest(
       admin,
       jobId,
-      job.user_id,
       job.course_id,
       job.exam_group_id,
       storagePath,

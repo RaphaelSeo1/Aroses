@@ -51,7 +51,6 @@ export async function POST(request: Request, ctx: Params) {
     .from("study_materials")
     .select("course_payload")
     .eq("id", materialId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (fetchErr || !row) {
@@ -95,8 +94,7 @@ export async function POST(request: Request, ctx: Params) {
   const { error: saveErr } = await supabase
     .from("study_materials")
     .update({ course_payload: payload })
-    .eq("id", materialId)
-    .eq("user_id", user.id);
+    .eq("id", materialId);
 
   if (saveErr) {
     console.error(saveErr);

@@ -32,7 +32,6 @@ export async function DELETE(_request: Request, ctx: Params) {
     .from("user_personal_quiz_items")
     .delete()
     .eq("id", itemId)
-    .eq("user_id", user.id)
     .eq("material_id", materialId);
 
   if (error) {

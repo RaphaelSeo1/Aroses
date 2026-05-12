@@ -33,6 +33,11 @@ function jobStartedAtMs(createdAt?: string): number | null {
 /** Space out module expands — each call uses heavy output tokens (Anthropic TPM). */
 const EXPAND_MODULE_GAP_MS = 1_600;
 
+/** Vercel / edge / origin blips — retry instead of forcing a full page refresh. */
+const TRANSIENT_HTTP = new Set([
+  408, 429, 500, 502, 503, 504, 524,
+]);
+
 type ExpandResponseJson = {
   error?: string;
   complete?: boolean;
@@ -40,6 +45,77 @@ type ExpandResponseJson = {
   modulesBuilt?: number;
   modulesTotal?: number;
 };
+
+type JobGetJson = {
+  status?: string;
+  materialId?: string;
+  error?: string;
+  outlineReady?: boolean;
+  modulesBuilt?: number;
+  modulesTotal?: number;
+  createdAt?: string;
+  streamPreview?: string | null;
+  previewCourse?: unknown;
+};
+
+/**
+ * GET job row with retries (cold starts, rate limits, brief network loss).
+ */
+async function fetchJobStatusWithRetry(
+  jobId: string,
+  signal: AbortSignal | undefined
+): Promise<
+  | { kind: "ok"; r: Response; data: JobGetJson; raw: string }
+  | { kind: "soft" }
+  | { kind: "fatal"; error: string }
+> {
+  for (let attempt = 0; attempt < 14; attempt++) {
+    if (signal?.aborted) {
+      return { kind: "fatal", error: "Cancelled." };
+    }
+    let r: Response;
+    try {
+      r = await fetch(`/api/process-pdf/jobs/${jobId}`, { signal });
+    } catch {
+      await sleep(Math.min(12_000, 900 + attempt * 1_000));
+      continue;
+    }
+    if (TRANSIENT_HTTP.has(r.status)) {
+      await sleep(
+        r.status === 429
+          ? Math.min(75_000, 4_000 + attempt * 6_000)
+          : Math.min(20_000, 1_200 + attempt * 1_800)
+      );
+      continue;
+    }
+
+    const raw = await r.text();
+    let data: JobGetJson;
+    try {
+      data = JSON.parse(raw) as JobGetJson;
+    } catch {
+      await sleep(2_000);
+      continue;
+    }
+
+    if (!r.ok) {
+      if (typeof data.error === "string" && data.error.trim()) {
+        return { kind: "fatal", error: data.error.trim() };
+      }
+      if (r.status >= 500) {
+        await sleep(Math.min(16_000, 1_500 + attempt * 2_000));
+        continue;
+      }
+      return {
+        kind: "fatal",
+        error: `Status check failed (${r.status}).`,
+      };
+    }
+
+    return { kind: "ok", r, data, raw };
+  }
+  return { kind: "soft" };
+}
 
 /**
  * POST /expand with retries when Vercel returns 429 (org output-token-per-minute, etc.).
@@ -50,7 +126,7 @@ async function postProcessPdfExpand(
 ): Promise<{ ok: true; json: ExpandResponseJson } | { ok: false; status: number; json: ExpandResponseJson | null }> {
   let lastStatus = 500;
   let lastJson: ExpandResponseJson | null = null;
-  for (let attempt = 0; attempt < 8; attempt++) {
+  for (let attempt = 0; attempt < 12; attempt++) {
     let r: Response;
     try {
       r = await fetch("/api/process-pdf/expand", {
@@ -60,6 +136,10 @@ async function postProcessPdfExpand(
         signal,
       });
     } catch {
+      if (attempt < 11) {
+        await sleep(Math.min(12_000, 800 + attempt * 1_000));
+        continue;
+      }
       return { ok: false, status: 0, json: null };
     }
     const raw = await r.text();
@@ -77,8 +157,17 @@ async function postProcessPdfExpand(
       }
       return { ok: true, json: parsed };
     }
-    if (r.status === 429 && attempt < 7) {
-      const delayMs = Math.min(90_000, 14_000 + attempt * 9_000);
+    const retryable =
+      r.status === 429 ||
+      TRANSIENT_HTTP.has(r.status) ||
+      (r.status === 400 &&
+        typeof parsed?.error === "string" &&
+        /rate|429|throttl|overloaded|timeout/i.test(parsed.error));
+    if (retryable && attempt < 11) {
+      const delayMs =
+        r.status === 429
+          ? Math.min(90_000, 14_000 + attempt * 9_000)
+          : Math.min(55_000, 2_200 + attempt * 4_500);
       await sleep(delayMs);
       continue;
     }
@@ -131,25 +220,20 @@ export async function pollPdfIngestJob(
     if (signal?.aborted) {
       return { error: "Cancelled." };
     }
-    const r = await fetch(`/api/process-pdf/jobs/${jobId}`);
-    const raw = await r.text();
-    let data: {
-      status?: string;
-      materialId?: string;
-      error?: string;
-      outlineReady?: boolean;
-      modulesBuilt?: number;
-      modulesTotal?: number;
-      createdAt?: string;
-      streamPreview?: string | null;
-      previewCourse?: unknown;
-    };
-    try {
-      data = JSON.parse(raw) as typeof data;
-    } catch {
-      await sleep(2000);
+    const got = await fetchJobStatusWithRetry(jobId, signal);
+    if (got.kind === "fatal") {
+      return { error: got.error };
+    }
+    if (got.kind === "soft") {
+      onProgress?.({
+        line: "Waiting for status from the server after a brief hiccup…",
+        bar: "indeterminate",
+      });
+      await sleep(2_500);
       continue;
     }
+
+    const { data } = got;
 
     const snapStatus = typeof data.status === "string" ? data.status : "unknown";
     options?.onJobSnapshot?.({
@@ -160,13 +244,6 @@ export async function pollPdfIngestJob(
       modulesTotal:
         typeof data.modulesTotal === "number" ? data.modulesTotal : undefined,
     });
-
-    if (!r.ok) {
-      if (typeof data.error === "string" && data.error.trim()) {
-        return { error: data.error.trim() };
-      }
-      return { error: `Status check failed (${r.status}).` };
-    }
 
     if ("streamPreview" in data) {
       const raw = (data as { streamPreview?: unknown }).streamPreview;
@@ -223,10 +300,12 @@ export async function pollPdfIngestJob(
       const expandResult = await postProcessPdfExpand(jobId, signal);
       if (!expandResult.ok && expandResult.status === 0) {
         if (signal?.aborted) return { error: "Cancelled." };
-        return {
-          error:
-            "Network error while building a module. Check your connection and try uploading again.",
-        };
+        onProgress?.({
+          line: `Writing module ${next} of ${total}${elapsedPart} — reconnecting…`,
+          bar: "indeterminate",
+        });
+        await sleep(3_200);
+        continue;
       }
       const expJson = expandResult.ok
         ? expandResult.json
@@ -278,10 +357,12 @@ export async function pollPdfIngestJob(
       const expandSave = await postProcessPdfExpand(jobId, signal);
       if (!expandSave.ok && expandSave.status === 0) {
         if (signal?.aborted) return { error: "Cancelled." };
-        return {
-          error:
-            "Network error while saving the study set. Check your connection — the build may still finish; refresh the course page.",
-        };
+        onProgress?.({
+          line: `Saving your study set (${total} module${total === 1 ? "" : "s"})…${elapsedPart} — reconnecting…`,
+          bar: "indeterminate",
+        });
+        await sleep(3_200);
+        continue;
       }
       const expJson = expandSave.ok
         ? expandSave.json

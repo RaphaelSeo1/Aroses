@@ -51,7 +51,6 @@ export async function POST(request: Request) {
     .from("courses")
     .select("id")
     .eq("id", courseId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!courseOk) {
@@ -63,7 +62,6 @@ export async function POST(request: Request) {
     .select("id")
     .eq("id", examGroupId)
     .eq("course_id", courseId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!groupOk) {
@@ -75,7 +73,6 @@ export async function POST(request: Request) {
     .select("id")
     .eq("course_id", courseId)
     .eq("exam_group_id", examGroupId)
-    .eq("user_id", user.id)
     .in("id", ids);
 
   if (fetchErr) {
@@ -95,7 +92,6 @@ export async function POST(request: Request) {
     .select("id")
     .eq("course_id", courseId)
     .eq("exam_group_id", examGroupId)
-    .eq("user_id", user.id)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: false });
 
@@ -114,7 +110,6 @@ export async function POST(request: Request) {
       .from("study_materials")
       .update({ sort_order: i })
       .eq("id", fullOrder[i])
-      .eq("user_id", user.id)
       .eq("course_id", courseId)
       .eq("exam_group_id", examGroupId);
     if (error) {

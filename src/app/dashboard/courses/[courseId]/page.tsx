@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseCreatorOverview } from "@/components/CourseCreatorOverview";
@@ -9,6 +8,7 @@ import {
   type MaterialRow,
 } from "@/components/ExamGroupsPanel";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
@@ -87,11 +87,30 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
 
   const uploadsCount = materialsRaw?.length ?? 0;
 
+  const adminHubHref = isAppAdminEnvUser({
+    id: user.id,
+    email: user.email,
+  })
+    ? "/dashboard/admin"
+    : undefined;
+  const adminViewingOthersCourse =
+    typeof course.owner_user_id === "string" &&
+    course.owner_user_id !== user.id;
+
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader
+        right={<HeaderNavLoggedIn adminHubHref={adminHubHref} />}
+      />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
+          {adminViewingOthersCourse ? (
+            <p className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/35 dark:text-amber-100">
+              Admin: you are editing someone else&apos;s course in the creator
+              workspace. Materials and sections stay attributed to the course
+              owner.
+            </p>
+          ) : null}
           <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
             Course workspace
           </p>

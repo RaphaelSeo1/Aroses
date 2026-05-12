@@ -7,8 +7,10 @@ import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import { HighlightedSummary } from "@/components/HighlightedSummary";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { McqQuiz } from "@/components/McqQuiz";
+import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
+import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload, SidebarMaterialOutline } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
@@ -46,12 +48,14 @@ export default async function StudyPage({ params, searchParams }: Props) {
     );
   }
 
-  const { data: courseRow } = await supabase
-    .from("courses")
-    .select("id, title, description")
-    .eq("id", courseId)
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const adminHubHref = isAppAdminEnvUser({
+    id: user.id,
+    email: user.email,
+  })
+    ? "/dashboard/admin"
+    : undefined;
+
+  const courseRow = await fetchCourseForDashboard(supabase, courseId, user.id);
 
   if (!courseRow) notFound();
 
@@ -105,6 +109,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
         <AppHeader
           right={
             <HeaderNavLoggedIn
+              adminHubHref={adminHubHref}
               courseHomeHref={`/dashboard/courses/${courseId}`}
             />
           }
@@ -213,6 +218,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
         <AppHeader
           right={
             <HeaderNavLoggedIn
+              adminHubHref={adminHubHref}
               courseHomeHref={`/dashboard/courses/${courseId}`}
             />
           }
@@ -255,6 +261,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
         <AppHeader
           right={
             <HeaderNavLoggedIn
+              adminHubHref={adminHubHref}
               courseHomeHref={`/dashboard/courses/${courseId}`}
             />
           }
@@ -315,6 +322,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
       <AppHeader
         right={
           <HeaderNavLoggedIn
+            adminHubHref={adminHubHref}
             courseHomeHref={`/dashboard/courses/${courseId}`}
           />
         }

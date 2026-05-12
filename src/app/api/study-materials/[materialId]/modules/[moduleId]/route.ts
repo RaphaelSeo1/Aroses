@@ -55,7 +55,6 @@ export async function PATCH(request: Request, ctx: Params) {
     .from("study_materials")
     .select("course_payload")
     .eq("id", materialId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (fetchErr || !row) {
@@ -83,8 +82,7 @@ export async function PATCH(request: Request, ctx: Params) {
   const { error: saveErr } = await supabase
     .from("study_materials")
     .update({ course_payload: payload })
-    .eq("id", materialId)
-    .eq("user_id", user.id);
+    .eq("id", materialId);
 
   if (saveErr) {
     console.error(saveErr);
@@ -118,7 +116,6 @@ export async function DELETE(_request: Request, ctx: Params) {
     .from("study_materials")
     .select("course_payload")
     .eq("id", materialId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (fetchErr || !row) {
@@ -153,8 +150,7 @@ export async function DELETE(_request: Request, ctx: Params) {
   const { error: saveErr } = await supabase
     .from("study_materials")
     .update({ course_payload: payload })
-    .eq("id", materialId)
-    .eq("user_id", user.id);
+    .eq("id", materialId);
 
   if (saveErr) {
     console.error(saveErr);
@@ -164,14 +160,12 @@ export async function DELETE(_request: Request, ctx: Params) {
   await supabase
     .from("module_completion")
     .delete()
-    .eq("material_id", materialId)
-    .eq("user_id", user.id);
+    .eq("material_id", materialId);
 
   await supabase
     .from("question_attempts")
     .delete()
-    .eq("material_id", materialId)
-    .eq("user_id", user.id);
+    .eq("material_id", materialId);
 
   return NextResponse.json({ ok: true });
 }

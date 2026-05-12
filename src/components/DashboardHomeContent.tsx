@@ -13,11 +13,13 @@ export function DashboardHomeContent({
   viewerUserId,
   ownedCourses,
   studyingCourses,
+  adminHubHref,
 }: {
   userEmail: string;
   viewerUserId: string;
   ownedCourses: DashboardCourse[];
   studyingCourses: StudyingCourse[];
+  adminHubHref?: string;
 }) {
   const hasOwned = ownedCourses.length > 0;
   const hasStudying = studyingCourses.length > 0;
@@ -25,7 +27,7 @@ export function DashboardHomeContent({
 
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedIn adminHubHref={adminHubHref} />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
           <div className="relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/75 p-6 shadow-xl shadow-zinc-900/[0.06] ring-1 ring-white/60 backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-950/75 dark:shadow-black/30 dark:ring-zinc-600/40 sm:p-8">

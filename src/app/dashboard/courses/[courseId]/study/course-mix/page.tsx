@@ -3,7 +3,9 @@ import { notFound, redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseMixQuizClient } from "@/components/CourseMixQuizClient";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
+import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
 import type { CourseWideQuizEntry } from "@/lib/quiz-session";
@@ -60,12 +62,14 @@ export default async function CourseMixStudyPage({ params, searchParams }: Props
     );
   }
 
-  const { data: courseRow } = await supabase
-    .from("courses")
-    .select("id, title")
-    .eq("id", courseId)
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const adminHubHref = isAppAdminEnvUser({
+    id: user.id,
+    email: user.email,
+  })
+    ? "/dashboard/admin"
+    : undefined;
+
+  const courseRow = await fetchCourseForDashboard(supabase, courseId, user.id);
 
   if (!courseRow) notFound();
 
@@ -124,7 +128,10 @@ export default async function CourseMixStudyPage({ params, searchParams }: Props
     <>
       <AppHeader
         right={
-          <HeaderNavLoggedIn courseHomeHref={`/dashboard/courses/${courseId}`} />
+          <HeaderNavLoggedIn
+            adminHubHref={adminHubHref}
+            courseHomeHref={`/dashboard/courses/${courseId}`}
+          />
         }
       />
       <div className="border-b border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950 sm:px-6">

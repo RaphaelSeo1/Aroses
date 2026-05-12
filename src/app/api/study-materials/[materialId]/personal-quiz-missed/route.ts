@@ -37,8 +37,7 @@ export async function GET(request: Request, ctx: Params) {
     .from("user_personal_quiz_items")
     .select("id")
     .eq("material_id", materialId)
-    .eq("module_id", moduleId)
-    .eq("user_id", user.id);
+    .eq("module_id", moduleId);
 
   if (ie) {
     console.error(ie);
@@ -53,7 +52,6 @@ export async function GET(request: Request, ctx: Params) {
   const { data: rows, error } = await supabase
     .from("user_personal_question_attempts")
     .select("personal_item_id, is_correct, answered_at")
-    .eq("user_id", user.id)
     .in("personal_item_id", ids)
     .order("answered_at", { ascending: false });
 

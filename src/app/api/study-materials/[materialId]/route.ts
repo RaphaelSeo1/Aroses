@@ -44,8 +44,7 @@ export async function PATCH(request: Request, ctx: Params) {
   const { error } = await supabase
     .from("study_materials")
     .update({ file_name: fileName })
-    .eq("id", materialId)
-    .eq("user_id", user.id);
+    .eq("id", materialId);
 
   if (error) {
     console.error(error);
@@ -72,8 +71,7 @@ export async function DELETE(_request: Request, ctx: Params) {
   const { error } = await supabase
     .from("study_materials")
     .delete()
-    .eq("id", materialId)
-    .eq("user_id", user.id);
+    .eq("id", materialId);
 
   if (error) {
     console.error(error);

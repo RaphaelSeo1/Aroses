@@ -162,10 +162,12 @@ export function CourseBuildTheater({
   courseId,
   jobIds,
   sectionId,
+  adminHubHref,
 }: {
   courseId: string;
   jobIds: string[];
   sectionId?: string | null;
+  adminHubHref?: string;
 }) {
   const router = useRouter();
   const [activeJob, setActiveJob] = useState(jobIds[0] ?? "");
@@ -466,7 +468,10 @@ export function CourseBuildTheater({
         : null}
       <AppHeader
         right={
-          <HeaderNavLoggedIn courseHomeHref={courseHomeWithSection} />
+          <HeaderNavLoggedIn
+            adminHubHref={adminHubHref}
+            courseHomeHref={courseHomeWithSection}
+          />
         }
       />
       <main className="min-h-[calc(100vh-4rem)] bg-white dark:bg-zinc-950">

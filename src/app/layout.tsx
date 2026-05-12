@@ -17,8 +17,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: `${APP_NAME} — AI study paths from your class material`,
-  description: `${APP_NAME} turns your lectures and notes into structured lessons, checkpoints, and quizzes — grounded in what you add.`,
+  title: `${APP_NAME} — Built for the classes that break you`,
+  description: `Upload your lecture slides and ${APP_NAME} builds a personalized course — lessons, quizzes, and practice from your actual material. Not generic. Yours.`,
   icons: {
     icon: "/aroses-icon.png",
     apple: "/aroses-icon.png",

@@ -53,7 +53,6 @@ export async function POST(request: Request, ctx: Params) {
     .from("study_materials")
     .select("id")
     .eq("id", materialId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!mat) {

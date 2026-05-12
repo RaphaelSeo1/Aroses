@@ -8,9 +8,12 @@ import { LogoutButton } from "@/components/LogoutButton";
  */
 export function HeaderNavLoggedIn({
   courseHomeHref,
+  adminHubHref,
 }: {
   /** Show when studying — links back to uploads/workspace for this course. */
   courseHomeHref?: string;
+  /** Creator-only admin hub (`/dashboard/admin`), when env allowlist matches. */
+  adminHubHref?: string;
 }) {
   return (
     <>
@@ -45,6 +48,15 @@ export function HeaderNavLoggedIn({
       >
         Profile
       </HeaderNavLink>
+      {adminHubHref ? (
+        <HeaderNavLink
+          href={adminHubHref}
+          activeWhen={(p) => p.startsWith("/dashboard/admin")}
+          title="Admin controls"
+        >
+          Admin
+        </HeaderNavLink>
+      ) : null}
       {courseHomeHref ? (
         <HeaderNavLink href={courseHomeHref}>Course home</HeaderNavLink>
       ) : null}

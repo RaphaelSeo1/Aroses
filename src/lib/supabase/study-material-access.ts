@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { fetchIsDbSuperAdmin } from "@/lib/db-super-admin";
+
 /**
  * True if this signed-in user may load this study material (owner or public course).
  */
@@ -16,6 +18,7 @@ export async function canAccessStudyMaterial(
 
   if (error || !row) return false;
   if (row.user_id === userId) return true;
+  if (await fetchIsDbSuperAdmin(supabase)) return true;
 
   const { data: course, error: ce } = await supabase
     .from("courses")

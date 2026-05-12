@@ -132,7 +132,6 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     .from("courses")
     .select("id")
     .eq("id", courseId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!courseOwn) {
@@ -145,7 +144,6 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     .select("id")
     .eq("id", examGroupId)
     .eq("course_id", courseId)
-    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!groupOwn) {

@@ -40,7 +40,6 @@ export async function GET(request: Request, ctx: Params) {
     )
     .eq("material_id", materialId)
     .eq("module_id", moduleId)
-    .eq("user_id", user.id)
     .order("due_at", { ascending: true });
 
   if (error) {
