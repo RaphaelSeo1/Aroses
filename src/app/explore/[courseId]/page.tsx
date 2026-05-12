@@ -6,6 +6,7 @@ import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { APP_NAME } from "@/lib/brand";
 import { exploreOutlineFromRpcPayload } from "@/lib/explore-course-outline";
+import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
@@ -64,12 +65,14 @@ export default async function ExploreCoursePage({ params }: Props) {
   const isOwner = Boolean(user && user.id === course.user_id);
   const studyHref = `/explore/${course.id}/study`;
 
+  const adminHubHref = adminHubHrefForSessionUser(user);
+
   return (
     <>
       <AppHeader
         right={
           user ? (
-            <HeaderNavLoggedIn />
+            <HeaderNavLoggedIn adminHubHref={adminHubHref} />
           ) : (
             <>
               <HeaderNavLink href="/explore">Explore</HeaderNavLink>

@@ -2,6 +2,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { MarketingLandingContent } from "@/components/MarketingLandingContent";
+import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function IntroPage() {
@@ -10,12 +11,14 @@ export default async function IntroPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const adminHubHref = user ? adminHubHrefForSessionUser(user) : undefined;
+
   return (
     <>
       <AppHeader
         right={
           user ? (
-            <HeaderNavLoggedIn />
+            <HeaderNavLoggedIn adminHubHref={adminHubHref} />
           ) : (
             <>
               <HeaderNavLink href="/explore">Explore</HeaderNavLink>

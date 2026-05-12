@@ -4,6 +4,7 @@ import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { LegalFooterLinks } from "@/components/LegalFooterLinks";
 import { APP_NAME } from "@/lib/brand";
+import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { createClient } from "@/lib/supabase/server";
 import type { ReactNode } from "react";
 
@@ -19,12 +20,14 @@ export async function LegalDocLayout({
     data: { user },
   } = await supabase.auth.getUser();
 
+  const adminHubHref = user ? adminHubHrefForSessionUser(user) : undefined;
+
   return (
     <>
       <AppHeader
         right={
           user ? (
-            <HeaderNavLoggedIn />
+            <HeaderNavLoggedIn adminHubHref={adminHubHref} />
           ) : (
             <>
               <HeaderNavLink href="/explore">Explore</HeaderNavLink>

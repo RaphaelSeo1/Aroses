@@ -57,3 +57,11 @@ export function isAppAdminEnvUser(user: {
   if (em && emails.has(em)) return true;
   return false;
 }
+
+/** Use from Server Components (e.g. Explore) where client nav context may not reach the header. */
+export function adminHubHrefForSessionUser(user: {
+  id: string;
+  email?: string | null;
+}): string | undefined {
+  return isAppAdminEnvUser(user) ? "/dashboard/admin" : undefined;
+}

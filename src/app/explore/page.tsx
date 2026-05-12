@@ -6,6 +6,7 @@ import { ExploreCoursesBoard } from "@/components/ExploreCoursesBoard";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { APP_NAME } from "@/lib/brand";
+import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { createClient } from "@/lib/supabase/server";
 
 export const metadata = {
@@ -33,12 +34,14 @@ export default async function ExplorePage() {
         /is_public|schema cache/i.test(coursesError.message ?? ""))
   );
 
+  const adminHubHref = user ? adminHubHrefForSessionUser(user) : undefined;
+
   return (
     <>
       <AppHeader
         right={
           user ? (
-            <HeaderNavLoggedIn />
+            <HeaderNavLoggedIn adminHubHref={adminHubHref} />
           ) : (
             <>
               <HeaderNavLink href="/explore">Explore</HeaderNavLink>

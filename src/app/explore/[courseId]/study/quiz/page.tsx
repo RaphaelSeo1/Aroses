@@ -8,6 +8,7 @@ import { CoursePlayer } from "@/components/CoursePlayer";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { summarizeCourseProgress } from "@/lib/learning-stats";
+import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { createClient } from "@/lib/supabase/server";
@@ -220,7 +221,7 @@ export default async function ExploreStudyQuizPage({
 
   const headerRight =
     user ? (
-      <HeaderNavLoggedIn />
+      <HeaderNavLoggedIn adminHubHref={adminHubHrefForSessionUser(user)} />
     ) : (
       <>
         <HeaderNavLink href="/explore">Explore</HeaderNavLink>
