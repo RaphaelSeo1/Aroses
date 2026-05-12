@@ -6,6 +6,20 @@ import { fileURLToPath } from "url";
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
+  /**
+   * Edge middleware cannot reliably read non-NEXT_PUBLIC env on Vercel. Mirror
+   * allowlist vars so `isAppAdminEnvUser` works there when only `APP_ADMIN_*` is set.
+   */
+  env: {
+    NEXT_PUBLIC_APP_ADMIN_USER_IDS:
+      process.env.NEXT_PUBLIC_APP_ADMIN_USER_IDS ||
+      process.env.APP_ADMIN_USER_IDS ||
+      "",
+    NEXT_PUBLIC_APP_ADMIN_EMAILS:
+      process.env.NEXT_PUBLIC_APP_ADMIN_EMAILS ||
+      process.env.APP_ADMIN_EMAILS ||
+      "",
+  },
   turbopack: {
     root: projectRoot,
   },

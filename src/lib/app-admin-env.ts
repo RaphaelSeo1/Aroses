@@ -1,8 +1,14 @@
 /**
- * Gate `/dashboard/admin` and the Admin nav link. Server-only env is enough for
- * middleware; use NEXT_PUBLIC_APP_ADMIN_USER_IDS for the client nav link (same UUIDs).
+ * Gate `/dashboard/admin` and the Admin nav link.
  *
- * Comma-separated auth user UUIDs. Optional: APP_ADMIN_EMAILS (comma-separated, case-insensitive).
+ * Use comma-separated auth user UUIDs in `APP_ADMIN_USER_IDS` and/or
+ * `NEXT_PUBLIC_APP_ADMIN_USER_IDS`. Emails: `APP_ADMIN_EMAILS` and/or
+ * `NEXT_PUBLIC_APP_ADMIN_EMAILS`.
+ *
+ * On Vercel, **middleware runs on Edge** and often cannot read non-`NEXT_PUBLIC_`
+ * variables from `.env`; `next.config.ts` mirrors the private vars into the
+ * `NEXT_PUBLIC_*` keys at build time so the gate still works when you only set
+ * `APP_ADMIN_USER_IDS` in project settings.
  */
 
 const UUID_RE =
@@ -35,7 +41,9 @@ export function getAppAdminUserIdSet(): Set<string> {
 }
 
 export function getAppAdminEmailSet(): Set<string> {
-  return parseEmailList(process.env.APP_ADMIN_EMAILS?.trim());
+  const a = parseEmailList(process.env.APP_ADMIN_EMAILS?.trim());
+  const b = parseEmailList(process.env.NEXT_PUBLIC_APP_ADMIN_EMAILS?.trim());
+  return new Set([...a, ...b]);
 }
 
 export function isAppAdminEnvUser(user: {

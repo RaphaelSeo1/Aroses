@@ -1,5 +1,6 @@
 "use client";
 
+import { useDashboardAdminNav } from "@/components/DashboardAdminNavContext";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { LogoutButton } from "@/components/LogoutButton";
 
@@ -8,13 +9,15 @@ import { LogoutButton } from "@/components/LogoutButton";
  */
 export function HeaderNavLoggedIn({
   courseHomeHref,
-  adminHubHref,
+  adminHubHref: adminHubHrefProp,
 }: {
   /** Show when studying — links back to uploads/workspace for this course. */
   courseHomeHref?: string;
   /** Creator-only admin hub (`/dashboard/admin`), when env allowlist matches. */
   adminHubHref?: string;
 }) {
+  const dashboardNav = useDashboardAdminNav();
+  const adminHubHref = adminHubHrefProp ?? dashboardNav?.adminHubHref;
   return (
     <>
       <HeaderNavLink
