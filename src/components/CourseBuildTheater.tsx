@@ -22,6 +22,43 @@ type RowState = {
   materialId?: string;
 };
 
+type PollOutcome = { materialId?: string; error?: string };
+
+function PdfJobPoll({
+  jobId,
+  nonce,
+  onProgress,
+  onPreview,
+  onDone,
+}: {
+  jobId: string;
+  nonce: number;
+  onProgress: (id: string, info: PdfBuildProgressUI) => void;
+  onPreview: (id: string, course: CoursePayload | null) => void;
+  onDone: (id: string, result: PollOutcome) => void;
+}) {
+  useEffect(() => {
+    const ac = new AbortController();
+    void (async () => {
+      const polled = await pollPdfIngestJob(
+        jobId,
+        (info) => {
+          if (!ac.signal.aborted) onProgress(jobId, info);
+        },
+        {
+          signal: ac.signal,
+          onPreviewCourse: (course) => {
+            if (!ac.signal.aborted) onPreview(jobId, course);
+          },
+        }
+      );
+      if (!ac.signal.aborted) onDone(jobId, polled);
+    })();
+    return () => ac.abort();
+  }, [jobId, nonce, onProgress, onPreview, onDone]);
+  return null;
+}
+
 export function CourseBuildTheater({
   courseId,
   jobIds,
@@ -37,11 +74,19 @@ export function CourseBuildTheater({
   const [previewByJob, setPreviewByJob] = useState<
     Record<string, CoursePayload | null>
   >({});
+  const [terminalByJob, setTerminalByJob] = useState<
+    Record<string, PollOutcome | null>
+  >(() => Object.fromEntries(jobIds.map((id) => [id, null])));
+  const [restartNonce, setRestartNonce] = useState<Record<string, number>>(
+    () => Object.fromEntries(jobIds.map((id) => [id, 0]))
+  );
   const [phase, setPhase] = useState<"boot" | "running" | "done">("boot");
   const [summary, setSummary] = useState<"success" | "partial" | "fail" | null>(
     null
   );
   const [moduleIdx, setModuleIdx] = useState(0);
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [retryErr, setRetryErr] = useState<string | null>(null);
 
   const courseHome = `/dashboard/courses/${courseId}`;
   const courseHomeWithSection =
@@ -63,13 +108,47 @@ export function CourseBuildTheater({
     router.refresh();
   }, [router, courseHomeWithSection]);
 
+  const onProgress = useCallback((id: string, info: PdfBuildProgressUI) => {
+    setRows((prev) => {
+      const base = prev[id] ?? {
+        label: "PDF",
+        line: "",
+        bar: "indeterminate" as const,
+      };
+      return {
+        ...prev,
+        [id]: {
+          ...base,
+          line: info.line,
+          bar: info.bar,
+        },
+      };
+    });
+  }, []);
+
+  const onPreview = useCallback((id: string, course: CoursePayload | null) => {
+    setPreviewByJob((prev) => ({ ...prev, [id]: course }));
+  }, []);
+
+  const onDone = useCallback((id: string, result: PollOutcome) => {
+    setTerminalByJob((prev) => ({ ...prev, [id]: result }));
+  }, []);
+
+  useEffect(() => {
+    setActiveJob((prev) => (jobIds.includes(prev) ? prev : jobIds[0] ?? ""));
+    setTerminalByJob(Object.fromEntries(jobIds.map((id) => [id, null])));
+    setRestartNonce(Object.fromEntries(jobIds.map((id) => [id, 0])));
+    setPhase("boot");
+    setSummary(null);
+    setRetryErr(null);
+  }, [jobIds.join(",")]);
+
   useEffect(() => {
     if (jobIds.length === 0) return;
 
     const ac = new AbortController();
-    let successTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const run = async () => {
+    const boot = async () => {
       const labelMap: Record<string, string> = {};
       await Promise.all(
         jobIds.map(async (id) => {
@@ -104,89 +183,123 @@ export function CourseBuildTheater({
         )
       );
       setPhase("running");
-
-      const outcomes = await Promise.all(
-        jobIds.map(async (id) => {
-          const polled = await pollPdfIngestJob(
-            id,
-            (info) => {
-              if (ac.signal.aborted) return;
-              setRows((prev) => ({
-                ...prev,
-                [id]: {
-                  label: prev[id]?.label ?? labelMap[id] ?? "PDF",
-                  line: info.line,
-                  bar: info.bar,
-                },
-              }));
-            },
-            {
-              signal: ac.signal,
-              onPreviewCourse: (course) => {
-                if (ac.signal.aborted) return;
-                setPreviewByJob((prev) => ({ ...prev, [id]: course }));
-              },
-            }
-          );
-          return { id, polled };
-        })
-      );
-
-      if (ac.signal.aborted) return;
-
-      setRows((prev) => {
-        const next = { ...prev };
-        for (const { id, polled } of outcomes) {
-          const base = next[id] ?? {
-            label: "PDF",
-            line: "",
-            bar: null as PdfBuildProgressUI["bar"],
-          };
-          next[id] = {
-            ...base,
-            error: polled.error,
-            materialId: polled.materialId,
-            line: polled.error
-              ? polled.error
-              : polled.materialId
-                ? "Ready — open study mode below."
-                : base.line,
-            bar: polled.materialId ? 100 : base.bar,
-          };
-        }
-        return next;
-      });
-
-      const okCount = outcomes.filter((o) => o.polled.materialId).length;
-      const errCount = outcomes.filter((o) => o.polled.error).length;
-      const s: "success" | "partial" | "fail" =
-        errCount === 0 ? "success" : okCount > 0 ? "partial" : "fail";
-      setSummary(s);
-      setPhase("done");
-
-      const firstMaterialInOrder = jobIds
-        .map((id) => outcomes.find((o) => o.id === id)?.polled.materialId)
-        .find((m) => typeof m === "string" && m.length > 0);
-
-      if (s === "success" && firstMaterialInOrder) {
-        successTimer = setTimeout(() => {
-          goToStudyEditor(firstMaterialInOrder);
-        }, 12_000);
-      }
     };
 
-    void run();
+    void boot();
 
     return () => {
       ac.abort();
+    };
+  }, [jobIds.join(",")]);
+
+  useEffect(() => {
+    if (jobIds.length === 0) return;
+    if (!jobIds.every((id) => terminalByJob[id] != null)) return;
+
+    let successTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const outcomes = jobIds.map((id) => ({
+      id,
+      polled: terminalByJob[id]!,
+    }));
+
+    setRows((prev) => {
+      const next = { ...prev };
+      for (const { id, polled } of outcomes) {
+        const base = next[id] ?? {
+          label: "PDF",
+          line: "",
+          bar: null as PdfBuildProgressUI["bar"],
+        };
+        next[id] = {
+          ...base,
+          error: polled.error,
+          materialId: polled.materialId,
+          line: polled.error
+            ? polled.error
+            : polled.materialId
+              ? "Ready — open study mode below."
+              : base.line,
+          bar: polled.materialId ? 100 : base.bar,
+        };
+      }
+      return next;
+    });
+
+    const okCount = outcomes.filter((o) => o.polled.materialId).length;
+    const errCount = outcomes.filter((o) => o.polled.error).length;
+    const s: "success" | "partial" | "fail" =
+      errCount === 0 ? "success" : okCount > 0 ? "partial" : "fail";
+    setSummary(s);
+    setPhase("done");
+
+    const firstMaterialInOrder = jobIds
+      .map((id) => outcomes.find((o) => o.id === id)?.polled.materialId)
+      .find((m) => typeof m === "string" && m.length > 0);
+
+    if (s === "success" && firstMaterialInOrder) {
+      successTimer = setTimeout(() => {
+        goToStudyEditor(firstMaterialInOrder);
+      }, 12_000);
+    }
+
+    return () => {
       if (successTimer) clearTimeout(successTimer);
     };
-  }, [jobIds.join(","), goToStudyEditor]);
+  }, [terminalByJob, jobIds.join(","), goToStudyEditor]);
+
+  useEffect(() => {
+    if (jobIds.length === 0) return;
+    const anyInFlight = jobIds.some((id) => terminalByJob[id] == null);
+    if (anyInFlight && phase === "done") {
+      setPhase("running");
+      setSummary(null);
+    }
+  }, [terminalByJob, phase, jobIds]);
 
   useEffect(() => {
     const p = previewByJob[activeJob]?.modules;
     if (p && moduleIdx >= p.length) setModuleIdx(Math.max(0, p.length - 1));
   }, [previewByJob, activeJob, moduleIdx]);
+
+  async function retryActiveJob() {
+    const id = activeJob;
+    if (!id) return;
+    setRetryBusy(true);
+    setRetryErr(null);
+    try {
+      const r = await fetch(`/api/process-pdf/jobs/${id}/retry`, {
+        method: "POST",
+      });
+      const raw = await r.text();
+      if (!r.ok) {
+        let msg = "Could not restart this build.";
+        try {
+          const j = JSON.parse(raw) as { error?: string };
+          if (typeof j.error === "string" && j.error.trim()) msg = j.error.trim();
+        } catch {
+          /* ignore */
+        }
+        setRetryErr(msg);
+        return;
+      }
+      setPreviewByJob((p) => ({ ...p, [id]: null }));
+      setTerminalByJob((p) => ({ ...p, [id]: null }));
+      setRestartNonce((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
+      setRows((p) => ({
+        ...p,
+        [id]: {
+          ...(p[id] ?? { label: "PDF", line: "", bar: "indeterminate" as const }),
+          line: "Restarting build from your uploaded PDF…",
+          bar: "indeterminate",
+          error: undefined,
+          materialId: undefined,
+        },
+      }));
+    } finally {
+      setRetryBusy(false);
+    }
+  }
 
   if (jobIds.length === 0) return null;
 
@@ -197,8 +310,25 @@ export function CourseBuildTheater({
     .find((m) => typeof m === "string" && m.length > 0);
   const mod = preview?.modules[moduleIdx];
 
+  const canOfferRetry =
+    Boolean(row) &&
+    !row.materialId &&
+    (phase === "running" || (phase === "done" && summary !== "success"));
+
   return (
     <>
+      {phase !== "boot"
+        ? jobIds.map((id) => (
+            <PdfJobPoll
+              key={`${id}-${restartNonce[id] ?? 0}`}
+              jobId={id}
+              nonce={restartNonce[id] ?? 0}
+              onProgress={onProgress}
+              onPreview={onPreview}
+              onDone={onDone}
+            />
+          ))
+        : null}
       <AppHeader
         right={
           <HeaderNavLoggedIn courseHomeHref={courseHomeWithSection} />
@@ -226,6 +356,7 @@ export function CourseBuildTheater({
                   onClick={() => {
                     setActiveJob(id);
                     setModuleIdx(0);
+                    setRetryErr(null);
                   }}
                   className={`rounded-full px-4 py-2 text-xs font-semibold transition ${
                     id === activeJob
@@ -241,12 +372,31 @@ export function CourseBuildTheater({
 
           {row ? (
             <div className="mb-6 rounded-xl border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-900/40">
-              <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-                {row.label}
-              </p>
-              <p className="mt-1 whitespace-pre-line text-sm text-zinc-800 dark:text-zinc-200">
-                {row.line}
-              </p>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+                    {row.label}
+                  </p>
+                  <p className="mt-1 whitespace-pre-line text-sm text-zinc-800 dark:text-zinc-200">
+                    {row.line}
+                  </p>
+                </div>
+                {canOfferRetry ? (
+                  <button
+                    type="button"
+                    disabled={retryBusy}
+                    onClick={() => void retryActiveJob()}
+                    className="shrink-0 rounded-full border border-zinc-300 bg-white px-4 py-2 text-xs font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                  >
+                    {retryBusy ? "Restarting…" : "Restart this PDF"}
+                  </button>
+                ) : null}
+              </div>
+              {retryErr ? (
+                <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                  {retryErr}
+                </p>
+              ) : null}
               <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
                 {row.bar === "indeterminate" ? (
                   <div
