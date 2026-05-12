@@ -30,6 +30,63 @@ function jobStartedAtMs(createdAt?: string): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+/** Space out module expands — each call uses heavy output tokens (Anthropic TPM). */
+const EXPAND_MODULE_GAP_MS = 1_600;
+
+type ExpandResponseJson = {
+  error?: string;
+  complete?: boolean;
+  materialId?: string;
+  modulesBuilt?: number;
+  modulesTotal?: number;
+};
+
+/**
+ * POST /expand with retries when Vercel returns 429 (org output-token-per-minute, etc.).
+ */
+async function postProcessPdfExpand(
+  jobId: string,
+  signal: AbortSignal | undefined
+): Promise<{ ok: true; json: ExpandResponseJson } | { ok: false; status: number; json: ExpandResponseJson | null }> {
+  let lastStatus = 500;
+  let lastJson: ExpandResponseJson | null = null;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    let r: Response;
+    try {
+      r = await fetch("/api/process-pdf/expand", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId }),
+        signal,
+      });
+    } catch {
+      return { ok: false, status: 0, json: null };
+    }
+    const raw = await r.text();
+    lastStatus = r.status;
+    let parsed: ExpandResponseJson | null = null;
+    try {
+      parsed = JSON.parse(raw) as ExpandResponseJson;
+    } catch {
+      parsed = null;
+    }
+    lastJson = parsed;
+    if (r.ok) {
+      if (!parsed) {
+        return { ok: false, status: r.status, json: null };
+      }
+      return { ok: true, json: parsed };
+    }
+    if (r.status === 429 && attempt < 7) {
+      const delayMs = Math.min(90_000, 14_000 + attempt * 9_000);
+      await sleep(delayMs);
+      continue;
+    }
+    return { ok: false, status: lastStatus, json: lastJson };
+  }
+  return { ok: false, status: lastStatus, json: lastJson };
+}
+
 /** Latest server row fields from `GET /jobs/:id` (each poll). Use for multi-PDF UI so tab order stays upload order while previews land in completion order. */
 export type PollPdfIngestJobSnapshot = {
   status: string;
@@ -152,40 +209,23 @@ export async function pollPdfIngestJob(
         line: `Writing module ${next} of ${total}${elapsedPart}…`,
         bar: Math.min(100, ((next - 0.5) / total) * 100),
       });
-      let exp: Response;
-      try {
-        exp = await fetch("/api/process-pdf/expand", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jobId }),
-          signal,
-        });
-      } catch {
+      const expandResult = await postProcessPdfExpand(jobId, signal);
+      if (!expandResult.ok && expandResult.status === 0) {
         if (signal?.aborted) return { error: "Cancelled." };
         return {
           error:
             "Network error while building a module. Check your connection and try uploading again.",
         };
       }
-      const expRaw = await exp.text();
-      let expJson: {
-        error?: string;
-        complete?: boolean;
-        materialId?: string;
-        modulesBuilt?: number;
-        modulesTotal?: number;
-      };
-      try {
-        expJson = JSON.parse(expRaw) as typeof expJson;
-      } catch {
-        return { error: "Invalid response while building a module." };
-      }
-      if (!exp.ok) {
+      const expJson = expandResult.ok
+        ? expandResult.json
+        : (expandResult.json ?? {});
+      if (!expandResult.ok) {
         return {
           error:
             typeof expJson.error === "string" && expJson.error.trim()
               ? expJson.error.trim()
-              : `Module ${next} failed (${exp.status}).`,
+              : `Module ${next} failed (${expandResult.status}).`,
         };
       }
       if (expJson.complete === true && typeof expJson.materialId === "string") {
@@ -210,6 +250,7 @@ export async function pollPdfIngestJob(
           ),
         });
       }
+      await sleep(EXPAND_MODULE_GAP_MS);
       continue;
     }
 
@@ -223,45 +264,29 @@ export async function pollPdfIngestJob(
         line: `Saving your study set (${total} module${total === 1 ? "" : "s"})…${elapsedPart}`,
         bar: 100,
       });
-      let exp: Response;
-      try {
-        exp = await fetch("/api/process-pdf/expand", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jobId }),
-          signal,
-        });
-      } catch {
+      const expandSave = await postProcessPdfExpand(jobId, signal);
+      if (!expandSave.ok && expandSave.status === 0) {
         if (signal?.aborted) return { error: "Cancelled." };
         return {
           error:
             "Network error while saving the study set. Check your connection — the build may still finish; refresh the course page.",
         };
       }
-      const expRaw = await exp.text();
-      let expJson: {
-        error?: string;
-        complete?: boolean;
-        materialId?: string;
-        modulesBuilt?: number;
-        modulesTotal?: number;
-      };
-      try {
-        expJson = JSON.parse(expRaw) as typeof expJson;
-      } catch {
-        return { error: "Invalid response while saving the study set." };
-      }
-      if (!exp.ok) {
+      const expJson = expandSave.ok
+        ? expandSave.json
+        : (expandSave.json ?? {});
+      if (!expandSave.ok) {
         return {
           error:
             typeof expJson.error === "string" && expJson.error.trim()
               ? expJson.error.trim()
-              : `Save step failed (${exp.status}).`,
+              : `Save step failed (${expandSave.status}).`,
         };
       }
       if (expJson.complete === true && typeof expJson.materialId === "string") {
         return { materialId: expJson.materialId };
       }
+      await sleep(EXPAND_MODULE_GAP_MS);
       continue;
     }
 

@@ -14,12 +14,14 @@ import {
 import type { PdfBuildProgressUI } from "@/lib/pdf-ingest-client";
 
 /**
- * When uploading multiple PDFs, wait this long between each `POST /api/process-pdf`
- * so each `after(runPdfIngestJob)` begins slightly later. That avoids four outlines
- * hammering the provider at the same instant (429 / overload) while jobs still run
- * in parallel once started — closer finish times without strict ordering.
+ * Delay between each `POST /api/process-pdf` when uploading multiple PDFs.
+ * Scales with batch size so background outline jobs do not all hit the AI provider at once.
  */
-const PDF_INGEST_START_STAGGER_MS = 1600;
+function pdfIngestStartStaggerMs(total: number): number {
+  if (total <= 1) return 0;
+  if (total === 2) return 2_500;
+  return Math.min(16_000, 3_000 + (total - 2) * 1_400);
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -185,7 +187,7 @@ export function CourseUploadForm({
         }
         setBuildProgress({
           line:
-            `${total} PDFs — each build starts ~${Math.round(PDF_INGEST_START_STAGGER_MS / 1000)}s after the previous so AI work does not pile up.\n${ordered.join("\n")}`,
+            `${total} PDFs · queued sequentially (~${Math.round(pdfIngestStartStaggerMs(total) / 1000)}s between starts)\n${ordered.join("\n")}`,
           bar,
         });
       };
@@ -212,8 +214,8 @@ export function CourseUploadForm({
         emitProgress(fileIndex, {
           line:
             total > 1
-              ? `File ${fileIndex + 1} of ${total}: ${file.name} — uploading to storage…`
-              : `${file.name} — uploading to storage…`,
+              ? `${fileIndex + 1}/${total}: ${file.name} — Uploading…`
+              : `${file.name} — Uploading…`,
           bar: "indeterminate",
         });
 
@@ -294,8 +296,8 @@ export function CourseUploadForm({
             emitProgress(fileIndex, {
               line:
                 total > 1
-                  ? `File ${fileIndex + 1}/${total} · ${file.name}: Starting build — follow progress at the top of the course page.`
-                  : `${file.name}: Starting build — follow progress at the top of the course page.`,
+                  ? `${fileIndex + 1}/${total}: ${file.name} — Build started`
+                  : `${file.name} — Build started`,
               bar: "indeterminate",
             });
             return {
@@ -321,7 +323,7 @@ export function CourseUploadForm({
       const startResults: StartResult[] = new Array(total);
       for (let fileIndex = 0; fileIndex < total; fileIndex++) {
         if (fileIndex > 0) {
-          await sleep(PDF_INGEST_START_STAGGER_MS);
+          await sleep(pdfIngestStartStaggerMs(total));
         }
         startResults[fileIndex] = await startOnePdf(
           queue[fileIndex]!,
@@ -509,12 +511,9 @@ export function CourseUploadForm({
         )}
 
         <p className="mt-2 text-xs text-zinc-500">
-          Text must be selectable in the PDF for best results (scanned pages may
-          not extract well). After upload you go to the live study build page: the
-          real lesson layout fills in as Claude generates it. Multiple PDFs start a
-          few seconds apart so builds do not compete for the same AI limits, then
-          all run in parallel on the server. Large decks can take several minutes—
-          keep this tab open.
+          PDFs with selectable text work best; scanned pages may not extract reliably.
+          After upload you&apos;ll open the study build view. Large files can take
+          several minutes—keep this tab open.
         </p>
       </div>
 
@@ -526,7 +525,7 @@ export function CourseUploadForm({
           aria-busy="true"
         >
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            Building your course
+            Course build in progress
           </p>
           <p className="mt-1.5 whitespace-pre-line text-sm font-medium text-zinc-900 dark:text-zinc-100">
             {buildProgress.line}

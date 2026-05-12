@@ -69,7 +69,15 @@ export async function POST(request: Request) {
   const result = await runPdfIngestExpandOne(jobId);
 
   if (result.kind === "failed") {
-    return NextResponse.json({ error: result.message }, { status: 500 });
+    const msg = result.message;
+    const rateLimited =
+      /rate limit|too many ai requests|tokens per minute|output tokens|exceed your organization/i.test(
+        msg
+      );
+    return NextResponse.json(
+      { error: msg },
+      { status: rateLimited ? 429 : 500 }
+    );
   }
 
   if (result.kind === "complete") {

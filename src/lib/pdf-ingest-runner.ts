@@ -1,4 +1,4 @@
-import { RateLimitError, APIError } from "@anthropic-ai/sdk";
+import { APIError, RateLimitError } from "@anthropic-ai/sdk";
 import pdfParse from "pdf-parse";
 import {
   parseCourseModule,
@@ -38,6 +38,81 @@ async function removeIngestObject(
 function truncateErr(msg: string, max = 400): string {
   const t = msg.trim();
   return t.length <= max ? t : `${t.slice(0, max)}…`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function isRetriableAnthropicRateLimit(e: unknown): boolean {
+  return (
+    e instanceof RateLimitError ||
+    (e instanceof APIError && e.status === 429)
+  );
+}
+
+function anthropic429BodyText(e: unknown): string {
+  if (e instanceof APIError) {
+    const err = e.error;
+    if (err && typeof err === "object") {
+      try {
+        return JSON.stringify(err);
+      } catch {
+        /* ignore */
+      }
+    }
+    return e.message ?? "";
+  }
+  if (e instanceof Error) return e.message;
+  return "";
+}
+
+function backoffMsAfterRateLimit(e: unknown, attemptIndex: number): number {
+  let fromHeader: number | null = null;
+  if (e instanceof APIError && e.headers && typeof e.headers.get === "function") {
+    const ra = e.headers.get("retry-after");
+    if (ra) {
+      const sec = Number(ra);
+      if (Number.isFinite(sec) && sec > 0) {
+        fromHeader = Math.min(120_000, Math.round(sec * 1000));
+      }
+    }
+  }
+  const body = anthropic429BodyText(e);
+  const tokenTpmHeavy =
+    /output tokens per minute|input tokens per minute|tokens per minute/i.test(
+      body
+    );
+  const exp = Math.min(90_000, 2_000 * 2 ** attemptIndex);
+  const adjusted = tokenTpmHeavy ? Math.max(exp, 28_000 + attemptIndex * 6_000) : exp;
+  return Math.max(2_000, fromHeader ?? adjusted);
+}
+
+/** Anthropic 429s are often transient when many PDFs start together — retry before failing the job. */
+async function withAnthropicRateLimitRetries<T>(
+  jobId: string,
+  phase: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const maxAttempts = 8;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!isRetriableAnthropicRateLimit(e) || attempt === maxAttempts - 1) {
+        throw e;
+      }
+      const delayMs = backoffMsAfterRateLimit(e, attempt);
+      console.warn("[pdf-ingest] rate limit, backing off", {
+        jobId,
+        phase,
+        attempt,
+        delayMs,
+      });
+      await sleep(delayMs);
+    }
+  }
+  throw new Error("[pdf-ingest] exhausted retries (unreachable)");
 }
 
 async function touchJobProgress(
@@ -331,11 +406,13 @@ export async function runPdfIngestExpandOne(
   await touchJobProgress(admin, jobId);
   let newMod: CourseModule;
   try {
-    newMod = await generateCourseModuleFromMaterial(
-      job.ingest_source_text,
-      outline,
-      idx,
-      createPdfStreamSink(admin, jobId)
+    newMod = await withAnthropicRateLimitRetries(jobId, "module", () =>
+      generateCourseModuleFromMaterial(
+        job.ingest_source_text,
+        outline,
+        idx,
+        createPdfStreamSink(admin, jobId)
+      )
     );
   } catch (e) {
     const message = mapAiFailureToMessage(jobId, e);
@@ -513,7 +590,9 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     void touchJobProgress(admin, jobId);
   }, 25_000);
   try {
-    outline = await generateCourseOutlineFromMaterial(text, streamSink);
+    outline = await withAnthropicRateLimitRetries(jobId, "outline", () =>
+      generateCourseOutlineFromMaterial(text, streamSink)
+    );
   } catch (e) {
     const message = mapAiFailureToMessage(jobId, e);
     await failJob(admin, jobId, storagePath, message);
