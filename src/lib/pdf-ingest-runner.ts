@@ -180,6 +180,44 @@ async function failJob(
   await removeIngestObject(admin, storagePath);
 }
 
+/** True if another restart bumped `ingest_epoch` — this invocation must not write or delete storage. */
+async function isStaleIngestEpoch(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string,
+  expected: number
+): Promise<boolean> {
+  const { data } = await admin
+    .from("pdf_ingest_jobs")
+    .select("ingest_epoch")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (!data) return true;
+  const cur =
+    typeof (data as { ingest_epoch?: unknown }).ingest_epoch === "number"
+      ? (data as { ingest_epoch: number }).ingest_epoch
+      : 0;
+  if (cur !== expected) {
+    console.info("[pdf-ingest] stale ingest_epoch; abandoning", {
+      jobId,
+      expected,
+      cur,
+    });
+    return true;
+  }
+  return false;
+}
+
+async function failJobUnlessStale(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string,
+  storagePath: string,
+  message: string,
+  claimedEpoch: number
+): Promise<void> {
+  if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) return;
+  await failJob(admin, jobId, storagePath, message);
+}
+
 function mapAiFailureToMessage(jobId: string, e: unknown): string {
   console.error("[pdf-ingest] AI", jobId, e);
   if (e instanceof RateLimitError) {
@@ -319,7 +357,7 @@ export async function runPdfIngestExpandOne(
   const { data: job, error: loadErr } = await admin
     .from("pdf_ingest_jobs")
     .select(
-      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, status, material_id, error_message, ingest_source_text, ingest_outline, ingest_modules"
+      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, status, material_id, error_message, ingest_source_text, ingest_outline, ingest_modules, ingest_epoch"
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -352,16 +390,22 @@ export async function runPdfIngestExpandOne(
     };
   }
 
+  const expandEpoch =
+    typeof (job as { ingest_epoch?: unknown }).ingest_epoch === "number"
+      ? (job as { ingest_epoch: number }).ingest_epoch
+      : 0;
+
   let outline: CourseOutlinePayload;
   try {
     outline = parseCourseOutlinePayload(job.ingest_outline as unknown);
   } catch (e) {
     console.error("[pdf-ingest] bad ingest_outline", jobId, e);
-    await failJob(
+    await failJobUnlessStale(
       admin,
       jobId,
       job.storage_path,
-      "Stored course outline was invalid. Try uploading the PDF again."
+      "Stored course outline was invalid. Try uploading the PDF again.",
+      expandEpoch
     );
     return { kind: "failed", message: "Invalid stored outline." };
   }
@@ -372,11 +416,12 @@ export async function runPdfIngestExpandOne(
     modulesBuilt = parseStoredModules(job.ingest_modules);
   } catch (e) {
     console.error("[pdf-ingest] corrupt ingest_modules", jobId, e);
-    await failJob(
+    await failJobUnlessStale(
       admin,
       jobId,
       storagePath,
-      "Saved module data was invalid. Try uploading the PDF again."
+      "Saved module data was invalid. Try uploading the PDF again.",
+      expandEpoch
     );
     return { kind: "failed", message: "Saved module data was invalid." };
   }
@@ -404,6 +449,15 @@ export async function runPdfIngestExpandOne(
 
   const idx = prefix.length;
   await touchJobProgress(admin, jobId);
+
+  if (await isStaleIngestEpoch(admin, jobId, expandEpoch)) {
+    return {
+      kind: "failed",
+      message:
+        "This build was restarted. Refresh the page if this tab still looks stuck.",
+    };
+  }
+
   let newMod: CourseModule;
   try {
     newMod = await withAnthropicRateLimitRetries(jobId, "module", () =>
@@ -415,29 +469,57 @@ export async function runPdfIngestExpandOne(
       )
     );
   } catch (e) {
+    if (await isStaleIngestEpoch(admin, jobId, expandEpoch)) {
+      return {
+        kind: "failed",
+        message:
+          "This build was restarted. Refresh the page if this tab still looks stuck.",
+      };
+    }
     const message = mapAiFailureToMessage(jobId, e);
-    await failJob(admin, jobId, storagePath, message);
+    await failJobUnlessStale(admin, jobId, storagePath, message, expandEpoch);
     return { kind: "failed", message };
   }
 
   const nextModules = [...prefix, newMod];
   const cappedNext = nextModules.slice(0, n);
-  const { error: upErr } = await admin
+  const { data: modRow, error: upErr } = await admin
     .from("pdf_ingest_jobs")
     .update({
       ingest_modules: nextModules,
       stream_preview: null,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", jobId);
+    .eq("id", jobId)
+    .eq("ingest_epoch", expandEpoch)
+    .select("id")
+    .maybeSingle();
 
   if (upErr) {
     console.error("[pdf-ingest] update ingest_modules", jobId, upErr);
-    await failJob(
+    await failJobUnlessStale(
       admin,
       jobId,
       storagePath,
-      "Could not save module progress. Try uploading again."
+      "Could not save module progress. Try uploading again.",
+      expandEpoch
+    );
+    return { kind: "failed", message: "Could not save module progress." };
+  }
+  if (!modRow) {
+    if (await isStaleIngestEpoch(admin, jobId, expandEpoch)) {
+      return {
+        kind: "failed",
+        message:
+          "This build was restarted. Refresh the page if this tab still looks stuck.",
+      };
+    }
+    await failJobUnlessStale(
+      admin,
+      jobId,
+      storagePath,
+      "Could not save module progress. Try uploading again.",
+      expandEpoch
     );
     return { kind: "failed", message: "Could not save module progress." };
   }
@@ -487,7 +569,7 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     .eq("id", jobId)
     .eq("status", "pending")
     .select(
-      "id, user_id, course_id, exam_group_id, storage_path, original_file_name"
+      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, ingest_epoch"
     )
     .maybeSingle();
 
@@ -507,6 +589,11 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     original_file_name: originalFileName,
   } = claimed;
 
+  const claimedEpoch =
+    typeof (claimed as { ingest_epoch?: unknown }).ingest_epoch === "number"
+      ? (claimed as { ingest_epoch: number }).ingest_epoch
+      : 0;
+
   const t0 = Date.now();
 
   let buf: Buffer;
@@ -517,11 +604,12 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
 
     if (dlErr || !blob) {
       console.error("[pdf-ingest] download", jobId, dlErr);
-      await failJob(
+      await failJobUnlessStale(
         admin,
         jobId,
         storagePath,
-        "Could not read the uploaded PDF from storage. Try uploading again."
+        "Could not read the uploaded PDF from storage. Try uploading again.",
+        claimedEpoch
       );
       return;
     }
@@ -529,11 +617,12 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     buf = Buffer.from(await blob.arrayBuffer());
   } catch (e) {
     console.error("[pdf-ingest] download unexpected", jobId, e);
-    await failJob(
+    await failJobUnlessStale(
       admin,
       jobId,
       storagePath,
-      "Could not read the uploaded PDF from storage."
+      "Could not read the uploaded PDF from storage.",
+      claimedEpoch
     );
     return;
   }
@@ -541,11 +630,12 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
   await touchJobProgress(admin, jobId);
 
   if (buf.length > MAX_STUDY_PDF_BYTES) {
-    await failJob(
+    await failJobUnlessStale(
       admin,
       jobId,
       storagePath,
-      "PDF is too large for this server (max 40 MB). Split the file or export fewer pages."
+      "PDF is too large for this server (max 40 MB). Split the file or export fewer pages.",
+      claimedEpoch
     );
     return;
   }
@@ -561,21 +651,23 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     const parsed = await pdfParse(buf);
     text = (parsed.text ?? "").trim();
   } catch {
-    await failJob(
+    await failJobUnlessStale(
       admin,
       jobId,
       storagePath,
-      "Could not read PDF. Try another file."
+      "Could not read PDF. Try another file.",
+      claimedEpoch
     );
     return;
   }
 
   if (text.length < 80) {
-    await failJob(
+    await failJobUnlessStale(
       admin,
       jobId,
       storagePath,
-      "Not enough text extracted from this PDF. Try slides with selectable text or another file."
+      "Not enough text extracted from this PDF. Try slides with selectable text or another file.",
+      claimedEpoch
     );
     return;
   }
@@ -583,6 +675,10 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
   await touchJobProgress(admin, jobId);
 
   const storedMaterial = materialTextForPdfIngest(text);
+
+  if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+    return;
+  }
 
   let outline: CourseOutlinePayload;
   const streamSink = createPdfStreamSink(admin, jobId);
@@ -594,14 +690,17 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
       generateCourseOutlineFromMaterial(text, streamSink)
     );
   } catch (e) {
+    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+      return;
+    }
     const message = mapAiFailureToMessage(jobId, e);
-    await failJob(admin, jobId, storagePath, message);
+    await failJobUnlessStale(admin, jobId, storagePath, message, claimedEpoch);
     return;
   } finally {
     clearInterval(heartbeat);
   }
 
-  const { error: outlineErr } = await admin
+  const { data: outlineRow, error: outlineErr } = await admin
     .from("pdf_ingest_jobs")
     .update({
       ingest_source_text: storedMaterial,
@@ -610,15 +709,33 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
       stream_preview: null,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", jobId);
+    .eq("id", jobId)
+    .eq("ingest_epoch", claimedEpoch)
+    .select("id")
+    .maybeSingle();
 
   if (outlineErr) {
     console.error("[pdf-ingest] persist outline", jobId, outlineErr);
-    await failJob(
+    await failJobUnlessStale(
       admin,
       jobId,
       storagePath,
-      "Could not save outline. Apply migration 021_pdf_ingest_chunked.sql in Supabase, then try again."
+      "Could not save outline. Apply migration 021_pdf_ingest_chunked.sql in Supabase, then try again.",
+      claimedEpoch
+    );
+    return;
+  }
+  if (!outlineRow) {
+    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+      console.info("[pdf-ingest] outline persist skipped (restarted)", jobId);
+      return;
+    }
+    await failJobUnlessStale(
+      admin,
+      jobId,
+      storagePath,
+      "Could not save outline. Apply migration 021_pdf_ingest_chunked.sql in Supabase, then try again.",
+      claimedEpoch
     );
     return;
   }

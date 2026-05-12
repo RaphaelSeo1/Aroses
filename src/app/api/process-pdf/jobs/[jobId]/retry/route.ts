@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -50,7 +50,7 @@ export async function POST(_request: Request, ctx: Params) {
 
   const { data: job, error: selErr } = await supabase
     .from("pdf_ingest_jobs")
-    .select("id, status, material_id, storage_path")
+    .select("id, status, material_id, storage_path, ingest_epoch")
     .eq("id", jobId)
     .maybeSingle();
 
@@ -108,6 +108,10 @@ export async function POST(_request: Request, ctx: Params) {
   }
 
   const restartedAt = new Date().toISOString();
+  const prevEpoch =
+    typeof job.ingest_epoch === "number" && Number.isFinite(job.ingest_epoch)
+      ? job.ingest_epoch
+      : 0;
 
   const { error: upErr } = await admin
     .from("pdf_ingest_jobs")
@@ -119,6 +123,7 @@ export async function POST(_request: Request, ctx: Params) {
       ingest_outline: null,
       ingest_modules: [],
       stream_preview: null,
+      ingest_epoch: prevEpoch + 1,
       updated_at: restartedAt,
     })
     .eq("id", jobId)

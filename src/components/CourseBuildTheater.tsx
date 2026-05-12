@@ -121,6 +121,43 @@ function PdfJobPoll({
   return null;
 }
 
+function StaggeredPdfJobPoll({
+  index,
+  jobId,
+  nonce,
+  onProgress,
+  onPreview,
+  onJobSnapshot,
+  onDone,
+}: {
+  index: number;
+  jobId: string;
+  nonce: number;
+  onProgress: (id: string, info: PdfBuildProgressUI) => void;
+  onPreview: (id: string, course: CoursePayload | null) => void;
+  onJobSnapshot: (id: string, snap: PollPdfIngestJobSnapshot) => void;
+  onDone: (id: string, result: PollOutcome) => void;
+}) {
+  const [ready, setReady] = useState(index === 0);
+  useEffect(() => {
+    if (index === 0) return;
+    const ms = Math.min(14_000, index * 2_800);
+    const t = setTimeout(() => setReady(true), ms);
+    return () => clearTimeout(t);
+  }, [index]);
+  if (!ready) return null;
+  return (
+    <PdfJobPoll
+      jobId={jobId}
+      nonce={nonce}
+      onProgress={onProgress}
+      onPreview={onPreview}
+      onJobSnapshot={onJobSnapshot}
+      onDone={onDone}
+    />
+  );
+}
+
 export function CourseBuildTheater({
   courseId,
   jobIds,
@@ -414,9 +451,10 @@ export function CourseBuildTheater({
   return (
     <>
       {phase !== "boot"
-        ? jobIds.map((id) => (
-            <PdfJobPoll
+        ? jobIds.map((id, index) => (
+            <StaggeredPdfJobPoll
               key={`${id}-${restartNonce[id] ?? 0}`}
+              index={index}
               jobId={id}
               nonce={restartNonce[id] ?? 0}
               onProgress={onProgress}

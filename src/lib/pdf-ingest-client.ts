@@ -97,6 +97,8 @@ export type PollPdfIngestJobSnapshot = {
 
 export type PollPdfIngestOptions = {
   signal?: AbortSignal;
+  /** Max time to keep polling + triggering expands for this job (default suits large decks + rate limits). */
+  maxWaitMs?: number;
   /** Latest Claude output tail while the model streams (outline / module JSON). */
   onStreamPreview?: (text: string | null) => void;
   /** Merged course preview (outline + partial modules) for the study-style live UI. */
@@ -104,6 +106,9 @@ export type PollPdfIngestOptions = {
   /** Fires after every successful job GET parse (status, outline gate, module counts). */
   onJobSnapshot?: (snapshot: PollPdfIngestJobSnapshot) => void;
 };
+
+/** One job can exceed 15m under TPM throttling, many modules, or cold starts — keep UI driving `/expand`. */
+const DEFAULT_POLL_MAX_WAIT_MS = 55 * 60 * 1000;
 
 /** Poll after `POST /api/process-pdf` returns `202` + `jobId` (chunked pipeline). */
 export async function pollPdfIngestJob(
@@ -115,7 +120,13 @@ export async function pollPdfIngestJob(
   error?: string;
 }> {
   const signal = options?.signal;
-  const deadline = Date.now() + 15 * 60 * 1000;
+  const maxWait =
+    typeof options?.maxWaitMs === "number" &&
+    Number.isFinite(options.maxWaitMs) &&
+    options.maxWaitMs >= 60_000
+      ? options.maxWaitMs
+      : DEFAULT_POLL_MAX_WAIT_MS;
+  const deadline = Date.now() + maxWait;
   while (Date.now() < deadline) {
     if (signal?.aborted) {
       return { error: "Cancelled." };
@@ -312,8 +323,8 @@ export async function pollPdfIngestJob(
 
     await sleep(1800);
   }
+  const waitedMin = Math.round(maxWait / 60_000);
   return {
-    error:
-      "Build is taking longer than expected (waited 15 minutes). For `COURSE_BUILD_PROFILE=full` or very large decks, upload one PDF at a time or check the host logs. Refresh the course page — it may still complete.",
+    error: `Build is taking longer than expected (waited about ${waitedMin} minutes). Very large batches can still be running on the server — open the course again from the dashboard or use “Restart this PDF”. If this keeps happening, try fewer PDFs at once or a higher Anthropic usage tier (output tokens per minute).`,
   };
 }
