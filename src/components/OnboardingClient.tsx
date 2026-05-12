@@ -19,7 +19,18 @@ import {
 } from "@/lib/onboarding";
 import { filterSchoolSuggestions } from "@/lib/school-suggestions";
 
-const HEADING_SERIF = "font-serif tracking-tight text-brand-ink dark:text-zinc-50";
+const HEADING_SERIF =
+  "font-serif tracking-tight text-brand-ink text-balance";
+
+/** Light-only onboarding surface (stays on-brand even when the app is in dark mode). */
+const SHELL = "min-h-screen bg-[#f6f6f4] text-zinc-900 antialiased";
+const PANEL = "rounded-2xl border border-zinc-200/80 bg-white shadow-[0_2px_24px_-12px_rgba(0,0,0,0.08)]";
+
+const BTN_PRIMARY =
+  "inline-flex min-w-[10.5rem] items-center justify-center rounded-xl bg-brand px-8 py-3 text-sm font-semibold text-white shadow-sm ring-1 ring-black/[0.06] transition hover:bg-brand-hover disabled:pointer-events-none disabled:opacity-45";
+
+const BTN_SECONDARY =
+  "inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-6 py-3 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50";
 
 function monthDays(y: number, m: number): number {
   return new Date(y, m, 0).getDate();
@@ -247,12 +258,12 @@ export function OnboardingClient() {
 
   if (dobUnderage) {
     return (
-      <div className="flex min-h-screen flex-col bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
+      <div className={`flex flex-col ${SHELL}`}>
         <div className="mx-auto flex w-full max-w-lg flex-1 flex-col justify-center px-6 py-16 text-center">
-          <h1 className={`text-3xl sm:text-4xl ${HEADING_SERIF}`}>
+          <h1 className={`text-2xl sm:text-3xl ${HEADING_SERIF}`}>
             Aroses is for ages 13 and up
           </h1>
-          <p className="mt-4 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+          <p className="mt-5 text-sm leading-relaxed text-zinc-600">
             Thanks for your interest. When you&apos;re 13 or older, we&apos;d love
             to have you back.
           </p>
@@ -264,14 +275,14 @@ export function OnboardingClient() {
                 setBirthMonth("");
                 setBirthDay("");
               }}
-              className="inline-flex items-center justify-center rounded-full border border-zinc-200 bg-white px-6 py-3 text-sm font-semibold text-zinc-800 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+              className={BTN_SECONDARY}
             >
               Adjust birthday
             </button>
             <button
               type="button"
               onClick={() => void leaveUnderage()}
-              className="inline-flex items-center justify-center rounded-full bg-brand px-8 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover"
+              className={BTN_PRIMARY}
             >
               Back to home
             </button>
@@ -281,10 +292,13 @@ export function OnboardingClient() {
     );
   }
 
+  const stepLabel =
+    phaseIndex >= 0 ? `Step ${phaseIndex + 1} of ${phases.length}` : "";
+
   const cardBase =
-    "flex w-full cursor-pointer rounded-2xl border-2 border-zinc-200/90 bg-white p-4 text-left shadow-sm transition dark:border-zinc-700 dark:bg-zinc-900/80 sm:p-5";
+    "group flex min-h-[9.25rem] w-full flex-col items-start gap-4 rounded-2xl border-2 border-zinc-200/90 bg-white p-6 text-left shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition hover:border-zinc-300 hover:shadow-md sm:min-h-[9.75rem] sm:p-7";
   const cardSelected =
-    "border-brand bg-brand-blush ring-1 ring-brand/20 dark:bg-brand-ink/20 dark:ring-brand-soft/30";
+    "border-brand bg-brand-blush shadow-[0_4px_20px_-8px_rgba(220,38,38,0.35)] ring-2 ring-brand/25";
 
   return (
     <div className="relative flex min-h-screen flex-col bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
