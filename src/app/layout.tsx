@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
+import { AppAdminNavGate } from "@/components/AppAdminNavGate";
 import { ScrollRestoration } from "@/components/ScrollRestoration";
 import { APP_NAME } from "@/lib/brand";
 import { THEME_INLINE_SCRIPT } from "@/lib/theme-inline-script";
@@ -46,7 +47,7 @@ export default function RootLayout({
           }
         </Script>
         <ScrollRestoration />
-        {children}
+        <AppAdminNavGate>{children}</AppAdminNavGate>
       </body>
     </html>
   );

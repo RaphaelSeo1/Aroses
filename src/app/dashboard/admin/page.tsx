@@ -72,7 +72,7 @@ export default async function AdminDashboardPage() {
   return (
     <>
       <AppHeader
-        right={<HeaderNavLoggedIn adminHubHref="/dashboard/admin" />}
+        right={<HeaderNavLoggedIn />}
       />
       <main>
         <AdminDashboardClient

@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
+import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
 import { CourseMixQuizClient } from "@/components/CourseMixQuizClient";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
-import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
@@ -62,16 +62,11 @@ export default async function CourseMixStudyPage({ params, searchParams }: Props
     );
   }
 
-  const adminHubHref = isAppAdminEnvUser({
-    id: user.id,
-    email: user.email,
-  })
-    ? "/dashboard/admin"
-    : undefined;
-
   const courseRow = await fetchCourseForDashboard(supabase, courseId, user.id);
 
   if (!courseRow) notFound();
+
+  const courseTitle = courseRow.title?.trim() || "Course";
 
   const { data: groupsOrder } = await supabase
     .from("exam_groups")
@@ -126,23 +121,13 @@ export default async function CourseMixStudyPage({ params, searchParams }: Props
 
   return (
     <>
-      <AppHeader
-        right={
-          <HeaderNavLoggedIn
-            adminHubHref={adminHubHref}
-            courseHomeHref={`/dashboard/courses/${courseId}`}
-          />
-        }
+      <AppHeader right={<HeaderNavLoggedIn />} />
+      <CourseWorkspaceBackRow
+        courseId={courseId}
+        courseTitle={courseTitle}
       />
       <div className="border-b border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950 sm:px-6">
         <p className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
-          <Link
-            href={`/dashboard/courses/${courseId}`}
-            className="font-medium text-zinc-700 underline-offset-2 hover:text-brand hover:underline dark:text-zinc-300 dark:hover:text-brand-soft"
-          >
-            {courseRow.title}
-          </Link>
-          <span className="text-zinc-400">·</span>
           <span className="rounded-full bg-brand-blush px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-ink dark:bg-[#1e1616]/80 dark:text-brand-soft">
             Whole-course mix
           </span>

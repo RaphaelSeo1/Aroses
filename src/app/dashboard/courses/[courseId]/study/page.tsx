@@ -2,12 +2,12 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { AppHeader } from "@/components/AppHeader";
+import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
 import { CoursePlayer } from "@/components/CoursePlayer";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import { HighlightedSummary } from "@/components/HighlightedSummary";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { McqQuiz } from "@/components/McqQuiz";
-import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
@@ -48,16 +48,11 @@ export default async function StudyPage({ params, searchParams }: Props) {
     );
   }
 
-  const adminHubHref = isAppAdminEnvUser({
-    id: user.id,
-    email: user.email,
-  })
-    ? "/dashboard/admin"
-    : undefined;
-
   const courseRow = await fetchCourseForDashboard(supabase, courseId, user.id);
 
   if (!courseRow) notFound();
+
+  const courseTitle = courseRow.title?.trim() || "Course";
 
   let row: {
     id: string;
@@ -106,13 +101,10 @@ export default async function StudyPage({ params, searchParams }: Props) {
   if (!row) {
     return (
       <>
-        <AppHeader
-          right={
-            <HeaderNavLoggedIn
-              adminHubHref={adminHubHref}
-              courseHomeHref={`/dashboard/courses/${courseId}`}
-            />
-          }
+        <AppHeader right={<HeaderNavLoggedIn />} />
+        <CourseWorkspaceBackRow
+          courseId={courseId}
+          courseTitle={courseTitle}
         />
         <main className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
           <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
@@ -215,26 +207,14 @@ export default async function StudyPage({ params, searchParams }: Props) {
   if (hasNewCourse && payload) {
     return (
       <>
-        <AppHeader
-          right={
-            <HeaderNavLoggedIn
-              adminHubHref={adminHubHref}
-              courseHomeHref={`/dashboard/courses/${courseId}`}
-            />
-          }
+        <AppHeader right={<HeaderNavLoggedIn />} />
+        <CourseWorkspaceBackRow
+          courseId={courseId}
+          courseTitle={courseTitle}
         />
-        <div className="border-b border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950 sm:px-6">
-          <p className="mx-auto max-w-7xl text-xs text-zinc-500">
-            <Link
-              href={`/dashboard/courses/${courseId}`}
-              className="font-medium text-zinc-700 underline-offset-2 hover:text-brand hover:underline dark:text-zinc-300 dark:hover:text-brand-soft"
-            >
-              {courseRow.title}
-            </Link>
-            <span className="mx-2 text-zinc-400">·</span>
-            <span className="text-zinc-600 dark:text-zinc-400">
-              {displayMaterialSectionLabel(row.file_name)}
-            </span>
+        <div className="border-b border-zinc-200 bg-white px-4 py-2.5 dark:border-zinc-800 dark:bg-zinc-950 sm:px-6">
+          <p className="mx-auto max-w-7xl text-xs font-medium text-zinc-600 dark:text-zinc-300">
+            {displayMaterialSectionLabel(row.file_name)}
           </p>
         </div>
         <CoursePlayer
@@ -258,26 +238,16 @@ export default async function StudyPage({ params, searchParams }: Props) {
     const keyConcepts = row.key_concepts ?? [];
     return (
       <>
-        <AppHeader
-          right={
-            <HeaderNavLoggedIn
-              adminHubHref={adminHubHref}
-              courseHomeHref={`/dashboard/courses/${courseId}`}
-            />
-          }
+        <AppHeader right={<HeaderNavLoggedIn />} />
+        <CourseWorkspaceBackRow
+          courseId={courseId}
+          courseTitle={courseTitle}
         />
         <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
           <p className="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-400">
             Legacy study pack — upload again for the full course experience
           </p>
-          <p className="mt-2 text-xs uppercase tracking-wide text-zinc-500">
-            <Link
-              href={`/dashboard/courses/${courseId}`}
-              className="font-medium underline-offset-2 hover:text-brand hover:underline dark:hover:text-brand-soft"
-            >
-              {courseRow.title}
-            </Link>
-            <span className="mx-1.5 text-zinc-400">·</span>
+          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
             {displayMaterialSectionLabel(row.file_name)}
           </p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -319,13 +289,10 @@ export default async function StudyPage({ params, searchParams }: Props) {
 
   return (
     <>
-      <AppHeader
-        right={
-          <HeaderNavLoggedIn
-            adminHubHref={adminHubHref}
-            courseHomeHref={`/dashboard/courses/${courseId}`}
-          />
-        }
+      <AppHeader right={<HeaderNavLoggedIn />} />
+      <CourseWorkspaceBackRow
+        courseId={courseId}
+        courseTitle={courseTitle}
       />
       <main className="mx-auto max-w-3xl px-4 py-16 sm:px-6">
         <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">

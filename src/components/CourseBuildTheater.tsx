@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { AppHeader } from "@/components/AppHeader";
+import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
 import { TypewriterText } from "@/components/TypewriterText";
@@ -162,12 +163,12 @@ export function CourseBuildTheater({
   courseId,
   jobIds,
   sectionId,
-  adminHubHref,
+  courseTitle,
 }: {
   courseId: string;
   jobIds: string[];
   sectionId?: string | null;
-  adminHubHref?: string;
+  courseTitle: string;
 }) {
   const router = useRouter();
   const [activeJob, setActiveJob] = useState(jobIds[0] ?? "");
@@ -466,25 +467,10 @@ export function CourseBuildTheater({
             />
           ))
         : null}
-      <AppHeader
-        right={
-          <HeaderNavLoggedIn
-            adminHubHref={adminHubHref}
-            courseHomeHref={courseHomeWithSection}
-          />
-        }
-      />
+      <AppHeader right={<HeaderNavLoggedIn />} />
+      <CourseWorkspaceBackRow courseId={courseId} courseTitle={courseTitle} />
       <main className="min-h-[calc(100vh-4rem)] bg-white dark:bg-zinc-950">
         <div className="mx-auto max-w-3xl px-4 py-8 sm:px-10">
-          <nav className="mb-6 text-sm">
-            <Link
-              href={courseHomeWithSection}
-              className="font-medium text-brand hover:underline dark:text-brand-soft"
-            >
-              ← Back to course
-            </Link>
-          </nav>
-
           <AiStudyDisclaimer className="mb-6" />
 
           {jobIds.length > 1 ? (

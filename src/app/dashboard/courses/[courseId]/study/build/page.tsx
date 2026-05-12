@@ -1,6 +1,5 @@
 import { notFound, redirect } from "next/navigation";
 import { CourseBuildTheater } from "@/components/CourseBuildTheater";
-import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
 
@@ -49,23 +48,18 @@ export default async function CourseStudyBuildPage({ params, searchParams }: Pro
     );
   }
 
-  const adminHubHref = isAppAdminEnvUser({
-    id: user.id,
-    email: user.email,
-  })
-    ? "/dashboard/admin"
-    : undefined;
-
   const courseRow = await fetchCourseForDashboard(supabase, courseId, user.id);
 
   if (!courseRow) notFound();
+
+  const courseTitle = courseRow.title?.trim() || "Course";
 
   return (
     <CourseBuildTheater
       courseId={courseId}
       jobIds={pdfJobIds}
       sectionId={sectionFromUrl}
-      adminHubHref={adminHubHref}
+      courseTitle={courseTitle}
     />
   );
 }

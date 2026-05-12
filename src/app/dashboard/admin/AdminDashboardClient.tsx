@@ -426,29 +426,35 @@ export function AdminDashboardClient({
               Recent activity
             </h2>
             <p className="mt-2 text-sm text-zinc-500">
-              Newest events from course creation and new accounts.
+              Newest events from course creation and new accounts. Scroll the
+              list when it grows.
             </p>
-            <ul className="mt-6 divide-y divide-zinc-100 rounded-2xl border border-zinc-200 bg-white shadow-sm">
-              {activity.map((a) => (
-                <li
-                  key={a.id}
-                  className="flex flex-col gap-1 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div>
-                    <p className="font-semibold" style={{ color: INK }}>
-                      {a.detail}
-                    </p>
-                    <p className="text-sm text-zinc-600">{a.title}</p>
-                  </div>
-                  <time
-                    className="shrink-0 text-xs font-medium text-zinc-500 sm:text-right"
-                    dateTime={a.at}
+            <div className="mt-6 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+              <ul
+                className="max-h-[min(22rem,50vh)] divide-y divide-zinc-100 overflow-y-auto overscroll-contain sm:max-h-[min(26rem,55vh)] [scrollbar-gutter:stable]"
+                role="list"
+              >
+                {activity.map((a) => (
+                  <li
+                    key={a.id}
+                    className="flex flex-col gap-1 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
                   >
-                    {formatWhen(a.at)}
-                  </time>
-                </li>
-              ))}
-            </ul>
+                    <div>
+                      <p className="font-semibold" style={{ color: INK }}>
+                        {a.detail}
+                      </p>
+                      <p className="text-sm text-zinc-600">{a.title}</p>
+                    </div>
+                    <time
+                      className="shrink-0 text-xs font-medium text-zinc-500 sm:text-right"
+                      dateTime={a.at}
+                    >
+                      {formatWhen(a.at)}
+                    </time>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </section>
         ) : null}
       </div>
