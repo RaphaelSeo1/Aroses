@@ -1,4 +1,9 @@
-import { APIError, RateLimitError } from "@anthropic-ai/sdk";
+import {
+  APIConnectionTimeoutError,
+  APIError,
+  APIUserAbortError,
+  RateLimitError,
+} from "@anthropic-ai/sdk";
 import pdfParse from "pdf-parse";
 import {
   parseCourseModule,
@@ -174,6 +179,7 @@ async function failJob(
       status: "failed",
       error_message: truncateErr(message),
       stream_preview: null,
+      ingest_phase: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);
@@ -220,6 +226,12 @@ async function failJobUnlessStale(
 
 function mapAiFailureToMessage(jobId: string, e: unknown): string {
   console.error("[pdf-ingest] AI", jobId, e);
+  if (e instanceof APIUserAbortError) {
+    return "The AI request was stopped or hit a time limit. Try again, or upload fewer PDFs at once.";
+  }
+  if (e instanceof APIConnectionTimeoutError) {
+    return "The AI request timed out. Try again on a stable network, or use a smaller PDF.";
+  }
   if (e instanceof RateLimitError) {
     return "The AI service rate limit was hit. Wait one minute and try again.";
   }
@@ -350,6 +362,7 @@ async function finalizePdfIngest(
       status: "complete",
       material_id: row.id,
       stream_preview: null,
+      ingest_phase: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);
@@ -584,6 +597,7 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     .from("pdf_ingest_jobs")
     .update({
       status: "running",
+      ingest_phase: "reading_pdf",
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)
@@ -707,6 +721,15 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     return;
   }
 
+  await admin
+    .from("pdf_ingest_jobs")
+    .update({
+      ingest_phase: "planning_outline",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .eq("ingest_epoch", claimedEpoch);
+
   let outline: CourseOutlinePayload;
   const streamSink = createPdfStreamSink(admin, jobId);
   const heartbeat = setInterval(() => {
@@ -734,6 +757,7 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
       ingest_outline: outline,
       ingest_modules: [],
       stream_preview: null,
+      ingest_phase: "writing_modules",
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId)

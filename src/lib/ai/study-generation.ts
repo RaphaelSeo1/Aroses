@@ -311,11 +311,10 @@ export type PdfIngestStreamSink = {
 
 const PDF_STREAM_PREVIEW_CAP = 28_000;
 
-/**
- * One user-message → assistant text. Uses Anthropic streaming when `streamSink` is set so
- * `push` receives a growing tail of the JSON as tokens arrive (single attempt; no retries).
- */
-async function invokeUserMessageForPdfText(
+/** Streaming attempts before falling back to a non-streaming call (same model, more retries). */
+const PDF_INGEST_STREAM_ATTEMPTS = 3;
+
+async function readPdfIngestStreamOnce(
   anthropic: Anthropic,
   params: {
     model: string;
@@ -323,25 +322,8 @@ async function invokeUserMessageForPdfText(
     temperature?: number;
     messages: Anthropic.MessageCreateParams["messages"];
   },
-  streamSink: PdfIngestStreamSink | undefined,
-  maxAttemptsWhenNotStreaming: number
+  streamSink: PdfIngestStreamSink
 ): Promise<string> {
-  if (!streamSink) {
-    const msg = await createMessageWithRetries(
-      anthropic,
-      {
-        model: params.model,
-        max_tokens: params.max_tokens,
-        ...(params.temperature !== undefined
-          ? { temperature: params.temperature }
-          : {}),
-        messages: params.messages,
-      },
-      { maxAttempts: maxAttemptsWhenNotStreaming }
-    );
-    return extractTextBlock(msg);
-  }
-
   const stream = anthropic.messages.stream({
     model: params.model,
     max_tokens: params.max_tokens,
@@ -373,6 +355,77 @@ async function invokeUserMessageForPdfText(
   const text = extractTextBlock(finalMessage);
   await streamSink.push(text.slice(-PDF_STREAM_PREVIEW_CAP));
   return text;
+}
+
+/**
+ * One user-message → assistant text. Uses Anthropic streaming when `streamSink` is set so
+ * `push` receives a growing tail of the JSON as tokens arrive. Retries transient stream errors,
+ * then falls back to non-streaming (no live tail) so PDF ingest still completes.
+ */
+async function invokeUserMessageForPdfText(
+  anthropic: Anthropic,
+  params: {
+    model: string;
+    max_tokens: number;
+    temperature?: number;
+    messages: Anthropic.MessageCreateParams["messages"];
+  },
+  streamSink: PdfIngestStreamSink | undefined,
+  maxAttemptsWhenNotStreaming: number
+): Promise<string> {
+  if (!streamSink) {
+    const msg = await createMessageWithRetries(
+      anthropic,
+      {
+        model: params.model,
+        max_tokens: params.max_tokens,
+        ...(params.temperature !== undefined
+          ? { temperature: params.temperature }
+          : {}),
+        messages: params.messages,
+      },
+      { maxAttempts: maxAttemptsWhenNotStreaming }
+    );
+    return extractTextBlock(msg);
+  }
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < PDF_INGEST_STREAM_ATTEMPTS; attempt++) {
+    try {
+      return await readPdfIngestStreamOnce(anthropic, params, streamSink);
+    } catch (err) {
+      lastErr = err;
+      const retry =
+        isRetryableApiError(err) && attempt < PDF_INGEST_STREAM_ATTEMPTS - 1;
+      if (!retry) break;
+      const delay = Math.min(
+        45_000,
+        1400 * 2 ** attempt + Math.floor(Math.random() * 700)
+      );
+      await sleep(delay);
+      await streamSink.clear().catch(() => {});
+    }
+  }
+
+  console.warn(
+    "[study-generation] PDF ingest stream failed; falling back to non-streaming",
+    lastErr
+  );
+  await streamSink.clear().catch(() => {});
+  const fallbackAttempts = Math.max(maxAttemptsWhenNotStreaming, 4);
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: params.model,
+      max_tokens: params.max_tokens,
+      ...(params.temperature !== undefined
+        ? { temperature: params.temperature }
+        : {}),
+      messages: params.messages,
+    },
+    { maxAttempts: fallbackAttempts }
+  );
+  return extractTextBlock(msg);
 }
 
 async function repairPayloadJson(

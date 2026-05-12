@@ -59,7 +59,7 @@ export async function GET(_request: Request, ctx: Params) {
   const { data: row, error } = await supabase
     .from("pdf_ingest_jobs")
     .select(
-      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_modules, original_file_name, stream_preview"
+      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_modules, original_file_name, stream_preview, ingest_phase"
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -86,8 +86,9 @@ export async function GET(_request: Request, ctx: Params) {
       status: "failed",
       materialId: undefined,
       error:
-        "This build stopped making progress for a long time (the server may have hit a time limit or lost the connection). Try uploading the PDF again on a stable network. Hard-refresh the page first so your browser runs the latest upload code. Confirm migrations 020–021 are applied in Supabase and the service role key is set on the host.",
+        "This build stopped making progress for a long time (the server may have hit a time limit or lost the connection). Try uploading the PDF again on a stable network. Hard-refresh the page first so your browser runs the latest upload code. Confirm migrations 020–027 are applied in Supabase and the service role key is set on the host.",
       outlineReady: false,
+      ingestPhase: null,
       modulesBuilt: 0,
       modulesTotal: 0,
       createdAt:
@@ -132,6 +133,14 @@ export async function GET(_request: Request, ctx: Params) {
   const streamPreview =
     typeof row.stream_preview === "string" ? row.stream_preview : null;
 
+  const ingestPhaseRaw = (row as { ingest_phase?: unknown }).ingest_phase;
+  const ingestPhase =
+    ingestPhaseRaw === "reading_pdf" ||
+    ingestPhaseRaw === "planning_outline" ||
+    ingestPhaseRaw === "writing_modules"
+      ? ingestPhaseRaw
+      : null;
+
   let previewCourse: CoursePayload | null = null;
   if (
     (outlineReady || row.status === "complete") &&
@@ -154,6 +163,7 @@ export async function GET(_request: Request, ctx: Params) {
     createdAt,
     originalFileName,
     streamPreview,
+    ingestPhase,
     previewCourse,
   });
 }

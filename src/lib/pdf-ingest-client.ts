@@ -56,7 +56,13 @@ type JobGetJson = {
   createdAt?: string;
   streamPreview?: string | null;
   previewCourse?: unknown;
+  ingestPhase?: PdfIngestPhase | null;
 };
+
+export type PdfIngestPhase =
+  | "reading_pdf"
+  | "planning_outline"
+  | "writing_modules";
 
 /**
  * GET job row with retries (cold starts, rate limits, brief network loss).
@@ -180,6 +186,7 @@ async function postProcessPdfExpand(
 export type PollPdfIngestJobSnapshot = {
   status: string;
   outlineReady: boolean;
+  ingestPhase?: PdfIngestPhase;
   modulesBuilt?: number;
   modulesTotal?: number;
 };
@@ -236,9 +243,17 @@ export async function pollPdfIngestJob(
     const { data } = got;
 
     const snapStatus = typeof data.status === "string" ? data.status : "unknown";
+    const rawPhase = data.ingestPhase;
+    const ingestPhase: PdfIngestPhase | undefined =
+      rawPhase === "reading_pdf" ||
+      rawPhase === "planning_outline" ||
+      rawPhase === "writing_modules"
+        ? rawPhase
+        : undefined;
     options?.onJobSnapshot?.({
       status: snapStatus,
       outlineReady: Boolean(data.outlineReady),
+      ingestPhase,
       modulesBuilt:
         typeof data.modulesBuilt === "number" ? data.modulesBuilt : undefined,
       modulesTotal:
@@ -387,15 +402,31 @@ export async function pollPdfIngestJob(
       !data.outlineReady
     ) {
       const started = jobStartedAtMs(data.createdAt);
-      const elapsedMs = started != null ? Date.now() - started : 0;
       const elapsedPart =
         started != null
           ? ` · ${formatElapsedShort(Date.now() - started)}`
           : "";
-      const phaseLine =
-        elapsedMs < 90_000
-          ? "Step 1/2: Extracting text from your PDF (huge slide files can take several minutes before any AI runs)…"
-          : "Step 2/2: Planning course outline with AI (then writing each module)…";
+      const streamPeek =
+        typeof data.streamPreview === "string" && data.streamPreview.length > 20
+          ? data.streamPreview
+          : "";
+      let phaseLine: string;
+      if (data.status === "pending") {
+        phaseLine =
+          "Queued: this PDF starts when the server picks it up (large batches are staggered on purpose)…";
+      } else if (ingestPhase === "planning_outline") {
+        phaseLine =
+          "Step 2/2: Planning course outline with AI (then writing each module)…";
+      } else if (ingestPhase === "reading_pdf") {
+        phaseLine =
+          "Step 1/2: Extracting text from your PDF (huge slide files can take several minutes before any AI runs)…";
+      } else if (streamPeek.length > 0) {
+        phaseLine =
+          "Step 2/2: Planning course outline with AI (receiving model output)…";
+      } else {
+        phaseLine =
+          "Step 1/2: Extracting text from your PDF (huge slide files can take several minutes before any AI runs)…";
+      }
       onProgress?.({
         line: `${phaseLine}${elapsedPart}`,
         bar: "indeterminate",

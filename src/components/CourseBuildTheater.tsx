@@ -51,6 +51,20 @@ function tabStatusLine(
       detail: "Outline is saved; the page layout appears when the first module body is ready.",
     };
   }
+  if (snap?.ingestPhase === "planning_outline") {
+    return {
+      line: "Planning outline…",
+      detail:
+        "Step 2/2: the model is drafting the course outline (JSON). Large slide decks can take several minutes.",
+    };
+  }
+  if (snap?.ingestPhase === "reading_pdf") {
+    return {
+      line: "Reading PDF…",
+      detail:
+        "Step 1/2: downloading and extracting text from your file before any outline AI runs.",
+    };
+  }
   if (snap?.status === "pending") {
     return {
       line: "Queued…",
