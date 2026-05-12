@@ -2,10 +2,10 @@ import Link from "next/link";
 import { AppHeader } from "@/components/AppHeader";
 import {
   CourseDashboardList,
-  StudyingCoursesSection,
 } from "@/components/CourseDashboardList";
 import type { DashboardCourse } from "@/components/CourseDashboardList";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { ContinueStudyingCarousel } from "@/components/ContinueStudyingCarousel";
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
 import type { StudyingCourse } from "@/lib/load-dashboard-courses";
@@ -24,8 +24,7 @@ export function DashboardHomeContent({
   progress: DashboardProgressPayload;
 }) {
   const hasOwned = ownedCourses.length > 0;
-  const hasStudying = studyingCourses.length > 0;
-  const empty = !hasOwned && !hasStudying;
+  const empty = !hasOwned && studyingCourses.length === 0;
 
   return (
     <>
@@ -77,6 +76,8 @@ export function DashboardHomeContent({
               </Link>
             </div>
           </div>
+
+              <ContinueStudyingCarousel entries={progress.recentPractice} />
 
           {empty ? (
             <div className="mx-auto mt-12 max-w-lg rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center shadow-lg shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-950/90 dark:shadow-black/20">
@@ -145,7 +146,7 @@ export function DashboardHomeContent({
                 </section>
               )}
 
-              <StudyingCoursesSection courses={studyingCourses} />
+              {/* “Continue learning” (Explore) cards removed — use the black carousel above instead. */}
             </div>
           )}
             </div>

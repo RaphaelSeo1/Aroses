@@ -263,7 +263,7 @@ export async function loadDashboardProgress(
     .sort(
       (a, b) => new Date(b.answeredAt).getTime() - new Date(a.answeredAt).getTime()
     )
-    .slice(0, 3)
+    .slice(0, 8)
     .map((r) => {
       const s = summaryByCourseId.get(r.courseId);
       return {

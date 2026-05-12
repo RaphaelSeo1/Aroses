@@ -1,14 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
-import type { StudyChatTurn } from "@/types/study-chat";
+import type { StudyChatResponse, StudyChatTurn } from "@/types/study-chat";
 
 type Props = {
   materialId: string;
   moduleId: number;
   quizOpen: boolean;
+  /** Base lessons URL (e.g. `/dashboard/courses/:id/study` or `/explore/:id/study`). */
+  studyHrefBase?: string;
+  /** Keep `mode=learn` when navigating (dashboard “study as learner”). */
+  learnMode?: boolean;
   /** Stack inside parent dock instead of separate fixed positions */
   docked?: boolean;
   /** Legacy study pack (summary + 10 MCQs) vs full course player */
@@ -19,9 +24,12 @@ export function StudyChatDrawer({
   materialId,
   moduleId,
   quizOpen,
+  studyHrefBase,
+  learnMode = false,
   docked = false,
   variant = "course",
 }: Props) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<StudyChatTurn[]>([]);
   const [input, setInput] = useState("");
@@ -95,7 +103,8 @@ export function StudyChatDrawer({
         return;
       }
 
-      const reply = body.reply as string | undefined;
+      const payload = body as Partial<StudyChatResponse> & { error?: unknown };
+      const reply = payload.reply;
       if (typeof reply !== "string") {
         setError("Bad response.");
         setMessages(prevSnapshot);
@@ -107,6 +116,34 @@ export function StudyChatDrawer({
         ...nextMessages,
         { role: "assistant", content: reply },
       ]);
+
+      const action = payload.action ?? null;
+      if (
+        action &&
+        typeof action === "object" &&
+        ((action as { type?: unknown }).type === "navigate_to_module" ||
+          (action as { type?: unknown }).type === "navigate_to_location") &&
+        variant === "course" &&
+        typeof studyHrefBase === "string" &&
+        studyHrefBase.length > 0
+      ) {
+        const targetModule =
+          (action as { moduleId?: unknown }).moduleId;
+        const targetMaterial =
+          (action as { type?: unknown }).type === "navigate_to_location" &&
+          typeof (action as { materialId?: unknown }).materialId === "string"
+            ? (action as { materialId: string }).materialId
+            : materialId;
+        if (typeof targetModule !== "number" || !Number.isFinite(targetModule)) {
+          return;
+        }
+        const p = new URLSearchParams();
+        p.set("material", targetMaterial);
+        p.set("module", String(targetModule));
+        if (learnMode) p.set("mode", "learn");
+        router.push(`${studyHrefBase}?${p.toString()}`);
+        setOpen(false);
+      }
     } catch {
       setError("Network error.");
       setMessages(prevSnapshot);

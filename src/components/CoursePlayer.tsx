@@ -1501,6 +1501,8 @@ export function CoursePlayer({
         materialId={materialId}
         moduleId={activeModuleId}
         quizOpen={quizOpen}
+        studyHrefBase={studyBase}
+        learnMode={learnMode}
         docked
       />
     </div>

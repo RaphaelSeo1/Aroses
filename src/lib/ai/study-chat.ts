@@ -91,7 +91,7 @@ function buildFullCourseContext(payload: CoursePayload): string {
 export async function runStudyChat(
   contextText: string,
   messages: StudyChatTurn[]
-): Promise<string> {
+): Promise<{ reply: string; action: unknown | null }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("Missing ANTHROPIC_API_KEY");
@@ -104,6 +104,13 @@ Rules:
 - Be concise unless they ask for depth. Use short paragraphs or bullet lists when helpful.
 - Never invent citations, sources, or facts outside CONTEXT.
 - If CONTEXT indicates the student is on a quiz screen, do not reveal correct multiple-choice letters or give away quiz keys; teach the underlying ideas instead.
+- When the student asks to jump to another module or to find where a term is covered, you may request navigation by setting an ACTION in the JSON output.
+
+Output format:
+- Return ONLY valid JSON, no markdown fences.
+- Shape: {"reply": string, "action": null | {"type":"navigate_to_module","moduleId":number,"reason"?:string} | {"type":"navigate_by_query","query":string}}
+- "reply" should be the user-visible tutoring message.
+- Use "navigate_by_query" when the user asks for a module about a term/concept but you are not sure which module id it is.
 
 CONTEXT:
 ---
@@ -127,5 +134,14 @@ ${contextText}
     throw new Error("Unexpected response from Claude");
   }
 
-  return block.text.trim();
+  const raw = block.text.trim();
+  try {
+    const parsed = JSON.parse(raw) as { reply?: unknown; action?: unknown };
+    if (typeof parsed?.reply === "string") {
+      return { reply: parsed.reply.trim(), action: parsed.action ?? null };
+    }
+  } catch {
+    // fall through
+  }
+  return { reply: raw, action: null };
 }

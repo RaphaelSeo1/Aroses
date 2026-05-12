@@ -668,7 +668,14 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
 
   let text = "";
   try {
-    const parsed = await pdfParse(buf);
+    const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
+    const maxPages = maxPagesRaw ? Number(maxPagesRaw) : 60;
+    const safeMaxPages =
+      Number.isFinite(maxPages) && maxPages >= 1 && maxPages <= 400
+        ? Math.floor(maxPages)
+        : 60;
+
+    const parsed = await pdfParse(buf, { max: safeMaxPages });
     text = (parsed.text ?? "").trim();
   } catch {
     await failJobUnlessStale(

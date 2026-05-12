@@ -6,6 +6,10 @@ import {
   buildStudyContextText,
   runStudyChat,
 } from "@/lib/ai/study-chat";
+import {
+  findBestModuleIdForQuery,
+  findBestStudyLocationForQuery,
+} from "@/lib/study-chat-nav";
 import type { StudyChatTurn } from "@/types/study-chat";
 import type { CoursePayload } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
@@ -18,6 +22,22 @@ const UUID_RE =
 
 const MAX_CONTENT_PER_MESSAGE = 8000;
 const MAX_MESSAGES = 24;
+
+function looksLikeNavigationIntent(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    t.includes("take me") ||
+    t.includes("go to") ||
+    t.includes("jump to") ||
+    t.includes("send me") ||
+    t.includes("bring me") ||
+    t.includes("where") ||
+    t.includes("which module") ||
+    t.includes("what module") ||
+    t.includes("find") ||
+    t.includes("search")
+  );
+}
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
@@ -95,7 +115,7 @@ export async function POST(request: Request) {
 
   const { data: row, error: fetchErr } = await supabase
     .from("study_materials")
-    .select("course_payload, summary, key_concepts, questions")
+    .select("course_id, course_payload, summary, key_concepts, questions")
     .eq("id", b.materialId)
     .maybeSingle();
 
@@ -103,6 +123,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Material not found" }, { status: 404 });
   }
 
+  const courseId = typeof row.course_id === "string" ? row.course_id : null;
   const payload = row.course_payload as CoursePayload | null;
   const hasStructuredCourse =
     payload != null &&
@@ -141,8 +162,67 @@ export async function POST(request: Request) {
   }
 
   try {
-    const reply = await runStudyChat(contextText, messages);
-    return NextResponse.json({ reply });
+    // Server-side fallback: if the user is asking to navigate, try searching the full payload
+    // even if the model doesn't return an action.
+    let fallbackAction: unknown | null = null;
+    if (hasStructuredCourse && looksLikeNavigationIntent(last.content)) {
+      // Search this material first, then other materials in the same course (if available).
+      const materials: { id: string; course_payload: CoursePayload }[] = [
+        { id: b.materialId, course_payload: payload! },
+      ];
+      if (courseId) {
+        const { data: otherMats } = await supabase
+          .from("study_materials")
+          .select("id, course_payload")
+          .eq("course_id", courseId)
+          .order("created_at", { ascending: true });
+        for (const om of otherMats ?? []) {
+          if (!om?.id || om.id === b.materialId) continue;
+          const pl = om.course_payload as CoursePayload | null;
+          if (pl && Array.isArray((pl as CoursePayload).modules) && pl.modules.length > 0) {
+            materials.push({ id: om.id, course_payload: pl });
+          }
+        }
+      }
+
+      const loc = findBestStudyLocationForQuery({
+        materials,
+        query: last.content,
+      });
+      if (loc) {
+        fallbackAction = {
+          type: "navigate_to_location",
+          materialId: loc.materialId,
+          moduleId: loc.moduleId,
+          reason: loc.reason,
+        };
+      }
+    }
+
+    const out = await runStudyChat(contextText, messages);
+    let action: unknown | null = out.action ?? null;
+
+    if (hasStructuredCourse && action && typeof action === "object") {
+      const a = action as { type?: unknown; query?: unknown; moduleId?: unknown };
+      if (a.type === "navigate_by_query" && typeof a.query === "string") {
+        const hit = findBestModuleIdForQuery(payload!, a.query);
+        action = hit
+          ? { type: "navigate_to_module", moduleId: hit.moduleId, reason: hit.reason }
+          : null;
+      }
+
+      if (a.type === "navigate_to_module") {
+        const modId = typeof a.moduleId === "number" ? a.moduleId : Number.NaN;
+        const ok = Number.isFinite(modId) && payload!.modules.some((m) => m.id === modId);
+        if (!ok) action = null;
+      }
+    }
+
+    if (!action && fallbackAction) {
+      action = fallbackAction;
+    }
+
+    return NextResponse.json({ reply: out.reply, action });
   } catch (e) {
     console.error(e);
     return NextResponse.json(

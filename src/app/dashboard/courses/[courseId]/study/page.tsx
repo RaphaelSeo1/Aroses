@@ -279,6 +279,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
             materialId={row.id}
             moduleId={1}
             quizOpen={false}
+            studyHrefBase={`/dashboard/courses/${courseId}/study`}
             docked
             variant="legacy"
           />

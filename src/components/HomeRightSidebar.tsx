@@ -55,6 +55,13 @@ export function HomeRightSidebar({
   const days = weekdayLabelsLast7();
   const last7 = activityBuckets14.slice(-7);
   const streak = streakFromBuckets(last7);
+  const suggested = (() => {
+    const unfinished = recentPractice.filter(
+      (r) => r.modulesTotal > 0 && r.modulesCompleted < r.modulesTotal
+    );
+    // If everything is finished (or has no module payload yet), fall back to recency.
+    return (unfinished.length > 0 ? unfinished : recentPractice).slice(0, 3);
+  })();
 
   return (
     <aside className="space-y-5 lg:sticky lg:top-[5.5rem]">
@@ -125,13 +132,13 @@ export function HomeRightSidebar({
           </Link>
         </div>
 
-        {recentPractice.length === 0 ? (
+        {suggested.length === 0 ? (
           <p className="mt-5 text-sm text-zinc-600 dark:text-zinc-400">
             No practice yet. Open a course and try a quiz.
           </p>
         ) : (
           <ul className="mt-5 space-y-3">
-            {recentPractice.map((r) => {
+            {suggested.map((r) => {
               const score =
                 r.totalLast10 > 0
                   ? `${r.correctLast10}/${r.totalLast10}`
