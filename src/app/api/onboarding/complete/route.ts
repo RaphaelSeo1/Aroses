@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
-  looksLikeProfilesMissingOnboardingCore,
+  looksLikeJwtExpired,
+  looksLikeMissingProfilesOnboardingMigration,
+  looksLikeRowLevelSecurityError,
   looksLikeUsernameConstraintError,
   upsertProfileWithOptionalColumnFallback,
 } from "@/lib/profile-upsert-retry";
@@ -172,11 +174,31 @@ export async function POST(request: Request) {
     if (looksLikeUsernameConstraintError(upErr.message)) {
       return NextResponse.json({ error: "Username is taken." }, { status: 409 });
     }
-    if (looksLikeProfilesMissingOnboardingCore(upErr.message)) {
+    if (looksLikeJwtExpired(upErr.message)) {
+      return NextResponse.json(
+        {
+          error: "Your session expired. Please sign in again and try Finish once more.",
+          code: "jwt_expired",
+        },
+        { status: 401 }
+      );
+    }
+    if (looksLikeRowLevelSecurityError(upErr.message)) {
       return NextResponse.json(
         {
           error:
-            "Your database is missing onboarding columns. In the Supabase dashboard → SQL Editor, run the full script from `supabase/migrations/026_onboarding_profile_fields.sql` in this repo (including the `profile_username_available` function), then click Finish again.",
+            "Could not save your profile (access was denied). Try signing out, signing back in, then tap Finish again.",
+          code: upErr.code ?? "42501",
+        },
+        { status: 403 }
+      );
+    }
+    if (looksLikeMissingProfilesOnboardingMigration(upErr.message)) {
+      return NextResponse.json(
+        {
+          error:
+            "Your Supabase database is missing profile columns used by onboarding. In the Supabase dashboard → SQL Editor, run the scripts from `supabase/migrations/015_profiles_study_focus.sql` (study_focus) and `supabase/migrations/026_onboarding_profile_fields.sql` (including `profile_username_available`), reload the project if needed, then try Finish again.",
+          code: "schema_migration",
         },
         { status: 503 }
       );
@@ -187,7 +209,10 @@ export async function POST(request: Request) {
         ? ` (${upErr.code ?? ""} ${upErr.message ?? ""})`
         : "";
     return NextResponse.json(
-      { error: `Could not save onboarding.${devHint}` },
+      {
+        error: `Could not save onboarding. Please try again.${devHint}`,
+        code: upErr.code ?? "upsert_failed",
+      },
       { status: 500 }
     );
   }

@@ -1,10 +1,13 @@
 import type { PostgrestError } from "@supabase/supabase-js";
 
-/** Columns we must keep for onboarding completion (gate reads `onboarding_completed_at`). */
+/**
+ * Columns we never drop when retrying upserts. `study_focus` is optional here so
+ * a DB missing migration 015 can still complete onboarding after stripping it.
+ * The gate only needs `onboarding_completed_at` (and a valid profile row).
+ */
 const ONBOARDING_UPSERT_REQUIRED = new Set([
   "id",
   "birthday",
-  "study_focus",
   "onboarding_completed_at",
 ]);
 
@@ -22,6 +25,10 @@ export function parseProfilesMissingColumnName(
   if (m1?.[1]) return m1[1];
   const m2 = /Could not find the '([^']+)' column of 'profiles'/i.exec(message);
   if (m2?.[1]) return m2[1];
+  const mCache = /Could not find the '([^']+)' column in the schema cache/i.exec(
+    message
+  );
+  if (mCache?.[1]) return mCache[1];
   const m3 = /Could not find the '([^']+)' column/i.exec(message);
   if (m3?.[1] && /profiles/i.test(message)) return m3[1];
   return null;
@@ -48,6 +55,37 @@ export function looksLikeProfilesMissingOnboardingCore(
   }
   if (/42703/.test(m) && /onboarding_completed_at/i.test(m)) return true;
   return false;
+}
+
+/** Postgres / PostgREST “blocked by policy” (not a missing-column issue). */
+export function looksLikeRowLevelSecurityError(
+  message: string | undefined
+): boolean {
+  return /row-level security|violates row-level security policy|permission denied for table|42501/i.test(
+    message ?? ""
+  );
+}
+
+export function looksLikeJwtExpired(message: string | undefined): boolean {
+  return /JWT expired|jwt expired|Invalid JWT|invalid jwt|invalid claim|PGRST301/i.test(
+    message ?? ""
+  );
+}
+
+/**
+ * Missing onboarding-related columns (026 / partial schema). Excludes RLS noise.
+ */
+export function looksLikeMissingProfilesOnboardingMigration(
+  message: string | undefined
+): boolean {
+  if (!message || looksLikeRowLevelSecurityError(message)) return false;
+  if (looksLikeProfilesMissingOnboardingCore(message)) return true;
+  if (!/42703|does not exist|could not find|schema cache/i.test(message)) {
+    return false;
+  }
+  return /\b(onboarding_completed_at|study_goals|referral_source|onboarding_persona|username|school_name|study_focus)\b/i.test(
+    message
+  );
 }
 
 export function looksLikeUsernameConstraintError(

@@ -34,10 +34,10 @@ const PANEL =
   "rounded-2xl border border-zinc-200/80 bg-white shadow-[0_2px_24px_-12px_rgba(0,0,0,0.08)] dark:border-zinc-200/80 dark:bg-white";
 
 const BTN_PRIMARY =
-  "inline-flex min-w-[10.5rem] items-center justify-center rounded-xl bg-brand px-8 py-3 text-sm font-semibold text-white shadow-sm ring-1 ring-black/[0.06] transition hover:bg-brand-hover disabled:pointer-events-none disabled:opacity-45 dark:bg-brand dark:text-white dark:hover:bg-brand-hover";
+  "inline-flex min-w-[9rem] items-center justify-center rounded-xl bg-brand px-6 py-2.5 text-sm font-semibold text-white shadow-sm ring-1 ring-black/[0.06] transition hover:bg-brand-hover disabled:pointer-events-none disabled:opacity-45 dark:bg-brand dark:text-white dark:hover:bg-brand-hover";
 
 const BTN_SECONDARY =
-  "inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-6 py-3 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-200 dark:bg-white dark:text-zinc-700 dark:hover:border-zinc-300 dark:hover:bg-zinc-50";
+  "inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-5 py-2.5 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-200 dark:bg-white dark:text-zinc-700 dark:hover:border-zinc-300 dark:hover:bg-zinc-50";
 
 function monthDays(y: number, m: number): number {
   return new Date(y, m, 0).getDate();
@@ -52,6 +52,27 @@ function isValidCalendarDate(y: number, m: number, d: number): boolean {
   return (
     dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d
   );
+}
+
+/** When month/year changes, keep the chosen day if still valid; clamp e.g. Feb 31 → 28/29. */
+function reconcileBirthDayAfterCalendarChange(
+  dayStr: string,
+  yStr: string,
+  mStr: string
+): string {
+  if (!mStr) return "";
+  if (!dayStr) return "";
+  if (!yStr) return dayStr;
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dayStr);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+    return "";
+  }
+  const max = monthDays(y, m);
+  if (d < 1) return "";
+  if (d > max) return String(max);
+  return dayStr;
 }
 
 function IconArrowRight({ className }: { className?: string }) {
@@ -231,11 +252,18 @@ export function OnboardingClient() {
           referralSource: referral,
         }),
       });
-      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        code?: string;
+      };
       if (!res.ok) {
-        setSubmitError(
-          typeof j.error === "string" ? j.error : "Could not finish setup."
-        );
+        const base =
+          typeof j.error === "string" ? j.error : "Could not finish setup.";
+        const withCode =
+          typeof j.code === "string" && j.code.length > 0
+            ? `${base} [${j.code}]`
+            : base;
+        setSubmitError(withCode);
         setSubmitting(false);
         return;
       }
@@ -303,12 +331,12 @@ export function OnboardingClient() {
     phaseIndex >= 0 ? `Step ${phaseIndex + 1} of ${phases.length}` : "";
 
   const cardBase =
-    "group flex min-h-[9.25rem] w-full cursor-pointer flex-col items-start gap-4 rounded-2xl border-2 border-zinc-200/90 bg-white p-6 text-left text-zinc-900 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition hover:border-zinc-300 hover:shadow-md dark:border-zinc-200/90 dark:bg-white dark:text-zinc-900 sm:min-h-[9.75rem] sm:flex-row sm:items-start sm:gap-5 sm:p-7";
+    "group flex w-full cursor-pointer items-start gap-3 rounded-xl border border-zinc-200/90 bg-white p-4 text-left text-zinc-900 shadow-sm transition hover:border-zinc-300 hover:shadow-md dark:border-zinc-200/90 dark:bg-white dark:text-zinc-900 sm:flex-row sm:items-center sm:gap-3.5 sm:p-4";
   const cardSelected =
-    "border-brand bg-brand-blush shadow-[0_4px_20px_-8px_rgba(220,38,38,0.35)] ring-2 ring-brand/25 dark:border-brand dark:bg-brand-blush dark:shadow-[0_4px_20px_-8px_rgba(220,38,38,0.35)] dark:ring-brand/25";
+    "border-brand bg-brand-blush shadow-[0_2px_14px_-6px_rgba(220,38,38,0.28)] ring-1 ring-brand/25 dark:border-brand dark:bg-brand-blush dark:shadow-[0_2px_14px_-6px_rgba(220,38,38,0.28)] dark:ring-brand/25";
 
   const emojiWrap =
-    "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-[1.35rem] leading-none shadow-inner dark:bg-zinc-100";
+    "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-[1.1rem] leading-none shadow-inner dark:bg-zinc-100 sm:h-10 sm:w-10 sm:text-[1.2rem]";
 
   return (
     <div className={`relative flex flex-col ${SHELL}`}>
@@ -342,10 +370,10 @@ export function OnboardingClient() {
         </div>
       </header>
 
-      <div className="flex flex-1 flex-col items-center px-4 py-10 sm:px-8 sm:py-14">
+      <div className="flex flex-1 flex-col items-center px-4 py-8 sm:px-8 sm:py-11">
         <div
           key={phase}
-          className="w-full max-w-2xl animate-onboarding-step"
+          className="w-full max-w-xl animate-onboarding-step sm:max-w-2xl"
         >
           {phase === "welcome" ? (
             <div className={`${PANEL} px-8 py-12 text-center sm:px-12 sm:py-14`}>
@@ -375,7 +403,7 @@ export function OnboardingClient() {
               >
                 I am a…
               </h2>
-              <div className="mt-8 grid grid-cols-1 gap-4 sm:mt-10 sm:grid-cols-2 sm:gap-5">
+              <div className="mt-6 grid grid-cols-1 gap-3 sm:mt-8 sm:grid-cols-2 sm:gap-3.5">
                 {ONBOARDING_PERSONAS.map((opt) => (
                   <button
                     key={opt.id}
@@ -386,11 +414,11 @@ export function OnboardingClient() {
                     <span className={emojiWrap} aria-hidden>
                       {opt.emoji}
                     </span>
-                    <div className="min-w-0 flex-1 space-y-2">
-                      <span className="block text-lg font-semibold leading-snug text-zinc-900 dark:text-zinc-900">
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <span className="block text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-900 sm:text-base">
                         {opt.label}
                       </span>
-                      <span className="block text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
+                      <span className="block text-[13px] leading-relaxed text-zinc-600 dark:text-zinc-600 sm:text-sm">
                         {opt.hint}
                       </span>
                     </div>
@@ -410,7 +438,7 @@ export function OnboardingClient() {
               <p className="mx-auto mt-3 max-w-md text-center text-sm leading-relaxed text-zinc-500 dark:text-zinc-500">
                 Select all that apply.
               </p>
-              <div className="mt-8 grid grid-cols-1 gap-4 sm:mt-10 sm:grid-cols-2 sm:gap-5">
+              <div className="mt-6 grid grid-cols-1 gap-3 sm:mt-8 sm:grid-cols-2 sm:gap-3.5">
                 {ONBOARDING_GOALS.map((opt) => {
                   const on = goals.has(opt.id);
                   return (
@@ -424,7 +452,7 @@ export function OnboardingClient() {
                         {opt.emoji}
                       </span>
                       <div className="min-w-0 flex-1">
-                        <span className="block text-lg font-semibold leading-snug text-zinc-900 dark:text-zinc-900">
+                        <span className="block text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-900 sm:text-base">
                           {opt.label}
                         </span>
                       </div>
@@ -568,8 +596,15 @@ export function OnboardingClient() {
                   <select
                     value={birthMonth}
                     onChange={(e) => {
-                      setBirthMonth(e.target.value);
-                      setBirthDay("");
+                      const nextM = e.target.value;
+                      setBirthMonth(nextM);
+                      setBirthDay((prev) =>
+                        reconcileBirthDayAfterCalendarChange(
+                          prev,
+                          birthYear,
+                          nextM
+                        )
+                      );
                     }}
                     className="mt-2 min-w-[10.5rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 dark:border-zinc-200 dark:bg-white dark:text-zinc-900"
                   >
@@ -603,8 +638,15 @@ export function OnboardingClient() {
                   <select
                     value={birthYear}
                     onChange={(e) => {
-                      setBirthYear(e.target.value);
-                      setBirthDay("");
+                      const nextY = e.target.value;
+                      setBirthYear(nextY);
+                      setBirthDay((prev) =>
+                        reconcileBirthDayAfterCalendarChange(
+                          prev,
+                          nextY,
+                          birthMonth
+                        )
+                      );
                     }}
                     className="mt-2 min-w-[7.5rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 dark:border-zinc-200 dark:bg-white dark:text-zinc-900"
                   >
@@ -627,7 +669,7 @@ export function OnboardingClient() {
               >
                 How did you find Aroses?
               </h2>
-              <div className="mx-auto mt-8 grid max-w-3xl grid-cols-1 gap-4 sm:mt-10 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
+              <div className="mx-auto mt-6 grid max-w-2xl grid-cols-1 gap-3 sm:mt-8 sm:grid-cols-2 sm:gap-3.5 lg:grid-cols-3">
                 {ONBOARDING_REFERRALS.map((opt) => (
                   <button
                     key={opt.id}
@@ -639,7 +681,7 @@ export function OnboardingClient() {
                       {opt.emoji}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <span className="block text-lg font-semibold leading-snug text-zinc-900 dark:text-zinc-900">
+                      <span className="block text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-900 sm:text-base">
                         {opt.label}
                       </span>
                     </div>
@@ -693,7 +735,7 @@ export function OnboardingClient() {
           phase !== "done" &&
           phase !== "username" &&
           phase !== "dob" ? (
-            <div className="mx-auto mt-10 flex justify-center sm:mt-12">
+            <div className="mx-auto mt-8 flex justify-center sm:mt-9">
               <button
                 type="button"
                 disabled={!canNext || (phase === "referral" && submitting)}
@@ -716,7 +758,7 @@ export function OnboardingClient() {
           ) : null}
 
           {phase === "username" ? (
-            <div className="mx-auto mt-10 flex justify-center sm:mt-12">
+            <div className="mx-auto mt-8 flex justify-center sm:mt-9">
               <button
                 type="button"
                 disabled={!canNext}
@@ -729,7 +771,7 @@ export function OnboardingClient() {
           ) : null}
 
           {phase === "dob" ? (
-            <div className="mx-auto mt-10 flex justify-center sm:mt-12">
+            <div className="mx-auto mt-8 flex justify-center sm:mt-9">
               <button
                 type="button"
                 disabled={!canNext}
