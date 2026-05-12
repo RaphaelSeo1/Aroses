@@ -13,8 +13,17 @@ import {
 } from "@/lib/study-pdf-ingest";
 import type { PdfBuildProgressUI } from "@/lib/pdf-ingest-client";
 
-/** Max PDFs building at once; each job is independent, but a cap limits Anthropic / host spikes. */
-const PDF_UPLOAD_CONCURRENCY = 3;
+/**
+ * When uploading multiple PDFs, wait this long between each `POST /api/process-pdf`
+ * so each `after(runPdfIngestJob)` begins slightly later. That avoids four outlines
+ * hammering the provider at the same instant (429 / overload) while jobs still run
+ * in parallel once started — closer finish times without strict ordering.
+ */
+const PDF_INGEST_START_STAGGER_MS = 1600;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 function isPdfFile(f: File): boolean {
   return (
@@ -63,29 +72,6 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
   }
 
   return `Request failed (${res.status} ${res.statusText || "error"}). Try a smaller file or retry later.`;
-}
-
-/** Run `worker` on each item with at most `concurrency` in flight. */
-async function runPool<T>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T, index: number) => Promise<void>
-): Promise<void> {
-  if (items.length === 0) return;
-  const n = Math.max(1, Math.min(concurrency, items.length));
-  const executing = new Set<Promise<void>>();
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]!;
-    const index = i;
-    const p = worker(item, index).finally(() => {
-      executing.delete(p);
-    });
-    executing.add(p);
-    if (executing.size >= n) {
-      await Promise.race(executing);
-    }
-  }
-  await Promise.all([...executing]);
 }
 
 export function CourseUploadForm({
@@ -199,8 +185,7 @@ export function CourseUploadForm({
         }
         setBuildProgress({
           line:
-            `Up to ${Math.min(PDF_UPLOAD_CONCURRENCY, total)} PDFs in parallel (${total} total)\n` +
-            ordered.join("\n"),
+            `${total} PDFs — each build starts ~${Math.round(PDF_INGEST_START_STAGGER_MS / 1000)}s after the previous so AI work does not pile up.\n${ordered.join("\n")}`,
           bar,
         });
       };
@@ -334,13 +319,15 @@ export function CourseUploadForm({
       }
 
       const startResults: StartResult[] = new Array(total);
-      await runPool(
-        queue,
-        Math.min(PDF_UPLOAD_CONCURRENCY, total),
-        async (file, fileIndex) => {
-          startResults[fileIndex] = await startOnePdf(file, fileIndex);
+      for (let fileIndex = 0; fileIndex < total; fileIndex++) {
+        if (fileIndex > 0) {
+          await sleep(PDF_INGEST_START_STAGGER_MS);
         }
-      );
+        startResults[fileIndex] = await startOnePdf(
+          queue[fileIndex]!,
+          fileIndex
+        );
+      }
 
       const jobs = startResults.filter(
         (r): r is StartOkJob => Boolean(r?.ok && r.mode === "job")
@@ -524,9 +511,10 @@ export function CourseUploadForm({
         <p className="mt-2 text-xs text-zinc-500">
           Text must be selectable in the PDF for best results (scanned pages may
           not extract well). After upload you go to the live study build page: the
-          real lesson layout fills in as Claude generates it. Up to {PDF_UPLOAD_CONCURRENCY}{" "}
-          PDFs start in
-          parallel; large decks can take several minutes—keep this tab open.
+          real lesson layout fills in as Claude generates it. Multiple PDFs start a
+          few seconds apart so builds do not compete for the same AI limits, then
+          all run in parallel on the server. Large decks can take several minutes—
+          keep this tab open.
         </p>
       </div>
 
