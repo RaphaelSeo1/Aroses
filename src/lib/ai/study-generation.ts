@@ -311,9 +311,6 @@ export type PdfIngestStreamSink = {
 
 const PDF_STREAM_PREVIEW_CAP = 28_000;
 
-/** Streaming attempts before falling back to a non-streaming call (same model, more retries). */
-const PDF_INGEST_STREAM_ATTEMPTS = 3;
-
 async function readPdfIngestStreamOnce(
   anthropic: Anthropic,
   params: {
@@ -359,8 +356,8 @@ async function readPdfIngestStreamOnce(
 
 /**
  * One user-message → assistant text. Uses Anthropic streaming when `streamSink` is set so
- * `push` receives a growing tail of the JSON as tokens arrive. Retries transient stream errors,
- * then falls back to non-streaming (no live tail) so PDF ingest still completes.
+ * `push` receives a growing tail of the JSON as tokens arrive. One stream try for speed;
+ * on failure, falls back to non-streaming (PDF ingest runner also applies rate-limit retries).
  */
 async function invokeUserMessageForPdfText(
   anthropic: Anthropic,
@@ -389,43 +386,29 @@ async function invokeUserMessageForPdfText(
     return extractTextBlock(msg);
   }
 
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < PDF_INGEST_STREAM_ATTEMPTS; attempt++) {
-    try {
-      return await readPdfIngestStreamOnce(anthropic, params, streamSink);
-    } catch (err) {
-      lastErr = err;
-      const retry =
-        isRetryableApiError(err) && attempt < PDF_INGEST_STREAM_ATTEMPTS - 1;
-      if (!retry) break;
-      const delay = Math.min(
-        45_000,
-        1400 * 2 ** attempt + Math.floor(Math.random() * 700)
-      );
-      await sleep(delay);
-      await streamSink.clear().catch(() => {});
-    }
+  try {
+    return await readPdfIngestStreamOnce(anthropic, params, streamSink);
+  } catch (err) {
+    console.warn(
+      "[study-generation] PDF ingest stream failed; falling back to non-streaming",
+      err
+    );
+    await streamSink.clear().catch(() => {});
+    const fallbackAttempts = Math.max(maxAttemptsWhenNotStreaming, 3);
+    const msg = await createMessageWithRetries(
+      anthropic,
+      {
+        model: params.model,
+        max_tokens: params.max_tokens,
+        ...(params.temperature !== undefined
+          ? { temperature: params.temperature }
+          : {}),
+        messages: params.messages,
+      },
+      { maxAttempts: fallbackAttempts }
+    );
+    return extractTextBlock(msg);
   }
-
-  console.warn(
-    "[study-generation] PDF ingest stream failed; falling back to non-streaming",
-    lastErr
-  );
-  await streamSink.clear().catch(() => {});
-  const fallbackAttempts = Math.max(maxAttemptsWhenNotStreaming, 4);
-  const msg = await createMessageWithRetries(
-    anthropic,
-    {
-      model: params.model,
-      max_tokens: params.max_tokens,
-      ...(params.temperature !== undefined
-        ? { temperature: params.temperature }
-        : {}),
-      messages: params.messages,
-    },
-    { maxAttempts: fallbackAttempts }
-  );
-  return extractTextBlock(msg);
 }
 
 async function repairPayloadJson(
