@@ -20,17 +20,24 @@ import {
 import { filterSchoolSuggestions } from "@/lib/school-suggestions";
 
 const HEADING_SERIF =
-  "font-serif tracking-tight text-brand-ink text-balance";
+  "font-serif tracking-tight text-brand-ink text-balance dark:text-brand-ink";
 
-/** Light-only onboarding surface (stays on-brand even when the app is in dark mode). */
-const SHELL = "min-h-screen bg-[#f6f6f4] text-zinc-900 antialiased";
-const PANEL = "rounded-2xl border border-zinc-200/80 bg-white shadow-[0_2px_24px_-12px_rgba(0,0,0,0.08)]";
+/**
+ * Light-only onboarding surface. When `html.dark` is set, `body` uses a light
+ * foreground color — without explicit `dark:` overrides, white cards inherit
+ * that color (invisible text on white). Force the same palette as light mode.
+ */
+const ONBOARDING_LIGHT =
+  "[color-scheme:light] dark:bg-[#f6f6f4] dark:text-zinc-900";
+const SHELL = `min-h-screen bg-[#f6f6f4] text-zinc-900 antialiased ${ONBOARDING_LIGHT}`;
+const PANEL =
+  "rounded-2xl border border-zinc-200/80 bg-white shadow-[0_2px_24px_-12px_rgba(0,0,0,0.08)] dark:border-zinc-200/80 dark:bg-white";
 
 const BTN_PRIMARY =
-  "inline-flex min-w-[10.5rem] items-center justify-center rounded-xl bg-brand px-8 py-3 text-sm font-semibold text-white shadow-sm ring-1 ring-black/[0.06] transition hover:bg-brand-hover disabled:pointer-events-none disabled:opacity-45";
+  "inline-flex min-w-[10.5rem] items-center justify-center rounded-xl bg-brand px-8 py-3 text-sm font-semibold text-white shadow-sm ring-1 ring-black/[0.06] transition hover:bg-brand-hover disabled:pointer-events-none disabled:opacity-45 dark:bg-brand dark:text-white dark:hover:bg-brand-hover";
 
 const BTN_SECONDARY =
-  "inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-6 py-3 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50";
+  "inline-flex items-center justify-center rounded-xl border border-zinc-200 bg-white px-6 py-3 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-200 dark:bg-white dark:text-zinc-700 dark:hover:border-zinc-300 dark:hover:bg-zinc-50";
 
 function monthDays(y: number, m: number): number {
   return new Date(y, m, 0).getDate();
@@ -263,7 +270,7 @@ export function OnboardingClient() {
           <h1 className={`text-2xl sm:text-3xl ${HEADING_SERIF}`}>
             Aroses is for ages 13 and up
           </h1>
-          <p className="mt-5 text-sm leading-relaxed text-zinc-600">
+          <p className="mt-5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
             Thanks for your interest. When you&apos;re 13 or older, we&apos;d love
             to have you back.
           </p>
@@ -296,48 +303,64 @@ export function OnboardingClient() {
     phaseIndex >= 0 ? `Step ${phaseIndex + 1} of ${phases.length}` : "";
 
   const cardBase =
-    "group flex min-h-[9.25rem] w-full flex-col items-start gap-4 rounded-2xl border-2 border-zinc-200/90 bg-white p-6 text-left shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition hover:border-zinc-300 hover:shadow-md sm:min-h-[9.75rem] sm:p-7";
+    "group flex min-h-[9.25rem] w-full cursor-pointer flex-col items-start gap-4 rounded-2xl border-2 border-zinc-200/90 bg-white p-6 text-left text-zinc-900 shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition hover:border-zinc-300 hover:shadow-md dark:border-zinc-200/90 dark:bg-white dark:text-zinc-900 sm:min-h-[9.75rem] sm:flex-row sm:items-start sm:gap-5 sm:p-7";
   const cardSelected =
-    "border-brand bg-brand-blush shadow-[0_4px_20px_-8px_rgba(220,38,38,0.35)] ring-2 ring-brand/25";
+    "border-brand bg-brand-blush shadow-[0_4px_20px_-8px_rgba(220,38,38,0.35)] ring-2 ring-brand/25 dark:border-brand dark:bg-brand-blush dark:shadow-[0_4px_20px_-8px_rgba(220,38,38,0.35)] dark:ring-brand/25";
+
+  const emojiWrap =
+    "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-[1.35rem] leading-none shadow-inner dark:bg-zinc-100";
 
   return (
-    <div className="relative flex min-h-screen flex-col bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
-      <div
-        className="fixed inset-x-0 top-0 z-20 h-1 bg-zinc-100 dark:bg-zinc-800"
-        aria-hidden
-      >
-        <div
-          className="h-full bg-brand transition-[width] duration-500 ease-out"
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-
-      {phase !== "welcome" && phase !== "done" ? (
-        <div className="absolute left-4 top-6 z-10 sm:left-8 sm:top-8">
-          <button
-            type="button"
-            onClick={goBack}
-            className="rounded-full border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-          >
-            Back
-          </button>
+    <div className={`relative flex flex-col ${SHELL}`}>
+      <header className="sticky top-0 z-30 border-b border-zinc-200/80 bg-white/95 shadow-sm backdrop-blur-md dark:border-zinc-200/80 dark:bg-white/95">
+        <div className="h-1.5 bg-zinc-200 dark:bg-zinc-200" aria-hidden>
+          <div
+            className="h-full bg-brand transition-[width] duration-500 ease-out"
+            style={{ width: `${progress}%` }}
+          />
         </div>
-      ) : null}
+        <div className="mx-auto grid w-full max-w-3xl grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-4 py-3.5 sm:px-8">
+          <div className="justify-self-start">
+            {phase !== "welcome" && phase !== "done" ? (
+              <button
+                type="button"
+                onClick={goBack}
+                className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-200 dark:bg-white dark:text-zinc-700 dark:hover:bg-zinc-50"
+              >
+                ← Back
+              </button>
+            ) : (
+              <span className="inline-block w-px opacity-0" aria-hidden>
+                .
+              </span>
+            )}
+          </div>
+          <p className="justify-self-center text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-500">
+            {phase === "welcome" || phase === "done" ? "Setup" : stepLabel}
+          </p>
+          <span className="justify-self-end" aria-hidden />
+        </div>
+      </header>
 
-      <div className="flex flex-1 flex-col items-center justify-center px-4 pb-16 pt-14 sm:px-6 sm:pb-20 sm:pt-16">
-        <div key={phase} className="w-full max-w-xl animate-onboarding-step">
+      <div className="flex flex-1 flex-col items-center px-4 py-10 sm:px-8 sm:py-14">
+        <div
+          key={phase}
+          className="w-full max-w-2xl animate-onboarding-step"
+        >
           {phase === "welcome" ? (
-            <div className="text-center">
-              <h1 className={`text-4xl font-semibold sm:text-5xl ${HEADING_SERIF}`}>
+            <div className={`${PANEL} px-8 py-12 text-center sm:px-12 sm:py-14`}>
+              <h1
+                className={`text-[1.75rem] font-semibold leading-tight sm:text-[2.1rem] ${HEADING_SERIF}`}
+              >
                 Welcome to Aroses
               </h1>
-              <p className="mx-auto mt-4 max-w-md text-base leading-relaxed text-zinc-600 dark:text-zinc-400">
+              <p className="mx-auto mt-5 max-w-sm text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
                 We all know something. Let&apos;s set up your experience.
               </p>
               <button
                 type="button"
                 onClick={goNext}
-                className="mx-auto mt-12 inline-flex items-center gap-2 rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-md transition hover:bg-brand-hover"
+                className={`${BTN_PRIMARY} mx-auto mt-10 gap-2`}
               >
                 Get started
                 <IconArrowRight className="h-4 w-4" />
@@ -347,26 +370,30 @@ export function OnboardingClient() {
 
           {phase === "persona" ? (
             <div>
-              <h2 className={`text-center text-2xl font-semibold sm:text-3xl ${HEADING_SERIF}`}>
+              <h2
+                className={`mx-auto max-w-lg text-center text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
+              >
                 I am a…
               </h2>
-              <div className="mt-10 grid gap-3 sm:grid-cols-2">
+              <div className="mt-8 grid grid-cols-1 gap-4 sm:mt-10 sm:grid-cols-2 sm:gap-5">
                 {ONBOARDING_PERSONAS.map((opt) => (
                   <button
                     key={opt.id}
                     type="button"
                     onClick={() => setPersona(opt.id)}
-                    className={`${cardBase} ${persona === opt.id ? cardSelected : "hover:border-zinc-300 dark:hover:border-zinc-500"}`}
+                    className={`${cardBase} ${persona === opt.id ? cardSelected : ""}`}
                   >
-                    <span className="text-2xl" aria-hidden>
+                    <span className={emojiWrap} aria-hidden>
                       {opt.emoji}
                     </span>
-                    <span className="mt-2 block text-base font-semibold text-zinc-900 dark:text-zinc-50">
-                      {opt.label}
-                    </span>
-                    <span className="mt-1 block text-sm leading-snug text-zinc-600 dark:text-zinc-400">
-                      {opt.hint}
-                    </span>
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <span className="block text-lg font-semibold leading-snug text-zinc-900 dark:text-zinc-900">
+                        {opt.label}
+                      </span>
+                      <span className="block text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
+                        {opt.hint}
+                      </span>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -375,13 +402,15 @@ export function OnboardingClient() {
 
           {phase === "goals" ? (
             <div>
-              <h2 className={`text-center text-2xl font-semibold sm:text-3xl ${HEADING_SERIF}`}>
+              <h2
+                className={`mx-auto max-w-lg text-center text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
+              >
                 I&apos;m here to…
               </h2>
-              <p className="mx-auto mt-2 max-w-md text-center text-sm text-zinc-500 dark:text-zinc-400">
+              <p className="mx-auto mt-3 max-w-md text-center text-sm leading-relaxed text-zinc-500 dark:text-zinc-500">
                 Select all that apply.
               </p>
-              <div className="mt-10 grid gap-3 sm:grid-cols-2">
+              <div className="mt-8 grid grid-cols-1 gap-4 sm:mt-10 sm:grid-cols-2 sm:gap-5">
                 {ONBOARDING_GOALS.map((opt) => {
                   const on = goals.has(opt.id);
                   return (
@@ -389,14 +418,16 @@ export function OnboardingClient() {
                       key={opt.id}
                       type="button"
                       onClick={() => toggleGoal(opt.id)}
-                      className={`${cardBase} ${on ? cardSelected : "hover:border-zinc-300 dark:hover:border-zinc-500"}`}
+                      className={`${cardBase} ${on ? cardSelected : ""}`}
                     >
-                      <span className="text-2xl" aria-hidden>
+                      <span className={emojiWrap} aria-hidden>
                         {opt.emoji}
                       </span>
-                      <span className="mt-2 block text-base font-semibold text-zinc-900 dark:text-zinc-50">
-                        {opt.label}
-                      </span>
+                      <div className="min-w-0 flex-1">
+                        <span className="block text-lg font-semibold leading-snug text-zinc-900 dark:text-zinc-900">
+                          {opt.label}
+                        </span>
+                      </div>
                     </button>
                   );
                 })}
@@ -405,14 +436,16 @@ export function OnboardingClient() {
           ) : null}
 
           {phase === "school" ? (
-            <div>
-              <h2 className={`text-center text-2xl font-semibold sm:text-3xl ${HEADING_SERIF}`}>
+            <div className={`${PANEL} mx-auto max-w-lg px-6 py-8 sm:px-8 sm:py-10`}>
+              <h2
+                className={`text-center text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
+              >
                 Where do you study or teach?
               </h2>
-              <p className="mx-auto mt-2 max-w-md text-center text-sm text-zinc-500 dark:text-zinc-400">
-                Start typing to see suggestions, or skip for now.
+              <p className="mx-auto mt-3 text-center text-sm leading-relaxed text-zinc-500 dark:text-zinc-500">
+                Start typing for suggestions, or skip for now.
               </p>
-              <div className="relative mx-auto mt-10 max-w-md">
+              <div className="relative mx-auto mt-8 w-full">
                 <input
                   type="text"
                   value={schoolName}
@@ -423,19 +456,19 @@ export function OnboardingClient() {
                   onFocus={() => setSchoolOpen(true)}
                   onBlur={() => setTimeout(() => setSchoolOpen(false), 180)}
                   placeholder="University or school name"
-                  className="w-full rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 shadow-sm outline-none ring-0 transition focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-brand-soft"
+                  className="w-full rounded-xl border border-zinc-200 bg-zinc-50/50 px-4 py-3.5 text-sm text-zinc-900 shadow-inner outline-none transition placeholder:text-zinc-400 focus:border-brand focus:bg-white focus:ring-2 focus:ring-brand/20 dark:border-zinc-200 dark:bg-zinc-50/50 dark:text-zinc-900 dark:placeholder:text-zinc-400 dark:focus:bg-white"
                   autoComplete="off"
                 />
                 {schoolOpen && schoolSuggestions.length > 0 ? (
                   <ul
-                    className="absolute z-30 mt-1 max-h-48 w-full overflow-auto rounded-xl border border-zinc-200 bg-white py-1 text-sm shadow-lg dark:border-zinc-600 dark:bg-zinc-900"
+                    className="absolute z-30 mt-1 max-h-48 w-full overflow-auto rounded-xl border border-zinc-200 bg-white py-1 text-sm shadow-lg dark:border-zinc-200 dark:bg-white"
                     role="listbox"
                   >
                     {schoolSuggestions.map((s) => (
                       <li key={s}>
                         <button
                           type="button"
-                          className="w-full px-4 py-2.5 text-left text-zinc-800 hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                          className="w-full px-4 py-2.5 text-left text-zinc-800 hover:bg-zinc-50 dark:text-zinc-800 dark:hover:bg-zinc-50"
                           onMouseDown={(e) => {
                             e.preventDefault();
                             setSchoolName(s);
@@ -449,12 +482,8 @@ export function OnboardingClient() {
                   </ul>
                 ) : null}
               </div>
-              <div className="mx-auto mt-8 flex max-w-md flex-wrap justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={goNext}
-                  className="inline-flex items-center justify-center rounded-full bg-brand px-8 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover"
-                >
+              <div className="mx-auto mt-8 flex flex-wrap justify-center gap-3">
+                <button type="button" onClick={goNext} className={BTN_PRIMARY}>
                   Continue
                 </button>
                 <button
@@ -463,7 +492,7 @@ export function OnboardingClient() {
                     setSchoolName("");
                     goNext();
                   }}
-                  className="inline-flex items-center justify-center rounded-full border border-zinc-200 bg-white px-6 py-3 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  className={BTN_SECONDARY}
                 >
                   Skip
                 </button>
@@ -472,14 +501,16 @@ export function OnboardingClient() {
           ) : null}
 
           {phase === "username" ? (
-            <div className="mx-auto max-w-md text-center">
-              <h2 className={`text-2xl font-semibold sm:text-3xl ${HEADING_SERIF}`}>
+            <div className={`${PANEL} mx-auto max-w-md px-6 py-8 text-center sm:px-8`}>
+              <h2
+                className={`text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
+              >
                 Choose your username
               </h2>
-              <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+              <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
                 This is how others will see you on Aroses.
               </p>
-              <div className="relative mt-8">
+              <div className="relative mx-auto mt-8 text-left">
                 <input
                   type="text"
                   value={username}
@@ -492,7 +523,7 @@ export function OnboardingClient() {
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
-                  className="w-full rounded-xl border border-zinc-200 bg-white py-3 pl-4 pr-12 text-left text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-50"
+                  className="w-full rounded-xl border border-zinc-200 bg-zinc-50/50 py-3.5 pl-4 pr-12 text-sm text-zinc-900 shadow-inner outline-none transition focus:border-brand focus:bg-white focus:ring-2 focus:ring-brand/20 dark:border-zinc-200 dark:bg-zinc-50/50 dark:text-zinc-900 dark:focus:bg-white"
                   maxLength={30}
                 />
                 <span className="pointer-events-none absolute right-3 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center">
@@ -521,16 +552,18 @@ export function OnboardingClient() {
           ) : null}
 
           {phase === "dob" ? (
-            <div className="mx-auto max-w-lg text-center">
-              <h2 className={`text-2xl font-semibold sm:text-3xl ${HEADING_SERIF}`}>
+            <div className={`${PANEL} mx-auto max-w-lg px-6 py-8 text-center sm:px-8 sm:py-10`}>
+              <h2
+                className={`text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
+              >
                 When were you born?
               </h2>
-              <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+              <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
                 We use this to personalize your experience. You must be 13 or older
                 to use Aroses.
               </p>
-              <div className="mx-auto mt-10 flex max-w-md flex-wrap items-end justify-center gap-3">
-                <label className="flex flex-col text-left text-xs font-medium uppercase tracking-wide text-zinc-500">
+              <div className="mx-auto mt-8 flex max-w-md flex-wrap items-end justify-center gap-4">
+                <label className="flex flex-col text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
                   Month
                   <select
                     value={birthMonth}
@@ -538,7 +571,7 @@ export function OnboardingClient() {
                       setBirthMonth(e.target.value);
                       setBirthDay("");
                     }}
-                    className="mt-1.5 min-w-[10rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-50"
+                    className="mt-2 min-w-[10.5rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 dark:border-zinc-200 dark:bg-white dark:text-zinc-900"
                   >
                     <option value="">Month</option>
                     {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
@@ -550,12 +583,12 @@ export function OnboardingClient() {
                     ))}
                   </select>
                 </label>
-                <label className="flex flex-col text-left text-xs font-medium uppercase tracking-wide text-zinc-500">
+                <label className="flex flex-col text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
                   Day
                   <select
                     value={birthDay}
                     onChange={(e) => setBirthDay(e.target.value)}
-                    className="mt-1.5 min-w-[6rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-50"
+                    className="mt-2 min-w-[6.5rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 dark:border-zinc-200 dark:bg-white dark:text-zinc-900"
                   >
                     <option value="">Day</option>
                     {Array.from({ length: maxDay }, (_, i) => i + 1).map((d) => (
@@ -565,7 +598,7 @@ export function OnboardingClient() {
                     ))}
                   </select>
                 </label>
-                <label className="flex flex-col text-left text-xs font-medium uppercase tracking-wide text-zinc-500">
+                <label className="flex flex-col text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
                   Year
                   <select
                     value={birthYear}
@@ -573,7 +606,7 @@ export function OnboardingClient() {
                       setBirthYear(e.target.value);
                       setBirthDay("");
                     }}
-                    className="mt-1.5 min-w-[7rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-50"
+                    className="mt-2 min-w-[7.5rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 dark:border-zinc-200 dark:bg-white dark:text-zinc-900"
                   >
                     <option value="">Year</option>
                     {yearOptions.map((y) => (
@@ -589,23 +622,27 @@ export function OnboardingClient() {
 
           {phase === "referral" ? (
             <div>
-              <h2 className={`text-center text-2xl font-semibold sm:text-3xl ${HEADING_SERIF}`}>
+              <h2
+                className={`mx-auto max-w-lg text-center text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
+              >
                 How did you find Aroses?
               </h2>
-              <div className="mx-auto mt-10 grid max-w-xl gap-3 sm:grid-cols-2">
+              <div className="mx-auto mt-8 grid max-w-3xl grid-cols-1 gap-4 sm:mt-10 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
                 {ONBOARDING_REFERRALS.map((opt) => (
                   <button
                     key={opt.id}
                     type="button"
                     onClick={() => setReferral(opt.id)}
-                    className={`${cardBase} ${referral === opt.id ? cardSelected : "hover:border-zinc-300 dark:hover:border-zinc-500"}`}
+                    className={`${cardBase} ${referral === opt.id ? cardSelected : ""}`}
                   >
-                    <span className="text-2xl" aria-hidden>
+                    <span className={emojiWrap} aria-hidden>
                       {opt.emoji}
                     </span>
-                    <span className="mt-2 block text-base font-semibold text-zinc-900 dark:text-zinc-50">
-                      {opt.label}
-                    </span>
+                    <div className="min-w-0 flex-1">
+                      <span className="block text-lg font-semibold leading-snug text-zinc-900 dark:text-zinc-900">
+                        {opt.label}
+                      </span>
+                    </div>
                   </button>
                 ))}
               </div>
@@ -613,25 +650,27 @@ export function OnboardingClient() {
           ) : null}
 
           {phase === "done" ? (
-            <div className="text-center">
-              <h1 className={`text-3xl font-semibold sm:text-4xl ${HEADING_SERIF}`}>
+            <div className={`${PANEL} px-8 py-12 text-center sm:px-10 sm:py-14`}>
+              <h1
+                className={`text-[1.65rem] font-semibold leading-tight sm:text-[2rem] ${HEADING_SERIF}`}
+              >
                 You&apos;re all set, {parseUsername(username) ?? "friend"}!
               </h1>
-              <p className="mx-auto mt-4 max-w-lg text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+              <p className="mx-auto mt-5 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
                 Your Aroses account is ready. Start by creating your first course or
                 exploring what others have made.
               </p>
-              <div className="mx-auto mt-10 flex max-w-lg flex-col gap-3 sm:flex-row sm:justify-center">
+              <div className="mx-auto mt-10 flex max-w-md flex-col gap-3 sm:flex-row sm:justify-center">
                 <Link
                   href="/dashboard/courses/new"
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover sm:flex-initial"
+                  className={`${BTN_PRIMARY} flex-1 gap-2 sm:flex-initial`}
                 >
                   Create a course
                   <IconArrowRight className="h-4 w-4" />
                 </Link>
                 <Link
                   href="/explore"
-                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-full border border-zinc-200 bg-white px-6 py-3 text-sm font-semibold text-zinc-900 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-50 dark:hover:bg-zinc-800 sm:flex-initial"
+                  className={`${BTN_SECONDARY} flex-1 gap-2 font-semibold sm:flex-initial`}
                 >
                   Explore courses
                   <IconArrowRight className="h-4 w-4" />
@@ -641,9 +680,12 @@ export function OnboardingClient() {
           ) : null}
 
           {submitError ? (
-            <p className="mx-auto mt-6 max-w-md text-center text-sm text-red-600">
+            <div
+              className="mx-auto mt-8 max-w-lg rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-center text-sm leading-relaxed text-red-800 dark:border-red-200 dark:bg-red-50 dark:text-red-900"
+              role="alert"
+            >
               {submitError}
-            </p>
+            </div>
           ) : null}
 
           {phase !== "welcome" &&
@@ -651,7 +693,7 @@ export function OnboardingClient() {
           phase !== "done" &&
           phase !== "username" &&
           phase !== "dob" ? (
-            <div className="mx-auto mt-12 flex max-w-md justify-center">
+            <div className="mx-auto mt-10 flex justify-center sm:mt-12">
               <button
                 type="button"
                 disabled={!canNext || (phase === "referral" && submitting)}
@@ -662,7 +704,7 @@ export function OnboardingClient() {
                   }
                   goNext();
                 }}
-                className="inline-flex min-w-[12rem] items-center justify-center rounded-full bg-brand px-8 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-40"
+                className={BTN_PRIMARY}
               >
                 {phase === "referral"
                   ? submitting
@@ -674,12 +716,12 @@ export function OnboardingClient() {
           ) : null}
 
           {phase === "username" ? (
-            <div className="mx-auto mt-12 flex max-w-md justify-center">
+            <div className="mx-auto mt-10 flex justify-center sm:mt-12">
               <button
                 type="button"
                 disabled={!canNext}
                 onClick={goNext}
-                className="inline-flex min-w-[12rem] items-center justify-center rounded-full bg-brand px-8 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-40"
+                className={BTN_PRIMARY}
               >
                 Continue
               </button>
@@ -687,12 +729,12 @@ export function OnboardingClient() {
           ) : null}
 
           {phase === "dob" ? (
-            <div className="mx-auto mt-12 flex max-w-md justify-center">
+            <div className="mx-auto mt-10 flex justify-center sm:mt-12">
               <button
                 type="button"
                 disabled={!canNext}
                 onClick={goNext}
-                className="inline-flex min-w-[12rem] items-center justify-center rounded-full bg-brand px-8 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-40"
+                className={BTN_PRIMARY}
               >
                 Continue
               </button>

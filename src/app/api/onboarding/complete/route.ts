@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
+  looksLikeProfilesMissingOnboardingCore,
+  looksLikeUsernameConstraintError,
+  upsertProfileWithOptionalColumnFallback,
+} from "@/lib/profile-upsert-retry";
+import {
   ageFromYmd,
   parseUsername,
   personaToStudyFocus,
@@ -152,25 +157,39 @@ export async function POST(request: Request) {
     onboarding_completed_at: completedAt,
   };
 
-  const { error: upErr } = await supabase.from("profiles").upsert(row, {
-    onConflict: "id",
-  });
+  const upResult = await upsertProfileWithOptionalColumnFallback(
+    async (r) => {
+      const { error } = await supabase.from("profiles").upsert(r as never, {
+        onConflict: "id",
+      });
+      return { error };
+    },
+    row
+  );
 
-  if (upErr) {
-    if (/unique|duplicate|profiles_username_lower_key/i.test(upErr.message)) {
+  if (!upResult.ok) {
+    const upErr = upResult.error;
+    if (looksLikeUsernameConstraintError(upErr.message)) {
       return NextResponse.json({ error: "Username is taken." }, { status: 409 });
     }
-    if (/onboarding_completed_at|study_goals|referral|onboarding_persona|username|school_name|schema cache/i.test(upErr.message)) {
+    if (looksLikeProfilesMissingOnboardingCore(upErr.message)) {
       return NextResponse.json(
         {
           error:
-            "Onboarding storage is not ready. Apply migration 026_onboarding_profile_fields.sql in Supabase.",
+            "Your database is missing onboarding columns. In the Supabase dashboard → SQL Editor, run the full script from `supabase/migrations/026_onboarding_profile_fields.sql` in this repo (including the `profile_username_available` function), then click Finish again.",
         },
         { status: 503 }
       );
     }
-    console.error(upErr);
-    return NextResponse.json({ error: "Could not save onboarding." }, { status: 500 });
+    console.error("[onboarding/complete]", upErr);
+    const devHint =
+      process.env.NODE_ENV === "development"
+        ? ` (${upErr.code ?? ""} ${upErr.message ?? ""})`
+        : "";
+    return NextResponse.json(
+      { error: `Could not save onboarding.${devHint}` },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json({ ok: true });
