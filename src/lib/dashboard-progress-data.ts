@@ -12,6 +12,16 @@ export type DashboardProgressPayload = {
   global: GlobalLearningTotals;
   activityBuckets: number[];
   dayLabels: string[];
+  recentPractice: {
+    courseId: string;
+    title: string;
+    answeredAt: string;
+    correctLast10: number;
+    totalLast10: number;
+    modulesCompleted: number;
+    modulesTotal: number;
+    isExploreLearner: boolean;
+  }[];
 };
 
 function last14DayLabels(): string[] {
@@ -161,6 +171,77 @@ export async function loadDashboardProgress(
     .select("answered_at")
     .gte("answered_at", since.toISOString());
 
+  const { data: recentAttemptsRaw } = await supabase
+    .from("question_attempts")
+    .select("material_id, is_correct, answered_at")
+    .order("answered_at", { ascending: false })
+    .limit(120);
+
+  const recentMaterialIds = Array.from(
+    new Set((recentAttemptsRaw ?? []).map((r) => r.material_id))
+  ).slice(0, 80);
+
+  const { data: recentMaterialsRaw } =
+    recentMaterialIds.length > 0
+      ? await supabase
+          .from("study_materials")
+          .select("id, course_id")
+          .in("id", recentMaterialIds)
+      : { data: [] as { id: string; course_id: string }[] };
+
+  const courseIdByMaterialId = new Map<string, string>();
+  const recentCourseIds = new Set<string>();
+  for (const m of recentMaterialsRaw ?? []) {
+    courseIdByMaterialId.set(m.id, m.course_id);
+    recentCourseIds.add(m.course_id);
+  }
+
+  const { data: recentCourseRows } =
+    recentCourseIds.size > 0
+      ? await supabase
+          .from("courses")
+          .select("id, title")
+          .in("id", [...recentCourseIds])
+      : { data: [] as { id: string; title: string }[] };
+
+  const courseTitleById = new Map<string, string>();
+  for (const c of recentCourseRows ?? []) {
+    courseTitleById.set(c.id, c.title);
+  }
+
+  const recentPracticeByCourse = new Map<
+    string,
+    {
+      courseId: string;
+      title: string;
+      answeredAt: string;
+      correctLast10: number;
+      totalLast10: number;
+    }
+  >();
+
+  for (const att of recentAttemptsRaw ?? []) {
+    const courseId = courseIdByMaterialId.get(att.material_id);
+    if (!courseId) continue;
+    const title = courseTitleById.get(courseId) ?? "Course";
+    const existing = recentPracticeByCourse.get(courseId);
+    const base = existing ?? {
+      courseId,
+      title,
+      answeredAt: att.answered_at,
+      correctLast10: 0,
+      totalLast10: 0,
+    };
+
+    if (base.totalLast10 >= 10) continue;
+    const next = {
+      ...base,
+      totalLast10: base.totalLast10 + 1,
+      correctLast10: base.correctLast10 + (att.is_correct ? 1 : 0),
+    };
+    recentPracticeByCourse.set(courseId, next);
+  }
+
   const { courses: summariesRaw, global } = buildCourseSummaries({
     courses,
     materials: allMaterials,
@@ -172,6 +253,26 @@ export async function loadDashboardProgress(
     ...s,
     isExploreLearner: !ownedCourseIds.has(s.courseId),
   }));
+
+  const summaryByCourseId = new Map<string, (typeof summaries)[number]>();
+  for (const s of summaries) {
+    summaryByCourseId.set(s.courseId, s);
+  }
+
+  const recentPractice = [...recentPracticeByCourse.values()]
+    .sort(
+      (a, b) => new Date(b.answeredAt).getTime() - new Date(a.answeredAt).getTime()
+    )
+    .slice(0, 3)
+    .map((r) => {
+      const s = summaryByCourseId.get(r.courseId);
+      return {
+        ...r,
+        modulesCompleted: s?.modulesCompleted ?? 0,
+        modulesTotal: s?.modulesTotal ?? 0,
+        isExploreLearner: Boolean(s?.isExploreLearner),
+      };
+    });
 
   const activityBuckets = bucketAttemptsLastDays(
     (recentAnswered ?? []).map((r) => r.answered_at),
@@ -191,5 +292,6 @@ export async function loadDashboardProgress(
     global,
     activityBuckets,
     dayLabels: last14DayLabels(),
+    recentPractice,
   };
 }

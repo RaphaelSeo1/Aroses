@@ -19,11 +19,13 @@ export function CourseDashboardList({
   courses: initialCourses,
   viewerUserId,
   className,
+  density = "comfortable",
 }: {
   courses: DashboardCourse[];
   viewerUserId: string;
   /** Wraps list area; default top margin `mt-12`. */
   className?: string;
+  density?: "comfortable" | "compact";
 }) {
   const router = useRouter();
   const [courses, setCourses] = useState(initialCourses);
@@ -145,7 +147,7 @@ export function CourseDashboardList({
           {listError}
         </p>
       )}
-      <ul className="grid gap-5 sm:grid-cols-2">
+      <ul className={density === "compact" ? "grid gap-4 sm:grid-cols-2" : "grid gap-5 sm:grid-cols-2"}>
         {courses.map((c, index) => {
           const isEditing = editingId === c.id;
           const busy = busyId === c.id || busyId === "__reorder__";
@@ -153,7 +155,13 @@ export function CourseDashboardList({
 
           return (
             <li key={c.id}>
-              <div className="group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 pt-7 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50">
+              <div
+                className={
+                  density === "compact"
+                    ? "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 pt-6 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50"
+                    : "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 pt-7 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50"
+                }
+              >
                 <div
                   className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-red-500 to-brand-soft opacity-90"
                   aria-hidden
@@ -205,12 +213,16 @@ export function CourseDashboardList({
                 ) : (
                   <>
                     <div
-                      className={`flex flex-1 flex-col gap-2 px-6 pt-0 ${canManage ? "pb-1" : "pb-6"}`}
+                      className={`flex flex-1 flex-col gap-2 ${density === "compact" ? "px-5" : "px-6"} pt-0 ${canManage ? "pb-1" : density === "compact" ? "pb-5" : "pb-6"}`}
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         <Link
                           href={`/dashboard/courses/${c.id}`}
-                          className="text-lg font-semibold tracking-tight text-zinc-900 underline-offset-2 transition group-hover:text-brand dark:text-zinc-50 dark:group-hover:text-brand-soft"
+                          className={
+                            density === "compact"
+                              ? "text-base font-semibold tracking-tight text-zinc-900 underline-offset-2 transition group-hover:text-brand dark:text-zinc-50 dark:group-hover:text-brand-soft"
+                              : "text-lg font-semibold tracking-tight text-zinc-900 underline-offset-2 transition group-hover:text-brand dark:text-zinc-50 dark:group-hover:text-brand-soft"
+                          }
                         >
                           {c.title}
                         </Link>
@@ -231,7 +243,11 @@ export function CourseDashboardList({
                       )}
                       <Link
                         href={`/dashboard/courses/${c.id}`}
-                        className="mt-4 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-4 py-2 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
+                        className={
+                          density === "compact"
+                            ? "mt-3 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-3.5 py-1.5 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
+                            : "mt-4 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-4 py-2 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
+                        }
                       >
                         Open course
                         <span aria-hidden className="transition group-hover:translate-x-0.5">

@@ -6,6 +6,8 @@ import {
 } from "@/components/CourseDashboardList";
 import type { DashboardCourse } from "@/components/CourseDashboardList";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HomeRightSidebar } from "@/components/HomeRightSidebar";
+import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
 import type { StudyingCourse } from "@/lib/load-dashboard-courses";
 
 export function DashboardHomeContent({
@@ -13,11 +15,13 @@ export function DashboardHomeContent({
   viewerUserId,
   ownedCourses,
   studyingCourses,
+  progress,
 }: {
   userEmail: string;
   viewerUserId: string;
   ownedCourses: DashboardCourse[];
   studyingCourses: StudyingCourse[];
+  progress: DashboardProgressPayload;
 }) {
   const hasOwned = ownedCourses.length > 0;
   const hasStudying = studyingCourses.length > 0;
@@ -28,7 +32,9 @@ export function DashboardHomeContent({
       <AppHeader right={<HeaderNavLoggedIn />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
-          <div className="relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/75 p-6 shadow-xl shadow-zinc-900/[0.06] ring-1 ring-white/60 backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-950/75 dark:shadow-black/30 dark:ring-zinc-600/40 sm:p-8">
+          <div className="grid gap-8 lg:grid-cols-[1fr_22rem] lg:items-start">
+            <div className="min-w-0">
+              <div className="relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/75 p-6 shadow-xl shadow-zinc-900/[0.06] ring-1 ring-white/60 backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-950/75 dark:shadow-black/30 dark:ring-zinc-600/40 sm:p-8">
             <div
               className="pointer-events-none absolute -right-24 -top-24 h-56 w-56 rounded-full bg-gradient-to-br from-brand/15 via-brand-soft/10 to-transparent blur-2xl dark:from-brand/25 dark:via-brand/5"
               aria-hidden
@@ -97,7 +103,7 @@ export function DashboardHomeContent({
               </div>
             </div>
           ) : (
-            <div className="mt-8 space-y-14 border-t border-zinc-200/80 pt-10 dark:border-zinc-800 sm:mt-10 sm:pt-12">
+            <div className="mt-8 space-y-12 border-t border-zinc-200/80 pt-8 dark:border-zinc-800 sm:mt-10 sm:pt-10">
               {hasOwned ? (
                 <section>
                   <div className="flex flex-wrap items-start gap-4">
@@ -118,7 +124,8 @@ export function DashboardHomeContent({
                   <CourseDashboardList
                     courses={ownedCourses}
                     viewerUserId={viewerUserId}
-                    className="mt-6"
+                    density="compact"
+                    className="mt-5"
                   />
                 </section>
               ) : (
@@ -141,6 +148,14 @@ export function DashboardHomeContent({
               <StudyingCoursesSection courses={studyingCourses} />
             </div>
           )}
+            </div>
+            <div className="hidden lg:block">
+              <HomeRightSidebar
+                activityBuckets14={progress.activityBuckets}
+                recentPractice={progress.recentPractice}
+              />
+            </div>
+          </div>
         </div>
       </main>
     </>
