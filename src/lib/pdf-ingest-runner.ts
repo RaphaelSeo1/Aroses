@@ -265,6 +265,47 @@ function parseStoredModules(raw: unknown): CourseModule[] {
   return raw.map((m) => parseCourseModule(m));
 }
 
+/**
+ * Before generating the outline, wait until fewer than `maxConcurrent` other jobs owned
+ * by this user are in the AI-heavy phases ("planning_outline" or "writing_modules").
+ * This prevents a 12-PDF batch from sending 12 simultaneous Anthropic requests and
+ * rate-limiting them all into a slow backoff spiral.
+ *
+ * Uses a short random jitter so sibling jobs don't all wake and retry at the same instant.
+ */
+async function waitForOutlineSlot(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  userId: string,
+  jobId: string,
+  claimedEpoch: number
+): Promise<boolean> {
+  const maxConcurrent = Number.isFinite(
+    Number(process.env.PDF_INGEST_MAX_CONCURRENT_OUTLINES)
+  )
+    ? Math.max(1, Math.trunc(Number(process.env.PDF_INGEST_MAX_CONCURRENT_OUTLINES)))
+    : 3;
+  const pollMs = 9_000;
+  const deadline = Date.now() + 12 * 60_000;
+
+  while (Date.now() < deadline) {
+    const { count } = await admin
+      .from("pdf_ingest_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .neq("id", jobId)
+      .eq("status", "running")
+      .in("ingest_phase", ["planning_outline"]);
+
+    if ((count ?? 0) < maxConcurrent) return true;
+
+    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) return false;
+
+    await sleep(pollMs + Math.floor(Math.random() * 3_000));
+  }
+
+  return false;
+}
+
 function pdfIngestModuleBatchSize(remaining: number): number {
   const profile = process.env.COURSE_BUILD_PROFILE?.trim().toLowerCase();
   const defaultBatch = profile === "full" ? 1 : 2;
@@ -771,6 +812,17 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
   const storedMaterial = materialTextForPdfIngest(text);
 
   if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+    return;
+  }
+
+  const gotSlot = await waitForOutlineSlot(
+    admin,
+    claimed.user_id,
+    jobId,
+    claimedEpoch
+  );
+  if (!gotSlot) {
+    console.info("[pdf-ingest] outline slot wait timed out or job restarted", jobId);
     return;
   }
 

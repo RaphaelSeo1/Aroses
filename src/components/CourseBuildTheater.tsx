@@ -156,7 +156,7 @@ function StaggeredPdfJobPoll({
   const [ready, setReady] = useState(index === 0);
   useEffect(() => {
     if (index === 0) return;
-    const ms = Math.min(3_200, index * 800);
+    const ms = Math.min(4_000, index * 1_000);
     const t = setTimeout(() => setReady(true), ms);
     return () => clearTimeout(t);
   }, [index]);

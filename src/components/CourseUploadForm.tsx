@@ -14,13 +14,16 @@ import {
 import type { PdfBuildProgressUI } from "@/lib/pdf-ingest-client";
 
 /**
- * Short spacing between `POST /api/process-pdf` starts when uploading multiple PDFs.
- * Starts are overlapped below; this avoids a thundering herd without serializing the whole batch.
+ * Per-file delay offset when starting multiple PDF builds in parallel.
+ * Single/dual uploads start near-instantly; larger batches are spread out so
+ * they don't all hit Anthropic in one wave (the server also has its own outline
+ * slot gate, but spacing starts here reduces initial contention further).
  */
 function pdfIngestStartStaggerMs(total: number): number {
   if (total <= 1) return 0;
-  if (total === 2) return 700;
-  return Math.min(1_600, 800 + (total - 2) * 200);
+  if (total <= 3) return 1_200;
+  if (total <= 6) return 2_500;
+  return 3_500;
 }
 
 function sleep(ms: number): Promise<void> {
