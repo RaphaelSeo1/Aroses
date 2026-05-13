@@ -31,7 +31,38 @@ function jobStartedAtMs(createdAt?: string): number | null {
 }
 
 /** Space out module expands — each call uses heavy output tokens (Anthropic TPM). */
-const EXPAND_MODULE_GAP_MS = 1_600;
+const EXPAND_MODULE_GAP_MS = 1_800;
+
+/**
+ * Limit parallel `POST /expand` across all in-tab PDF jobs. Many concurrent expands
+ * (e.g. 10+ courses each on module 3) spikes org TPM and returns 429 → permanent job fail.
+ */
+const EXPAND_FETCH_MAX_CONCURRENT = 3;
+
+const expandFetchConcurrency = (() => {
+  let inFlight = 0;
+  const waiters: Array<() => void> = [];
+  return {
+    acquire(): Promise<void> {
+      return new Promise((resolve) => {
+        if (inFlight < EXPAND_FETCH_MAX_CONCURRENT) {
+          inFlight++;
+          resolve();
+        } else {
+          waiters.push(() => {
+            inFlight++;
+            resolve();
+          });
+        }
+      });
+    },
+    release(): void {
+      inFlight--;
+      const w = waiters.shift();
+      if (w) w();
+    },
+  };
+})();
 
 /** Vercel / edge / origin blips — retry instead of forcing a full page refresh. */
 const TRANSIENT_HTTP = new Set([
@@ -132,7 +163,8 @@ async function postProcessPdfExpand(
 ): Promise<{ ok: true; json: ExpandResponseJson } | { ok: false; status: number; json: ExpandResponseJson | null }> {
   let lastStatus = 500;
   let lastJson: ExpandResponseJson | null = null;
-  for (let attempt = 0; attempt < 12; attempt++) {
+  for (let attempt = 0; attempt < 15; attempt++) {
+    await expandFetchConcurrency.acquire();
     let r: Response;
     try {
       r = await fetch("/api/process-pdf/expand", {
@@ -142,13 +174,19 @@ async function postProcessPdfExpand(
         signal,
       });
     } catch {
-      if (attempt < 11) {
+      expandFetchConcurrency.release();
+      if (attempt < 14) {
         await sleep(Math.min(12_000, 800 + attempt * 1_000));
         continue;
       }
       return { ok: false, status: 0, json: null };
     }
-    const raw = await r.text();
+    let raw: string;
+    try {
+      raw = await r.text();
+    } finally {
+      expandFetchConcurrency.release();
+    }
     lastStatus = r.status;
     let parsed: ExpandResponseJson | null = null;
     try {
@@ -169,7 +207,7 @@ async function postProcessPdfExpand(
       (r.status === 400 &&
         typeof parsed?.error === "string" &&
         /rate|429|throttl|overloaded|timeout/i.test(parsed.error));
-    if (retryable && attempt < 11) {
+    if (retryable && attempt < 14) {
       const delayMs =
         r.status === 429
           ? Math.min(90_000, 14_000 + attempt * 9_000)

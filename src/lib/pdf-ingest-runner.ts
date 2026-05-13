@@ -53,7 +53,9 @@ function sleep(ms: number): Promise<void> {
 function isRetriableAnthropicRateLimit(e: unknown): boolean {
   return (
     e instanceof RateLimitError ||
-    (e instanceof APIError && e.status === 429)
+    (e instanceof APIError &&
+      typeof e.status === "number" &&
+      (e.status === 429 || e.status === 503 || e.status === 529))
   );
 }
 
@@ -94,13 +96,14 @@ function backoffMsAfterRateLimit(e: unknown, attemptIndex: number): number {
   return Math.max(2_000, fromHeader ?? adjusted);
 }
 
-/** Anthropic 429s are often transient when many PDFs start together — retry before failing the job. */
+/** Anthropic 429 / overload responses are common when many PDFs expand modules together — retry before failing the job. */
 async function withAnthropicRateLimitRetries<T>(
   jobId: string,
   phase: string,
-  fn: () => Promise<T>
+  fn: () => Promise<T>,
+  options?: { maxAttempts?: number }
 ): Promise<T> {
-  const maxAttempts = 8;
+  const maxAttempts = options?.maxAttempts ?? 8;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       return await fn();
@@ -494,14 +497,21 @@ export async function runPdfIngestExpandOne(
   }
 
   let newMod: CourseModule;
+  const moduleHeartbeat = setInterval(() => {
+    void touchJobProgress(admin, jobId);
+  }, 22_000);
   try {
-    newMod = await withAnthropicRateLimitRetries(jobId, "module", () =>
-      generateCourseModuleFromMaterial(
-        job.ingest_source_text,
-        outline,
-        idx,
-        createPdfStreamSink(admin, jobId)
-      )
+    newMod = await withAnthropicRateLimitRetries(
+      jobId,
+      "module",
+      () =>
+        generateCourseModuleFromMaterial(
+          job.ingest_source_text,
+          outline,
+          idx,
+          createPdfStreamSink(admin, jobId)
+        ),
+      { maxAttempts: 12 }
     );
   } catch (e) {
     if (await isStaleIngestEpoch(admin, jobId, expandEpoch)) {
@@ -514,6 +524,8 @@ export async function runPdfIngestExpandOne(
     const message = mapAiFailureToMessage(jobId, e);
     await failJobUnlessStale(admin, jobId, storagePath, message, expandEpoch);
     return { kind: "failed", message };
+  } finally {
+    clearInterval(moduleHeartbeat);
   }
 
   const nextModules = [...prefix, newMod];

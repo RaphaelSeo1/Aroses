@@ -52,3 +52,23 @@ export function applyTheme(pref: ThemePreference): void {
 
   commit();
 }
+
+/**
+ * Run once on the client after mount. Next hydration resets `<html class>` to the server
+ * tree (no `dark`), wiping the inline script — pages without `ThemeToggle` would stay light.
+ * Returns cleanup for the system `prefers-color-scheme` listener when stored pref is `system`.
+ */
+export function syncThemeAfterMount(): () => void {
+  if (typeof window === "undefined") return () => {};
+
+  applyTheme(readStoredTheme() ?? "system");
+
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  const onOsThemeChange = () => {
+    if ((readStoredTheme() ?? "system") === "system") {
+      applyTheme("system");
+    }
+  };
+  mq.addEventListener("change", onOsThemeChange);
+  return () => mq.removeEventListener("change", onOsThemeChange);
+}

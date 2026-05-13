@@ -909,7 +909,7 @@ export async function generateCourseModuleFromMaterial(
     profile === "express" || profile === "fast"
       ? 1
       : profile === "balanced"
-        ? 2
+        ? 3
         : 5;
 
   const rawText = await invokeUserMessageForPdfText(

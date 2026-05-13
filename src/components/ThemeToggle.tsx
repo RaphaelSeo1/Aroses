@@ -68,16 +68,7 @@ export function ThemeToggle() {
   const [pref, setPref] = useState<ThemePreference>("system");
 
   useEffect(() => {
-    const stored = readStoredTheme() ?? "system";
-    setPref(stored);
-    applyTheme(stored);
-
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const sync = () => {
-      if ((readStoredTheme() ?? "system") === "system") applyTheme("system");
-    };
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
+    setPref(readStoredTheme() ?? "system");
   }, []);
 
   const pick = useCallback((next: ThemePreference) => {
