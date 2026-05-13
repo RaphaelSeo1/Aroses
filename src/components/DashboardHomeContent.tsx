@@ -16,19 +16,24 @@ export function DashboardHomeContent({
   ownedCourses,
   studyingCourses,
   progress,
+  omitHeader = false,
 }: {
   userEmail: string;
   viewerUserId: string;
   ownedCourses: DashboardCourse[];
   studyingCourses: StudyingCourse[];
   progress: DashboardProgressPayload;
+  /** When true, only render main workspace (parent supplies `<AppHeader />`). */
+  omitHeader?: boolean;
 }) {
   const hasOwned = ownedCourses.length > 0;
   const empty = !hasOwned && studyingCourses.length === 0;
 
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      {omitHeader ? null : (
+        <AppHeader right={<HeaderNavLoggedIn />} />
+      )}
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
           <div className="grid gap-8 lg:grid-cols-[1fr_22rem] lg:items-start">

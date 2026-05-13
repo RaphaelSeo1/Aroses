@@ -50,7 +50,13 @@ export function HeaderNavLink({
 
   const merged = [cls, className].filter(Boolean).join(" ");
   return (
-    <Link href={href} className={merged} aria-current={active ? "page" : undefined} {...rest}>
+    <Link
+      href={href}
+      prefetch
+      className={merged}
+      aria-current={active ? "page" : undefined}
+      {...rest}
+    >
       {children}
     </Link>
   );

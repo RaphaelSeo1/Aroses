@@ -5,28 +5,25 @@ import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { ProfileSettingsForm } from "@/components/ProfileSettingsForm";
 import { ProgressDashboardContent } from "@/components/progress/ProgressDashboardContent";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
-import { createClient } from "@/lib/supabase/server";
+import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import type { UserProfileRow } from "@/types/profile";
 
 type PageProps = {
   searchParams: Promise<{ tab?: string }>;
 };
 
-function ProfileFormSkeleton() {
+function ProfileBodySkeleton() {
   return (
-    <div className="flex min-h-[20rem] items-center justify-center rounded-2xl border border-zinc-200 bg-white/90 dark:border-zinc-800 dark:bg-zinc-950/90">
-      <p className="text-sm text-zinc-500 dark:text-zinc-400">
-        Loading settings…
-      </p>
+    <div className="animate-pulse space-y-6 rounded-2xl border border-zinc-200/80 bg-white/50 p-8 dark:border-zinc-800 dark:bg-zinc-950/40">
+      <div className="h-8 w-48 rounded-lg bg-zinc-200/80 dark:bg-zinc-700/60" />
+      <div className="h-4 max-w-md rounded bg-zinc-200/60 dark:bg-zinc-700/50" />
+      <div className="h-72 rounded-xl bg-zinc-200/50 dark:bg-zinc-800/50" />
     </div>
   );
 }
 
 export default async function ProfilePage({ searchParams }: PageProps) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { user } = await getServerAuth();
 
   if (!user?.email) {
     redirect("/login?next=/dashboard/profile");
@@ -40,21 +37,48 @@ export default async function ProfilePage({ searchParams }: PageProps) {
         ? ("account" as const)
         : ("general" as const);
 
-  const selProfiles = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .maybeSingle();
+  return (
+    <>
+      <AppHeader right={<HeaderNavLoggedIn />} />
+      <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
+        <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 sm:py-12 lg:py-14">
+          <Suspense fallback={<ProfileBodySkeleton />}>
+            <ProfilePageBody
+              userEmail={user.email}
+              userId={user.id}
+              initialPanel={initialPanel}
+            />
+          </Suspense>
+        </div>
+      </main>
+    </>
+  );
+}
 
-  type ProfileFields = {
-    display_name: string | null;
-    username?: string | null;
-    birthday: unknown;
-    bio: string | null;
-    study_focus?: string | null;
-    avatar_url?: string | null;
-    school_name?: string | null;
-  };
+type ProfileFields = {
+  display_name: string | null;
+  username?: string | null;
+  birthday: unknown;
+  bio: string | null;
+  study_focus?: string | null;
+  avatar_url?: string | null;
+  school_name?: string | null;
+};
+
+async function ProfilePageBody({
+  userEmail,
+  userId,
+  initialPanel,
+}: {
+  userEmail: string;
+  userId: string;
+  initialPanel: "progress" | "account" | "general";
+}) {
+  const { supabase } = await getServerAuth();
+  const [selProfiles, progressData] = await Promise.all([
+    supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
+    loadDashboardProgress(supabase, userId),
+  ]);
 
   const profileRow = selProfiles.data as ProfileFields | null;
   const profileErr = selProfiles.error;
@@ -75,29 +99,18 @@ export default async function ProfilePage({ searchParams }: PageProps) {
     };
   }
 
-  const progressData = await loadDashboardProgress(supabase, user.id);
-
   return (
-    <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
-      <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-        <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 sm:py-12 lg:py-14">
-          <Suspense fallback={<ProfileFormSkeleton />}>
-            <ProfileSettingsForm
-              email={user.email}
-              initial={initial}
-              initialPanel={initialPanel}
-              progressPanel={
-                <ProgressDashboardContent
-                  data={progressData}
-                  showTopActions
-                  layout="panel"
-                />
-              }
-            />
-          </Suspense>
-        </div>
-      </main>
-    </>
+    <ProfileSettingsForm
+      email={userEmail}
+      initial={initial}
+      initialPanel={initialPanel}
+      progressPanel={
+        <ProgressDashboardContent
+          data={progressData}
+          showTopActions
+          layout="panel"
+        />
+      }
+    />
   );
 }

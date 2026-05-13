@@ -1,21 +1,47 @@
-import type { ReactNode } from "react";
+"use client";
+
+import { useEffect, useState, type ReactNode } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { DashboardAdminNavProvider } from "@/components/DashboardAdminNavContext";
 import { isAppAdminEnvUser } from "@/lib/app-admin-env";
-import { createClient } from "@/lib/supabase/server";
+
+function adminHrefForUser(user: {
+  id: string;
+  email?: string | null;
+} | null): string | undefined {
+  if (user && isAppAdminEnvUser({ id: user.id, email: user.email })) {
+    return "/dashboard/admin";
+  }
+  return undefined;
+}
 
 /**
- * Supplies admin hub href to the whole app so **Admin** appears on Explore,
- * Intro, Legal, etc., not only under `/dashboard/*`.
+ * Supplies admin hub href app-wide. Runs on the **client** so the root layout does not
+ * block each navigation on `getUser()` (that duplicated work with every page’s own auth).
  */
-export async function AppAdminNavGate({ children }: { children: ReactNode }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const adminHubHref =
-    user && isAppAdminEnvUser({ id: user.id, email: user.email })
-      ? "/dashboard/admin"
-      : undefined;
+export function AppAdminNavGate({ children }: { children: ReactNode }) {
+  const [adminHubHref, setAdminHubHref] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    const supabase = createClient();
+
+    const sync = () => {
+      void supabase.auth.getSession().then(({ data: { session } }) => {
+        const u = session?.user;
+        setAdminHubHref(
+          u ? adminHrefForUser({ id: u.id, email: u.email }) : undefined
+        );
+      });
+    };
+
+    sync();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      sync();
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   return (
     <DashboardAdminNavProvider adminHubHref={adminHubHref}>

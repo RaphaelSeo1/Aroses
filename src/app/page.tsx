@@ -1,15 +1,27 @@
+import { Suspense } from "react";
+import { AppHeader } from "@/components/AppHeader";
 import { DashboardHomeContent } from "@/components/DashboardHomeContent";
+import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { MainRouteSkeleton } from "@/components/MainRouteSkeleton";
 import { loadDashboardCourseLists } from "@/lib/load-dashboard-courses";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
 import { profileNeedsOnboarding } from "@/lib/onboarding-gate";
-import { createClient } from "@/lib/supabase/server";
+import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import { redirect } from "next/navigation";
 
-export default async function Home() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+export default function Home() {
+  return (
+    <>
+      <AppHeader right={<HeaderNavLoggedIn />} />
+      <Suspense fallback={<MainRouteSkeleton />}>
+        <HomeContent />
+      </Suspense>
+    </>
+  );
+}
+
+async function HomeContent() {
+  const { supabase, user } = await getServerAuth();
 
   if (!user?.email || !user.id) {
     redirect("/intro");
@@ -25,6 +37,7 @@ export default async function Home() {
   ]);
   return (
     <DashboardHomeContent
+      omitHeader
       userEmail={user.email}
       viewerUserId={user.id}
       ownedCourses={owned}
