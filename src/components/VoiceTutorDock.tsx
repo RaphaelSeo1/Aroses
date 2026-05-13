@@ -910,47 +910,54 @@ export function VoiceTutorDock({
         return;
       }
 
-      // Ensure we have an up-to-the-moment speculative transcript before we
-      // stop the recorder. This is the "thinking while you're still speaking"
-      // payoff — by the time we get here it's usually already in flight.
-      await fireSpeculative({ final: true });
-      const pending = specPendingRef.current;
-      if (pending) {
-        try {
-          await pending;
-        } catch {
-          /* ignore */
-        }
-      }
-
-      const transcript = specLatestTextRef.current.trim();
-      if (transcript) {
-        // Tear down the recorder in the background — we already have the text.
-        void (async () => {
+      try {
+        // Ensure we have an up-to-the-moment speculative transcript before we
+        // stop the recorder. This is the "thinking while you're still speaking"
+        // payoff — by the time we get here it's usually already in flight.
+        await fireSpeculative({ final: true });
+        const pending = specPendingRef.current;
+        if (pending) {
           try {
-            await finalizeBlob();
+            await pending;
           } catch {
             /* ignore */
           }
-          endRecorder();
-        })();
-        resetSpeculative();
-        await runVoiceStream(transcript);
-        return;
-      }
+        }
 
-      // Fallback: speculative came back empty. Transcribe the full blob
-      // synchronously and then stream the reply.
-      const blob = await finalizeBlob();
-      endRecorder();
-      resetSpeculative();
-      const text = await transcribeBlob(blob);
-      if (text) {
-        await runVoiceStream(text);
-      } else {
-        setError(
-          "Didn't catch that — try speaking a little louder or closer to the mic."
-        );
+        const transcript = specLatestTextRef.current.trim();
+        if (transcript) {
+          // Tear down the recorder in the background — we already have the text.
+          void (async () => {
+            try {
+              await finalizeBlob();
+            } catch {
+              /* ignore */
+            }
+            endRecorder();
+          })();
+          resetSpeculative();
+          await runVoiceStream(transcript);
+          return;
+        }
+
+        // Fallback: speculative came back empty. Transcribe the full blob
+        // synchronously and then stream the reply.
+        const blob = await finalizeBlob();
+        endRecorder();
+        resetSpeculative();
+        const text = await transcribeBlob(blob);
+        if (text) {
+          await runVoiceStream(text);
+        } else {
+          setError(
+            "Didn't catch that — try speaking a little louder or closer to the mic."
+          );
+        }
+      } catch {
+        setError("Something went wrong — try again.");
+      } finally {
+        // Always return to listening so the phase never gets stuck on "thinking".
+        if (liveModeRef.current) setLivePhase("listening");
       }
     },
     [
