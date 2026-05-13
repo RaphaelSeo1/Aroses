@@ -449,7 +449,7 @@ async function finalizePdfIngest(
       .from("study_materials")
       .delete()
       .eq("id", row.id)
-      .catch(() => {});
+      .then(() => {}, () => {});
 
     const { data: winner } = await admin
       .from("pdf_ingest_jobs")
