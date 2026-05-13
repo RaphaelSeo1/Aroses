@@ -156,7 +156,7 @@ function StaggeredPdfJobPoll({
   const [ready, setReady] = useState(index === 0);
   useEffect(() => {
     if (index === 0) return;
-    const ms = Math.min(14_000, index * 2_800);
+    const ms = Math.min(3_200, index * 800);
     const t = setTimeout(() => setReady(true), ms);
     return () => clearTimeout(t);
   }, [index]);
@@ -264,15 +264,18 @@ export function CourseBuildTheater({
   }, []);
 
   useEffect(() => {
-    setActiveJob((prev) => (jobIds.includes(prev) ? prev : jobIds[0] ?? ""));
-    setTerminalByJob(Object.fromEntries(jobIds.map((id) => [id, null])));
-    setRestartNonce(Object.fromEntries(jobIds.map((id) => [id, 0])));
-    setPhase("boot");
-    setSummary(null);
-    setRetryErr(null);
-    setRestartAckByJob({});
-    setSnapshotByJob({});
-  }, [jobIds.join(",")]);
+    const t = setTimeout(() => {
+      setActiveJob((prev) => (jobIds.includes(prev) ? prev : jobIds[0] ?? ""));
+      setTerminalByJob(Object.fromEntries(jobIds.map((id) => [id, null])));
+      setRestartNonce(Object.fromEntries(jobIds.map((id) => [id, 0])));
+      setPhase("boot");
+      setSummary(null);
+      setRetryErr(null);
+      setRestartAckByJob({});
+      setSnapshotByJob({});
+    }, 0);
+    return () => clearTimeout(t);
+  }, [jobIds]);
 
   useEffect(() => {
     if (jobIds.length === 0) return;
@@ -321,7 +324,7 @@ export function CourseBuildTheater({
     return () => {
       ac.abort();
     };
-  }, [jobIds.join(",")]);
+  }, [jobIds]);
 
   useEffect(() => {
     if (jobIds.length === 0) return;
@@ -334,63 +337,72 @@ export function CourseBuildTheater({
       polled: terminalByJob[id]!,
     }));
 
-    setRows((prev) => {
-      const next = { ...prev };
-      for (const { id, polled } of outcomes) {
-        const base = next[id] ?? {
-          label: "PDF",
-          line: "",
-          bar: null as PdfBuildProgressUI["bar"],
-        };
-        next[id] = {
-          ...base,
-          error: polled.error,
-          materialId: polled.materialId,
-          line: polled.error
-            ? polled.error
-            : polled.materialId
-              ? "Ready — open study mode below."
-              : base.line,
-          bar: polled.materialId ? 100 : base.bar,
-        };
+    const updateTimer = setTimeout(() => {
+      setRows((prev) => {
+        const next = { ...prev };
+        for (const { id, polled } of outcomes) {
+          const base = next[id] ?? {
+            label: "PDF",
+            line: "",
+            bar: null as PdfBuildProgressUI["bar"],
+          };
+          next[id] = {
+            ...base,
+            error: polled.error,
+            materialId: polled.materialId,
+            line: polled.error
+              ? polled.error
+              : polled.materialId
+                ? "Ready — open study mode below."
+                : base.line,
+            bar: polled.materialId ? 100 : base.bar,
+          };
+        }
+        return next;
+      });
+
+      const okCount = outcomes.filter((o) => o.polled.materialId).length;
+      const errCount = outcomes.filter((o) => o.polled.error).length;
+      const s: "success" | "partial" | "fail" =
+        errCount === 0 ? "success" : okCount > 0 ? "partial" : "fail";
+      setSummary(s);
+      setPhase("done");
+
+      const firstMaterialInOrder = jobIds
+        .map((id) => outcomes.find((o) => o.id === id)?.polled.materialId)
+        .find((m) => typeof m === "string" && m.length > 0);
+
+      if (s === "success" && firstMaterialInOrder) {
+        successTimer = setTimeout(() => {
+          goToStudyEditor(firstMaterialInOrder);
+        }, 12_000);
       }
-      return next;
-    });
-
-    const okCount = outcomes.filter((o) => o.polled.materialId).length;
-    const errCount = outcomes.filter((o) => o.polled.error).length;
-    const s: "success" | "partial" | "fail" =
-      errCount === 0 ? "success" : okCount > 0 ? "partial" : "fail";
-    setSummary(s);
-    setPhase("done");
-
-    const firstMaterialInOrder = jobIds
-      .map((id) => outcomes.find((o) => o.id === id)?.polled.materialId)
-      .find((m) => typeof m === "string" && m.length > 0);
-
-    if (s === "success" && firstMaterialInOrder) {
-      successTimer = setTimeout(() => {
-        goToStudyEditor(firstMaterialInOrder);
-      }, 12_000);
-    }
+    }, 0);
 
     return () => {
+      if (updateTimer) clearTimeout(updateTimer);
       if (successTimer) clearTimeout(successTimer);
     };
-  }, [terminalByJob, jobIds.join(","), goToStudyEditor]);
+  }, [terminalByJob, jobIds, goToStudyEditor]);
 
   useEffect(() => {
     if (jobIds.length === 0) return;
     const anyInFlight = jobIds.some((id) => terminalByJob[id] == null);
     if (anyInFlight && phase === "done") {
-      setPhase("running");
-      setSummary(null);
+      const t = setTimeout(() => {
+        setPhase("running");
+        setSummary(null);
+      }, 0);
+      return () => clearTimeout(t);
     }
   }, [terminalByJob, phase, jobIds]);
 
   useEffect(() => {
     const p = previewByJob[activeJob]?.modules;
-    if (p && moduleIdx >= p.length) setModuleIdx(Math.max(0, p.length - 1));
+    if (p && moduleIdx >= p.length) {
+      const t = setTimeout(() => setModuleIdx(Math.max(0, p.length - 1)), 0);
+      return () => clearTimeout(t);
+    }
   }, [previewByJob, activeJob, moduleIdx]);
 
   async function retryActiveJob() {

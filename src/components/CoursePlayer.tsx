@@ -20,6 +20,7 @@ import { buildQuizSessionItems } from "@/lib/quiz-session";
 import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
 import { PracticeProgressPullTab } from "@/components/PracticeProgressPullTab";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
+import { VoiceTutorDock } from "@/components/VoiceTutorDock";
 import {
   AROSES_COURSE_REFINED_EVENT,
   type ArosesCourseRefinedDetail,
@@ -1497,6 +1498,16 @@ export function CoursePlayer({
       {courseManageEnabled ? (
         <CourseRefineDrawer materialId={materialId} docked />
       ) : null}
+      <VoiceTutorDock
+        key={`${materialId}-${activeModuleId}`}
+        materialId={materialId}
+        moduleId={activeModuleId}
+        quizOpen={quizOpen}
+        courseId={courseId}
+        studyHrefBase={studyBase}
+        learnMode={learnMode}
+        docked
+      />
       <StudyChatDrawer
         materialId={materialId}
         moduleId={activeModuleId}

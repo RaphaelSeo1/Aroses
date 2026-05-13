@@ -5,6 +5,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
 import { CoursePlayer } from "@/components/CoursePlayer";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
+import { VoiceTutorDock } from "@/components/VoiceTutorDock";
 import { HighlightedSummary } from "@/components/HighlightedSummary";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { McqQuiz } from "@/components/McqQuiz";
@@ -274,7 +275,17 @@ export default async function StudyPage({ params, searchParams }: Props) {
             </div>
           </section>
         </main>
-        <div className="fixed bottom-6 right-6 z-[100] pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+        <div className="fixed bottom-6 right-6 z-[100] flex flex-col items-end gap-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+          <VoiceTutorDock
+            key={row.id}
+            materialId={row.id}
+            moduleId={1}
+            quizOpen={false}
+            courseId={courseId}
+            studyHrefBase={`/dashboard/courses/${courseId}/study`}
+            docked
+            variant="legacy"
+          />
           <StudyChatDrawer
             materialId={row.id}
             moduleId={1}

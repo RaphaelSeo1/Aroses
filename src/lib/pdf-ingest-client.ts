@@ -31,7 +31,7 @@ function jobStartedAtMs(createdAt?: string): number | null {
 }
 
 /** Space out module expands — each call uses heavy output tokens (Anthropic TPM). */
-const EXPAND_MODULE_GAP_MS = 1_800;
+const EXPAND_MODULE_GAP_MS = 350;
 
 /**
  * Limit parallel `POST /expand` across all in-tab PDF jobs. Many concurrent expands

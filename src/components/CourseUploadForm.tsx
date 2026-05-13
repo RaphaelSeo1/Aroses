@@ -14,13 +14,13 @@ import {
 import type { PdfBuildProgressUI } from "@/lib/pdf-ingest-client";
 
 /**
- * Delay between each `POST /api/process-pdf` when uploading multiple PDFs.
- * Scales with batch size so background outline jobs do not all hit the AI provider at once.
+ * Short spacing between `POST /api/process-pdf` starts when uploading multiple PDFs.
+ * Starts are overlapped below; this avoids a thundering herd without serializing the whole batch.
  */
 function pdfIngestStartStaggerMs(total: number): number {
   if (total <= 1) return 0;
-  if (total === 2) return 2_500;
-  return Math.min(16_000, 3_000 + (total - 2) * 1_400);
+  if (total === 2) return 700;
+  return Math.min(1_600, 800 + (total - 2) * 200);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -187,7 +187,7 @@ export function CourseUploadForm({
         }
         setBuildProgress({
           line:
-            `${total} PDFs · queued sequentially (~${Math.round(pdfIngestStartStaggerMs(total) / 1000)}s between starts)\n${ordered.join("\n")}`,
+            `${total} PDFs · starting with short spacing so they can build sooner\n${ordered.join("\n")}`,
           bar,
         });
       };
@@ -321,15 +321,15 @@ export function CourseUploadForm({
       }
 
       const startResults: StartResult[] = new Array(total);
-      for (let fileIndex = 0; fileIndex < total; fileIndex++) {
-        if (fileIndex > 0) {
-          await sleep(pdfIngestStartStaggerMs(total));
-        }
-        startResults[fileIndex] = await startOnePdf(
-          queue[fileIndex]!,
-          fileIndex
-        );
-      }
+      const spacingMs = pdfIngestStartStaggerMs(total);
+      await Promise.all(
+        queue.map(async (file, fileIndex) => {
+          if (fileIndex > 0 && spacingMs > 0) {
+            await sleep(fileIndex * spacingMs);
+          }
+          startResults[fileIndex] = await startOnePdf(file, fileIndex);
+        })
+      );
 
       const jobs = startResults.filter(
         (r): r is StartOkJob => Boolean(r?.ok && r.mode === "job")

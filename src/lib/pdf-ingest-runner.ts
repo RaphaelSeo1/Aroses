@@ -265,6 +265,15 @@ function parseStoredModules(raw: unknown): CourseModule[] {
   return raw.map((m) => parseCourseModule(m));
 }
 
+function pdfIngestModuleBatchSize(remaining: number): number {
+  const profile = process.env.COURSE_BUILD_PROFILE?.trim().toLowerCase();
+  const defaultBatch = profile === "full" ? 1 : 2;
+  const raw = process.env.PDF_INGEST_MODULE_BATCH_SIZE?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : defaultBatch;
+  const safe = Number.isFinite(parsed) ? parsed : defaultBatch;
+  return Math.max(1, Math.min(3, remaining, Math.trunc(safe)));
+}
+
 async function finalizePdfIngest(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
@@ -496,22 +505,28 @@ export async function runPdfIngestExpandOne(
     };
   }
 
-  let newMod: CourseModule;
+  const batchCount = pdfIngestModuleBatchSize(n - idx);
+  const batchIndices = Array.from({ length: batchCount }, (_, offset) => idx + offset);
+  let newModules: CourseModule[];
   const moduleHeartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
   }, 22_000);
   try {
-    newMod = await withAnthropicRateLimitRetries(
-      jobId,
-      "module",
-      () =>
-        generateCourseModuleFromMaterial(
-          job.ingest_source_text,
-          outline,
-          idx,
-          createPdfStreamSink(admin, jobId)
-        ),
-      { maxAttempts: 12 }
+    newModules = await Promise.all(
+      batchIndices.map((moduleIndex, offset) =>
+        withAnthropicRateLimitRetries(
+          jobId,
+          batchCount === 1 ? "module" : `module-${moduleIndex + 1}`,
+          () =>
+            generateCourseModuleFromMaterial(
+              job.ingest_source_text,
+              outline,
+              moduleIndex,
+              offset === 0 ? createPdfStreamSink(admin, jobId) : undefined
+            ),
+          { maxAttempts: 12 }
+        )
+      )
     );
   } catch (e) {
     if (await isStaleIngestEpoch(admin, jobId, expandEpoch)) {
@@ -528,7 +543,7 @@ export async function runPdfIngestExpandOne(
     clearInterval(moduleHeartbeat);
   }
 
-  const nextModules = [...prefix, newMod];
+  const nextModules = [...prefix, ...newModules];
   const cappedNext = nextModules.slice(0, n);
   const { data: modRow, error: upErr } = await admin
     .from("pdf_ingest_jobs")
@@ -628,13 +643,7 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     return;
   }
 
-  const {
-    user_id: userId,
-    course_id: courseId,
-    exam_group_id: examGroupId,
-    storage_path: storagePath,
-    original_file_name: originalFileName,
-  } = claimed;
+  const storagePath = claimed.storage_path;
 
   const claimedEpoch =
     typeof (claimed as { ingest_epoch?: unknown }).ingest_epoch === "number"
