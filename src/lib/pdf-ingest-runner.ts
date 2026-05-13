@@ -283,8 +283,8 @@ async function waitForOutlineSlot(
     Number(process.env.PDF_INGEST_MAX_CONCURRENT_OUTLINES)
   )
     ? Math.max(1, Math.trunc(Number(process.env.PDF_INGEST_MAX_CONCURRENT_OUTLINES)))
-    : 3;
-  const pollMs = 9_000;
+    : 8;
+  const pollMs = 4_000;
   const deadline = Date.now() + 12 * 60_000;
 
   while (Date.now() < deadline) {

@@ -21,9 +21,9 @@ import type { PdfBuildProgressUI } from "@/lib/pdf-ingest-client";
  */
 function pdfIngestStartStaggerMs(total: number): number {
   if (total <= 1) return 0;
-  if (total <= 3) return 1_200;
-  if (total <= 6) return 2_500;
-  return 3_500;
+  if (total <= 3) return 800;
+  if (total <= 6) return 1_200;
+  return 1_500;
 }
 
 function sleep(ms: number): Promise<void> {
