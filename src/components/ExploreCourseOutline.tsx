@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useRef, useMemo, useState } from "react";
 import type { ExploreOutlineGroup } from "@/lib/explore-course-outline";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 
@@ -14,6 +14,7 @@ export function ExploreCourseOutline({
   );
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  const accordionRef = useRef<HTMLDivElement>(null);
 
   const visibleGroup = useMemo(
     () => groups.find((g) => g.sort === activeGroup) ?? groups[0],
@@ -29,29 +30,6 @@ export function ExploreCourseOutline({
       })),
     [visibleGroup]
   );
-
-  // Highlight sidebar entry as the user scrolls through the accordion.
-  useEffect(() => {
-    if (typeof IntersectionObserver === "undefined") return;
-    if (visibleItems.length === 0) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (visible.length > 0) {
-          const id = visible[0].target.id;
-          if (id) setActiveKey(id);
-        }
-      },
-      { rootMargin: "-20% 0px -55% 0px", threshold: 0 }
-    );
-    for (const it of visibleItems) {
-      const el = document.getElementById(it.key);
-      if (el) io.observe(el);
-    }
-    return () => io.disconnect();
-  }, [visibleItems]);
 
   if (groups.length === 0) return null;
 
@@ -69,8 +47,13 @@ export function ExploreCourseOutline({
     setOpenKey(key);
     setActiveKey(key);
     requestAnimationFrame(() => {
+      const container = accordionRef.current;
       const el = document.getElementById(key);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (container && el) {
+        const containerTop = container.getBoundingClientRect().top;
+        const elTop = el.getBoundingClientRect().top;
+        container.scrollBy({ top: elTop - containerTop - 16, behavior: "smooth" });
+      }
     });
   };
 
@@ -178,7 +161,7 @@ export function ExploreCourseOutline({
         </aside>
 
         {/* Accordion — scrolls internally so the page doesn't scroll */}
-        <div className="min-w-0 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5" style={{ maxHeight: "calc(100vh - 16rem)" }}>
+        <div ref={accordionRef} className="min-w-0 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5" style={{ maxHeight: "calc(100vh - 16rem)" }}>
           {visibleItems.length > 0 ? (
             <ul className="space-y-2">
               {visibleItems.map(({ mat, key, title }) => {
