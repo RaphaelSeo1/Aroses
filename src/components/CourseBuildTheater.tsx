@@ -261,6 +261,25 @@ export function CourseBuildTheater({
 
   const onDone = useCallback((id: string, result: PollOutcome) => {
     setTerminalByJob((prev) => ({ ...prev, [id]: result }));
+    // Immediately update the status card for this job so it doesn't stay
+    // stale while other jobs in the batch are still running.
+    setRows((prev) => {
+      const base = prev[id] ?? { label: "PDF", line: "", bar: "indeterminate" as const };
+      return {
+        ...prev,
+        [id]: {
+          ...base,
+          error: result.error,
+          materialId: result.materialId,
+          line: result.error
+            ? result.error
+            : result.materialId
+              ? "Ready — open study mode below."
+              : base.line,
+          bar: result.materialId ? 100 : base.bar,
+        },
+      };
+    });
   }, []);
 
   useEffect(() => {
