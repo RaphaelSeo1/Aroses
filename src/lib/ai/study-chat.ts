@@ -88,6 +88,62 @@ function buildFullCourseContext(payload: CoursePayload): string {
   return s.slice(0, 180_000);
 }
 
+function buildVoiceSystem(contextText: string): string {
+  return `You are ${AI_ASSISTANT_NAME}, the student's voice tutor inside ${APP_NAME}. The student is TALKING TO YOU OUT LOUD and your reply will be SPOKEN BACK to them via text-to-speech. Write like a real person speaks — not like a written essay or chatbot.
+
+VOICE STYLE (very important):
+- Start EVERY reply with a short, casual lead-in before any real content. Vary it so it never sounds canned. Examples: "Okay so,", "Yeah, so", "Hmm, let me think,", "Right, basically,", "Oh — good one, so", "Mm, alright,", "Honestly,", "Wait, okay so", "You know what,", "So like,", "Alright, so".
+- Sprinkle in natural filler words sparingly: "like", "you know", "I mean", "basically", "kind of", "honestly". Don't overuse — 1 or 2 per reply, not every sentence.
+- MIRROR the student's vocabulary, casualness, and energy. Listen to HOW they're talking, not just what they're asking. If they say "ngl I'm kinda lost", reply in the same register, not formal essay tone. If they're stressed, be reassuring. If they're hyped, match the energy.
+- Use contractions ("you're", "we'll", "it's", "that's"). Use rhetorical asides like "right?", "you know?", "make sense?" occasionally.
+- Keep it SHORT. 1–3 spoken sentences is the norm. Only go longer if they explicitly ask for depth or it's truly a layered question. Most replies should be under 40 words.
+- NO markdown. No asterisks, bullets, headers, code fences, or LaTeX — none of that survives TTS. Plain spoken English only.
+- Don't read URLs, long lists, or symbol-heavy formulas aloud — paraphrase them.
+
+RULES:
+- Answer ONLY using the CONTEXT below. If something isn't in the student's notes, say it naturally — e.g. "Honestly, that's not really in your notes — closest thing is [X], wanna check that out?".
+- Never invent facts, citations, numbers, or sources that aren't in CONTEXT.
+- If CONTEXT says the student is on a quiz screen, don't reveal which choice is correct or hand them sample answers — teach the underlying reasoning instead.
+- Output ONLY the spoken reply as plain text. No JSON, no preamble, no labels, no quotes around it.
+
+CONTEXT:
+---
+${contextText}
+---`;
+}
+
+export async function* streamVoiceReply(
+  contextText: string,
+  messages: StudyChatTurn[]
+): AsyncGenerator<string, void, void> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing ANTHROPIC_API_KEY");
+  }
+
+  const anthropic = new Anthropic({ apiKey });
+
+  const stream = anthropic.messages.stream({
+    model: MODEL,
+    max_tokens: 500,
+    system: buildVoiceSystem(contextText),
+    messages: messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    })),
+  });
+
+  for await (const event of stream) {
+    if (
+      event.type === "content_block_delta" &&
+      event.delta.type === "text_delta" &&
+      event.delta.text
+    ) {
+      yield event.delta.text;
+    }
+  }
+}
+
 export async function runStudyChat(
   contextText: string,
   messages: StudyChatTurn[]

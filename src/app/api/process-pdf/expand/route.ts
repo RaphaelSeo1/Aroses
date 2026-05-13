@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
-import { runPdfIngestExpandOne } from "@/lib/pdf-ingest-runner";
+import { after, NextResponse } from "next/server";
+import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 
 export const runtime = "nodejs";
 
@@ -68,6 +68,32 @@ export async function POST(request: Request) {
   const result = await runPdfIngestExpandOne(jobId);
 
   if (result.kind === "failed") {
+    // If the job is still pending, phase 1 (extract + outline) hasn't started
+    // yet — the original after() in POST /api/process-pdf may have been dropped
+    // or delayed. Re-kick it here so the build self-heals without a manual
+    // re-upload. The atomic claim inside runPdfIngestJob (eq status=pending)
+    // makes re-triggering safe: a duplicate kick is a no-op.
+    if (result.message === "Job is not ready to expand yet.") {
+      const { data: statusRow } = await supabase
+        .from("pdf_ingest_jobs")
+        .select("status")
+        .eq("id", jobId)
+        .maybeSingle();
+
+      if (statusRow?.status === "pending") {
+        after(() => {
+          void runPdfIngestJob(jobId).catch((e) =>
+            console.error("[process-pdf/expand] kick phase1", jobId, e)
+          );
+        });
+        return NextResponse.json({
+          complete: false,
+          modulesBuilt: 0,
+          modulesTotal: 0,
+        });
+      }
+    }
+
     const msg = result.message;
     const rateLimited =
       /rate limit|too many ai requests|tokens per minute|output tokens|exceed your organization/i.test(

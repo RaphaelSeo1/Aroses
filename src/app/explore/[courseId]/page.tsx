@@ -85,7 +85,7 @@ export default async function ExploreCoursePage({ params }: Props) {
         }
       />
       <main className="min-h-[calc(100vh-4rem)] flex-1 bg-app-gradient">
-        <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
+        <div className="mx-auto max-w-3xl px-4 pt-10 sm:px-6 sm:pt-14">
           <Link
             href="/explore"
             className="inline-flex items-center gap-1 text-sm font-semibold text-brand transition hover:gap-2 dark:text-brand-soft"
@@ -149,9 +149,13 @@ export default async function ExploreCoursePage({ params }: Props) {
               Explore.
             </p>
           ) : null}
+        </div>
 
+        <div className="mx-auto max-w-5xl px-4 sm:px-6">
           <ExploreCourseOutline groups={outlineGroups} />
+        </div>
 
+        <div className="mx-auto max-w-3xl px-4 pb-10 sm:px-6 sm:pb-14">
           {outlineGroups.length === 0 && !outlineError ? (
             <p className="mt-10 text-sm text-zinc-500 dark:text-zinc-400">
               When this course has generated lessons, a{" "}

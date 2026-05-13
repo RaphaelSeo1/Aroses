@@ -451,7 +451,7 @@ export async function pollPdfIngestJob(
       let phaseLine: string;
       if (data.status === "pending") {
         phaseLine =
-          "Queued: this PDF starts when the server picks it up (large batches are staggered on purpose)…";
+          "Starting… (picking up your PDF now)";
       } else if (ingestPhase === "planning_outline") {
         phaseLine =
           "Step 2/2: Planning course outline with AI (then writing each module)…";
@@ -469,6 +469,19 @@ export async function pollPdfIngestJob(
         line: `${phaseLine}${elapsedPart}`,
         bar: "indeterminate",
       });
+
+      // If the job is still pending, the original after() callback may have
+      // been dropped or delayed. Call expand as a self-healing kick — the
+      // expand route will re-trigger phase 1 if the job is still pending.
+      // The kick is fire-and-forget; the next poll cycle will pick up progress.
+      if (data.status === "pending" && !signal?.aborted) {
+        void fetch("/api/process-pdf/expand", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId }),
+          signal,
+        }).catch(() => {});
+      }
     }
 
     await sleep(1800);

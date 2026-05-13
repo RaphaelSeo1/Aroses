@@ -325,6 +325,18 @@ async function finalizePdfIngest(
   outline: CourseOutlinePayload,
   modulesRaw: CourseModule[]
 ): Promise<{ materialId: string } | null> {
+  // Idempotency guard: if a concurrent expand call (e.g. from a page refresh)
+  // already finalized this job, return the existing materialId instead of
+  // inserting a duplicate study_materials row.
+  const { data: alreadyDone } = await admin
+    .from("pdf_ingest_jobs")
+    .select("status, material_id")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (alreadyDone?.status === "complete" && alreadyDone?.material_id) {
+    return { materialId: alreadyDone.material_id as string };
+  }
+
   const modules = renumberModules(modulesRaw);
   const payload: CoursePayload = {
     title: outline.title,
@@ -383,6 +395,10 @@ async function finalizePdfIngest(
       ? fromUploadStem
       : "Material";
 
+  // Insert study_materials first, then atomically flip job status to `complete`
+  // in a single UPDATE that also sets material_id. Doing both in one operation
+  // avoids a window where status=complete but material_id=null (which would
+  // leave the polling client spinning forever).
   const { data: row, error: insErr } = await admin
     .from("study_materials")
     .insert({
@@ -410,7 +426,10 @@ async function finalizePdfIngest(
     return null;
   }
 
-  await admin
+  // Atomically claim completion. If the UPDATE matches 0 rows (status was no
+  // longer `running` because a concurrent call or a retry won), delete the
+  // orphan row we just inserted and return the winner's materialId.
+  const { data: claimed } = await admin
     .from("pdf_ingest_jobs")
     .update({
       status: "complete",
@@ -419,7 +438,29 @@ async function finalizePdfIngest(
       ingest_phase: null,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", jobId);
+    .eq("id", jobId)
+    .eq("status", "running")
+    .select("id")
+    .maybeSingle();
+
+  if (claimed === null) {
+    // Lost the race — delete the orphan material we inserted above.
+    await admin
+      .from("study_materials")
+      .delete()
+      .eq("id", row.id)
+      .catch(() => {});
+
+    const { data: winner } = await admin
+      .from("pdf_ingest_jobs")
+      .select("material_id")
+      .eq("id", jobId)
+      .maybeSingle();
+    const winId = winner?.material_id;
+    return typeof winId === "string" && winId.length > 0
+      ? { materialId: winId }
+      : null;
+  }
 
   await removeIngestObject(admin, storagePath);
 

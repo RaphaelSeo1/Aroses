@@ -15,7 +15,8 @@ type Params = { params: Promise<{ jobId: string }> };
 
 /**
  * Reset a stuck PDF ingest job to `pending` and re-queue phase 1.
- * Does not apply after `complete` (material saved) or `failed` (ingest file was removed).
+ * When a completed job is restarted the old study_materials row is deleted
+ * first so the next build doesn't leave a duplicate in the course.
  */
 export async function POST(_request: Request, ctx: Params) {
   const { jobId } = await ctx.params;
@@ -48,6 +49,15 @@ export async function POST(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Need admin client for storage checks and the cleanup delete below.
+  const admin = createAdminClient();
+  if (!admin) {
+    return NextResponse.json(
+      { error: "Server is not configured for storage." },
+      { status: 500 }
+    );
+  }
+
   const { data: job, error: selErr } = await supabase
     .from("pdf_ingest_jobs")
     .select("id, status, material_id, storage_path, ingest_epoch")
@@ -56,13 +66,6 @@ export async function POST(_request: Request, ctx: Params) {
 
   if (selErr || !job) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
-  }
-
-  if (job.status === "complete" && job.material_id) {
-    return NextResponse.json(
-      { error: "This build already finished. Open it in the study editor." },
-      { status: 400 }
-    );
   }
 
   if (job.status === "failed") {
@@ -86,14 +89,6 @@ export async function POST(_request: Request, ctx: Params) {
     );
   }
 
-  const admin = createAdminClient();
-  if (!admin) {
-    return NextResponse.json(
-      { error: "Server is not configured for storage." },
-      { status: 500 }
-    );
-  }
-
   const { error: dlErr } = await admin.storage
     .from(STUDY_PDF_INGEST_BUCKET)
     .download(storagePath);
@@ -105,6 +100,22 @@ export async function POST(_request: Request, ctx: Params) {
       },
       { status: 400 }
     );
+  }
+
+  // If a previous run already produced a study_materials row, delete it before
+  // resetting so the fresh rebuild doesn't leave a duplicate in the course.
+  const oldMaterialId =
+    typeof job.material_id === "string" && job.material_id.length > 0
+      ? job.material_id
+      : null;
+  if (oldMaterialId) {
+    const { error: delErr } = await admin
+      .from("study_materials")
+      .delete()
+      .eq("id", oldMaterialId);
+    if (delErr) {
+      console.warn("[process-pdf/retry] delete old material", oldMaterialId, delErr);
+    }
   }
 
   const restartedAt = new Date().toISOString();
