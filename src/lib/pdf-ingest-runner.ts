@@ -5,6 +5,7 @@ import {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 import pdfParse from "pdf-parse";
+import { extractPdfTextHeadTail } from "@/lib/pdf-text-head-tail";
 import {
   parseCourseModule,
   parseCourseOutlinePayload,
@@ -681,25 +682,56 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
   });
 
   let text = "";
-  try {
-    const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
-    const maxPages = maxPagesRaw ? Number(maxPagesRaw) : 60;
-    const safeMaxPages =
-      Number.isFinite(maxPages) && maxPages >= 1 && maxPages <= 400
-        ? Math.floor(maxPages)
-        : 60;
+  const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
+  const maxPages = maxPagesRaw ? Number(maxPagesRaw) : 60;
+  const safeMaxPages =
+    Number.isFinite(maxPages) && maxPages >= 1 && maxPages <= 400
+      ? Math.floor(maxPages)
+      : 60;
 
-    const parsed = await pdfParse(buf, { max: safeMaxPages });
-    text = (parsed.text ?? "").trim();
-  } catch {
-    await failJobUnlessStale(
-      admin,
-      jobId,
-      storagePath,
-      "Could not read PDF. Try another file.",
-      claimedEpoch
-    );
-    return;
+  /** Head+tail page text extraction (see `extractPdfTextHeadTail`). Unrelated to `COURSE_BUILD_PROFILE`. */
+  const useHeadTailPdfExtract =
+    process.env.PDF_INGEST_FAST_EXTRACT?.trim() !== "0";
+
+  let usedHeadTailPdfExtract = false;
+  if (useHeadTailPdfExtract) {
+    try {
+      const extracted = await extractPdfTextHeadTail(buf, {
+        onHeartbeat: () => touchJobProgress(admin, jobId),
+      });
+      if (extracted.text.length >= 80) {
+        text = extracted.text;
+        usedHeadTailPdfExtract = true;
+        console.info("[pdf-ingest] extract", {
+          jobId,
+          numpages: extracted.numpages,
+          skippedMiddle: extracted.skippedMiddle,
+          chars: text.length,
+        });
+      }
+    } catch (e) {
+      console.warn(
+        "[pdf-ingest] head-tail PDF extract failed; falling back to pdf-parse",
+        jobId,
+        e
+      );
+    }
+  }
+
+  if (!usedHeadTailPdfExtract) {
+    try {
+      const parsed = await pdfParse(buf, { max: safeMaxPages });
+      text = (parsed.text ?? "").trim();
+    } catch {
+      await failJobUnlessStale(
+        admin,
+        jobId,
+        storagePath,
+        "Could not read PDF. Try another file.",
+        claimedEpoch
+      );
+      return;
+    }
   }
 
   if (text.length < 80) {
