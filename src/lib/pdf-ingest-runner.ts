@@ -268,11 +268,11 @@ function parseStoredModules(raw: unknown): CourseModule[] {
 
 function pdfIngestModuleBatchSize(remaining: number): number {
   const profile = process.env.COURSE_BUILD_PROFILE?.trim().toLowerCase();
-  const defaultBatch = profile === "full" ? 1 : 2;
+  const defaultBatch = profile === "full" ? 1 : 3;
   const raw = process.env.PDF_INGEST_MODULE_BATCH_SIZE?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : defaultBatch;
   const safe = Number.isFinite(parsed) ? parsed : defaultBatch;
-  return Math.max(1, Math.min(3, remaining, Math.trunc(safe)));
+  return Math.max(1, Math.min(remaining, Math.trunc(safe)));
 }
 
 async function finalizePdfIngest(

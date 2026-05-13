@@ -30,14 +30,15 @@ function jobStartedAtMs(createdAt?: string): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-/** Space out module expands — each call uses heavy output tokens (Anthropic TPM). */
-const EXPAND_MODULE_GAP_MS = 350;
+/** Gap between consecutive expand calls per PDF (ms). */
+const EXPAND_MODULE_GAP_MS = 50;
 
 /**
- * Limit parallel `POST /expand` across all in-tab PDF jobs. Many concurrent expands
- * (e.g. 10+ courses each on module 3) spikes org TPM and returns 429 → permanent job fail.
+ * Max parallel POST /expand calls across all in-tab PDF jobs.
+ * The Anthropic retry logic handles 429s, so set this high enough
+ * that all PDFs can generate modules simultaneously.
  */
-const EXPAND_FETCH_MAX_CONCURRENT = 3;
+const EXPAND_FETCH_MAX_CONCURRENT = 20;
 
 const expandFetchConcurrency = (() => {
   let inFlight = 0;
