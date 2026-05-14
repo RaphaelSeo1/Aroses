@@ -381,19 +381,27 @@ export async function pollPdfIngestJob(
     if (inModulePhase && built < total) {
       const next = built + 1;
       const started = jobStartedAtMs(data.createdAt);
-      const elapsedPart =
-        started != null
-          ? ` · ${formatElapsedShort(Date.now() - started)}`
-          : "";
-      onProgress?.({
-        line: `Writing module ${next} of ${total}${elapsedPart}…`,
-        bar: Math.min(100, ((next - 0.5) / total) * 100),
-      });
+      const bar = Math.min(100, ((next - 0.5) / total) * 100);
+
+      // Keep the timer ticking while we block on the expand fetch.
+      // Without this the text (including elapsed) is frozen for the entire
+      // duration of the server call (up to ~5 min under heavy rate-limiting).
+      const liveTimer = setInterval(() => {
+        if (signal?.aborted) return;
+        const elapsed = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
+        onProgress?.({ line: `Writing module ${next} of ${total}${elapsed}…`, bar });
+      }, 1_000);
+      const elapsed0 = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
+      onProgress?.({ line: `Writing module ${next} of ${total}${elapsed0}…`, bar });
+
       const expandResult = await postProcessPdfExpand(jobId, signal);
+      clearInterval(liveTimer);
+
       if (!expandResult.ok && expandResult.status === 0) {
         if (signal?.aborted) return { error: "Cancelled." };
+        const elapsed = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
         onProgress?.({
-          line: `Writing module ${next} of ${total}${elapsedPart} — reconnecting…`,
+          line: `Writing module ${next} of ${total}${elapsed} — reconnecting…`,
           bar: "indeterminate",
         });
         await sleep(3_200);
@@ -438,19 +446,24 @@ export async function pollPdfIngestJob(
 
     if (inModulePhase && built === total) {
       const started = jobStartedAtMs(data.createdAt);
-      const elapsedPart =
-        started != null
-          ? ` · ${formatElapsedShort(Date.now() - started)}`
-          : "";
-      onProgress?.({
-        line: `Saving your study set (${total} module${total === 1 ? "" : "s"})…${elapsedPart}`,
-        bar: 100,
-      });
+      const label = `Saving your study set (${total} module${total === 1 ? "" : "s"})`;
+
+      const liveTimerSave = setInterval(() => {
+        if (signal?.aborted) return;
+        const elapsed = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
+        onProgress?.({ line: `${label}…${elapsed}`, bar: 100 });
+      }, 1_000);
+      const elapsed0 = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
+      onProgress?.({ line: `${label}…${elapsed0}`, bar: 100 });
+
       const expandSave = await postProcessPdfExpand(jobId, signal);
+      clearInterval(liveTimerSave);
+
       if (!expandSave.ok && expandSave.status === 0) {
         if (signal?.aborted) return { error: "Cancelled." };
+        const elapsed = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
         onProgress?.({
-          line: `Saving your study set (${total} module${total === 1 ? "" : "s"})…${elapsedPart} — reconnecting…`,
+          line: `${label}…${elapsed} — reconnecting…`,
           bar: "indeterminate",
         });
         await sleep(3_200);
