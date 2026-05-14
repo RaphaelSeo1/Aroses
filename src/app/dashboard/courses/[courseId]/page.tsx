@@ -58,6 +58,13 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
     .select("id, file_name, created_at, exam_group_id, sort_order, course_payload")
     .eq("course_id", course.id);
 
+  // Fetch any PDF ingest jobs that failed or are stuck, so we can warn the user.
+  const { data: failedJobsRaw } = await supabase
+    .from("pdf_ingest_jobs")
+    .select("id, original_file_name, status, exam_group_id, error_message")
+    .eq("course_id", course.id)
+    .in("status", ["failed"]);
+
   const materials: MaterialRow[] = sortStudyMaterialsForDashboard(
     (materialsRaw ?? [])
       .filter(
@@ -85,6 +92,14 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
   }
 
   const uploadsCount = materialsRaw?.length ?? 0;
+
+  type FailedJob = { id: string; original_file_name: string | null; exam_group_id: string | null; error_message: string | null };
+  const failedJobs: FailedJob[] = (failedJobsRaw ?? []).map((j) => ({
+    id: j.id,
+    original_file_name: typeof j.original_file_name === "string" ? j.original_file_name : null,
+    exam_group_id: typeof j.exam_group_id === "string" ? j.exam_group_id : null,
+    error_message: typeof j.error_message === "string" ? j.error_message : null,
+  }));
 
   const adminViewingOthersCourse =
     typeof course.owner_user_id === "string" &&
@@ -131,6 +146,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
             courseId={course.id}
             groups={groups}
             materials={materials}
+            failedJobs={failedJobs}
             initialSectionId={sectionFromUrl ?? undefined}
           />
         </div>

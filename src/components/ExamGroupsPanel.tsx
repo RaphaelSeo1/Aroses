@@ -554,15 +554,24 @@ function MaterialBuildsList({
   );
 }
 
+export type FailedJobRow = {
+  id: string;
+  original_file_name: string | null;
+  exam_group_id: string | null;
+  error_message: string | null;
+};
+
 export function ExamGroupsPanel({
   courseId,
   groups,
   materials,
+  failedJobs = [],
   initialSectionId,
 }: {
   courseId: string;
   groups: ExamGroupRow[];
   materials: MaterialRow[];
+  failedJobs?: FailedJobRow[];
   /** When set (e.g. from `?section=` after PDF upload redirect), selects that section tab. */
   initialSectionId?: string;
 }) {
@@ -1093,6 +1102,33 @@ export function ExamGroupsPanel({
         </div>
         {groupRenameError && (
           <p className="mt-1 text-xs text-red-600 dark:text-red-400">{groupRenameError}</p>
+        )}
+
+        {/* Failed jobs for the active section */}
+        {failedJobs.filter((j) => j.exam_group_id === activeId).length > 0 && (
+          <div className="mt-6 space-y-2">
+            {failedJobs
+              .filter((j) => j.exam_group_id === activeId)
+              .map((j) => (
+                <div
+                  key={j.id}
+                  className="flex flex-wrap items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/60 dark:bg-red-950/40"
+                >
+                  <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400">
+                    <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
+                  </svg>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-red-800 dark:text-red-200">
+                      {j.original_file_name ?? "A PDF"} failed to process
+                    </p>
+                    <p className="mt-0.5 text-xs text-red-700 dark:text-red-300">
+                      {j.error_message ?? "An error occurred during extraction."}{" "}
+                      Re-upload this file below to try again.
+                    </p>
+                  </div>
+                </div>
+              ))}
+          </div>
         )}
 
         <div className="mt-8 border-t border-zinc-100 pt-8 dark:border-zinc-800">
