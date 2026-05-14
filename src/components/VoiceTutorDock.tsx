@@ -94,6 +94,17 @@ export function VoiceTutorDock({
   const [holdRecording, setHoldRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-clear transient errors after 5 seconds so the hint text shows again.
+  useEffect(() => {
+    if (!error) return;
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => setError(null), 5000);
+    return () => {
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    };
+  }, [error]);
   const [playbackRate, setPlaybackRateState] = useState<PlaybackRate>(1);
   const [livePhase, setLivePhaseState] = useState<LivePhase>("off");
   const [pauseMs, setPauseMs] = useState<number>(DEFAULT_PAUSE_MS);
@@ -1520,16 +1531,18 @@ export function VoiceTutorDock({
       )}
 
       {error ? (
-        <p className="max-w-[14rem] text-xs leading-snug text-red-600 dark:text-red-400">
+        <p className="max-w-[14rem] text-xs leading-snug text-red-500 dark:text-red-400">
           {error}
         </p>
       ) : (
-        <p className="max-w-[14rem] text-[10px] leading-snug text-zinc-500 dark:text-zinc-400">
+        <p className="max-w-[14rem] text-[10px] leading-snug text-zinc-400 dark:text-zinc-500">
           {inputMode === "hold"
-            ? "Hold the button, speak, release. Uses the same lesson context as chat (Claude + your materials)."
+            ? "Hold the button and speak — Rose will reply when you let go."
             : inputMode === "tap"
-              ? "Tap once to record, tap again to send."
-              : `${liveStatusLabel} · Pause slider sets how long after you stop talking before the reply kicks in.`}
+              ? "Tap to start speaking, tap again to send."
+              : livePhase === "off"
+                ? "Starting up…"
+                : "Listening — just start talking to Rose."}
         </p>
       )}
     </div>
