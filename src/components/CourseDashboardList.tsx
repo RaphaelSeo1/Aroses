@@ -147,7 +147,7 @@ export function CourseDashboardList({
           {listError}
         </p>
       )}
-      <ul className={density === "compact" ? "grid gap-4 sm:grid-cols-2" : "grid gap-5 sm:grid-cols-2"}>
+      <ul className={density === "compact" ? "grid gap-4 sm:grid-cols-2 lg:grid-cols-3" : "grid gap-5 sm:grid-cols-2 lg:grid-cols-3"}>
         {courses.map((c, index) => {
           const isEditing = editingId === c.id;
           const busy = busyId === c.id || busyId === "__reorder__";
