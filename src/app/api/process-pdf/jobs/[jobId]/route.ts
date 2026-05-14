@@ -1,9 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { buildLivePreviewCourse } from "@/lib/pdf-ingest-preview";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import type { CoursePayload } from "@/types/course";
 
 export const runtime = "nodejs";
@@ -142,12 +141,11 @@ export async function GET(_request: Request, ctx: Params) {
 
       if (reset) {
         console.warn("[jobs/get] auto-recovered stalled phase-1 job", jobId);
-        after(() => {
-          void runPdfIngestJob(jobId).catch((e) =>
-            console.error("[jobs/get] auto-recover kick", jobId, e)
-          );
-        });
-        // Return pending so the client's kick also fires
+        // Don't use after() here — it shares the invocation budget and can be
+        // killed before phase 1 finishes. The client will see `pending` and
+        // fire its own fire-and-forget POST /expand, which now runs phase 1
+        // inline (awaited) for the full 300 s serverless window.
+        // Return pending so the client's kick fires
         return NextResponse.json({
           status: "pending",
           outlineReady: false,

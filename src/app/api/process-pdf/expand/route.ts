@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 
 export const runtime = "nodejs";
@@ -81,11 +81,14 @@ export async function POST(request: Request) {
         .maybeSingle();
 
       if (statusRow?.status === "pending") {
-        after(() => {
-          void runPdfIngestJob(jobId).catch((e) =>
-            console.error("[process-pdf/expand] kick phase1", jobId, e)
-          );
-        });
+        // Run phase 1 inline (awaited) rather than via after(). after() shares
+        // the parent invocation's budget and Vercel can terminate it early for
+        // large PDFs (slow extraction + outline generation). By awaiting here
+        // we give phase 1 the full 300 s function window. The client fires this
+        // expand call as fire-and-forget so holding the response is invisible.
+        await runPdfIngestJob(jobId).catch((e) =>
+          console.error("[process-pdf/expand] inline phase1", jobId, e)
+        );
         return NextResponse.json({
           complete: false,
           modulesBuilt: 0,
