@@ -577,6 +577,15 @@ export function ExamGroupsPanel({
 }) {
   const router = useRouter();
   const [dismissedJobIds, setDismissedJobIds] = useState<Set<string>>(() => new Set());
+
+  async function dismissFailedJob(jobId: string) {
+    setDismissedJobIds((prev) => new Set([...prev, jobId]));
+    try {
+      await fetch(`/api/process-pdf/jobs/${jobId}/dismiss`, { method: "DELETE" });
+    } catch {
+      // Best-effort — already hidden locally
+    }
+  }
   const [activeId, setActiveId] = useState(() => {
     if (
       initialSectionId &&
@@ -1156,7 +1165,7 @@ export function ExamGroupsPanel({
                   </div>
                   <button
                     type="button"
-                    onClick={() => setDismissedJobIds((prev) => new Set([...prev, j.id]))}
+                    onClick={() => void dismissFailedJob(j.id)}
                     className="ml-auto shrink-0 rounded-lg p-1 text-red-400 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/40 dark:hover:text-red-200"
                     aria-label="Dismiss"
                   >
