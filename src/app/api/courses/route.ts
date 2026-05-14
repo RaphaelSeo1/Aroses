@@ -52,7 +52,12 @@ export async function POST(request: Request) {
   const nextOrder =
     typeof maxRow?.sort_order === "number" ? maxRow.sort_order + 1 : 0;
 
-  const { data: row, error } = await supabase
+  // Try inserting with self-study columns. If the migration hasn't been
+  // applied yet (column doesn't exist → code 42703), fall back to the
+  // base columns so course creation never hard-fails.
+  let row: { id: string } | null = null;
+
+  const { data: rowFull, error: errFull } = await supabase
     .from("courses")
     .insert({
       user_id: user.id,
@@ -65,13 +70,40 @@ export async function POST(request: Request) {
     .select("id")
     .single();
 
-  if (error) {
-    console.error(error);
-    return NextResponse.json(
-      { error: "Could not create course." },
-      { status: 500 }
-    );
+  if (errFull) {
+    const isSchemaErr =
+      errFull.code === "42703" ||
+      (errFull.message ?? "").includes("is_self_study") ||
+      (errFull.message ?? "").includes("study_context") ||
+      (errFull.message ?? "").includes("schema cache");
+
+    if (!isSchemaErr) {
+      console.error("[POST /api/courses]", errFull);
+      return NextResponse.json(
+        { error: "Could not create course." },
+        { status: 500 }
+      );
+    }
+
+    // Migration not yet applied — create without the new columns.
+    console.warn("[POST /api/courses] self-study columns missing; creating without them");
+    const { data: rowFallback, error: errFallback } = await supabase
+      .from("courses")
+      .insert({ user_id: user.id, title, description, sort_order: nextOrder })
+      .select("id")
+      .single();
+
+    if (errFallback || !rowFallback) {
+      console.error("[POST /api/courses] fallback", errFallback);
+      return NextResponse.json(
+        { error: "Could not create course." },
+        { status: 500 }
+      );
+    }
+    row = rowFallback;
+  } else {
+    row = rowFull;
   }
 
-  return NextResponse.json({ courseId: row.id });
+  return NextResponse.json({ courseId: row!.id });
 }
