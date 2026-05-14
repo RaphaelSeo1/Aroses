@@ -661,9 +661,17 @@ export async function runPdfIngestExpandOne(
 
 /**
  * Background phase 1: claim job → download PDF → extract text → course outline → DB.
- * Client then calls `POST /api/process-pdf/expand` (or dev runs `runPdfIngestExpandOne` in a loop).
+ *
+ * When `driveModules: true` is set the function also loops over all module
+ * expansions inline (phase 2) so the full pipeline runs in a single server
+ * invocation without requiring the browser client to be present.  Use this
+ * in the initial `after()` call so uploads complete even when the user
+ * navigates away before the client's polling loop kicks in.
  */
-export async function runPdfIngestJob(jobId: string): Promise<void> {
+export async function runPdfIngestJob(
+  jobId: string,
+  options?: { driveModules?: boolean }
+): Promise<void> {
   const admin = createAdminClient();
   if (!admin) {
     console.error("[pdf-ingest] missing SUPABASE_SERVICE_ROLE_KEY", jobId);
@@ -916,4 +924,27 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     ms: Date.now() - t0,
     modules: outline.modules.length,
   });
+
+  if (!options?.driveModules) return;
+
+  // Phase 2: drive all module expansions inline so the job completes without
+  // the browser client needing to stay open (upload-and-leave support).
+  // We loop until complete, failed, or a safety cap is reached. Each call to
+  // runPdfIngestExpandOne claims and writes exactly one module batch then
+  // returns, so even very large outlines advance safely within one invocation.
+  const maxSteps = outline.modules.length + 6; // modules + a few finalize retries
+  for (let step = 0; step < maxSteps; step++) {
+    const r = await runPdfIngestExpandOne(jobId);
+    if (r.kind === "complete") {
+      console.info("[pdf-ingest] driveModules: complete", { jobId, step });
+      break;
+    }
+    if (r.kind === "failed") {
+      console.warn("[pdf-ingest] driveModules: failed", { jobId, step, message: r.message });
+      break;
+    }
+    // Brief pause to avoid slamming Anthropic with back-to-back requests
+    // from the same job while other parallel jobs are also generating modules.
+    await sleep(300);
+  }
 }

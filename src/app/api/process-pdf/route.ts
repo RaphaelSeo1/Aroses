@@ -9,9 +9,13 @@ export const runtime = "nodejs";
 
 /**
  * Must be a **numeric literal** (Next.js 16). Keep in sync with `PDF_PROCESS_MAX_DURATION_SEC`
- * in `@/lib/pdf-route-duration`. **Vercel Pro:** 300s max. **Hobby:** use **60** or deploy fails.
+ * in `@/lib/pdf-route-duration`. **Vercel Pro:** up to 900 s. **Hobby:** use **60** or deploy fails.
+ *
+ * Set to 800 so the after() callback can drive both phase 1 (extract + outline, ~3-5 min)
+ * AND all module writes (phase 2, ~30-60 s × N modules) in a single invocation, letting
+ * uploads complete even when the user navigates away before the client's polling loop fires.
  */
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 export const dynamic = "force-dynamic";
 
@@ -201,7 +205,10 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
 
   if (useChunkedPdfIngest) {
     after(() => {
-      void runPdfIngestJob(jobId).catch((e) =>
+      // driveModules: true — run phase 1 AND all module writes in this single
+      // server invocation so the PDF processes fully even if the user navigates
+      // away before the browser polling loop starts driving /expand calls.
+      void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
         console.error("[process-pdf] after()", jobId, e)
       );
     });
