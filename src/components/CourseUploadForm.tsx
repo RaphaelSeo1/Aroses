@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   describePdfIngestUploadFailure,
@@ -132,6 +132,55 @@ export function CourseUploadForm({
     setFiles((prev) => prev.filter((_, i) => i !== index));
     setError(null);
     setSuccess(null);
+  }
+
+  // Drag-to-reorder state for the pending-file list.
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  const previewFiles = useMemo(() => {
+    if (dragFrom === null || dragOverIdx === null || dragFrom === dragOverIdx) {
+      return files;
+    }
+    const next = [...files];
+    const [removed] = next.splice(dragFrom, 1);
+    next.splice(dragOverIdx, 0, removed);
+    return next;
+  }, [files, dragFrom, dragOverIdx]);
+
+  function handleFileDragStart(e: React.DragEvent, index: number) {
+    if (loading) return;
+    setDragFrom(index);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleFileDragOver(e: React.DragEvent, index: number) {
+    if (dragFrom === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverIdx !== index) setDragOverIdx(index);
+  }
+
+  function handleFileDrop(e: React.DragEvent, toIndex: number) {
+    if (dragFrom === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (dragFrom !== toIndex) {
+      setFiles((prev) => {
+        const next = [...prev];
+        const [removed] = next.splice(dragFrom, 1);
+        next.splice(toIndex, 0, removed);
+        return next;
+      });
+    }
+    setDragFrom(null);
+    setDragOverIdx(null);
+  }
+
+  function handleFileDragEnd() {
+    setDragFrom(null);
+    setDragOverIdx(null);
   }
 
   async function onSubmit(e: FormEvent) {
@@ -491,26 +540,67 @@ export function CourseUploadForm({
         </button>
 
         {files.length > 0 && (
-          <ul className="mt-4 space-y-2">
-            {files.map((file, index) => (
-              <li
-                key={`${file.name}-${file.size}-${index}`}
-                className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-              >
-                <span className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-100">
-                  {file.name}
-                </span>
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => removeFile(index)}
-                  className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
-          </ul>
+          <>
+            {files.length > 1 ? (
+              <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+                Drag the handle to reorder — PDFs build in this order.
+              </p>
+            ) : null}
+            <ul className="mt-2 space-y-2">
+              {previewFiles.map((file) => {
+                // Index lookup against the *real* files array so reorder + remove
+                // operate on the underlying state, not the optimistic preview.
+                const realIndex = files.findIndex(
+                  (f) => f.name === file.name && f.size === file.size
+                );
+                const isDragging =
+                  dragFrom !== null && files[dragFrom]?.name === file.name && files[dragFrom]?.size === file.size;
+
+                return (
+                  <li
+                    key={`${file.name}-${file.size}-${realIndex}`}
+                    draggable={!loading && files.length > 1}
+                    onDragStart={(e) => handleFileDragStart(e, realIndex)}
+                    onDragOver={(e) => handleFileDragOver(e, realIndex)}
+                    onDrop={(e) => handleFileDrop(e, realIndex)}
+                    onDragEnd={handleFileDragEnd}
+                    className={[
+                      "flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm transition-[opacity,transform] duration-150 dark:border-zinc-700 dark:bg-zinc-950",
+                      isDragging ? "opacity-40 scale-95" : "opacity-100 scale-100",
+                      files.length > 1 && !loading ? "cursor-grab active:cursor-grabbing" : "",
+                    ].join(" ")}
+                  >
+                    {files.length > 1 ? (
+                      <span
+                        className="flex h-6 w-5 shrink-0 items-center justify-center text-zinc-300 dark:text-zinc-600"
+                        aria-hidden
+                      >
+                        <svg viewBox="0 0 10 16" fill="currentColor" className="h-3.5 w-3.5">
+                          <circle cx="2.5" cy="2" r="1.5" />
+                          <circle cx="7.5" cy="2" r="1.5" />
+                          <circle cx="2.5" cy="7" r="1.5" />
+                          <circle cx="7.5" cy="7" r="1.5" />
+                          <circle cx="2.5" cy="12" r="1.5" />
+                          <circle cx="7.5" cy="12" r="1.5" />
+                        </svg>
+                      </span>
+                    ) : null}
+                    <span className="min-w-0 flex-1 truncate font-medium text-zinc-900 dark:text-zinc-100">
+                      {file.name}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => removeFile(realIndex)}
+                      className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                    >
+                      Remove
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
         )}
 
         <p className="mt-2 text-xs text-zinc-500">
