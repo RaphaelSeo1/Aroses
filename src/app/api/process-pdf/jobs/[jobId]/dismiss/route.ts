@@ -35,14 +35,17 @@ export async function DELETE(_req: Request, { params }: Params) {
     .maybeSingle();
 
   if (!job) {
-    return NextResponse.json({ error: "Not found." }, { status: 404 });
+    // Already gone — treat as success so the banner doesn't reappear.
+    return NextResponse.json({ ok: true });
   }
   if (job.user_id !== user.id) {
     return NextResponse.json({ error: "Forbidden." }, { status: 403 });
   }
-  if (job.status !== "failed") {
+  // Allow dismissing any non-active job. The dashboard page only surfaces
+  // `failed` status jobs, so whatever we get here should be dismissable.
+  if (job.status === "running" || job.status === "pending") {
     return NextResponse.json(
-      { error: "Only failed jobs can be dismissed." },
+      { error: "Job is still in progress and cannot be dismissed yet." },
       { status: 400 }
     );
   }

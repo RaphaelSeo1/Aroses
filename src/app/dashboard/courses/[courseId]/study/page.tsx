@@ -154,12 +154,14 @@ export default async function StudyPage({ params, searchParams }: Props) {
   if (hasNewCourse && payload) {
     const { data: groupsOrder } = await supabase
       .from("exam_groups")
-      .select("id")
+      .select("id, name")
       .eq("course_id", courseRow.id)
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
 
-    const examGroupTabOrder = (groupsOrder ?? []).map((g) => g.id);
+    const examGroupRows = (groupsOrder ?? []) as { id: string; name: string }[];
+    const examGroupTabOrder = examGroupRows.map((g) => g.id);
+    const examGroupNameById = new Map(examGroupRows.map((g) => [g.id, g.name]));
 
     const { data: allMaterials } = await supabase
       .from("study_materials")
@@ -196,11 +198,14 @@ export default async function StudyPage({ params, searchParams }: Props) {
 
     sidebarOutlines = outlineRows.map((r) => {
       const p = r.course_payload as CoursePayload;
+      const egId = typeof r.exam_group_id === "string" ? r.exam_group_id : undefined;
       return {
         materialId: r.id,
         fileName: displayMaterialSectionLabel(r.file_name),
         modules: p.modules.map((m) => ({ id: m.id, title: m.title })),
         completedModuleIds: compByMaterial.get(r.id) ?? [],
+        examGroupId: egId,
+        examGroupName: egId ? (examGroupNameById.get(egId) ?? undefined) : undefined,
       };
     });
   }

@@ -701,36 +701,51 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
 
   const t0 = Date.now();
 
-  let buf: Buffer;
-  try {
-    const { data: blob, error: dlErr } = await admin.storage
-      .from(STUDY_PDF_INGEST_BUCKET)
-      .download(storagePath);
+  // Retry up to 4 times with short delays — Supabase Storage can have
+  // brief propagation lag right after upload, especially on cold paths.
+  const DL_DELAYS_MS = [1_500, 3_000, 6_000];
+  let buf: Buffer | null = null;
+  for (let attempt = 0; attempt <= DL_DELAYS_MS.length; attempt++) {
+    try {
+      const { data: blob, error: dlErr } = await admin.storage
+        .from(STUDY_PDF_INGEST_BUCKET)
+        .download(storagePath);
 
-    if (dlErr || !blob) {
-      console.error("[pdf-ingest] download", jobId, dlErr);
+      if (dlErr || !blob) {
+        if (attempt < DL_DELAYS_MS.length) {
+          await sleep(DL_DELAYS_MS[attempt]);
+          continue;
+        }
+        console.error("[pdf-ingest] download failed after retries", jobId, dlErr);
+        await failJobUnlessStale(
+          admin,
+          jobId,
+          storagePath,
+          "Could not read the uploaded PDF from storage. Try uploading again.",
+          claimedEpoch
+        );
+        return;
+      }
+
+      buf = Buffer.from(await blob.arrayBuffer());
+      break;
+    } catch (e) {
+      if (attempt < DL_DELAYS_MS.length) {
+        await sleep(DL_DELAYS_MS[attempt]);
+        continue;
+      }
+      console.error("[pdf-ingest] download unexpected after retries", jobId, e);
       await failJobUnlessStale(
         admin,
         jobId,
         storagePath,
-        "Could not read the uploaded PDF from storage. Try uploading again.",
+        "Could not read the uploaded PDF from storage.",
         claimedEpoch
       );
       return;
     }
-
-    buf = Buffer.from(await blob.arrayBuffer());
-  } catch (e) {
-    console.error("[pdf-ingest] download unexpected", jobId, e);
-    await failJobUnlessStale(
-      admin,
-      jobId,
-      storagePath,
-      "Could not read the uploaded PDF from storage.",
-      claimedEpoch
-    );
-    return;
   }
+  if (!buf) return; // all retries failed — already failed the job above
 
   await touchJobProgress(admin, jobId);
 

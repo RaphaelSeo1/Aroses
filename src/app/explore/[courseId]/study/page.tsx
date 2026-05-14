@@ -19,7 +19,7 @@ import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { createClient } from "@/lib/supabase/server";
 import {
-  fetchExamGroupIdsOrderForPublicExplore,
+  fetchExamGroupsForSidebar,
   fetchStudyMaterialForPublicExplore,
   fetchStudyMaterialsOutlineRowsForPublicExplore,
 } from "@/lib/supabase/fetch-explore-study-material";
@@ -178,15 +178,13 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
 
   let sidebarOutlines: SidebarMaterialOutline[] = [];
   if (hasNewCourse && payload) {
-    const examGroupTabOrder = await fetchExamGroupIdsOrderForPublicExplore(
-      supabase,
-      courseRow.id
-    );
+    const [examGroups, allMaterials] = await Promise.all([
+      fetchExamGroupsForSidebar(supabase, courseRow.id),
+      fetchStudyMaterialsOutlineRowsForPublicExplore(supabase, courseRow.id),
+    ]);
 
-    const allMaterials = await fetchStudyMaterialsOutlineRowsForPublicExplore(
-      supabase,
-      courseRow.id
-    );
+    const examGroupTabOrder = examGroups.map((g) => g.id);
+    const examGroupNameById = new Map(examGroups.map((g) => [g.id, g.name]));
 
     const outlineCandidates = allMaterials
       .filter((r) => {
@@ -221,11 +219,14 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
 
     sidebarOutlines = outlineRows.map((r) => {
       const p = r.course_payload as CoursePayload;
+      const egId = typeof r.exam_group_id === "string" && r.exam_group_id ? r.exam_group_id : undefined;
       return {
         materialId: r.id,
         fileName: displayMaterialSectionLabel(r.file_name),
         modules: p.modules.map((m) => ({ id: m.id, title: m.title })),
         completedModuleIds: compByMaterial.get(r.id) ?? [],
+        examGroupId: egId,
+        examGroupName: egId ? (examGroupNameById.get(egId) ?? undefined) : undefined,
       };
     });
   }

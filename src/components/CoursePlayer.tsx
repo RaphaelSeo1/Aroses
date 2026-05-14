@@ -793,7 +793,35 @@ export function CoursePlayer({
               </p>
             )}
             {showAccordion
-              ? sidebarOutlines.map((outline) => {
+              ? (() => {
+                  // Group materials by section. Preserve insertion order of sections.
+                  const hasSections = sidebarOutlines.some((o) => o.examGroupId);
+                  if (!hasSections) {
+                    // No section data — render flat list as before
+                    return sidebarOutlines.map((outline) => renderMaterialCard(outline));
+                  }
+
+                  // Build ordered section groups
+                  const seen = new Map<string, { name: string; outlines: typeof sidebarOutlines }>();
+                  for (const o of sidebarOutlines) {
+                    const key = o.examGroupId ?? "__none__";
+                    const name = o.examGroupName ?? (o.examGroupId ? "Section" : "Other");
+                    if (!seen.has(key)) seen.set(key, { name, outlines: [] });
+                    seen.get(key)!.outlines.push(o);
+                  }
+
+                  return Array.from(seen.entries()).map(([groupKey, { name, outlines }]) => (
+                    <div key={groupKey} className="space-y-2">
+                      <p className="px-1 pt-1 text-[10px] font-bold uppercase tracking-wider text-brand dark:text-brand-soft">
+                        {name}
+                      </p>
+                      <div className="space-y-2">
+                        {outlines.map((outline) => renderMaterialCard(outline))}
+                      </div>
+                    </div>
+                  ));
+
+                  function renderMaterialCard(outline: (typeof sidebarOutlines)[number]) {
                   const doneCount = outline.completedModuleIds.length;
                   const totalM = outline.modules.length;
                   const isOpenBuild = outline.materialId === materialId;
@@ -984,7 +1012,8 @@ export function CoursePlayer({
                       ) : null}
                     </div>
                   );
-                })
+                  } // end renderMaterialCard
+                })()
               : course.modules.map((mod) => {
                   const done = completed.has(mod.id);
                   const active = mod.id === activeModuleId;

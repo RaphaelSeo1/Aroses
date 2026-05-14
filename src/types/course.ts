@@ -60,4 +60,7 @@ export type SidebarMaterialOutline = {
   fileName: string;
   modules: { id: number; title: string }[];
   completedModuleIds: number[];
+  /** The exam-group (section) this material belongs to — used to render section headers in the sidebar. */
+  examGroupId?: string;
+  examGroupName?: string;
 };

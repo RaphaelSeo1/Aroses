@@ -124,10 +124,19 @@ export async function fetchExamGroupIdsOrderForPublicExplore(
   supabase: SupabaseClient,
   courseId: string
 ): Promise<string[]> {
+  const groups = await fetchExamGroupsForSidebar(supabase, courseId);
+  return groups.map((g) => g.id);
+}
+
+/** Ordered exam groups with names for sidebar section headers (RLS or admin fallback). */
+export async function fetchExamGroupsForSidebar(
+  supabase: SupabaseClient,
+  courseId: string
+): Promise<{ id: string; name: string }[]> {
   const run = (client: SupabaseClient) =>
     client
       .from("exam_groups")
-      .select("id")
+      .select("id, name")
       .eq("course_id", courseId)
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
@@ -137,8 +146,8 @@ export async function fetchExamGroupIdsOrderForPublicExplore(
     console.error(error);
     return [];
   }
-  const ids = (data ?? []).map((r) => r.id as string);
-  if (ids.length > 0) return ids;
+  const rows = (data ?? []) as { id: string; name: string }[];
+  if (rows.length > 0) return rows;
 
   const admin = createAdminClient();
   if (!admin) return [];
@@ -148,5 +157,5 @@ export async function fetchExamGroupIdsOrderForPublicExplore(
     console.error(ae);
     return [];
   }
-  return (ad ?? []).map((r) => r.id as string);
+  return (ad ?? []) as { id: string; name: string }[];
 }

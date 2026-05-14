@@ -581,9 +581,14 @@ export function ExamGroupsPanel({
   async function dismissFailedJob(jobId: string) {
     setDismissedJobIds((prev) => new Set([...prev, jobId]));
     try {
-      await fetch(`/api/process-pdf/jobs/${jobId}/dismiss`, { method: "DELETE" });
+      const res = await fetch(`/api/process-pdf/jobs/${jobId}/dismiss`, { method: "DELETE" });
+      if (!res.ok) {
+        // If the server rejected the dismiss (e.g. status changed), force a full
+        // page reload so the banner reflects the true server state.
+        router.refresh();
+      }
     } catch {
-      // Best-effort — already hidden locally
+      // Best-effort — already hidden locally; stale banner will clear on next refresh
     }
   }
   const [activeId, setActiveId] = useState(() => {
