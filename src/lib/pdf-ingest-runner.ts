@@ -134,6 +134,45 @@ async function touchJobProgress(
     .eq("id", jobId);
 }
 
+/**
+ * Soft cap on concurrent Anthropic outline calls per user. Without this, large
+ * batches (10+ PDFs) blow Anthropic's TPM/RPM, every call gets 429, and the
+ * SDK retries with 28-90s backoff — making the whole batch slower than serial.
+ * With this cap, outlines run in waves; live preview lands fast for the first
+ * wave and steadily for the rest instead of all stalling together.
+ *
+ * Counts only OTHER jobs (excludes `selfJobId`) whose `updated_at` is recent
+ * so dead invocations don't block forever. Bounded wait so the function never
+ * holds an invocation past Vercel's wall clock.
+ */
+async function waitForOutlineSlot(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  userId: string,
+  selfJobId: string,
+  selfEpoch: number
+): Promise<void> {
+  const MAX_CONCURRENT = 4;
+  const MAX_ITER = 40;
+  const SLEEP_MS = 2_500;
+  const FRESH_WINDOW_MS = 90_000;
+
+  for (let i = 0; i < MAX_ITER; i++) {
+    if (await isStaleIngestEpoch(admin, selfJobId, selfEpoch)) return;
+    const cutoff = new Date(Date.now() - FRESH_WINDOW_MS).toISOString();
+    const { count } = await admin
+      .from("pdf_ingest_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("ingest_phase", "planning_outline")
+      .gt("updated_at", cutoff)
+      .neq("id", selfJobId);
+    if ((count ?? 0) < MAX_CONCURRENT) return;
+    await touchJobProgress(admin, selfJobId);
+    await sleep(SLEEP_MS);
+  }
+  // Fall through after ~100s wait — proceed and let the SDK retry handle it.
+}
+
 async function pushJobStreamPreview(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
@@ -826,6 +865,14 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     })
     .eq("id", jobId)
     .eq("ingest_epoch", claimedEpoch);
+
+  // Throttle concurrent outline AI calls per user — without this, 10+ PDF
+  // batches all hit Anthropic at the same instant and every call ends up in
+  // 28-90s rate-limit backoff loops.
+  await waitForOutlineSlot(admin, claimed.user_id, jobId, claimedEpoch);
+  if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+    return;
+  }
 
   let outline: CourseOutlinePayload;
   const streamSink = createPdfStreamSink(admin, jobId);
