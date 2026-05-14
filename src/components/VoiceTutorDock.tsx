@@ -58,11 +58,25 @@ type Props = {
 function pickMimeType(): string | undefined {
   if (typeof MediaRecorder === "undefined") return undefined;
   const MR = MediaRecorder;
-  if (MR.isTypeSupported("audio/webm;codecs=opus")) {
-    return "audio/webm;codecs=opus";
+  // Prefer opus-in-webm (Chrome/Firefox), fall back to mp4/aac (Safari/iOS)
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4;codecs=mp4a.40.2",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+  ];
+  for (const t of candidates) {
+    if (MR.isTypeSupported(t)) return t;
   }
-  if (MR.isTypeSupported("audio/webm")) return "audio/webm";
   return undefined;
+}
+
+function mimeTypeToExtension(mimeType: string | undefined): string {
+  if (!mimeType) return "webm";
+  if (mimeType.startsWith("audio/mp4")) return "m4a";
+  if (mimeType.startsWith("audio/ogg")) return "ogg";
+  return "webm";
 }
 
 function stopPlayback(audioRef: MutableRefObject<HTMLAudioElement | null>) {
@@ -429,23 +443,26 @@ export function VoiceTutorDock({
   const transcribeBlob = useCallback(
     async (blob: Blob): Promise<string | null> => {
       if (blob.size < 256) return null;
+      const actualType = blob.type || "audio/webm";
+      const ext = mimeTypeToExtension(actualType);
       const fd = new FormData();
       fd.append("materialId", materialId);
-      fd.append(
-        "file",
-        new File([blob], "speech.webm", {
-          type: blob.type || "audio/webm",
-        })
-      );
+      fd.append("file", new File([blob], `speech.${ext}`, { type: actualType }));
       try {
         const r = await fetch("/api/voice-tutor/transcribe", {
           method: "POST",
           body: fd,
         });
-        if (!r.ok) return null;
+        if (!r.ok) {
+          const j = (await r.json().catch(() => ({}))) as { error?: string };
+          const msg = typeof j.error === "string" ? j.error : "Transcription failed.";
+          setError(msg);
+          return null;
+        }
         const j = (await r.json()) as { text?: string };
         return typeof j.text === "string" ? j.text.trim() : null;
       } catch {
+        setError("Network error — check your connection and try again.");
         return null;
       }
     },
@@ -758,14 +775,11 @@ export function VoiceTutorDock({
       setError(null);
       if (liveModeRef.current) setLivePhase("thinking");
       try {
+        const actualType = blob.type || "audio/webm";
+        const ext = mimeTypeToExtension(actualType);
         const fd = new FormData();
         fd.append("materialId", materialId);
-        fd.append(
-          "file",
-          new File([blob], "speech.webm", {
-            type: blob.type || "audio/webm",
-          })
-        );
+        fd.append("file", new File([blob], `speech.${ext}`, { type: actualType }));
 
         const tr = await fetch("/api/voice-tutor/transcribe", {
           method: "POST",
