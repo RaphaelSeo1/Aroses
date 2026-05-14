@@ -151,9 +151,9 @@ async function waitForOutlineSlot(
   selfJobId: string,
   selfEpoch: number
 ): Promise<void> {
-  const MAX_CONCURRENT = 4;
-  const MAX_ITER = 40;
-  const SLEEP_MS = 2_500;
+  const MAX_CONCURRENT = 3;
+  const MAX_ITER = 80;
+  const SLEEP_MS = 1_000;
   const FRESH_WINDOW_MS = 90_000;
 
   for (let i = 0; i < MAX_ITER; i++) {
@@ -607,7 +607,7 @@ export async function runPdfIngestExpandOne(
               moduleIndex,
               offset === 0 ? createPdfStreamSink(admin, jobId) : undefined
             ),
-          { maxAttempts: 12 }
+          { maxAttempts: 16 }
         )
       )
     );
@@ -880,8 +880,11 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
     void touchJobProgress(admin, jobId);
   }, 25_000);
   try {
-    outline = await withAnthropicRateLimitRetries(jobId, "outline", () =>
-      generateCourseOutlineFromMaterial(text, streamSink)
+    outline = await withAnthropicRateLimitRetries(
+      jobId,
+      "outline",
+      () => generateCourseOutlineFromMaterial(text, streamSink),
+      { maxAttempts: 14 }
     );
   } catch (e) {
     if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
