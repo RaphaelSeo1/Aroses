@@ -576,6 +576,7 @@ export function ExamGroupsPanel({
   initialSectionId?: string;
 }) {
   const router = useRouter();
+  const [dismissedJobIds, setDismissedJobIds] = useState<Set<string>>(() => new Set());
   const [activeId, setActiveId] = useState(() => {
     if (
       initialSectionId &&
@@ -1132,14 +1133,14 @@ export function ExamGroupsPanel({
         )}
 
         {/* Failed jobs for the active section */}
-        {failedJobs.filter((j) => j.exam_group_id === activeId).length > 0 && (
+        {failedJobs.filter((j) => j.exam_group_id === activeId && !dismissedJobIds.has(j.id)).length > 0 && (
           <div className="mt-6 space-y-2">
             {failedJobs
-              .filter((j) => j.exam_group_id === activeId)
+              .filter((j) => j.exam_group_id === activeId && !dismissedJobIds.has(j.id))
               .map((j) => (
                 <div
                   key={j.id}
-                  className="flex flex-wrap items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/60 dark:bg-red-950/40"
+                  className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/60 dark:bg-red-950/40"
                 >
                   <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400">
                     <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
@@ -1153,6 +1154,16 @@ export function ExamGroupsPanel({
                       Re-upload this file below to try again.
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setDismissedJobIds((prev) => new Set([...prev, j.id]))}
+                    className="ml-auto shrink-0 rounded-lg p-1 text-red-400 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/40 dark:hover:text-red-200"
+                    aria-label="Dismiss"
+                  >
+                    <svg viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+                      <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+                    </svg>
+                  </button>
                 </div>
               ))}
           </div>
