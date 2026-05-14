@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { StudyingCourse } from "@/lib/load-dashboard-courses";
 
 export type DashboardCourse = {
@@ -148,164 +148,242 @@ export function CourseDashboardList({
         </p>
       )}
       <ul className={density === "compact" ? "grid gap-4 sm:grid-cols-2 lg:grid-cols-3" : "grid gap-5 sm:grid-cols-2 lg:grid-cols-3"}>
-        {courses.map((c, index) => {
-          const isEditing = editingId === c.id;
-          const busy = busyId === c.id || busyId === "__reorder__";
-          const canManage = c.user_id === viewerUserId;
-
-          return (
-            <li key={c.id}>
-              <div
-                className={
-                  density === "compact"
-                    ? "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 pt-6 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50"
-                    : "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 pt-7 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50"
-                }
-              >
-                <div
-                  className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-red-500 to-brand-soft opacity-90"
-                  aria-hidden
-                />
-                {isEditing ? (
-                  <div className="flex flex-1 flex-col gap-3 px-6 pb-6">
-                    <label className="sr-only" htmlFor={`edit-title-${c.id}`}>
-                      Title
-                    </label>
-                    <input
-                      id={`edit-title-${c.id}`}
-                      value={draftTitle}
-                      onChange={(e) => setDraftTitle(e.target.value)}
-                      className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-base font-semibold text-zinc-900 outline-none focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-                    />
-                    <label
-                      className="sr-only"
-                      htmlFor={`edit-desc-${c.id}`}
-                    >
-                      Description
-                    </label>
-                    <textarea
-                      id={`edit-desc-${c.id}`}
-                      value={draftDescription}
-                      onChange={(e) => setDraftDescription(e.target.value)}
-                      rows={3}
-                      className="resize-y rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-                      placeholder="Description (optional)"
-                    />
-                    <div className="mt-auto flex flex-wrap gap-2 pt-2">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void saveEdit(c.id)}
-                        className="rounded-full bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover disabled:opacity-50 dark:bg-brand"
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={cancelEdit}
-                        className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-900"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div
-                      className={`flex flex-1 flex-col gap-2 ${density === "compact" ? "px-5" : "px-6"} pt-0 ${canManage ? "pb-1" : density === "compact" ? "pb-5" : "pb-6"}`}
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Link
-                          href={`/dashboard/courses/${c.id}`}
-                          className={
-                            density === "compact"
-                              ? "text-base font-semibold tracking-tight text-zinc-900 underline-offset-2 transition group-hover:text-brand dark:text-zinc-50 dark:group-hover:text-brand-soft"
-                              : "text-lg font-semibold tracking-tight text-zinc-900 underline-offset-2 transition group-hover:text-brand dark:text-zinc-50 dark:group-hover:text-brand-soft"
-                          }
-                        >
-                          {c.title}
-                        </Link>
-                        {c.is_public ? (
-                          <span className="rounded-full border border-emerald-200/80 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
-                            On Explore
-                          </span>
-                        ) : null}
-                      </div>
-                      {c.description ? (
-                        <p className="line-clamp-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                          {c.description}
-                        </p>
-                      ) : (
-                        <p className="text-sm italic text-zinc-500">
-                          No description
-                        </p>
-                      )}
-                      <Link
-                        href={`/dashboard/courses/${c.id}`}
-                        className={
-                          density === "compact"
-                            ? "mt-3 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-3.5 py-1.5 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
-                            : "mt-4 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-4 py-2 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
-                        }
-                      >
-                        Open course
-                        <span aria-hidden className="transition group-hover:translate-x-0.5">
-                          →
-                        </span>
-                      </Link>
-                    </div>
-
-                    {canManage ? (
-                      <div className="mx-6 mb-6 mt-5 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-4 dark:border-zinc-800">
-                        <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                          Order
-                        </span>
-                        <button
-                          type="button"
-                          disabled={busy || index === 0}
-                          onClick={() => void reorder(index, index - 1)}
-                          className="rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                          title="Move up"
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy || index >= courses.length - 1}
-                          onClick={() => void reorder(index, index + 1)}
-                          className="rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                          title="Move down"
-                        >
-                          ↓
-                        </button>
-                        <span className="mx-1 h-4 w-px bg-zinc-200 dark:bg-zinc-700" aria-hidden />
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => startEdit(c)}
-                          className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void removeCourse(c.id, c.title)}
-                          className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    ) : null}
-                  </>
-                )}
-              </div>
-            </li>
-          );
-        })}
+        {courses.map((c, index) => (
+          <CourseCard
+            key={c.id}
+            course={c}
+            index={index}
+            total={courses.length}
+            density={density}
+            viewerUserId={viewerUserId}
+            busy={busyId === c.id || busyId === "__reorder__"}
+            editingId={editingId}
+            draftTitle={draftTitle}
+            draftDescription={draftDescription}
+            setDraftTitle={setDraftTitle}
+            setDraftDescription={setDraftDescription}
+            onStartEdit={startEdit}
+            onSaveEdit={saveEdit}
+            onCancelEdit={cancelEdit}
+            onReorder={reorder}
+            onRemove={removeCourse}
+          />
+        ))}
       </ul>
     </div>
+  );
+}
+
+function CourseCard({
+  course: c,
+  index,
+  total,
+  density,
+  viewerUserId,
+  busy,
+  editingId,
+  draftTitle,
+  draftDescription,
+  setDraftTitle,
+  setDraftDescription,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onReorder,
+  onRemove,
+}: {
+  course: DashboardCourse;
+  index: number;
+  total: number;
+  density: "comfortable" | "compact";
+  viewerUserId: string;
+  busy: boolean;
+  editingId: string | null;
+  draftTitle: string;
+  draftDescription: string;
+  setDraftTitle: (v: string) => void;
+  setDraftDescription: (v: string) => void;
+  onStartEdit: (c: DashboardCourse) => void;
+  onSaveEdit: (id: string) => void;
+  onCancelEdit: () => void;
+  onReorder: (from: number, to: number) => void;
+  onRemove: (id: string, title: string) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const isEditing = editingId === c.id;
+  const canManage = c.user_id === viewerUserId;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [menuOpen]);
+
+  return (
+    <li>
+      <div
+        className={
+          density === "compact"
+            ? "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 pt-6 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50"
+            : "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 pt-7 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50"
+        }
+      >
+        <div
+          className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-red-500 to-brand-soft opacity-90"
+          aria-hidden
+        />
+
+        {/* ⋯ menu */}
+        {canManage && !isEditing && (
+          <div ref={menuRef} className="absolute right-3 top-4 z-10">
+            <button
+              type="button"
+              onClick={() => setMenuOpen((p) => !p)}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+              aria-label="Course options"
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                <circle cx="4" cy="10" r="1.5" />
+                <circle cx="10" cy="10" r="1.5" />
+                <circle cx="16" cy="10" r="1.5" />
+              </svg>
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-8 w-44 overflow-hidden rounded-xl border border-zinc-200 bg-white py-1 shadow-lg shadow-zinc-900/10 dark:border-zinc-700 dark:bg-zinc-900">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => { setMenuOpen(false); onStartEdit(c); }}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 shrink-0 text-zinc-400">
+                    <path d="M13.586 3.586a2 2 0 1 1 2.828 2.828l-.793.793-2.828-2.828.793-.793ZM11.379 5.793 3 14.172V17h2.828l8.38-8.379-2.83-2.828Z" />
+                  </svg>
+                  Edit title &amp; description
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || index === 0}
+                  onClick={() => { setMenuOpen(false); onReorder(index, index - 1); }}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 shrink-0 text-zinc-400">
+                    <path fillRule="evenodd" d="M14.77 12.79a.75.75 0 0 1-1.06-.02L10 8.832 6.29 12.77a.75.75 0 1 1-1.08-1.04l4.25-4.5a.75.75 0 0 1 1.08 0l4.25 4.5a.75.75 0 0 1-.02 1.06Z" clipRule="evenodd" />
+                  </svg>
+                  Move up
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || index >= total - 1}
+                  onClick={() => { setMenuOpen(false); onReorder(index, index + 1); }}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 shrink-0 text-zinc-400">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clipRule="evenodd" />
+                  </svg>
+                  Move down
+                </button>
+                <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => { setMenuOpen(false); onRemove(c.id, c.title); }}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-red-600 hover:bg-red-50 disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                >
+                  <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 shrink-0">
+                    <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 3.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clipRule="evenodd" />
+                  </svg>
+                  Delete course
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {isEditing ? (
+          <div className="flex flex-1 flex-col gap-3 px-6 pb-6">
+            <label className="sr-only" htmlFor={`edit-title-${c.id}`}>Title</label>
+            <input
+              id={`edit-title-${c.id}`}
+              value={draftTitle}
+              onChange={(e) => setDraftTitle(e.target.value)}
+              className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-base font-semibold text-zinc-900 outline-none focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+            />
+            <label className="sr-only" htmlFor={`edit-desc-${c.id}`}>Description</label>
+            <textarea
+              id={`edit-desc-${c.id}`}
+              value={draftDescription}
+              onChange={(e) => setDraftDescription(e.target.value)}
+              rows={3}
+              className="resize-y rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+              placeholder="Description (optional)"
+            />
+            <div className="mt-auto flex flex-wrap gap-2 pt-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onSaveEdit(c.id)}
+                className="rounded-full bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover disabled:opacity-50 dark:bg-brand"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onCancelEdit}
+                className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-900"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className={`flex flex-1 flex-col gap-2 ${density === "compact" ? "px-5 pb-6" : "px-6 pb-7"} pt-0`}>
+            <div className="flex flex-wrap items-center gap-2 pr-8">
+              <Link
+                href={`/dashboard/courses/${c.id}`}
+                className={
+                  density === "compact"
+                    ? "text-base font-semibold tracking-tight text-zinc-900 transition group-hover:text-brand dark:text-zinc-50 dark:group-hover:text-brand-soft"
+                    : "text-lg font-semibold tracking-tight text-zinc-900 transition group-hover:text-brand dark:text-zinc-50 dark:group-hover:text-brand-soft"
+                }
+              >
+                {c.title}
+              </Link>
+              {c.is_public ? (
+                <span className="rounded-full border border-emerald-200/80 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
+                  On Explore
+                </span>
+              ) : null}
+            </div>
+            {c.description ? (
+              <p className="line-clamp-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                {c.description}
+              </p>
+            ) : (
+              <p className="text-sm italic text-zinc-500">No description</p>
+            )}
+            <Link
+              href={`/dashboard/courses/${c.id}`}
+              className={
+                density === "compact"
+                  ? "mt-3 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-3.5 py-1.5 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
+                  : "mt-4 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-4 py-2 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
+              }
+            >
+              Open course
+              <span aria-hidden className="transition group-hover:translate-x-0.5">→</span>
+            </Link>
+          </div>
+        )}
+      </div>
+    </li>
   );
 }
 
