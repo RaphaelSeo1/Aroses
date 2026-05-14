@@ -541,9 +541,14 @@ function outlineMaxTokens(profile: CourseBuildProfile): number {
   return clampInt(envInt("COURSE_FULL_OUTLINE_MAX_TOKENS", 10_240), 4096, 16_384);
 }
 
+function selfStudyBlock(studyContext: string): string {
+  return `\n=== LEARNER CONTEXT (self-study mode) ===\nThe student described their study situation as follows. Use this to calibrate the ENTIRE course — depth, focus, pacing, and terminology:\n"${studyContext}"\nApply this context throughout: adjust module emphasis, skip or compress topics they already know, expand areas they are struggling with, and use the exam timeline or goal if one is mentioned.\n=== END LEARNER CONTEXT ===\n`;
+}
+
 function outlineInstruction(
   materialText: string,
-  profile: CourseBuildProfile
+  profile: CourseBuildProfile,
+  studyContext?: string
 ): string {
   let moduleCount: string;
   let maxLessonTitles: number;
@@ -566,7 +571,7 @@ function outlineInstruction(
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
-
+${studyContext ? selfStudyBlock(studyContext) : ""}
 ${moduleCount}
 Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to ${maxLessonTitles}** short strings — concise titles only, under 100 characters each, no pasted paragraphs). For dense excerpts, use many distinct titles (up to the max) so each major idea can get its own lesson later.
 
@@ -611,7 +616,8 @@ function moduleInstruction(
   materialText: string,
   outline: CourseOutlinePayload,
   moduleIndex: number,
-  profile: CourseBuildProfile
+  profile: CourseBuildProfile,
+  studyContext?: string
 ): string {
   const stub = outline.modules[moduleIndex];
   const n = outline.modules.length;
@@ -634,7 +640,7 @@ function moduleInstruction(
           : `For EACH lesson: include key_terms (term+definition) and examples (strings).`;
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. Module title **must be** ${JSON.stringify(stub.title)}.
-
+${studyContext ? selfStudyBlock(studyContext) : ""}
 Create one full module object: lessons (one per planned lesson title below, in order — same count as lesson_titles, each with rich "content", "key_terms", "examples"), plus quiz.
 
 Planned lesson titles for this module: ${titles}.
@@ -818,7 +824,8 @@ async function ensureModuleLessonFields(
 /** Phase 1 of chunked PDF ingest — small JSON, usually finishes quickly. */
 export async function generateCourseOutlineFromMaterial(
   materialText: string,
-  streamSink?: PdfIngestStreamSink
+  streamSink?: PdfIngestStreamSink,
+  studyContext?: string
 ): Promise<CourseOutlinePayload> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -836,7 +843,7 @@ export async function generateCourseOutlineFromMaterial(
     materialText,
     outlineMaterialCharLimit(profile)
   );
-  const instruction = outlineInstruction(trimmed, profile);
+  const instruction = outlineInstruction(trimmed, profile, studyContext);
 
   const maxAttempts =
     profile === "express" || profile === "fast" || profile === "balanced"
@@ -885,7 +892,8 @@ export async function generateCourseModuleFromMaterial(
   materialText: string,
   outline: CourseOutlinePayload,
   moduleIndex: number,
-  streamSink?: PdfIngestStreamSink
+  streamSink?: PdfIngestStreamSink,
+  studyContext?: string
 ): Promise<CourseModule> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -903,7 +911,7 @@ export async function generateCourseModuleFromMaterial(
   });
 
   const trimmed = truncateMaterial(materialText, materialCharLimit(profile));
-  const instruction = moduleInstruction(trimmed, outline, moduleIndex, profile);
+  const instruction = moduleInstruction(trimmed, outline, moduleIndex, profile, studyContext);
 
   const maxAttempts =
     profile === "express" || profile === "fast"

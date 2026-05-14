@@ -88,8 +88,11 @@ function buildFullCourseContext(payload: CoursePayload): string {
   return s.slice(0, 180_000);
 }
 
-function buildVoiceSystem(contextText: string): string {
-  return `You are ${AI_ASSISTANT_NAME}, the student's voice tutor inside ${APP_NAME}. The student is TALKING TO YOU OUT LOUD and your reply will be SPOKEN BACK to them via text-to-speech. Write like a real person speaks — not like a written essay or chatbot.
+function buildVoiceSystem(contextText: string, studyContext?: string): string {
+  const selfStudySection = studyContext
+    ? `\nSTUDENT BACKGROUND (they told us this when they started — use it to calibrate every reply):\n"${studyContext}"\n`
+    : "";
+  return `You are ${AI_ASSISTANT_NAME}, the student's voice tutor inside ${APP_NAME}. The student is TALKING TO YOU OUT LOUD and your reply will be SPOKEN BACK to them via text-to-speech. Write like a real person speaks — not like a written essay or chatbot.${selfStudySection}
 
 VOICE STYLE (very important):
 - Start EVERY reply with a short, casual lead-in before any real content. Vary it so it never sounds canned. Examples: "Okay so,", "Yeah, so", "Hmm, let me think,", "Right, basically,", "Oh — good one, so", "Mm, alright,", "Honestly,", "Wait, okay so", "You know what,", "So like,", "Alright, so".
@@ -114,7 +117,8 @@ ${contextText}
 
 export async function* streamVoiceReply(
   contextText: string,
-  messages: StudyChatTurn[]
+  messages: StudyChatTurn[],
+  studyContext?: string
 ): AsyncGenerator<string, void, void> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -126,7 +130,7 @@ export async function* streamVoiceReply(
   const stream = anthropic.messages.stream({
     model: MODEL,
     max_tokens: 500,
-    system: buildVoiceSystem(contextText),
+    system: buildVoiceSystem(contextText, studyContext),
     messages: messages.map((m) => ({
       role: m.role,
       content: m.content,

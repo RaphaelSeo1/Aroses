@@ -19,10 +19,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const b = body as { title?: string; description?: string };
+  const b = body as {
+    title?: string;
+    description?: string;
+    is_self_study?: boolean;
+    study_context?: string;
+  };
   const title = typeof b.title === "string" ? b.title.trim() : "";
   const description =
     typeof b.description === "string" ? b.description.trim() : "";
+  const isSelfStudy = Boolean(b.is_self_study);
+  const studyContext =
+    typeof b.study_context === "string" && b.study_context.trim().length > 0
+      ? b.study_context.trim().slice(0, 4000)
+      : null;
 
   if (title.length < 2) {
     return NextResponse.json(
@@ -49,6 +59,8 @@ export async function POST(request: Request) {
       title,
       description,
       sort_order: nextOrder,
+      is_self_study: isSelfStudy,
+      ...(studyContext ? { study_context: studyContext } : {}),
     })
     .select("id")
     .single();

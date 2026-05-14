@@ -122,6 +122,21 @@ export async function POST(request: Request) {
     .eq("id", b.materialId)
     .maybeSingle();
 
+  // Fetch self-study context from the parent course (nullable).
+  let studyContext: string | undefined;
+  const resolvedCourseId =
+    typeof row?.course_id === "string" ? row.course_id : null;
+  if (resolvedCourseId) {
+    const { data: courseCtxRow } = await supabase
+      .from("courses")
+      .select("study_context")
+      .eq("id", resolvedCourseId)
+      .maybeSingle();
+    const raw = courseCtxRow?.study_context;
+    studyContext =
+      typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : undefined;
+  }
+
   if (fetchErr || !row) {
     return NextResponse.json({ error: "Material not found" }, { status: 404 });
   }
@@ -220,7 +235,7 @@ export async function POST(request: Request) {
       if (detectedAction) send("action", detectedAction);
 
       try {
-        for await (const delta of streamVoiceReply(contextText, messages)) {
+        for await (const delta of streamVoiceReply(contextText, messages, studyContext)) {
           send("text", { delta });
         }
         send("done", {});

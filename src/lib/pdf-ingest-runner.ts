@@ -459,6 +459,19 @@ export async function runPdfIngestExpandOne(
     .eq("id", jobId)
     .maybeSingle();
 
+  // Fetch self-study context from the parent course (nullable).
+  let expandStudyContext: string | null = null;
+  if (job?.course_id) {
+    const { data: courseCtx } = await admin
+      .from("courses")
+      .select("study_context")
+      .eq("id", job.course_id)
+      .maybeSingle();
+    const raw = courseCtx?.study_context;
+    expandStudyContext =
+      typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+  }
+
   if (loadErr || !job) {
     return { kind: "failed", message: "Job not found." };
   }
@@ -571,7 +584,8 @@ export async function runPdfIngestExpandOne(
               job.ingest_source_text,
               outline,
               moduleIndex,
-              offset === 0 ? createPdfStreamSink(admin, jobId) : undefined
+              offset === 0 ? createPdfStreamSink(admin, jobId) : undefined,
+              expandStudyContext ?? undefined
             ),
           { maxAttempts: 16 }
         )
@@ -691,6 +705,20 @@ export async function runPdfIngestJob(
       "id, user_id, course_id, exam_group_id, storage_path, original_file_name, ingest_epoch"
     )
     .maybeSingle();
+
+  // Fetch course-level self-study context (nullable). Done after the claim so
+  // we don't delay the claim itself; the context is only needed at outline time.
+  let courseStudyContext: string | null = null;
+  if (claimed?.course_id) {
+    const { data: courseRow } = await admin
+      .from("courses")
+      .select("study_context")
+      .eq("id", claimed.course_id)
+      .maybeSingle();
+    const raw = courseRow?.study_context;
+    courseStudyContext =
+      typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+  }
 
   if (claimErr) {
     console.error("[pdf-ingest] claim", jobId, claimErr);
@@ -864,7 +892,12 @@ export async function runPdfIngestJob(
     outline = await withAnthropicRateLimitRetries(
       jobId,
       "outline",
-      () => generateCourseOutlineFromMaterial(text, streamSink),
+      () =>
+        generateCourseOutlineFromMaterial(
+          text,
+          streamSink,
+          courseStudyContext ?? undefined
+        ),
       { maxAttempts: 14 }
     );
   } catch (e) {

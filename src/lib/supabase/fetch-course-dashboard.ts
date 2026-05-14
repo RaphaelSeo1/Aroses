@@ -8,6 +8,8 @@ export type DashboardCourseRow = {
   description: string;
   created_at: string;
   is_public: boolean;
+  is_self_study?: boolean;
+  study_context?: string | null;
   /** Present when `025_app_super_admins.sql` is applied and you are in `app_super_admins`. */
   owner_user_id?: string;
 };
@@ -28,13 +30,15 @@ export async function fetchCourseForDashboard(
     description: string;
     created_at: string;
     is_public?: boolean | null;
+    is_self_study?: boolean | null;
+    study_context?: string | null;
   };
 
   let row: Row | null = null;
 
   const primary = await supabase
     .from("courses")
-    .select("id, user_id, title, description, created_at, is_public")
+    .select("id, user_id, title, description, created_at, is_public, is_self_study, study_context")
     .eq("id", courseId)
     .maybeSingle();
 
@@ -79,6 +83,8 @@ export async function fetchCourseForDashboard(
     description: rest.description,
     created_at: rest.created_at,
     is_public: Boolean(rest.is_public),
+    is_self_study: Boolean(rest.is_self_study),
+    study_context: rest.study_context ?? null,
     owner_user_id: ownerUserId,
   };
 }
