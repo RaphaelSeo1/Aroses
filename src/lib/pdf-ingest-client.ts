@@ -96,8 +96,29 @@ export type PdfIngestPhase =
   | "planning_outline"
   | "writing_modules";
 
+/** Per-attempt timeout for GET /jobs/:id. Stops the poll from hanging forever if a single fetch stalls. */
+const JOB_GET_TIMEOUT_MS = 45_000;
+
+function combinedSignal(outer: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; cancel: () => void } {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  const onOuterAbort = () => ctl.abort();
+  if (outer) {
+    if (outer.aborted) ctl.abort();
+    else outer.addEventListener("abort", onOuterAbort, { once: true });
+  }
+  return {
+    signal: ctl.signal,
+    cancel: () => {
+      clearTimeout(timer);
+      if (outer) outer.removeEventListener("abort", onOuterAbort);
+    },
+  };
+}
+
 /**
  * GET job row with retries (cold starts, rate limits, brief network loss).
+ * Each attempt has a hard timeout so a single hung fetch can't block polling forever.
  */
 async function fetchJobStatusWithRetry(
   jobId: string,
@@ -112,9 +133,16 @@ async function fetchJobStatusWithRetry(
       return { kind: "fatal", error: "Cancelled." };
     }
     let r: Response;
+    const attemptSignal = combinedSignal(signal, JOB_GET_TIMEOUT_MS);
     try {
-      r = await fetch(`/api/process-pdf/jobs/${jobId}`, { signal });
+      r = await fetch(`/api/process-pdf/jobs/${jobId}`, {
+        signal: attemptSignal.signal,
+        cache: "no-store",
+      });
+      attemptSignal.cancel();
     } catch {
+      attemptSignal.cancel();
+      if (signal?.aborted) return { kind: "fatal", error: "Cancelled." };
       await sleep(Math.min(12_000, 900 + attempt * 1_000));
       continue;
     }
@@ -158,23 +186,6 @@ async function fetchJobStatusWithRetry(
 /** Per-attempt timeout for /expand fetch. Slightly longer than Vercel maxDuration=300s. */
 const EXPAND_FETCH_TIMEOUT_MS = 320_000;
 
-function expandSignal(outer: AbortSignal | undefined): { signal: AbortSignal; cancel: () => void } {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), EXPAND_FETCH_TIMEOUT_MS);
-  const onOuterAbort = () => ctl.abort();
-  if (outer) {
-    if (outer.aborted) ctl.abort();
-    else outer.addEventListener("abort", onOuterAbort, { once: true });
-  }
-  return {
-    signal: ctl.signal,
-    cancel: () => {
-      clearTimeout(timer);
-      if (outer) outer.removeEventListener("abort", onOuterAbort);
-    },
-  };
-}
-
 /**
  * POST /expand with retries when Vercel returns 429 (org output-token-per-minute, etc.).
  * Each attempt has a hard timeout so hung server invocations don't block forever.
@@ -188,13 +199,14 @@ async function postProcessPdfExpand(
   for (let attempt = 0; attempt < 15; attempt++) {
     await expandFetchConcurrency.acquire();
     let r: Response;
-    const attemptSignal = expandSignal(signal);
+    const attemptSignal = combinedSignal(signal, EXPAND_FETCH_TIMEOUT_MS);
     try {
       r = await fetch("/api/process-pdf/expand", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId }),
         signal: attemptSignal.signal,
+        cache: "no-store",
       });
     } catch {
       attemptSignal.cancel();
