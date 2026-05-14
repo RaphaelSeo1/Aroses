@@ -34,6 +34,10 @@ export function CourseDashboardList({
   const [draftDescription, setDraftDescription] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
 
   // Drag-and-drop
   const [dragFrom, setDragFrom] = useState<number | null>(null);
@@ -53,6 +57,18 @@ export function CourseDashboardList({
   useEffect(() => {
     setCourses(initialCourses);
   }, [initialCourses]);
+
+  // Esc closes the delete-confirmation modal
+  useEffect(() => {
+    if (!pendingDelete) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && busyId !== pendingDelete?.id) {
+        setPendingDelete(null);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [pendingDelete, busyId]);
 
   function startEdit(c: DashboardCourse) {
     setListError(null);
@@ -93,11 +109,14 @@ export function CourseDashboardList({
     setBusyId(null);
   }
 
-  async function removeCourse(courseId: string, title: string) {
-    const ok = window.confirm(
-      `Delete "${title}"? All uploads, sections, and progress for this course will be removed. This cannot be undone.`
-    );
-    if (!ok) return;
+  function removeCourse(courseId: string, title: string) {
+    setListError(null);
+    setPendingDelete({ id: courseId, title });
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    const { id: courseId } = pendingDelete;
     setBusyId(courseId);
     setListError(null);
     try {
@@ -106,12 +125,15 @@ export function CourseDashboardList({
       if (!res.ok) {
         setListError(typeof body.error === "string" ? body.error : "Could not delete.");
         setBusyId(null);
+        setPendingDelete(null);
         return;
       }
       if (editingId === courseId) setEditingId(null);
+      setPendingDelete(null);
       router.refresh();
     } catch {
       setListError("Network error.");
+      setPendingDelete(null);
     }
     setBusyId(null);
   }
@@ -205,6 +227,77 @@ export function CourseDashboardList({
           />
         ))}
       </ul>
+
+      {/* ─── Delete confirmation modal ─────────────────────────────────────── */}
+      {pendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 px-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-course-title"
+          onClick={(e) => {
+            // Click on backdrop dismisses (but not on the modal itself)
+            if (e.target === e.currentTarget && busyId !== pendingDelete.id) {
+              setPendingDelete(null);
+            }
+          }}
+        >
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-950 sm:p-7">
+            <div className="flex items-start gap-4">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-red-50 dark:bg-red-950/40">
+                <svg
+                  className="h-5 w-5 text-red-600 dark:text-red-400"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  aria-hidden
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M8.485 3.495c.667-1.148 2.363-1.148 3.03 0l6.28 10.795c.673 1.158-.171 2.605-1.515 2.605H3.72c-1.344 0-2.188-1.447-1.515-2.605L8.485 3.495zM10 7a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 7zm0 8.25a.95.95 0 100-1.9.95.95 0 000 1.9z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2
+                  id="delete-course-title"
+                  className="text-lg font-semibold text-zinc-900 dark:text-zinc-50"
+                >
+                  Delete this course?
+                </h2>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                    &ldquo;{pendingDelete.title}&rdquo;
+                  </span>{" "}
+                  will be permanently deleted, along with all uploads, sections,
+                  generated lessons, quizzes, and progress.
+                </p>
+                <p className="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
+                  This cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setPendingDelete(null)}
+                disabled={busyId === pendingDelete.id}
+                className="inline-flex items-center justify-center rounded-full border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDelete()}
+                disabled={busyId === pendingDelete.id}
+                className="inline-flex items-center justify-center rounded-full bg-red-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-red-600/20 hover:bg-red-700 disabled:opacity-60 dark:bg-red-500 dark:hover:bg-red-600"
+              >
+                {busyId === pendingDelete.id ? "Deleting…" : "Delete course"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
