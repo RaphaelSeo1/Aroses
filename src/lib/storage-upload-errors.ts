@@ -70,7 +70,7 @@ export function describePdfIngestUploadFailure(message: string): string {
   }
 
   if (m.includes("payload too large") || m.includes("413")) {
-    return "PDF is too large for the configured storage limit (40 MB max).";
+    return "PDF is too large for the configured storage limit (150 MB max).";
   }
 
   return (

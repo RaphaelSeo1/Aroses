@@ -732,7 +732,7 @@ export async function runPdfIngestJob(jobId: string): Promise<void> {
       admin,
       jobId,
       storagePath,
-      "PDF is too large for this server (max 40 MB). Split the file or export fewer pages.",
+      "PDF is too large for this server (max 150 MB). Split the file or export fewer pages.",
       claimedEpoch
     );
     return;

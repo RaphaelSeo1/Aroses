@@ -225,7 +225,7 @@ export function CourseUploadForm({
         if (file.size > MAX_STUDY_PDF_BYTES) {
           return {
             ok: false,
-            failure: `${file.name}: PDF is too large (max 40 MB). Split the file or export fewer pages.`,
+            failure: `${file.name}: PDF is too large (max 150 MB). Split the file or export fewer pages.`,
           };
         }
 
