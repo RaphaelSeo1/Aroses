@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import Link from "next/link";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseCreatorOverview } from "@/components/CourseCreatorOverview";
 import { CourseVisibilityToggle } from "@/components/CourseVisibilityToggle";
@@ -8,6 +9,8 @@ import {
   type MaterialRow,
 } from "@/components/ExamGroupsPanel";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { SelfStudyContextCard } from "@/components/SelfStudyContextCard";
+import { ShareCourseButton } from "@/components/ShareCourseButton";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
@@ -51,7 +54,24 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
 
-  const groups: ExamGroupRow[] = groupsRaw ?? [];
+  let groups: ExamGroupRow[] = groupsRaw ?? [];
+
+  // For self-study courses, hide the section concept entirely by auto-creating
+  // a single default group ("My materials") so the upload form has somewhere
+  // to write to. The ExamGroupsPanel will render with just this one tab.
+  if (course.is_self_study && groups.length === 0) {
+    const { data: created } = await supabase
+      .from("exam_groups")
+      .insert({
+        course_id: course.id,
+        user_id: user.id,
+        name: "My materials",
+        sort_order: 0,
+      })
+      .select("id, name, sort_order")
+      .single();
+    if (created) groups = [created];
+  }
 
   const { data: materialsRaw } = await supabase
     .from("study_materials")
@@ -105,6 +125,8 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
     typeof course.owner_user_id === "string" &&
     course.owner_user_id !== user.id;
 
+  const isSelfStudy = Boolean(course.is_self_study);
+
   return (
     <>
       <AppHeader right={<HeaderNavLoggedIn />} />
@@ -117,38 +139,125 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
               owner.
             </p>
           ) : null}
-          <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-            Course workspace
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            {course.title}
-          </h1>
-          {course.description ? (
-            <p className="mt-4 leading-relaxed text-zinc-600 dark:text-zinc-400">
-              {course.description}
-            </p>
-          ) : null}
 
-          <CourseCreatorOverview
-            courseId={course.id}
-            uploadsCount={uploadsCount}
-            modulesTotal={modulesTotal}
-          />
+          {isSelfStudy ? (
+            <>
+              {/* ── Self Study header ───────────────────────────────────── */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                    <span>🎯</span> Self study
+                  </p>
+                  <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+                    {course.title}
+                  </h1>
+                  <p className="mt-1.5 text-sm text-zinc-500 dark:text-zinc-400">
+                    Private to you · not shown on Explore
+                  </p>
+                </div>
+                <ShareCourseButton courseId={course.id} accent="indigo" />
+              </div>
 
-          <div className="mt-10">
-            <CourseVisibilityToggle
-              courseId={course.id}
-              initialPublic={Boolean(course.is_public)}
-            />
-          </div>
+              {course.study_context ? (
+                <div className="mt-6">
+                  <SelfStudyContextCard
+                    courseId={course.id}
+                    initialContext={course.study_context}
+                  />
+                </div>
+              ) : null}
 
-          <ExamGroupsPanel
-            courseId={course.id}
-            groups={groups}
-            materials={materials}
-            failedJobs={failedJobs}
-            initialSectionId={sectionFromUrl ?? undefined}
-          />
+              {/* Quick stats — simplified, no "manage" framing */}
+              <div className="mt-6 grid grid-cols-2 gap-3">
+                <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
+                    PDFs uploaded
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                    {uploadsCount}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
+                    Lessons built
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                    {modulesTotal}
+                  </p>
+                </div>
+              </div>
+
+              {uploadsCount > 0 ? (
+                <div className="mt-4">
+                  <Link
+                    href={`/dashboard/courses/${course.id}/study`}
+                    className="inline-flex items-center justify-center rounded-full bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-600/20 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
+                  >
+                    Open study room →
+                  </Link>
+                </div>
+              ) : null}
+
+              {/* Upload area — single bucket, no section talk */}
+              <div className="mt-10">
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                  Your materials
+                </h2>
+                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                  Drop in the PDFs you want to study. The AI will turn them
+                  into lessons calibrated to your goal above.
+                </p>
+                <div className="mt-5">
+                  <ExamGroupsPanel
+                    courseId={course.id}
+                    groups={groups}
+                    materials={materials}
+                    failedJobs={failedJobs}
+                    initialSectionId={sectionFromUrl ?? undefined}
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* ── Standard public-course workspace ────────────────────── */}
+              <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+                Course workspace
+              </p>
+              <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
+                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+                  {course.title}
+                </h1>
+                <ShareCourseButton courseId={course.id} />
+              </div>
+              {course.description ? (
+                <p className="mt-4 leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  {course.description}
+                </p>
+              ) : null}
+
+              <CourseCreatorOverview
+                courseId={course.id}
+                uploadsCount={uploadsCount}
+                modulesTotal={modulesTotal}
+              />
+
+              <div className="mt-10">
+                <CourseVisibilityToggle
+                  courseId={course.id}
+                  initialPublic={Boolean(course.is_public)}
+                />
+              </div>
+
+              <ExamGroupsPanel
+                courseId={course.id}
+                groups={groups}
+                materials={materials}
+                failedJobs={failedJobs}
+                initialSectionId={sectionFromUrl ?? undefined}
+              />
+            </>
+          )}
         </div>
       </main>
     </>

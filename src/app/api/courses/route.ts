@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     is_self_study?: boolean;
     study_context?: string;
   };
-  const title = typeof b.title === "string" ? b.title.trim() : "";
+  let title = typeof b.title === "string" ? b.title.trim() : "";
   const description =
     typeof b.description === "string" ? b.description.trim() : "";
   const isSelfStudy = Boolean(b.is_self_study);
@@ -33,6 +33,16 @@ export async function POST(request: Request) {
     typeof b.study_context === "string" && b.study_context.trim().length > 0
       ? b.study_context.trim().slice(0, 4000)
       : null;
+
+  // Self-study sessions don't require a title; we generate a friendly default
+  // like "Self study · May 14" so the workspace header reads cleanly. The user
+  // can rename it later.
+  if (isSelfStudy && title.length < 2) {
+    title = `Self study · ${new Date().toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    })}`;
+  }
 
   if (title.length < 2) {
     return NextResponse.json(

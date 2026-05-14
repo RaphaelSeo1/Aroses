@@ -162,17 +162,13 @@ export default function NewCoursePage() {
     }
     setError(null);
     setLoading(true);
-    // Auto-generate a title from the first sentence / a short prefix
-    const shortTitle =
-      studyContext.trim().slice(0, 60).replace(/[.,!?…]+$/, "").trim() ||
-      "Self Study";
+    // Server picks a friendly default title ("Self study · May 14") when
+    // is_self_study=true — do NOT send the study_context as a title.
     try {
       const res = await fetch("/api/courses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: shortTitle,
-          description: "",
           is_self_study: true,
           study_context: studyContext.trim(),
         }),
