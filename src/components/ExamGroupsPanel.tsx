@@ -579,6 +579,11 @@ export function ExamGroupsPanel({
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+  const [groupRenameDraft, setGroupRenameDraft] = useState("");
+  const [groupRenameBusy, setGroupRenameBusy] = useState(false);
+  const [groupRenameError, setGroupRenameError] = useState<string | null>(null);
+  const groupRenameInputRef = useRef<HTMLInputElement>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(
     null
   );
@@ -728,6 +733,50 @@ export function ExamGroupsPanel({
       setMaterialError("Network error.");
     }
     setAutoRenameBusy(false);
+  }
+
+  function beginRenameGroup(g: ExamGroupRow) {
+    setGroupRenameError(null);
+    setRenamingGroupId(g.id);
+    setGroupRenameDraft(g.name);
+    setTimeout(() => groupRenameInputRef.current?.select(), 0);
+  }
+
+  function cancelRenameGroup() {
+    setRenamingGroupId(null);
+    setGroupRenameDraft("");
+    setGroupRenameError(null);
+  }
+
+  async function saveRenameGroup(e: React.FormEvent, groupId: string) {
+    e.preventDefault();
+    const name = groupRenameDraft.trim();
+    if (name.length < 1 || name.length > 120) {
+      setGroupRenameError("Name must be 1–120 characters.");
+      return;
+    }
+    setGroupRenameBusy(true);
+    setGroupRenameError(null);
+    try {
+      const res = await fetch(`/api/exam-groups/${groupId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setGroupRenameError(
+          typeof body.error === "string" ? body.error : "Could not rename."
+        );
+        setGroupRenameBusy(false);
+        return;
+      }
+      setRenamingGroupId(null);
+      router.refresh();
+    } catch {
+      setGroupRenameError("Network error.");
+    }
+    setGroupRenameBusy(false);
   }
 
   async function createGroup(e: React.FormEvent) {
@@ -968,29 +1017,83 @@ export function ExamGroupsPanel({
         )}
 
         <div
-          className="mt-6 flex gap-2 overflow-x-auto pb-1 scrollbar-thin"
+          className="mt-6 flex flex-wrap gap-2 pb-1"
           role="tablist"
         >
           {groups.map((g) => {
             const active = g.id === activeId;
+            const renaming = renamingGroupId === g.id;
+
+            if (renaming) {
+              return (
+                <form
+                  key={g.id}
+                  onSubmit={(e) => void saveRenameGroup(e, g.id)}
+                  className="flex items-center gap-1"
+                >
+                  <input
+                    ref={groupRenameInputRef}
+                    value={groupRenameDraft}
+                    onChange={(e) => setGroupRenameDraft(e.target.value)}
+                    disabled={groupRenameBusy}
+                    onKeyDown={(e) => { if (e.key === "Escape") cancelRenameGroup(); }}
+                    className="w-36 rounded-full border border-brand bg-white px-3 py-2 text-sm font-semibold text-zinc-900 outline-none focus:ring-2 focus:ring-brand/30 dark:border-brand-border dark:bg-zinc-900 dark:text-zinc-100"
+                    autoFocus
+                  />
+                  <button
+                    type="submit"
+                    disabled={groupRenameBusy}
+                    className="rounded-full bg-brand px-3 py-2 text-xs font-semibold text-white hover:bg-brand-hover disabled:opacity-50"
+                  >
+                    {groupRenameBusy ? "…" : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={groupRenameBusy}
+                    onClick={cancelRenameGroup}
+                    className="rounded-full border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    Cancel
+                  </button>
+                </form>
+              );
+            }
+
             return (
-              <button
-                key={g.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setActiveId(g.id)}
-                className={`shrink-0 rounded-full px-5 py-2.5 text-sm font-semibold transition ${
-                  active
-                    ? "bg-brand text-white shadow-md shadow-red-600/25 dark:bg-brand"
-                    : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                }`}
-              >
-                {g.name}
-              </button>
+              <div key={g.id} className="group/tab relative flex items-center">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setActiveId(g.id)}
+                  className={`shrink-0 rounded-full py-2.5 text-sm font-semibold transition ${
+                    active
+                      ? "bg-brand pl-5 pr-3 text-white shadow-md shadow-red-600/25 dark:bg-brand"
+                      : "bg-zinc-100 px-5 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  {g.name}
+                </button>
+                {active && (
+                  <button
+                    type="button"
+                    onClick={() => beginRenameGroup(g)}
+                    className="ml-1 mr-1 flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/20 hover:text-white"
+                    aria-label={`Rename ${g.name}`}
+                    title="Rename section"
+                  >
+                    <svg viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
+                      <path d="M11.013 2.513a1.75 1.75 0 0 1 2.475 2.474L6.226 12.25a2.75 2.75 0 0 1-.892.592l-2.585.95a.5.5 0 0 1-.634-.634l.95-2.585a2.75 2.75 0 0 1 .592-.892l7.356-7.168Z" />
+                    </svg>
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
+        {groupRenameError && (
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{groupRenameError}</p>
+        )}
 
         <div className="mt-8 border-t border-zinc-100 pt-8 dark:border-zinc-800">
           <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
