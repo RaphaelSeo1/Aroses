@@ -41,23 +41,38 @@ async function pageToText(pageData: PageData): Promise<string> {
   return text;
 }
 
+/** Process pages in parallel batches instead of one-by-one for much faster extraction. */
+const RENDER_BATCH_SIZE = 10;
+
 async function renderPageRange(
   doc: PdfDoc,
   fromInclusive: number,
   toInclusive: number,
   onEveryPages: { n: number; fn: () => Promise<void> } | undefined
 ): Promise<string> {
-  const parts: string[] = [];
+  const pageNums: number[] = [];
+  for (let p = fromInclusive; p <= toInclusive; p++) pageNums.push(p);
+
+  const parts: string[] = new Array(pageNums.length);
   let rendered = 0;
-  for (let p = fromInclusive; p <= toInclusive; p++) {
-    const page = await doc.getPage(p);
-    const t = await pageToText(page);
-    parts.push(t);
-    rendered++;
-    if (onEveryPages && rendered % onEveryPages.n === 0) {
-      await onEveryPages.fn();
+
+  for (let i = 0; i < pageNums.length; i += RENDER_BATCH_SIZE) {
+    const batch = pageNums.slice(i, i + RENDER_BATCH_SIZE);
+    const texts = await Promise.all(
+      batch.map(async (p) => {
+        const page = await doc.getPage(p);
+        return pageToText(page);
+      })
+    );
+    for (let j = 0; j < texts.length; j++) {
+      parts[i + j] = texts[j];
+      rendered++;
+      if (onEveryPages && rendered % onEveryPages.n === 0) {
+        await onEveryPages.fn();
+      }
     }
   }
+
   return parts.join("\n\n");
 }
 

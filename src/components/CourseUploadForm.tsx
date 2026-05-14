@@ -21,9 +21,11 @@ import type { PdfBuildProgressUI } from "@/lib/pdf-ingest-client";
  */
 function pdfIngestStartStaggerMs(total: number): number {
   if (total <= 1) return 0;
-  if (total <= 3) return 800;
-  if (total <= 6) return 1_200;
-  return 1_500;
+  // Tiny stagger just to avoid exact-simultaneous DB writes — the real work
+  // is async server-side, so we no longer need multi-second gaps.
+  if (total <= 3) return 150;
+  if (total <= 6) return 120;
+  return 100;
 }
 
 function sleep(ms: number): Promise<void> {
