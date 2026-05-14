@@ -155,8 +155,29 @@ async function fetchJobStatusWithRetry(
   return { kind: "soft" };
 }
 
+/** Per-attempt timeout for /expand fetch. Slightly longer than Vercel maxDuration=300s. */
+const EXPAND_FETCH_TIMEOUT_MS = 320_000;
+
+function expandSignal(outer: AbortSignal | undefined): { signal: AbortSignal; cancel: () => void } {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), EXPAND_FETCH_TIMEOUT_MS);
+  const onOuterAbort = () => ctl.abort();
+  if (outer) {
+    if (outer.aborted) ctl.abort();
+    else outer.addEventListener("abort", onOuterAbort, { once: true });
+  }
+  return {
+    signal: ctl.signal,
+    cancel: () => {
+      clearTimeout(timer);
+      if (outer) outer.removeEventListener("abort", onOuterAbort);
+    },
+  };
+}
+
 /**
  * POST /expand with retries when Vercel returns 429 (org output-token-per-minute, etc.).
+ * Each attempt has a hard timeout so hung server invocations don't block forever.
  */
 async function postProcessPdfExpand(
   jobId: string,
@@ -167,15 +188,18 @@ async function postProcessPdfExpand(
   for (let attempt = 0; attempt < 15; attempt++) {
     await expandFetchConcurrency.acquire();
     let r: Response;
+    const attemptSignal = expandSignal(signal);
     try {
       r = await fetch("/api/process-pdf/expand", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId }),
-        signal,
+        signal: attemptSignal.signal,
       });
     } catch {
+      attemptSignal.cancel();
       expandFetchConcurrency.release();
+      if (signal?.aborted) return { ok: false, status: 0, json: null };
       if (attempt < 14) {
         await sleep(Math.min(12_000, 800 + attempt * 1_000));
         continue;
@@ -186,6 +210,7 @@ async function postProcessPdfExpand(
     try {
       raw = await r.text();
     } finally {
+      attemptSignal.cancel();
       expandFetchConcurrency.release();
     }
     lastStatus = r.status;
@@ -262,6 +287,16 @@ export async function pollPdfIngestJob(
       ? options.maxWaitMs
       : DEFAULT_POLL_MAX_WAIT_MS;
   const deadline = Date.now() + maxWait;
+
+  // Stall watchdog: if outline isn't ready and the stream preview hasn't
+  // changed for OUTLINE_STALL_MS, the server-side outline call probably
+  // died silently. Re-kick the expand route (it self-heals pending jobs,
+  // and we add a similar self-heal for stuck `running` jobs server-side).
+  const OUTLINE_STALL_MS = 75_000;
+  let lastStreamPreview: string | null | undefined = undefined;
+  let lastStreamPreviewAt = Date.now();
+  let lastKickAt = 0;
+
   while (Date.now() < deadline) {
     if (signal?.aborted) {
       return { error: "Cancelled." };
@@ -471,11 +506,28 @@ export async function pollPdfIngestJob(
         bar: "indeterminate",
       });
 
-      // If the job is still pending, the original after() callback may have
-      // been dropped or delayed. Call expand as a self-healing kick — the
-      // expand route will re-trigger phase 1 if the job is still pending.
-      // The kick is fire-and-forget; the next poll cycle will pick up progress.
-      if (data.status === "pending" && !signal?.aborted) {
+      // Track stream preview changes so we know whether the server-side
+      // outline call is actually making progress.
+      const curPreview =
+        typeof data.streamPreview === "string" ? data.streamPreview : null;
+      if (lastStreamPreview === undefined || curPreview !== lastStreamPreview) {
+        lastStreamPreview = curPreview;
+        lastStreamPreviewAt = Date.now();
+      }
+
+      // Kick conditions:
+      //   (a) job is pending — original after() callback may have been dropped
+      //   (b) job is running + outline not ready + no progress for OUTLINE_STALL_MS
+      const now = Date.now();
+      const stalledRunning =
+        data.status === "running" &&
+        now - lastStreamPreviewAt > OUTLINE_STALL_MS;
+      const shouldKick =
+        !signal?.aborted &&
+        (data.status === "pending" || stalledRunning) &&
+        now - lastKickAt > 30_000; // don't spam kicks
+      if (shouldKick) {
+        lastKickAt = now;
         void fetch("/api/process-pdf/expand", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

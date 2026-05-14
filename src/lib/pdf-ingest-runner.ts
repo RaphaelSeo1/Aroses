@@ -267,11 +267,13 @@ function parseStoredModules(raw: unknown): CourseModule[] {
 
 
 function pdfIngestModuleBatchSize(remaining: number): number {
-  const profile = process.env.COURSE_BUILD_PROFILE?.trim().toLowerCase();
-  const defaultBatch = profile === "full" ? 1 : 3;
+  // Default to 1 module per expand call. Running modules in parallel server-side
+  // multiplies Anthropic load (with N PDFs in flight, batch=3 = 3N concurrent
+  // calls), which blows past TPM limits and makes each call retry with 60-90s
+  // backoff. Serial per-PDF (batch=1) keeps concurrent calls = number of PDFs.
   const raw = process.env.PDF_INGEST_MODULE_BATCH_SIZE?.trim();
-  const parsed = raw ? Number.parseInt(raw, 10) : defaultBatch;
-  const safe = Number.isFinite(parsed) ? parsed : defaultBatch;
+  const parsed = raw ? Number.parseInt(raw, 10) : 1;
+  const safe = Number.isFinite(parsed) ? parsed : 1;
   return Math.max(1, Math.min(remaining, Math.trunc(safe)));
 }
 
