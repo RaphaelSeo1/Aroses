@@ -2,7 +2,6 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
 import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
-import { createAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
@@ -77,7 +76,7 @@ export async function POST(request: Request) {
     if (result.message === "Job is not ready to expand yet.") {
       const { data: statusRow } = await supabase
         .from("pdf_ingest_jobs")
-        .select("id, status, ingest_outline, updated_at, ingest_epoch")
+        .select("status")
         .eq("id", jobId)
         .maybeSingle();
 
@@ -92,54 +91,6 @@ export async function POST(request: Request) {
           modulesBuilt: 0,
           modulesTotal: 0,
         });
-      }
-
-      // Self-heal stuck `running` jobs that never produced an outline. If the
-      // job has been `running` with no outline for >90s, the original phase-1
-      // invocation almost certainly died (Vercel cold-start failure, OOM,
-      // outline AI stream hang). Reset to pending and re-kick.
-      const isRunningNoOutline =
-        statusRow?.status === "running" && statusRow?.ingest_outline == null;
-      const stale =
-        isRunningNoOutline &&
-        typeof statusRow.updated_at === "string" &&
-        Date.now() - new Date(statusRow.updated_at).getTime() > 90_000;
-      if (stale) {
-        const admin = createAdminClient();
-        if (admin) {
-          const prevEpoch =
-            typeof (statusRow as { ingest_epoch?: unknown }).ingest_epoch ===
-            "number"
-              ? (statusRow as { ingest_epoch: number }).ingest_epoch
-              : 0;
-          const { data: resetRow } = await admin
-            .from("pdf_ingest_jobs")
-            .update({
-              status: "pending",
-              ingest_phase: null,
-              stream_preview: null,
-              ingest_epoch: prevEpoch + 1,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", jobId)
-            .eq("status", "running")
-            .is("ingest_outline", null)
-            .select("id")
-            .maybeSingle();
-          if (resetRow) {
-            console.warn("[process-pdf/expand] auto-recovered stale running job", jobId);
-            after(() => {
-              void runPdfIngestJob(jobId).catch((e) =>
-                console.error("[process-pdf/expand] auto-recover phase1", jobId, e)
-              );
-            });
-            return NextResponse.json({
-              complete: false,
-              modulesBuilt: 0,
-              modulesTotal: 0,
-            });
-          }
-        }
       }
     }
 

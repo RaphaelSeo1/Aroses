@@ -288,15 +288,6 @@ export async function pollPdfIngestJob(
       : DEFAULT_POLL_MAX_WAIT_MS;
   const deadline = Date.now() + maxWait;
 
-  // Stall watchdog: if outline isn't ready and the stream preview hasn't
-  // changed for OUTLINE_STALL_MS, the server-side outline call probably
-  // died silently. Re-kick the expand route (it self-heals pending jobs,
-  // and we add a similar self-heal for stuck `running` jobs server-side).
-  const OUTLINE_STALL_MS = 75_000;
-  let lastStreamPreview: string | null | undefined = undefined;
-  let lastStreamPreviewAt = Date.now();
-  let lastKickAt = 0;
-
   while (Date.now() < deadline) {
     if (signal?.aborted) {
       return { error: "Cancelled." };
@@ -506,28 +497,11 @@ export async function pollPdfIngestJob(
         bar: "indeterminate",
       });
 
-      // Track stream preview changes so we know whether the server-side
-      // outline call is actually making progress.
-      const curPreview =
-        typeof data.streamPreview === "string" ? data.streamPreview : null;
-      if (lastStreamPreview === undefined || curPreview !== lastStreamPreview) {
-        lastStreamPreview = curPreview;
-        lastStreamPreviewAt = Date.now();
-      }
-
-      // Kick conditions:
-      //   (a) job is pending — original after() callback may have been dropped
-      //   (b) job is running + outline not ready + no progress for OUTLINE_STALL_MS
-      const now = Date.now();
-      const stalledRunning =
-        data.status === "running" &&
-        now - lastStreamPreviewAt > OUTLINE_STALL_MS;
-      const shouldKick =
-        !signal?.aborted &&
-        (data.status === "pending" || stalledRunning) &&
-        now - lastKickAt > 30_000; // don't spam kicks
-      if (shouldKick) {
-        lastKickAt = now;
+      // If the job is still pending, the original after() callback may have
+      // been dropped or delayed. Call expand as a self-healing kick — the
+      // expand route will re-trigger phase 1 if the job is still pending.
+      // The kick is fire-and-forget; the next poll cycle will pick up progress.
+      if (data.status === "pending" && !signal?.aborted) {
         void fetch("/api/process-pdf/expand", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
