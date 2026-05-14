@@ -600,6 +600,8 @@ export function ExamGroupsPanel({
   const [materialBusyId, setMaterialBusyId] = useState<string | null>(null);
   const [materialError, setMaterialError] = useState<string | null>(null);
   const [reorderBusy, setReorderBusy] = useState(false);
+  // Optimistic local order: groupId → ordered material IDs (cleared on server refresh)
+  const [localOrderByGroup, setLocalOrderByGroup] = useState<Record<string, string[]>>({});
   const [autoRenameBusy, setAutoRenameBusy] = useState(false);
   const [deletePendingIds, setDeletePendingIds] = useState<string[] | null>(
     null
@@ -619,6 +621,16 @@ export function ExamGroupsPanel({
 
   const materialsForActive = useMemo(() => {
     const list = materials.filter((m) => m.exam_group_id === activeId);
+    const localOrder = localOrderByGroup[activeId];
+    if (localOrder) {
+      // Apply optimistic order
+      const byId = Object.fromEntries(list.map((m) => [m.id, m]));
+      const ordered = localOrder.map((id) => byId[id]).filter(Boolean) as MaterialRow[];
+      // Append any items not in localOrder (newly added)
+      const inOrder = new Set(localOrder);
+      for (const m of list) if (!inOrder.has(m.id)) ordered.push(m);
+      return ordered;
+    }
     return [...list].sort((a, b) => {
       const ao = a.sort_order ?? 0;
       const bo = b.sort_order ?? 0;
@@ -627,7 +639,7 @@ export function ExamGroupsPanel({
         new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       );
     });
-  }, [materials, activeId]);
+  }, [materials, activeId, localOrderByGroup]);
 
   useEffect(() => {
     setSelectedMaterialIds(new Set());
@@ -654,7 +666,6 @@ export function ExamGroupsPanel({
 
   const selectionDisabled =
     autoRenameBusy ||
-    reorderBusy ||
     Boolean(materialBusyId) ||
     Boolean(editingMaterialId) ||
     deleteBusy;
@@ -667,8 +678,9 @@ export function ExamGroupsPanel({
       .filter((x): x is MaterialRow => Boolean(x));
   }, [deletePendingIds, materials]);
 
-  async function persistMaterialOrder(orderedIds: string[]) {
-    setReorderBusy(true);
+  async function persistMaterialOrder(orderedIds: string[], groupId: string) {
+    // Apply optimistic order instantly — no waiting for server
+    setLocalOrderByGroup((prev) => ({ ...prev, [groupId]: orderedIds }));
     setMaterialError(null);
     try {
       const res = await fetch("/api/study-materials/reorder", {
@@ -676,7 +688,7 @@ export function ExamGroupsPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           courseId,
-          examGroupId: activeId,
+          examGroupId: groupId,
           materialIds: orderedIds,
         }),
       });
@@ -685,14 +697,29 @@ export function ExamGroupsPanel({
         setMaterialError(
           typeof body.error === "string" ? body.error : "Could not reorder."
         );
-        setReorderBusy(false);
+        // Revert optimistic update on error
+        setLocalOrderByGroup((prev) => {
+          const next = { ...prev };
+          delete next[groupId];
+          return next;
+        });
         return;
       }
+      // Clear local override now that server is in sync
+      setLocalOrderByGroup((prev) => {
+        const next = { ...prev };
+        delete next[groupId];
+        return next;
+      });
       router.refresh();
     } catch {
       setMaterialError("Network error.");
+      setLocalOrderByGroup((prev) => {
+        const next = { ...prev };
+        delete next[groupId];
+        return next;
+      });
     }
-    setReorderBusy(false);
   }
 
   const sensors = useSensors(
@@ -712,7 +739,7 @@ export function ExamGroupsPanel({
     const newIndex = ids.indexOf(over.id as string);
     if (oldIndex < 0 || newIndex < 0) return;
     const next = arrayMove(ids, oldIndex, newIndex);
-    void persistMaterialOrder(next);
+    void persistMaterialOrder(next, activeId);
   }
 
   async function autoRenameBuildsInGroup() {
