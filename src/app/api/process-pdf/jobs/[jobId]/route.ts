@@ -1,7 +1,9 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { buildLivePreviewCourse } from "@/lib/pdf-ingest-preview";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import type { CoursePayload } from "@/types/course";
 
 export const runtime = "nodejs";
@@ -59,7 +61,7 @@ export async function GET(_request: Request, ctx: Params) {
   const { data: row, error } = await supabase
     .from("pdf_ingest_jobs")
     .select(
-      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_modules, original_file_name, stream_preview, ingest_phase"
+      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_modules, original_file_name, stream_preview, ingest_phase, ingest_epoch"
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -99,6 +101,70 @@ export async function GET(_request: Request, ctx: Params) {
       streamPreview: null,
       previewCourse: null,
     });
+  }
+
+  // Self-heal: if a job has been `running` with no outline for >4 min the
+  // server invocation almost certainly died silently (Vercel killed it, OOM,
+  // unhandled error). Reset it to `pending` atomically so the client's
+  // existing kick fires and re-runs phase 1 — no manual "Restart" needed.
+  // 4 min is well above the worst-case legitimate extraction time (~2-3 min
+  // for very large slide decks) so we won't race a healthy invocation.
+  const STALL_PHASE1_MS = 4 * 60 * 1000;
+  const isStuckPhase1 =
+    row.status === "running" &&
+    (row as { ingest_outline?: unknown }).ingest_outline == null &&
+    Number.isFinite(updatedAt) &&
+    Date.now() - updatedAt > STALL_PHASE1_MS;
+
+  if (isStuckPhase1) {
+    const admin = createAdminClient();
+    if (admin) {
+      const prevEpoch =
+        typeof (row as { ingest_epoch?: unknown }).ingest_epoch === "number"
+          ? (row as { ingest_epoch: number }).ingest_epoch
+          : 0;
+      const stallCutoff = new Date(Date.now() - STALL_PHASE1_MS).toISOString();
+      const { data: reset } = await admin
+        .from("pdf_ingest_jobs")
+        .update({
+          status: "pending",
+          ingest_phase: null,
+          stream_preview: null,
+          ingest_epoch: prevEpoch + 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", jobId)
+        .eq("status", "running")
+        .is("ingest_outline", null)
+        .lt("updated_at", stallCutoff)
+        .select("id")
+        .maybeSingle();
+
+      if (reset) {
+        console.warn("[jobs/get] auto-recovered stalled phase-1 job", jobId);
+        after(() => {
+          void runPdfIngestJob(jobId).catch((e) =>
+            console.error("[jobs/get] auto-recover kick", jobId, e)
+          );
+        });
+        // Return pending so the client's kick also fires
+        return NextResponse.json({
+          status: "pending",
+          outlineReady: false,
+          modulesBuilt: 0,
+          modulesTotal: 0,
+          ingestPhase: null,
+          streamPreview: null,
+          previewCourse: null,
+          createdAt:
+            typeof row.created_at === "string" ? row.created_at : undefined,
+          originalFileName:
+            typeof row.original_file_name === "string"
+              ? row.original_file_name
+              : undefined,
+        });
+      }
+    }
   }
 
   const outline = row.ingest_outline as { modules?: unknown[] } | null;
