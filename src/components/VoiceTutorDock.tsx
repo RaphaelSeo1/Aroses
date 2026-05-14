@@ -111,6 +111,9 @@ export function VoiceTutorDock({
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Only show errors after the user has actually used the mic at least once.
   const hasInteractedRef = useRef(false);
+  // Pre-fetched TTS clip that plays the instant the pause threshold fires,
+  // so the user hears audio before the LLM has even returned its first token.
+  const thinkingAudioRef = useRef<ArrayBuffer | null>(null);
 
   // Auto-clear transient errors after 5 seconds so the hint text shows again.
   useEffect(() => {
@@ -121,6 +124,38 @@ export function VoiceTutorDock({
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     };
   }, [error]);
+
+  // Pre-fetch a short "thinking" TTS clip when live mode is active so it's
+  // ready to play instantly the moment the user stops talking — eliminating
+  // the perceived silence between speech and the first real response word.
+  useEffect(() => {
+    if (inputMode !== "live") {
+      thinkingAudioRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/voice-tutor/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: "Hmm.",
+            materialId,
+            ...(courseId ? { courseId } : {}),
+          }),
+        });
+        if (!cancelled && res.ok) {
+          thinkingAudioRef.current = await res.arrayBuffer();
+        }
+      } catch {
+        // Not critical — fall back to normal (no instant filler)
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inputMode, materialId, courseId]);
   const [playbackRate, setPlaybackRateState] = useState<PlaybackRate>(1);
   const [livePhase, setLivePhaseState] = useState<LivePhase>("off");
   const [pauseMs, setPauseMs] = useState<number>(DEFAULT_PAUSE_MS);
@@ -470,7 +505,7 @@ export function VoiceTutorDock({
   );
 
   const runVoiceStream = useCallback(
-    async (transcript: string) => {
+    async (transcript: string, earlyAudio?: ArrayBuffer | null) => {
       if (!transcript) {
         setError(
           "Didn't catch that — try speaking a little louder or closer to the mic."
@@ -575,6 +610,20 @@ export function VoiceTutorDock({
       type QueueItem = { bufPromise: Promise<ArrayBuffer | null> };
       const queue: QueueItem[] = [];
       let playbackTail: Promise<void> = Promise.resolve();
+
+      // If we have a pre-fetched "thinking" clip, enqueue it at the head of the
+      // queue right now — it starts playing immediately while the LLM streams in
+      // the background, so the user hears audio with zero perceived delay.
+      if (earlyAudio) {
+        const earlyItem: QueueItem = { bufPromise: Promise.resolve(earlyAudio) };
+        queue.push(earlyItem);
+        playbackTail = playbackTail.then(async () => {
+          if (cancelled) return;
+          const buf = await earlyItem.bufPromise;
+          if (!buf || cancelled) return;
+          await playBuffer(buf);
+        });
+      }
 
       const enqueueSentence = (text: string) => {
         const trimmed = text.trim();
@@ -963,7 +1012,7 @@ export function VoiceTutorDock({
             endRecorder();
           })();
           resetSpeculative();
-          await runVoiceStream(transcript);
+          await runVoiceStream(transcript, thinkingAudioRef.current);
           return;
         }
 
@@ -974,7 +1023,7 @@ export function VoiceTutorDock({
         resetSpeculative();
         const text = await transcribeBlob(blob);
         if (text) {
-          await runVoiceStream(text);
+          await runVoiceStream(text, thinkingAudioRef.current);
         } else {
           setError(
             "Didn't catch that — try speaking a little louder or closer to the mic."

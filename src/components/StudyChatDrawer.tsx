@@ -203,9 +203,27 @@ export function StudyChatDrawer({
 
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
             {messages.length === 0 ? (
-              <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                {`Ask ${AI_ASSISTANT_NAME} anything about what you're viewing — definitions, intuition, or how ideas connect. Answers only use what's in your generated course.`}
-              </p>
+              <div className="space-y-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                <p>{`Ask ${AI_ASSISTANT_NAME} anything about what you're viewing — definitions, intuition, or how ideas connect.`}</p>
+                {variant === "course" && (
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Try asking
+                    </p>
+                    <ul className="space-y-1 text-[12px] text-zinc-500 dark:text-zinc-400">
+                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Take me to the module about carbohydrates")}>
+                        "Take me to the module about carbohydrates"
+                      </li>
+                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Which module covers DNA replication?")}>
+                        "Which module covers DNA replication?"
+                      </li>
+                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Explain this concept in simpler terms")}>
+                        "Explain this in simpler terms"
+                      </li>
+                    </ul>
+                  </div>
+                )}
+              </div>
             ) : null}
             {messages.map((m, i) => (
               <div
