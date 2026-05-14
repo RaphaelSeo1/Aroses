@@ -495,6 +495,22 @@ export function CoursePlayer({
     activeModuleIndex >= 0 &&
     activeModuleIndex < course.modules.length - 1;
 
+  // When this is the last module of the current material, find the next
+  // material in the sidebar so we can offer a "Move to next upload" button
+  // instead of leaving the user stranded with a greyed-out "Next module".
+  const nextMaterialInfo = useMemo(() => {
+    if (hasNextModule) return null; // Next module exists — no need
+    const currentIdx = sidebarOutlines.findIndex((o) => o.materialId === materialId);
+    if (currentIdx < 0 || currentIdx >= sidebarOutlines.length - 1) return null;
+    const next = sidebarOutlines[currentIdx + 1];
+    if (!next || next.modules.length === 0) return null;
+    return {
+      materialId: next.materialId,
+      moduleId: next.modules[0].id,
+      fileName: next.fileName,
+    };
+  }, [hasNextModule, sidebarOutlines, materialId]);
+
   const totalModules = course.modules.length;
   const completedCount = completed.size;
   const progressPct =
@@ -564,11 +580,15 @@ export function CoursePlayer({
         const ix = course.modules.findIndex((m) => m.id === moduleId);
         const nextMod = ix >= 0 ? course.modules[ix + 1] : undefined;
         if (nextMod) {
-          syncModuleToUrl(nextMod.id);
+          // Always exit to the lessons page (not quiz) so the user sees the
+          // lesson content for the next module rather than jumping straight
+          // into its quiz.
+          const q = `?${buildStudySearchParams(materialId, nextMod.id, learnMode)}`;
+          router.push(`${studyBase}${q}`);
         }
       }
     },
-    [persistModuleCompletion, course.modules, syncModuleToUrl]
+    [persistModuleCompletion, course.modules, materialId, learnMode, router, studyBase]
   );
 
   const handleQuizPassFinished = useCallback(() => {
@@ -1488,12 +1508,25 @@ export function CoursePlayer({
                           items={quizSessionItems}
                           shuffleEpoch={quizSessionEpoch}
                           hasNextModule={hasNextModule}
+                          nextMaterialFileName={nextMaterialInfo?.fileName}
                           onAttemptRecorded={bumpReviewRefresh}
                           onPassFinished={handleQuizPassFinished}
                           onCompleteQuiz={(choice) =>
                             completeModuleOnServer(activeModule.id, {
                               advanceToNextModule: choice === "next_module",
                             })
+                          }
+                          onNextMaterial={
+                            nextMaterialInfo
+                              ? () => {
+                                  const q = `?${buildStudySearchParams(
+                                    nextMaterialInfo.materialId,
+                                    nextMaterialInfo.moduleId,
+                                    learnMode
+                                  )}`;
+                                  router.push(`${studyBase}${q}`);
+                                }
+                              : undefined
                           }
                         />
                       </div>

@@ -12,10 +12,14 @@ type Props = {
   shuffleEpoch: number;
   /** Whether another module exists after this one in the course */
   hasNextModule: boolean;
+  /** File name of the next PDF upload — shown on the "Move to next upload" button */
+  nextMaterialFileName?: string;
   /** Called after marking this module complete — choose review vs navigate */
   onCompleteQuiz: (
     choice: "review_lessons" | "next_module"
   ) => void | Promise<void>;
+  /** Navigate to the first module of the next PDF/material. Shown when hasNextModule is false. */
+  onNextMaterial?: () => void;
   /** Whole-course mixed session — simpler completion, no module completion. */
   mixedCourseReview?: boolean;
   /** Parent refetches quiz-review / progress gauges (e.g. practice drawer). */
@@ -30,7 +34,9 @@ export function ModuleQuiz({
   items,
   shuffleEpoch,
   hasNextModule,
+  nextMaterialFileName,
   onCompleteQuiz,
+  onNextMaterial,
   mixedCourseReview = false,
   onAttemptRecorded,
   onPassFinished,
@@ -304,28 +310,46 @@ export function ModuleQuiz({
           >
             {savingExit ? "Saving…" : "Review lessons again"}
           </button>
-          <button
-            type="button"
-            disabled={savingExit || !hasNextModule}
-            onClick={() => void runComplete("next_module")}
-            title={
-              !hasNextModule
-                ? "This is the last module in this upload."
-                : undefined
-            }
-            className="transition-none inline-flex flex-1 items-center justify-center rounded-full bg-brand-hover px-6 py-2.5 text-sm font-medium text-white shadow-sm shadow-red-950/25 hover:bg-red-900 disabled:opacity-60 dark:bg-brand-hover dark:hover:bg-red-950 dark:shadow-black/40 sm:flex-none"
-          >
-            {savingExit ? "Saving…" : "Next module"}
-          </button>
+          {hasNextModule ? (
+            <button
+              type="button"
+              disabled={savingExit}
+              onClick={() => void runComplete("next_module")}
+              className="transition-none inline-flex flex-1 items-center justify-center rounded-full bg-brand-hover px-6 py-2.5 text-sm font-medium text-white shadow-sm shadow-red-950/25 hover:bg-red-900 disabled:opacity-60 dark:bg-brand-hover dark:hover:bg-red-950 dark:shadow-black/40 sm:flex-none"
+            >
+              {savingExit ? "Saving…" : "Next module →"}
+            </button>
+          ) : onNextMaterial ? (
+            <button
+              type="button"
+              disabled={savingExit}
+              onClick={() => {
+                if (savingExit) return;
+                void runComplete("review_lessons").then(() => onNextMaterial());
+              }}
+              className="transition-none inline-flex flex-1 items-center justify-center gap-1.5 rounded-full bg-brand-hover px-6 py-2.5 text-sm font-medium text-white shadow-sm shadow-red-950/25 hover:bg-red-900 disabled:opacity-60 dark:bg-brand-hover dark:hover:bg-red-950 dark:shadow-black/40 sm:flex-none"
+            >
+              {savingExit ? "Saving…" : (
+                <span className="flex items-center gap-1.5">
+                  Move to next upload
+                  {nextMaterialFileName ? (
+                    <span className="max-w-[9rem] truncate text-xs text-white/70">
+                      {nextMaterialFileName}
+                    </span>
+                  ) : null}
+                  <span>→</span>
+                </span>
+              )}
+            </button>
+          ) : null}
         </div>
-        {!hasNextModule ? (
+        {!hasNextModule && !onNextMaterial ? (
           <p className="mt-3 text-xs text-zinc-500">
-            You&apos;re on the last module for this PDF — use{" "}
+            You&apos;ve finished all modules in this upload. Use{" "}
             <strong className="font-medium text-zinc-700 dark:text-zinc-300">
               Review lessons again
             </strong>{" "}
-            to revisit material, or exit study mode from the header when you’re
-            done.
+            to revisit, or navigate to another upload from the sidebar.
           </p>
         ) : null}
       </div>
