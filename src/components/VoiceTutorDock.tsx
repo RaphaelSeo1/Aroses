@@ -95,6 +95,8 @@ export function VoiceTutorDock({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Only show errors after the user has actually used the mic at least once.
+  const hasInteractedRef = useRef(false);
 
   // Auto-clear transient errors after 5 seconds so the hint text shows again.
   useEffect(() => {
@@ -1230,6 +1232,7 @@ export function VoiceTutorDock({
       } catch {
         /* ignore */
       }
+      hasInteractedRef.current = true;
       setHoldRecording(true);
       const p = startRecording();
       startPromiseRef.current = p;
@@ -1267,6 +1270,7 @@ export function VoiceTutorDock({
   const onTapMic = useCallback(async () => {
     if (inputMode !== "tap" || busy) return;
     if (!tapRecording) {
+      hasInteractedRef.current = true;
       setTapRecording(true);
       setError(null);
       try {
@@ -1530,7 +1534,7 @@ export function VoiceTutorDock({
         </button>
       )}
 
-      {error ? (
+      {error && hasInteractedRef.current ? (
         <p className="max-w-[14rem] text-xs leading-snug text-red-500 dark:text-red-400">
           {error}
         </p>
