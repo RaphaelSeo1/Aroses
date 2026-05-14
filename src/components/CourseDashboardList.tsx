@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { StudyingCourse } from "@/lib/load-dashboard-courses";
 
 export type DashboardCourse = {
@@ -38,6 +38,17 @@ export function CourseDashboardList({
   // Drag-and-drop
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+
+  // Live preview order while dragging
+  const previewCourses = useMemo(() => {
+    if (dragFrom === null || dragOver === null || dragFrom === dragOver) return courses;
+    const next = [...courses];
+    const [removed] = next.splice(dragFrom, 1);
+    next.splice(dragOver, 0, removed);
+    return next;
+  }, [courses, dragFrom, dragOver]);
+
+  const draggedId = dragFrom !== null ? courses[dragFrom]?.id : null;
 
   useEffect(() => {
     setCourses(initialCourses);
@@ -169,7 +180,7 @@ export function CourseDashboardList({
             : "grid gap-5 sm:grid-cols-2 lg:grid-cols-3"
         }
       >
-        {courses.map((c, index) => (
+        {previewCourses.map((c, index) => (
           <CourseCard
             key={c.id}
             course={c}
@@ -186,9 +197,8 @@ export function CourseDashboardList({
             onSaveEdit={saveEdit}
             onCancelEdit={cancelEdit}
             onRemove={removeCourse}
-            isDragging={dragFrom === index}
-            isDropTarget={dragOver === index && dragFrom !== index}
-            onDragStart={() => handleDragStart(index)}
+            isDragging={c.id === draggedId}
+            onDragStart={() => handleDragStart(courses.indexOf(c))}
             onDragOver={(e) => handleDragOver(e, index)}
             onDrop={() => handleDrop(index)}
             onDragEnd={handleDragEnd}
@@ -214,7 +224,6 @@ function CourseCard({
   onCancelEdit,
   onRemove,
   isDragging,
-  isDropTarget,
   onDragStart,
   onDragOver,
   onDrop,
@@ -235,7 +244,6 @@ function CourseCard({
   onCancelEdit: () => void;
   onRemove: (id: string, title: string) => void;
   isDragging: boolean;
-  isDropTarget: boolean;
   onDragStart: () => void;
   onDragOver: (e: React.DragEvent) => void;
   onDrop: () => void;
@@ -265,17 +273,14 @@ function CourseCard({
       onDrop={canManage ? onDrop : undefined}
       onDragEnd={canManage ? onDragEnd : undefined}
       className={[
-        "transition-opacity duration-150",
-        isDragging ? "opacity-40" : "opacity-100",
+        "transition-[opacity,transform] duration-200",
+        isDragging ? "opacity-40 scale-95" : "opacity-100 scale-100",
       ].join(" ")}
     >
       <div
         className={[
-          "group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-white/95 shadow-md ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 motion-reduce:hover:translate-y-0 dark:bg-zinc-950/95 dark:ring-zinc-700/30",
+          "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50",
           density === "compact" ? "pt-6" : "pt-7",
-          isDropTarget
-            ? "scale-[1.02] border-brand shadow-xl shadow-red-900/[0.12] ring-brand/20 dark:border-brand-border"
-            : "border-zinc-200/90 shadow-zinc-900/[0.04] hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] dark:border-zinc-800 dark:hover:border-brand-border/50",
         ].join(" ")}
       >
         <div
