@@ -121,6 +121,12 @@ export default function NewCoursePage() {
   // Self-study fields
   const [studyContext, setStudyContext] = useState("");
   const [sectionName, setSectionName] = useState("");
+  // Polished one-liner returned by `/api/self-study/polish-goal`. When set,
+  // the form shows a "is this right?" confirmation step before creating the
+  // course. The polished text is what we persist as `study_context` so the
+  // workspace badge stays short and clean.
+  const [polishedGoal, setPolishedGoal] = useState<string | null>(null);
+  const [polishing, setPolishing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [error, setError] = useState<string | null>(null);
@@ -163,10 +169,47 @@ export default function NewCoursePage() {
     setLoading(false);
   }
 
-  // ── Create self-study course ──────────────────────────────────────────────
-  async function submitSelfStudy(e: React.FormEvent) {
+  // Ask the AI to summarise the learner's free-form goal into a tight
+  // one-liner. We display that summary back to them for confirmation
+  // before creating the course; the polished text becomes the persisted
+  // `study_context` so the workspace badge stays short.
+  async function polishGoal(e: React.FormEvent) {
     e.preventDefault();
-    if (!studyContext.trim()) {
+    const raw = studyContext.trim();
+    if (!raw) {
+      setError(
+        "Tell us a bit about your study situation so we can personalise it for you."
+      );
+      return;
+    }
+    setError(null);
+    setPolishing(true);
+    try {
+      const res = await fetch("/api/self-study/polish-goal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ study_context: raw }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || typeof body.summary !== "string") {
+        setError(
+          typeof body.error === "string"
+            ? body.error
+            : "Couldn't summarise that — please rephrase and try again."
+        );
+        setPolishing(false);
+        return;
+      }
+      setPolishedGoal(body.summary.trim());
+    } catch {
+      setError("Network error. Try again.");
+    }
+    setPolishing(false);
+  }
+
+  // ── Create self-study course ──────────────────────────────────────────────
+  async function submitSelfStudy(finalContext: string) {
+    if (!finalContext.trim()) {
       setError("Tell us a bit about your study situation so we can personalise it for you.");
       return;
     }
@@ -180,7 +223,7 @@ export default function NewCoursePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           is_self_study: true,
-          study_context: studyContext.trim(),
+          study_context: finalContext.trim(),
           // Optional — if blank the workspace falls back to "My materials".
           section_name: sectionName.trim() || undefined,
         }),
@@ -351,84 +394,155 @@ export default function NewCoursePage() {
                 What do you need from this material? The more specific you are, the better we can tailor it for you — upload your PDF next and we&apos;ll build a course around exactly your goal.
               </p>
 
-              <form onSubmit={(e) => void submitSelfStudy(e)} className="mt-8 space-y-5">
-                <div className="relative">
-                  {!studyContext && (
-                    <CyclingPlaceholder active={step === "selfStudy"} />
-                  )}
-                  <textarea
-                    ref={textareaRef}
-                    rows={5}
-                    value={studyContext}
-                    onChange={(e) => setStudyContext(e.target.value)}
-                    className="block w-full resize-none rounded-2xl border border-zinc-300 bg-white px-4 py-4 text-sm leading-relaxed text-zinc-900 shadow-sm outline-none ring-indigo-500 placeholder:text-transparent focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                    maxLength={4000}
-                  />
-                  {studyContext.length > 3600 && (
-                    <p className="mt-1 text-right text-xs text-zinc-400">
-                      {4000 - studyContext.length} characters left
-                    </p>
-                  )}
-                </div>
+              {polishedGoal === null ? (
+                /* Stage 1 — drafting: capture the learner's raw goal. */
+                <form
+                  onSubmit={(e) => void polishGoal(e)}
+                  className="mt-8 space-y-5"
+                >
+                  <div className="relative">
+                    {!studyContext && (
+                      <CyclingPlaceholder active={step === "selfStudy"} />
+                    )}
+                    <textarea
+                      ref={textareaRef}
+                      rows={5}
+                      value={studyContext}
+                      onChange={(e) => setStudyContext(e.target.value)}
+                      className="block w-full resize-none rounded-2xl border border-zinc-300 bg-white px-4 py-4 text-sm leading-relaxed text-zinc-900 shadow-sm outline-none ring-indigo-500 placeholder:text-transparent focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                      maxLength={4000}
+                    />
+                    {studyContext.length > 3600 && (
+                      <p className="mt-1 text-right text-xs text-zinc-400">
+                        {4000 - studyContext.length} characters left
+                      </p>
+                    )}
+                  </div>
 
-                {/* Hint chips — tap to fill */}
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    "I have an exam soon",
-                    "I already know the basics",
-                    "I'm completely new to this",
-                    "Focus on one specific topic",
-                  ].map((hint) => (
-                    <button
-                      key={hint}
-                      type="button"
-                      onClick={() =>
-                        setStudyContext((prev) =>
-                          prev ? `${prev} ${hint.toLowerCase()}` : hint
-                        )
-                      }
-                      className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-indigo-950 dark:hover:text-indigo-300"
+                  {/* Hint chips — tap to fill */}
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      "I have an exam soon",
+                      "I already know the basics",
+                      "I'm completely new to this",
+                      "Focus on one specific topic",
+                    ].map((hint) => (
+                      <button
+                        key={hint}
+                        type="button"
+                        onClick={() =>
+                          setStudyContext((prev) =>
+                            prev ? `${prev} ${hint.toLowerCase()}` : hint
+                          )
+                        }
+                        className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-600 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-indigo-950 dark:hover:text-indigo-300"
+                      >
+                        {hint}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="self-study-section"
+                      className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
                     >
-                      {hint}
+                      Folder name{" "}
+                      <span className="font-normal text-zinc-500">
+                        (optional — shows as the materials tab)
+                      </span>
+                    </label>
+                    <input
+                      id="self-study-section"
+                      value={sectionName}
+                      onChange={(e) => setSectionName(e.target.value)}
+                      maxLength={80}
+                      placeholder="e.g. Midterm prep, Lecture notes, Bio chapter 4"
+                      className="mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 outline-none ring-indigo-500 placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                    />
+                  </div>
+
+                  {error && (
+                    <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <button
+                      type="submit"
+                      disabled={polishing || !studyContext.trim()}
+                      className="inline-flex flex-1 items-center justify-center rounded-full bg-indigo-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 disabled:opacity-50 sm:flex-none dark:bg-indigo-500 dark:hover:bg-indigo-600"
+                    >
+                      {polishing
+                        ? "Polishing your goal…"
+                        : "Review my goal →"}
                     </button>
-                  ))}
-                </div>
+                  </div>
+                </form>
+              ) : (
+                /* Stage 2 — review: confirm the polished one-liner. */
+                <div className="mt-8 space-y-5">
+                  <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-4 py-4 dark:border-indigo-900/60 dark:bg-indigo-950/30">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                      Is this what you want?
+                    </p>
+                    <p className="mt-2 text-base font-medium leading-relaxed text-zinc-900 dark:text-zinc-50">
+                      {polishedGoal}
+                    </p>
+                    <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+                      We&apos;ll use this to calibrate your lessons and the
+                      voice tutor. You can edit it anytime from the workspace.
+                    </p>
+                  </div>
 
-                {/* Optional folder name for the materials tab in the workspace.
-                    Without this we fall back to "My materials" which the
-                    user can also rename inline later. */}
-                <div>
-                  <label
-                    htmlFor="self-study-section"
-                    className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
-                  >
-                    Folder name{" "}
-                    <span className="font-normal text-zinc-500">
-                      (optional — shows as the materials tab)
-                    </span>
-                  </label>
-                  <input
-                    id="self-study-section"
-                    value={sectionName}
-                    onChange={(e) => setSectionName(e.target.value)}
-                    maxLength={80}
-                    placeholder="e.g. Midterm prep, Lecture notes, Bio chapter 4"
-                    className="mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 outline-none ring-indigo-500 placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                  />
-                </div>
+                  <div>
+                    <label
+                      htmlFor="self-study-section-review"
+                      className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
+                    >
+                      Folder name{" "}
+                      <span className="font-normal text-zinc-500">
+                        (optional)
+                      </span>
+                    </label>
+                    <input
+                      id="self-study-section-review"
+                      value={sectionName}
+                      onChange={(e) => setSectionName(e.target.value)}
+                      maxLength={80}
+                      placeholder="e.g. Midterm prep, Lecture notes, Bio chapter 4"
+                      className="mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 outline-none ring-indigo-500 placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                    />
+                  </div>
 
-                {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+                  {error && (
+                    <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                  )}
 
-                <div className="flex flex-wrap items-center gap-3 pt-1">
-                  <button
-                    type="submit"
-                    disabled={loading || !studyContext.trim()}
-                    className="inline-flex flex-1 items-center justify-center rounded-full bg-indigo-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 disabled:opacity-50 sm:flex-none dark:bg-indigo-500 dark:hover:bg-indigo-600"
-                  >
-                    {loading ? "Setting up…" : "Continue — upload PDF next →"}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => void submitSelfStudy(polishedGoal)}
+                      disabled={loading}
+                      className="inline-flex flex-1 items-center justify-center rounded-full bg-indigo-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 disabled:opacity-50 sm:flex-none dark:bg-indigo-500 dark:hover:bg-indigo-600"
+                    >
+                      {loading
+                        ? "Setting up…"
+                        : "Looks good — upload PDF next →"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPolishedGoal(null);
+                        setError(null);
+                      }}
+                      disabled={loading}
+                      className="rounded-full border border-zinc-300 px-4 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                    >
+                      Edit my answer
+                    </button>
+                  </div>
                 </div>
-              </form>
+              )}
             </div>
           )}
 

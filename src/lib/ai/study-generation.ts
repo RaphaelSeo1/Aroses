@@ -322,6 +322,8 @@ QUIZ (critical): Each module needs **at least 4 questions per module**, with **a
 
 ${sizeRules}
 
+${titleStyleRules()}
+
 ${sourceCoverageRules("monolith")}
 
 Generate the course in this exact JSON format:
@@ -672,7 +674,7 @@ function outlineInstruction(
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
 ${studyContext ? selfStudyBlock(studyContext) : ""}
 ${moduleCount}
-Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to ${maxLessonTitles}** short strings — concise titles only, under 100 characters each, no pasted paragraphs). For dense excerpts, use many distinct titles (up to the max) so each major idea can get its own lesson later.
+Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to ${maxLessonTitles}** short strings — concise titles only, no pasted paragraphs). For dense excerpts, use many distinct titles (up to the max) so each major idea can get its own lesson later.
 
 Exact shape:
 {
@@ -683,6 +685,8 @@ Exact shape:
   ]
 }
 
+${titleStyleRules()}
+
 ${outlineCoverageBlock(profile)}
 
 Rules: base everything on the material; do not invent unrelated topics. No markdown fences, no commentary.
@@ -690,6 +694,23 @@ Rules: base everything on the material; do not invent unrelated topics. No markd
 --- MATERIAL START ---
 ${materialText}
 --- MATERIAL END ---`;
+}
+
+/**
+ * Style guidance shared by the outline and monolith course prompts so the
+ * resulting course title, module titles, and lesson titles read as short
+ * topic labels — not full sentences. Without this, Claude tends to default
+ * to verbose "Master the fundamentals of …" / "Explore how …" patterns
+ * that overflow the UI and feel repetitive across modules.
+ */
+function titleStyleRules(): string {
+  return `TITLE STYLE (very important — follow strictly):
+- **course title**: short topic name, 2 to 5 words. Example: "Ionic Bonding", "World War II Causes", "Linear Algebra Basics". NOT "A Comprehensive Guide to ...".
+- **module titles**: short noun phrases, **2 to 5 words each, max 40 characters**. Just name the topic. Example: "Covalent Bonding", "VSEPR Geometry", "Ideal Gas Law". **NEVER** start with "Master", "Explore", "Understand", "Introduction to", "Overview of", "Deep Dive into", "Foundations of", "The Fundamentals of", or any verb-led phrase.
+- **lesson_titles**: short noun phrases, **3 to 6 words each, max 50 characters**. Example: "Electron Sharing", "Bond Polarity", "Lewis Structures". Same forbidden openers as module titles.
+- **description**: ONE short sentence under ~20 words. No marketing fluff, no "designed for self-study", no second paragraph.
+
+Repetition rule: across the whole outline, no two modules (or two lesson titles) may start with the same first word. If you'd produce "Master the X" and "Master the Y", rewrite both as bare topic names.`;
 }
 
 function moduleQuizRules(profile: CourseBuildProfile): string {
