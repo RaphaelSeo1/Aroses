@@ -3,6 +3,7 @@ import Link from "next/link";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseCreatorOverview } from "@/components/CourseCreatorOverview";
 import { CourseVisibilityToggle } from "@/components/CourseVisibilityToggle";
+import { EditableCourseTitle } from "@/components/EditableCourseTitle";
 import {
   ExamGroupsPanel,
   type ExamGroupRow,
@@ -143,13 +144,17 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
             <>
               {/* ── Self Study header ───────────────────────────────────── */}
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
+                <div className="min-w-0 flex-1">
                   <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
                     <span>🎯</span> Self study
                   </p>
-                  <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                    {course.title}
-                  </h1>
+                  <div className="mt-2">
+                    <EditableCourseTitle
+                      courseId={course.id}
+                      initialTitle={course.title}
+                      accent="indigo"
+                    />
+                  </div>
                   <p className="mt-1.5 text-sm text-zinc-500 dark:text-zinc-400">
                     Private to you · not shown on Explore
                   </p>
@@ -219,9 +224,13 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                 Course workspace
               </p>
               <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
-                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  {course.title}
-                </h1>
+                <div className="min-w-0 flex-1">
+                  <EditableCourseTitle
+                    courseId={course.id}
+                    initialTitle={course.title}
+                    accent="brand"
+                  />
+                </div>
                 <ShareCourseButton courseId={course.id} />
               </div>
               {course.description ? (
