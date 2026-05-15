@@ -743,6 +743,10 @@ export async function runPdfIngestJob(
   const DL_DELAYS_MS = [1_500, 3_000, 6_000];
   let buf: Buffer | null = null;
   for (let attempt = 0; attempt <= DL_DELAYS_MS.length; attempt++) {
+    // Heartbeat at the top of every attempt so the GET-route phase-1
+    // stall reset (default 15 s) never false-positives during legitimate
+    // download retries.
+    await touchJobProgress(admin, jobId);
     try {
       const { data: blob, error: dlErr } = await admin.storage
         .from(STUDY_PDF_INGEST_BUCKET)

@@ -108,13 +108,15 @@ export async function GET(_request: Request, ctx: Params) {
   // finishes, but `stream_preview` + heartbeats keep `updated_at` fresh; resetting
   // here caused stuck "planning outline" and lost work.
   //
-  // **On by default at 45s.** When many PDFs are uploaded in parallel Vercel can
+  // **On by default at 15s.** When many PDFs are uploaded in parallel Vercel can
   // silently kill some `after()` workers; without this the job sits in
-  // `reading_pdf` forever until the user clicks "Restart this PDF". Override
-  // with `PDF_INGEST_STALL_PHASE1_MS` (ms), or set `0` to disable.
-  const MIN_STALL_MS = 30 * 1000;
+  // `reading_pdf` forever until the user clicks "Restart this PDF". The runner
+  // heartbeats every 8 s during extraction, so 15 s is comfortably above noise
+  // while still catching dead workers fast. Override with
+  // `PDF_INGEST_STALL_PHASE1_MS` (ms), or set `0` to disable.
+  const MIN_STALL_MS = 10 * 1000;
   const MAX_STALL_MS = 45 * 60 * 1000;
-  const DEFAULT_STALL_PHASE1_MS = 45 * 1000;
+  const DEFAULT_STALL_PHASE1_MS = 15 * 1000;
   const stallPhase1Env = process.env.PDF_INGEST_STALL_PHASE1_MS?.trim();
   const stallPhase1Parsed = stallPhase1Env
     ? Number.parseInt(stallPhase1Env, 10)
@@ -127,6 +129,47 @@ export async function GET(_request: Request, ctx: Params) {
           stallPhase1Parsed <= MAX_STALL_MS
         ? stallPhase1Parsed
         : DEFAULT_STALL_PHASE1_MS;
+
+  // **Pending pickup**: if a job has been `status=pending` for more than a few
+  // seconds the original `after()` worker from `POST /api/process-pdf` never
+  // started (Vercel dropped it, cold-start backlog, etc.). Re-kick it here so
+  // the user does not have to click Restart. Override via
+  // `PDF_INGEST_PENDING_KICK_MS` (ms), `0` to disable.
+  const PENDING_MIN_MS = 2 * 1000;
+  const PENDING_MAX_MS = 5 * 60 * 1000;
+  const DEFAULT_PENDING_KICK_MS = 4 * 1000;
+  const pendingKickEnv = process.env.PDF_INGEST_PENDING_KICK_MS?.trim();
+  const pendingKickParsed = pendingKickEnv
+    ? Number.parseInt(pendingKickEnv, 10)
+    : Number.NaN;
+  const PENDING_KICK_MS =
+    pendingKickEnv === "0" || pendingKickParsed === 0
+      ? null
+      : Number.isFinite(pendingKickParsed) &&
+          pendingKickParsed >= PENDING_MIN_MS &&
+          pendingKickParsed <= PENDING_MAX_MS
+        ? pendingKickParsed
+        : DEFAULT_PENDING_KICK_MS;
+
+  const createdAtMs =
+    typeof row.created_at === "string" ? Date.parse(row.created_at) : NaN;
+  const pendingForMs =
+    Number.isFinite(createdAtMs) && row.status === "pending"
+      ? Date.now() - createdAtMs
+      : 0;
+  if (
+    PENDING_KICK_MS != null &&
+    row.status === "pending" &&
+    pendingForMs >= PENDING_KICK_MS
+  ) {
+    // Atomic claim inside `runPdfIngestJob` makes duplicate kicks safe — only
+    // one worker can flip status from `pending` to `running`.
+    after(() => {
+      void runPdfIngestJob(jobId).catch((e) =>
+        console.error("[jobs/get] kick pending job", jobId, e)
+      );
+    });
+  }
 
   const ingestPhaseRawEarly = (row as { ingest_phase?: unknown }).ingest_phase;
   const stallAppliesToThisPhase =
