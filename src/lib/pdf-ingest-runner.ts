@@ -461,7 +461,7 @@ export async function runPdfIngestExpandOne(
   const { data: job, error: loadErr } = await admin
     .from("pdf_ingest_jobs")
     .select(
-      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, status, material_id, error_message, ingest_source_text, ingest_outline, ingest_modules, ingest_epoch"
+      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, status, material_id, error_message, ingest_source_text, ingest_outline, ingest_modules, ingest_epoch, created_at"
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -574,8 +574,60 @@ export async function runPdfIngestExpandOne(
     };
   }
 
-  // Peer-aware concurrency: how many *other* PDFs for this user are currently
-  // writing modules? If zero, we can safely parallelize. If any, stay serial.
+  // FIFO queue for module generation, same shape as the outline queue in
+  // `runPdfIngestJob`. Cap concurrent Anthropic module streams per user to
+  // protect Tier 1 TPM. Earliest `created_at` goes first so the user sees
+  // tabs finish in upload order (matches the UI's numbered list).
+  const moduleConcurrencyEnv =
+    process.env.PDF_INGEST_MODULE_CONCURRENCY?.trim();
+  const moduleConcurrencyParsed = moduleConcurrencyEnv
+    ? Number.parseInt(moduleConcurrencyEnv, 10)
+    : Number.NaN;
+  const MODULE_CONCURRENCY = Number.isFinite(moduleConcurrencyParsed)
+    ? Math.max(1, Math.min(20, moduleConcurrencyParsed))
+    : 3;
+  const QUEUE_POLL_MS = 3_500;
+  const QUEUE_MAX_WAIT_MS = 4 * 60 * 1000;
+
+  const jobCreatedAt =
+    typeof (job as { created_at?: unknown }).created_at === "string"
+      ? (job as { created_at: string }).created_at
+      : null;
+  if (jobCreatedAt && job.user_id) {
+    const queueStartedAt = Date.now();
+    let loggedQueueEnter = false;
+    while (Date.now() - queueStartedAt < QUEUE_MAX_WAIT_MS) {
+      const { count: aheadOfMe } = await admin
+        .from("pdf_ingest_jobs")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", job.user_id)
+        .eq("ingest_phase", "writing_modules")
+        .lt("created_at", jobCreatedAt)
+        .neq("id", jobId);
+      const position = aheadOfMe ?? 0;
+      if (position < MODULE_CONCURRENCY) break;
+      if (!loggedQueueEnter) {
+        console.info("[pdf-ingest] module queue wait", {
+          jobId,
+          position,
+          concurrency: MODULE_CONCURRENCY,
+        });
+        loggedQueueEnter = true;
+      }
+      await touchJobProgress(admin, jobId);
+      await sleep(QUEUE_POLL_MS);
+      if (await isStaleIngestEpoch(admin, jobId, expandEpoch)) {
+        return {
+          kind: "failed",
+          message:
+            "This build was restarted. Refresh the page if this tab still looks stuck.",
+        };
+      }
+    }
+  }
+
+  // Peer-aware batch size: how many *other* PDFs for this user are currently
+  // writing modules? If zero, we can safely parallelize within this job.
   let modulePeerCount = 0;
   if (job.user_id) {
     const { count: peers } = await admin
@@ -721,7 +773,7 @@ export async function runPdfIngestJob(
     .eq("id", jobId)
     .eq("status", "pending")
     .select(
-      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, ingest_epoch"
+      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, ingest_epoch, created_at"
     )
     .maybeSingle();
 
@@ -935,39 +987,53 @@ export async function runPdfIngestJob(
     .eq("id", jobId)
     .eq("ingest_epoch", claimedEpoch);
 
-  // Stagger entry into the streaming Anthropic call when many PDFs reach
-  // phase 2 simultaneously. Without this, 10 parallel uploads all hit the
-  // outline streaming endpoint within ~5 s of each other, blow past the
-  // tokens-per-minute limit, and every job spends 28-90 s in 429 retry
-  // backoff with no streamed tokens to show in the UI. Cost is ~0 for a
-  // single PDF (count=1, no delay).
-  const { count: concurrentOutlines } = await admin
-    .from("pdf_ingest_jobs")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", claimed.user_id)
-    .eq("ingest_phase", "planning_outline")
-    .neq("id", jobId);
-  if (concurrentOutlines && concurrentOutlines > 0) {
-    // ~1.8 s per peer, capped at 18 s. Each job picks a random point in
-    // [0, window) so the herd spreads instead of all firing at t=0.
-    const window = Math.min(18_000, concurrentOutlines * 1_800);
-    const wait = Math.round(Math.random() * window);
-    if (wait > 0) {
-      console.info("[pdf-ingest] stagger outline entry", {
-        jobId,
-        peers: concurrentOutlines,
-        waitMs: wait,
-      });
-      // Touch progress so phase-1 stall detector (which never inspects this
-      // phase) and STALE_RUNNING budget both stay clear during the wait.
-      const staggerHb = setInterval(() => {
-        void touchJobProgress(admin, jobId);
-      }, 6_000);
-      try {
-        await sleep(wait);
-      } finally {
-        clearInterval(staggerHb);
+  // Concurrency queue for the streaming Anthropic outline call. Tier 1 Haiku
+  // can run ~2-3 outlines in parallel before hitting input or output TPM
+  // limits and forcing every job into 28-90 s 429 retry backoff. A FIFO queue
+  // ordered by `created_at` gives deterministic, low-latency scheduling:
+  // the first N PDFs proceed immediately, the rest wait until a slot frees.
+  //
+  // Total wall-clock for 9 PDFs ≈ ceil(9 / 3) * 30 s = 90 s, vs the previous
+  // chaos where every job spent minutes in 429 retries.
+  //
+  // Override via `PDF_INGEST_OUTLINE_CONCURRENCY` (set higher on Tier 2/3/4).
+  const concurrencyEnv = process.env.PDF_INGEST_OUTLINE_CONCURRENCY?.trim();
+  const concurrencyParsed = concurrencyEnv
+    ? Number.parseInt(concurrencyEnv, 10)
+    : Number.NaN;
+  const OUTLINE_CONCURRENCY = Number.isFinite(concurrencyParsed)
+    ? Math.max(1, Math.min(20, concurrencyParsed))
+    : 3;
+  const QUEUE_POLL_MS = 3_500;
+  const QUEUE_MAX_WAIT_MS = 6 * 60 * 1000;
+
+  const myCreatedAt =
+    typeof (claimed as { created_at?: unknown }).created_at === "string"
+      ? (claimed as { created_at: string }).created_at
+      : null;
+  if (myCreatedAt && claimed.user_id) {
+    const queueStartedAt = Date.now();
+    let loggedQueueEnter = false;
+    while (Date.now() - queueStartedAt < QUEUE_MAX_WAIT_MS) {
+      const { count: aheadOfMe } = await admin
+        .from("pdf_ingest_jobs")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", claimed.user_id)
+        .eq("ingest_phase", "planning_outline")
+        .lt("created_at", myCreatedAt)
+        .neq("id", jobId);
+      const position = aheadOfMe ?? 0;
+      if (position < OUTLINE_CONCURRENCY) break;
+      if (!loggedQueueEnter) {
+        console.info("[pdf-ingest] outline queue wait", {
+          jobId,
+          position,
+          concurrency: OUTLINE_CONCURRENCY,
+        });
+        loggedQueueEnter = true;
       }
+      await touchJobProgress(admin, jobId);
+      await sleep(QUEUE_POLL_MS);
       if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
         return;
       }
