@@ -1,7 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { buildLivePreviewCourse, tryOutlinePreviewFromStreamTail } from "@/lib/pdf-ingest-preview";
+import { runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { CoursePayload } from "@/types/course";
 
@@ -107,11 +108,13 @@ export async function GET(_request: Request, ctx: Params) {
   // finishes, but `stream_preview` + heartbeats keep `updated_at` fresh; resetting
   // here caused stuck "planning outline" and lost work.
   //
-  // **Off by default.** Set `PDF_INGEST_STALL_PHASE1_MS` to milliseconds (60s–45m),
-  // e.g. `60000` for 1 minute, to re-enable auto-reset during reading only.
-  // `0` disables even when env is set.
-  const MIN_STALL_MS = 60 * 1000;
+  // **On by default at 45s.** When many PDFs are uploaded in parallel Vercel can
+  // silently kill some `after()` workers; without this the job sits in
+  // `reading_pdf` forever until the user clicks "Restart this PDF". Override
+  // with `PDF_INGEST_STALL_PHASE1_MS` (ms), or set `0` to disable.
+  const MIN_STALL_MS = 30 * 1000;
   const MAX_STALL_MS = 45 * 60 * 1000;
+  const DEFAULT_STALL_PHASE1_MS = 45 * 1000;
   const stallPhase1Env = process.env.PDF_INGEST_STALL_PHASE1_MS?.trim();
   const stallPhase1Parsed = stallPhase1Env
     ? Number.parseInt(stallPhase1Env, 10)
@@ -123,7 +126,7 @@ export async function GET(_request: Request, ctx: Params) {
           stallPhase1Parsed >= MIN_STALL_MS &&
           stallPhase1Parsed <= MAX_STALL_MS
         ? stallPhase1Parsed
-        : null;
+        : DEFAULT_STALL_PHASE1_MS;
 
   const ingestPhaseRawEarly = (row as { ingest_phase?: unknown }).ingest_phase;
   const stallAppliesToThisPhase =
@@ -168,11 +171,15 @@ export async function GET(_request: Request, ctx: Params) {
 
       if (reset) {
         console.warn("[jobs/get] auto-recovered stalled phase-1 job", jobId);
-        // Don't use after() here — it shares the invocation budget and can be
-        // killed before phase 1 finishes. The client will see `pending` and
-        // fire its own fire-and-forget POST /expand, which now runs phase 1
-        // inline (awaited) for the full 300 s serverless window.
-        // Return pending so the client's kick fires
+        // Server-side kick so the new worker fires even if the client is
+        // momentarily not polling (closed tab, throttled background tab).
+        // The atomic claim inside `runPdfIngestJob` makes a duplicate kick a
+        // no-op if the client also fires `/expand` on the next poll.
+        after(() => {
+          void runPdfIngestJob(jobId).catch((e) =>
+            console.error("[jobs/get] kick after auto-recovery", jobId, e)
+          );
+        });
         return NextResponse.json({
           status: "pending",
           outlineReady: false,
