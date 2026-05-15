@@ -917,6 +917,45 @@ export async function runPdfIngestJob(
     .eq("id", jobId)
     .eq("ingest_epoch", claimedEpoch);
 
+  // Stagger entry into the streaming Anthropic call when many PDFs reach
+  // phase 2 simultaneously. Without this, 10 parallel uploads all hit the
+  // outline streaming endpoint within ~5 s of each other, blow past the
+  // tokens-per-minute limit, and every job spends 28-90 s in 429 retry
+  // backoff with no streamed tokens to show in the UI. Cost is ~0 for a
+  // single PDF (count=1, no delay).
+  const { count: concurrentOutlines } = await admin
+    .from("pdf_ingest_jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", claimed.user_id)
+    .eq("ingest_phase", "planning_outline")
+    .neq("id", jobId);
+  if (concurrentOutlines && concurrentOutlines > 0) {
+    // ~1.8 s per peer, capped at 18 s. Each job picks a random point in
+    // [0, window) so the herd spreads instead of all firing at t=0.
+    const window = Math.min(18_000, concurrentOutlines * 1_800);
+    const wait = Math.round(Math.random() * window);
+    if (wait > 0) {
+      console.info("[pdf-ingest] stagger outline entry", {
+        jobId,
+        peers: concurrentOutlines,
+        waitMs: wait,
+      });
+      // Touch progress so phase-1 stall detector (which never inspects this
+      // phase) and STALE_RUNNING budget both stay clear during the wait.
+      const staggerHb = setInterval(() => {
+        void touchJobProgress(admin, jobId);
+      }, 6_000);
+      try {
+        await sleep(wait);
+      } finally {
+        clearInterval(staggerHb);
+      }
+      if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+        return;
+      }
+    }
+  }
+
   const streamSink = createPdfStreamSink(admin, jobId);
   const heartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
