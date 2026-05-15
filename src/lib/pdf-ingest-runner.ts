@@ -5,7 +5,7 @@ import {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 import pdfParse from "pdf-parse";
-import { extractPdfTextFullDocument, extractPdfTextHeadTail } from "@/lib/pdf-text-head-tail";
+import { extractPdfTextHeadTail } from "@/lib/pdf-text-head-tail";
 import {
   parseCourseModule,
   parseCourseOutlinePayload,
@@ -15,9 +15,9 @@ import type { CourseModule } from "@/types/course";
 import type { CourseOutlinePayload } from "@/lib/ai/course-payload";
 import type { CoursePayload } from "@/types/course";
 import {
-  buildMaterialDigestFromFullPdfText,
   generateCourseModuleFromMaterial,
   generateCourseOutlineFromMaterial,
+  materialTextForPdfIngest,
   type PdfIngestStreamSink,
 } from "@/lib/ai/study-generation";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -893,158 +893,12 @@ export async function runPdfIngestJob(
     clearInterval(extractKeepAlive);
   }
 
-  const needsFullExtract = previewResult.skippedMiddle;
-
-  if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
-    return;
-  }
-
-  await admin
-    .from("pdf_ingest_jobs")
-    .update({
-      ingest_phase: "planning_preview",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", jobId)
-    .eq("ingest_epoch", claimedEpoch);
-
-  const streamSinkPreview = createPdfStreamSink(admin, jobId);
-  const heartbeatPreview = setInterval(() => {
-    void touchJobProgress(admin, jobId);
-  }, 8_000);
-  let provisionalOutline: CourseOutlinePayload;
-  try {
-    provisionalOutline = await withAnthropicRateLimitRetries(
-      jobId,
-      "outline-preview",
-      () =>
-        generateCourseOutlineFromMaterial(
-          previewResult.text,
-          streamSinkPreview,
-          courseStudyContext ?? undefined
-        ),
-      { maxAttempts: 14 }
-    );
-  } catch (e) {
-    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
-      return;
-    }
-    const message = mapAiFailureToMessage(jobId, e);
-    await failJobUnlessStale(admin, jobId, storagePath, message, claimedEpoch);
-    return;
-  } finally {
-    clearInterval(heartbeatPreview);
-  }
-
-  const { data: previewRow, error: previewErr } = await admin
-    .from("pdf_ingest_jobs")
-    .update({
-      ingest_preview_outline: provisionalOutline,
-      stream_preview: null,
-      ingest_phase: needsFullExtract ? "reading_full_pdf" : "digesting_full_pdf",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", jobId)
-    .eq("ingest_epoch", claimedEpoch)
-    .select("id")
-    .maybeSingle();
-
-  if (previewErr) {
-    console.error("[pdf-ingest] persist preview outline", jobId, previewErr);
-    await failJobUnlessStale(
-      admin,
-      jobId,
-      storagePath,
-      "Could not save preview outline. Apply migration 028_pdf_ingest_preview_outline.sql in Supabase, then try again.",
-      claimedEpoch
-    );
-    return;
-  }
-  if (!previewRow) {
-    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
-      console.info("[pdf-ingest] preview outline persist skipped (restarted)", jobId);
-      return;
-    }
-    await failJobUnlessStale(
-      admin,
-      jobId,
-      storagePath,
-      "Could not save preview outline. Apply migration 028_pdf_ingest_preview_outline.sql in Supabase, then try again.",
-      claimedEpoch
-    );
-    return;
-  }
-
-  // Start the full-document extraction AFTER the preview outline is saved so
-  // the page-render CPU work does not slow the live-preview AI stream that
-  // every parallel job is racing to finish.
-  let fullText: string;
-  try {
-    const fullRes = needsFullExtract
-      ? await extractPdfTextFullDocument(buf, {
-          onHeartbeat: () => touchJobProgress(admin, jobId),
-        })
-      : {
-          text: previewResult.text,
-          numpages: previewResult.numpages,
-        };
-    fullText = fullRes.text;
-  } catch (e) {
-    console.error("[pdf-ingest] full extract", jobId, e);
-    await failJobUnlessStale(
-      admin,
-      jobId,
-      storagePath,
-      "Could not read the full PDF text. Try another file or fewer pages at once.",
-      claimedEpoch
-    );
-    return;
-  }
-
-  if (fullText.trim().length < 80) {
-    await failJobUnlessStale(
-      admin,
-      jobId,
-      storagePath,
-      "Not enough text extracted from this PDF. Try slides with selectable text or another file.",
-      claimedEpoch
-    );
-    return;
-  }
-
-  if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
-    return;
-  }
-
-  await admin
-    .from("pdf_ingest_jobs")
-    .update({
-      ingest_phase: "digesting_full_pdf",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", jobId)
-    .eq("ingest_epoch", claimedEpoch);
-
-  let storedMaterial: string;
-  try {
-    storedMaterial = await buildMaterialDigestFromFullPdfText(fullText, {
-      studyContext: courseStudyContext ?? undefined,
-      onChunkDone: () => touchJobProgress(admin, jobId),
-    });
-  } catch (e) {
-    console.error("[pdf-ingest] digest material", jobId, e);
-    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
-      return;
-    }
-    await failJobUnlessStale(
-      admin,
-      jobId,
-      storagePath,
-      mapAiFailureToMessage(jobId, e),
-      claimedEpoch
-    );
-    return;
-  }
+  // Single-pass outline: the live preview comes from streaming this same
+  // outline call (UI reads `stream_preview` and parses prefixes as it grows).
+  // Avoid extra Anthropic calls per job — with many PDFs in parallel they
+  // stack up and exhaust the serverless wall clock before modules can start.
+  const sourceTextForOutline = previewResult.text;
+  const storedMaterial = materialTextForPdfIngest(sourceTextForOutline);
 
   if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
     return;
@@ -1059,10 +913,8 @@ export async function runPdfIngestJob(
     .eq("id", jobId)
     .eq("ingest_epoch", claimedEpoch);
 
-  await clearJobStreamPreview(admin, jobId);
-
-  const streamSinkFinal = createPdfStreamSink(admin, jobId);
-  const heartbeatFinal = setInterval(() => {
+  const streamSink = createPdfStreamSink(admin, jobId);
+  const heartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
   }, 8_000);
   let outline: CourseOutlinePayload;
@@ -1072,8 +924,8 @@ export async function runPdfIngestJob(
       "outline",
       () =>
         generateCourseOutlineFromMaterial(
-          storedMaterial,
-          streamSinkFinal,
+          sourceTextForOutline,
+          streamSink,
           courseStudyContext ?? undefined
         ),
       { maxAttempts: 14 }
@@ -1086,7 +938,7 @@ export async function runPdfIngestJob(
     await failJobUnlessStale(admin, jobId, storagePath, message, claimedEpoch);
     return;
   } finally {
-    clearInterval(heartbeatFinal);
+    clearInterval(heartbeat);
   }
 
   const { data: outlineRow, error: outlineErr } = await admin

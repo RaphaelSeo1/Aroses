@@ -85,11 +85,11 @@ function envPositiveInt(name: string, fallback: number, max: number): number {
 }
 
 export type ExtractPdfTextFastOptions = {
-  /** First pages to extract when skipping the middle (default from env `PDF_INGEST_HEAD_PAGES`, else 4). */
+  /** First pages to extract when skipping the middle (default from env `PDF_INGEST_HEAD_PAGES`, else 12). */
   headPages?: number;
-  /** Last pages to extract when skipping the middle (default from env `PDF_INGEST_TAIL_PAGES`, else 0). */
+  /** Last pages to extract when skipping the middle (default from env `PDF_INGEST_TAIL_PAGES`, else 6). */
   tailPages?: number;
-  /** If total pages <= this, extract every page (default from env `PDF_INGEST_FULL_PARSE_MAX_PAGES`, else 6). */
+  /** If total pages <= this, extract every page (default from env `PDF_INGEST_FULL_PARSE_MAX_PAGES`, else 16). */
   fullParseMaxPages?: number;
   onHeartbeat?: () => Promise<void>;
 };
@@ -137,15 +137,13 @@ export async function extractPdfTextHeadTail(
     const pdf = doc;
     numpages = pdf.numPages;
 
-    // PREVIEW slice only — must be small enough that 9+ parallel jobs do not
-    // saturate the single Node thread before the live outline can stream. The
-    // final course is rebuilt from the FULL document by the runner, so a tiny
-    // slice here is safe.
-    const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 4, 120);
-    const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 0, 120);
+    // Default slice for the single-pass outline. Big enough for Claude to
+    // ground the outline, small enough that many parallel jobs stay snappy.
+    const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 12, 120);
+    const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 6, 120);
     const fullBelowDefault = envPositiveInt(
       "PDF_INGEST_FULL_PARSE_MAX_PAGES",
-      6,
+      16,
       400
     );
 
