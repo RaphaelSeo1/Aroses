@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
 import { buildLivePreviewCourse, tryOutlinePreviewFromStreamTail } from "@/lib/pdf-ingest-preview";
-import { runPdfIngestJob } from "@/lib/pdf-ingest-runner";
+import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { CoursePayload } from "@/types/course";
 
@@ -260,6 +260,46 @@ export async function GET(_request: Request, ctx: Params) {
         });
       }
     }
+  }
+
+  // Soft stall-kick for the writing_modules phase. Module heartbeats fire
+  // every 22 s during a live module call (plus queue heartbeats every 3.5 s
+  // when waiting), so 60 s of no updates reliably means the /expand worker
+  // died (Vercel maxDuration, OOM, or 504 mid-flight). Unlike phase-1 we do
+  // NOT reset the row — keep status=running, ingest_outline, and the
+  // ingest_modules prefix intact, and just fire a fresh /expand-style
+  // worker. runPdfIngestExpandOne is idempotent: it reads modules.length and
+  // continues from there. This unsticks UI like "Writing module 3 of 5" that
+  // sits frozen because the prior fetch is hung.
+  const MODULE_STALL_MS = 60_000;
+  const phaseForModuleCheck = (row as { ingest_phase?: unknown }).ingest_phase;
+  const outlineForModuleCheck = (row as { ingest_outline?: unknown })
+    .ingest_outline;
+  const modulesArrForCheck = Array.isArray(row.ingest_modules)
+    ? (row.ingest_modules as unknown[])
+    : [];
+  const outlineModuleCount =
+    outlineForModuleCheck &&
+    typeof outlineForModuleCheck === "object" &&
+    Array.isArray((outlineForModuleCheck as { modules?: unknown[] }).modules)
+      ? (outlineForModuleCheck as { modules: unknown[] }).modules.length
+      : 0;
+  const isStuckWritingModules =
+    phaseForModuleCheck === "writing_modules" &&
+    row.status === "running" &&
+    outlineModuleCount > 0 &&
+    modulesArrForCheck.length < outlineModuleCount &&
+    Number.isFinite(updatedAt) &&
+    Date.now() - updatedAt > MODULE_STALL_MS &&
+    currentEpoch < MAX_AUTO_RECOVERIES;
+
+  if (isStuckWritingModules) {
+    console.warn("[jobs/get] kicking stalled writing_modules job", jobId);
+    after(() => {
+      void runPdfIngestExpandOne(jobId).catch((e) =>
+        console.error("[jobs/get] kick after module stall", jobId, e)
+      );
+    });
   }
 
   const outline = row.ingest_outline as { modules?: unknown[] } | null;

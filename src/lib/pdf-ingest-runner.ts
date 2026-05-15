@@ -662,7 +662,14 @@ export async function runPdfIngestExpandOne(
               offset === 0 ? createPdfStreamSink(admin, jobId) : undefined,
               expandStudyContext ?? undefined
             ),
-          { maxAttempts: 16 }
+          // 6 attempts × 90 s exp-backoff cap = ~126 s worst-case retry +
+          // ~30 s generation = ~156 s. Comfortably under Vercel's 300 s
+          // maxDuration so /expand always returns cleanly to the client
+          // (which has its own retry loop via polling). 16 here meant the
+          // function would get force-killed mid-retry, the client would
+          // reconnect, and the same module would be re-attempted from zero
+          // — the UI looked stuck at "Writing module N of M" for minutes.
+          { maxAttempts: 6 }
         )
       )
     );
