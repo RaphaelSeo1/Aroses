@@ -26,6 +26,20 @@ type RowState = {
 
 type PollOutcome = { materialId?: string; error?: string };
 
+/** True while the server is still expanding module bodies (not just outline). */
+function modulesStillBuilding(
+  snap: PollPdfIngestJobSnapshot | undefined
+): boolean {
+  if (!snap || snap.status !== "running") return false;
+  if (snap.ingestPhase === "writing_modules") return true;
+  if (!snap.outlineReady) return false;
+  const total = snap.modulesTotal ?? 0;
+  if (total <= 0) return false;
+  const built =
+    typeof snap.modulesBuilt === "number" ? snap.modulesBuilt : 0;
+  return built < total;
+}
+
 function tabStatusLine(
   terminal: PollOutcome | null | undefined,
   preview: CoursePayload | null | undefined,
@@ -38,17 +52,21 @@ function tabStatusLine(
   if (terminal?.materialId) {
     return { line: "Done", detail: "Open in study editor from the course list." };
   }
+  // IMPORTANT: check module progress before `preview`. The merged preview
+  // exists as soon as the outline is saved, but modules can still be writing
+  // for minutes — tabs must not all jump to "Live preview" during that time.
+  if (modulesStillBuilding(snap)) {
+    return {
+      line: "Writing modules…",
+      detail:
+        "Outline is on screen; lesson bodies are still being generated for this PDF.",
+    };
+  }
   if (preview) {
     return {
       line: "Live preview",
       detail:
         "Outline is visible; lessons fill in as each module finishes (order can differ from other PDFs in this batch).",
-    };
-  }
-  if (snap?.outlineReady) {
-    return {
-      line: "Writing modules…",
-      detail: "Outline is saved; the page layout appears when the first module body is ready.",
     };
   }
   if (snap?.ingestPhase === "planning_outline") {
@@ -68,7 +86,8 @@ function tabStatusLine(
   if (snap?.status === "pending") {
     return {
       line: "Queued…",
-      detail: "This build starts shortly after upload (multi-PDF batches are staggered on purpose).",
+      detail:
+        "This build starts shortly after upload. In large batches the first few PDFs start a few seconds apart (capped), then the rest kick in together so the tab strip does not stay idle too long.",
     };
   }
   if (phase === "boot") {
@@ -521,10 +540,11 @@ export function CourseBuildTheater({
           {jobIds.length > 1 ? (
             <div className="mb-6 space-y-2 border-b border-zinc-100 pb-4 dark:border-zinc-800">
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Tabs stay in the order you uploaded. Each PDF finishes extraction on its
-                own schedule, so previews can appear in a different order than the
-                list — use the
-                status under each name to see which step each file is on.
+                Tabs stay in the order you uploaded. Each PDF finishes on its own
+                schedule, so previews can appear in a different order than the list
+                — use the status under each name to see which step each file is on.
+                Large batches start the first few polls a few seconds apart (then the
+                rest together) so the browser is not overwhelmed.
               </p>
               <div className="flex flex-wrap gap-2" role="tablist" aria-label="PDF builds">
                 {jobIds.map((id, idx) => {
