@@ -19,19 +19,19 @@ export function ProgressRings({
 }: {
   modulePct: number;
   quizPct: number | null;
-  size?: "sm" | "lg";
+  size?: "xs" | "sm" | "lg";
   className?: string;
   ringId?: string;
   strokeTransitionClass?: string;
   quizLabelPlacement?: "center" | "below";
 }) {
   /** Slightly larger small layout so the donut hole clears both strokes + numeric center. */
-  const dim = size === "lg" ? 160 : 128;
+  const dim = size === "lg" ? 160 : size === "sm" ? 128 : 80;
   const c = dim / 2;
-  const outerR = size === "lg" ? 58 : 46;
-  const innerR = size === "lg" ? 42 : 32;
-  const outerW = size === "lg" ? 9 : 5;
-  const innerW = size === "lg" ? 7 : 4;
+  const outerR = size === "lg" ? 58 : size === "sm" ? 46 : 28;
+  const innerR = size === "lg" ? 42 : size === "sm" ? 32 : 19;
+  const outerW = size === "lg" ? 9 : size === "sm" ? 5 : 4;
+  const innerW = size === "lg" ? 7 : size === "sm" ? 4 : 3;
   const cOuter = 2 * Math.PI * outerR;
   const cInner = 2 * Math.PI * innerR;
   const modClamped = Math.min(100, Math.max(0, modulePct));
@@ -50,18 +50,22 @@ export function ProgressRings({
   const centerPctClass =
     size === "lg"
       ? "text-2xl"
-      : quizBelow || moduleLabelBelow
-        ? "text-xl"
-        : quizClamped != null
-          ? "text-[1.0625rem]"
-          : "text-lg";
+      : size === "xs"
+        ? "text-[0.78rem]"
+        : quizBelow || moduleLabelBelow
+          ? "text-xl"
+          : quizClamped != null
+            ? "text-[1.0625rem]"
+            : "text-lg";
 
   /** Flex centering sits visually high on numeric + caption stacks; nudge toward donut hole center. */
   const centerAnchorClass =
     !quizBelow && quizClamped != null && !moduleLabelBelow
       ? size === "lg"
         ? "left-1/2 top-[calc(50%+0.28rem)] -translate-x-1/2 -translate-y-1/2"
-        : "left-1/2 top-[calc(50%+0.35rem)] -translate-x-1/2 -translate-y-1/2"
+        : size === "xs"
+          ? "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+          : "left-1/2 top-[calc(50%+0.35rem)] -translate-x-1/2 -translate-y-1/2"
       : size === "lg"
         ? "left-1/2 top-[calc(50%+0.14rem)] -translate-x-1/2 -translate-y-1/2"
         : "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2";
@@ -158,12 +162,12 @@ export function ProgressRings({
         >
           {modClamped}%
         </span>
-        {!moduleLabelBelow ? (
+        {!moduleLabelBelow && size !== "xs" ? (
           <span className="mt-0.5 block text-[10px] font-medium uppercase leading-none tracking-wide text-brand-muted dark:text-brand-soft">
             modules
           </span>
         ) : null}
-        {!quizBelow && quizClamped != null ? (
+        {!quizBelow && quizClamped != null && size !== "xs" ? (
           <span
             className={`mt-1.5 tabular-nums font-semibold leading-none text-brand-ink/90 dark:text-brand-soft ${size === "lg" ? "text-[11px]" : "text-[10px]"}`}
           >

@@ -31,11 +31,11 @@ export function ProgressDashboardContent({
 
   const heroSplit =
     isPanel
-      ? "flex flex-col gap-10"
-      : "flex flex-col gap-10 xl:flex-row xl:items-stretch xl:justify-between xl:gap-12";
+      ? "flex flex-col gap-6"
+      : "flex flex-col gap-6 lg:flex-row lg:items-stretch lg:justify-between lg:gap-8";
 
   return (
-    <div className="space-y-12">
+    <div className="space-y-8">
       {showTopActions ? (
         <div className="flex flex-col gap-5 border-b border-zinc-200/80 pb-8 dark:border-zinc-800">
           <div className="space-y-2">
@@ -93,9 +93,9 @@ export function ProgressDashboardContent({
         </div>
       ) : (
         <>
-          <section className="rounded-2xl border border-brand-border bg-brand-blush/80 p-5 shadow-lg shadow-red-900/5 dark:border-brand-border/40 dark:bg-[#1e1616]/95 sm:p-8">
+          <section className="rounded-2xl border border-brand-border bg-brand-blush/80 p-4 shadow-md shadow-red-900/5 dark:border-brand-border/40 dark:bg-[#1e1616]/95 sm:p-6">
             <div className={heroSplit}>
-              <div className="flex min-w-0 flex-1 flex-col items-center gap-8 sm:flex-row sm:items-start">
+              <div className="flex min-w-0 flex-1 flex-col items-center gap-6 sm:flex-row sm:items-center">
                 <ProgressRings
                   ringId="pulse-hero"
                   modulePct={modPctGlobal}
@@ -104,49 +104,49 @@ export function ProgressDashboardContent({
                   className="shrink-0"
                 />
                 <div className="min-w-0 flex-1 text-center sm:text-left">
-                  <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                  <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
                     Overall snapshot
                   </h3>
-                  <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
                     <strong className="font-medium text-zinc-800 dark:text-zinc-200">
                       Outer ring
                     </strong>{" "}
-                    tracks module checkpoints across your courses.{" "}
+                    = modules ·{" "}
                     <strong className="font-medium text-zinc-800 dark:text-zinc-200">
-                      Inner ring
+                      inner
                     </strong>{" "}
-                    is your quiz accuracy when you have attempts.
+                    = quiz accuracy.
                   </p>
-                  <dl className="mt-6 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                    <div className="rounded-2xl border border-zinc-100 bg-zinc-50/90 px-3 py-3.5 dark:border-zinc-800 dark:bg-zinc-900/50">
+                  <dl className="mt-4 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                    <div className="rounded-xl border border-zinc-100 bg-zinc-50/90 px-2.5 py-2 dark:border-zinc-800 dark:bg-zinc-900/50">
                       <dt className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                         Courses
                       </dt>
-                      <dd className="mt-1 text-xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                      <dd className="mt-0.5 text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
                         {global.coursesStarted}
                       </dd>
                     </div>
-                    <div className="rounded-2xl border border-zinc-100 bg-zinc-50/90 px-3 py-3.5 dark:border-zinc-800 dark:bg-zinc-900/50">
+                    <div className="rounded-xl border border-zinc-100 bg-zinc-50/90 px-2.5 py-2 dark:border-zinc-800 dark:bg-zinc-900/50">
                       <dt className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                        Lesson units
+                        Lessons
                       </dt>
-                      <dd className="mt-1 text-xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                      <dd className="mt-0.5 text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
                         {global.uploadsTotal}
                       </dd>
                     </div>
-                    <div className="rounded-2xl border border-zinc-100 bg-zinc-50/90 px-3 py-3.5 dark:border-zinc-800 dark:bg-zinc-900/50">
+                    <div className="rounded-xl border border-zinc-100 bg-zinc-50/90 px-2.5 py-2 dark:border-zinc-800 dark:bg-zinc-900/50">
                       <dt className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                         Quiz tries
                       </dt>
-                      <dd className="mt-1 text-xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                      <dd className="mt-0.5 text-lg font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
                         {global.quizAttempts}
                       </dd>
                     </div>
-                    <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50/80 px-3 py-3.5 dark:border-emerald-900/50 dark:bg-emerald-950/35">
+                    <div className="rounded-xl border border-emerald-200/80 bg-emerald-50/80 px-2.5 py-2 dark:border-emerald-900/50 dark:bg-emerald-950/35">
                       <dt className="text-[10px] font-semibold uppercase tracking-wide text-emerald-800 dark:text-emerald-400">
                         Correct
                       </dt>
-                      <dd className="mt-1 text-xl font-semibold tabular-nums text-emerald-800 dark:text-emerald-300">
+                      <dd className="mt-0.5 text-lg font-semibold tabular-nums text-emerald-800 dark:text-emerald-300">
                         {global.quizAttempts > 0 ? global.quizCorrect : "—"}
                       </dd>
                     </div>
@@ -158,24 +158,25 @@ export function ProgressDashboardContent({
                 className={
                   isPanel
                     ? "w-full min-w-0"
-                    : "flex w-full min-w-0 flex-col xl:max-w-md xl:flex-1"
+                    : "flex w-full min-w-0 flex-col lg:max-w-sm lg:flex-1"
                 }
               >
                 <div
                   className={
                     isPanel
-                      ? "rounded-xl border border-zinc-200/90 bg-white/70 p-4 shadow-sm dark:border-zinc-700/80 dark:bg-zinc-950/40"
-                      : "rounded-xl border border-zinc-200/60 bg-white/50 p-4 dark:border-zinc-700/60 dark:bg-zinc-950/30"
+                      ? "rounded-xl border border-zinc-200/90 bg-white/70 p-3 shadow-sm dark:border-zinc-700/80 dark:bg-zinc-950/40"
+                      : "rounded-xl border border-zinc-200/60 bg-white/50 p-3 dark:border-zinc-700/60 dark:bg-zinc-950/30"
                   }
                 >
-                  <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                    Practice rhythm (14 days)
-                  </h4>
-                  <p className="mt-1.5 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                    Each column is one day — taller means more quiz attempts.
-                    Letters match weekdays (S&nbsp;M&nbsp;T&nbsp;W&nbsp;T&nbsp;F&nbsp;S).
-                  </p>
-                  <div className="mt-5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                      Practice rhythm
+                    </h4>
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                      Last 14 days
+                    </span>
+                  </div>
+                  <div className="mt-3">
                     <ActivityRhythm
                       buckets={activityBuckets}
                       labels={dayLabels}
@@ -186,17 +187,19 @@ export function ProgressDashboardContent({
             </div>
           </section>
 
-          <section className="border-t border-zinc-200/80 pt-10 dark:border-zinc-800">
-            <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-              By course
-            </h3>
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              Jump back into anything you&apos;ve started — tiles follow your
-              module checkpoints per class.
-            </p>
-            <ul className="mt-8 space-y-8">
+          <section>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                By course
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {summaries.length} {summaries.length === 1 ? "course" : "courses"} ·
+                tiles follow module checkpoints
+              </p>
+            </div>
+            <ul className="mt-5 grid gap-4 md:grid-cols-2">
               {summaries.map((c) => (
-                <li key={c.courseId}>
+                <li key={c.courseId} className="flex">
                   <CourseLearningCard course={c} />
                 </li>
               ))}
