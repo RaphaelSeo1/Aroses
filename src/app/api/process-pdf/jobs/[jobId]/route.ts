@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { buildLivePreviewCourse } from "@/lib/pdf-ingest-preview";
+import { buildLivePreviewCourse, tryOutlinePreviewFromStreamTail } from "@/lib/pdf-ingest-preview";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { CoursePayload } from "@/types/course";
 
@@ -102,14 +102,16 @@ export async function GET(_request: Request, ctx: Params) {
     });
   }
 
-  // Self-heal: reset a stuck phase-1 job (`running`, no outline, `updated_at`
-  // frozen) to `pending` so the client's `/expand` kick can restart.
+  // Phase-1 stall reset: only while **reading the PDF** (`ingest_outline` still null).
+  // Never during `planning_outline` — outline JSON is not persisted until the model
+  // finishes, but `stream_preview` + heartbeats keep `updated_at` fresh; resetting
+  // here caused stuck "planning outline" and lost work.
   //
-  // Default **1 minute** (`PDF_INGEST_STALL_PHASE1_MS` unset). Override with
-  // milliseconds in **1–45 minutes**, or set **`0`** to disable this reset entirely.
+  // **Off by default.** Set `PDF_INGEST_STALL_PHASE1_MS` to milliseconds (60s–45m),
+  // e.g. `60000` for 1 minute, to re-enable auto-reset during reading only.
+  // `0` disables even when env is set.
   const MIN_STALL_MS = 60 * 1000;
   const MAX_STALL_MS = 45 * 60 * 1000;
-  const DEFAULT_STALL_MS = 60 * 1000;
   const stallPhase1Env = process.env.PDF_INGEST_STALL_PHASE1_MS?.trim();
   const stallPhase1Parsed = stallPhase1Env
     ? Number.parseInt(stallPhase1Env, 10)
@@ -121,9 +123,18 @@ export async function GET(_request: Request, ctx: Params) {
           stallPhase1Parsed >= MIN_STALL_MS &&
           stallPhase1Parsed <= MAX_STALL_MS
         ? stallPhase1Parsed
-        : DEFAULT_STALL_MS;
+        : null;
+
+  const ingestPhaseRawEarly = (row as { ingest_phase?: unknown }).ingest_phase;
+  const stallAppliesToThisPhase =
+    ingestPhaseRawEarly === "reading_pdf" ||
+    ingestPhaseRawEarly === null ||
+    ingestPhaseRawEarly === undefined ||
+    ingestPhaseRawEarly === "";
+
   const isStuckPhase1 =
     STALL_PHASE1_MS != null &&
+    stallAppliesToThisPhase &&
     row.status === "running" &&
     (row as { ingest_outline?: unknown }).ingest_outline == null &&
     Number.isFinite(updatedAt) &&
@@ -219,6 +230,14 @@ export async function GET(_request: Request, ctx: Params) {
       ? ingestPhaseRaw
       : null;
 
+  const jobCreatedMs =
+    typeof row.created_at === "string" && row.created_at.trim()
+      ? Date.parse(row.created_at.trim())
+      : NaN;
+  /** After 1 minute, allow best-effort live preview from streaming outline tail. */
+  const jobAgeOkForStreamPreview =
+    Number.isFinite(jobCreatedMs) && Date.now() - jobCreatedMs >= 60_000;
+
   let previewCourse: CoursePayload | null = null;
   if (
     (outlineReady || row.status === "complete") &&
@@ -226,6 +245,14 @@ export async function GET(_request: Request, ctx: Params) {
     typeof outline === "object"
   ) {
     previewCourse = buildLivePreviewCourse(outline, modulesArr);
+  } else if (
+    row.status === "running" &&
+    ingestPhase === "planning_outline" &&
+    streamPreview &&
+    streamPreview.length >= 400 &&
+    jobAgeOkForStreamPreview
+  ) {
+    previewCourse = tryOutlinePreviewFromStreamTail(streamPreview);
   }
 
   return NextResponse.json({

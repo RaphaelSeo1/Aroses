@@ -1,9 +1,37 @@
 import {
   parseCourseModule,
   parseCourseOutlinePayload,
+  stripJsonFence,
   type CourseOutlinePayload,
 } from "@/lib/ai/course-payload";
 import type { CourseLesson, CourseModule, CoursePayload } from "@/types/course";
+
+/**
+ * Best-effort: the DB stores only a **tail** of the streaming outline JSON. After
+ * ~1 minute of wall time the buffer is often long enough to contain a complete
+ * parseable outline prefix so the UI can show live preview before the row is
+ * finalized.
+ */
+export function tryOutlinePreviewFromStreamTail(
+  stream: string
+): CoursePayload | null {
+  const s = stream.trim();
+  if (s.length < 200) return null;
+  const cleaned = stripJsonFence(s);
+  const start = cleaned.indexOf("{");
+  if (start < 0) return null;
+  const frag = cleaned.slice(start);
+  const maxLen = Math.min(frag.length, 28_000);
+  for (let len = maxLen; len > 120; len -= 120) {
+    try {
+      const parsed: unknown = JSON.parse(frag.slice(0, len));
+      return buildLivePreviewCourse(parsed, []);
+    } catch {
+      /* try shorter prefix — incomplete trailing `}` etc. */
+    }
+  }
+  return null;
+}
 
 /**
  * Merge stored outline + any completed modules into a `CoursePayload` the study UI can render
