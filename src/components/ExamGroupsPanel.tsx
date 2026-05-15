@@ -608,6 +608,11 @@ export function ExamGroupsPanel({
   const [groupRenameBusy, setGroupRenameBusy] = useState(false);
   const [groupRenameError, setGroupRenameError] = useState<string | null>(null);
   const groupRenameInputRef = useRef<HTMLInputElement>(null);
+  const [pendingDeleteGroupId, setPendingDeleteGroupId] = useState<string | null>(
+    null
+  );
+  const [deleteGroupBusy, setDeleteGroupBusy] = useState(false);
+  const [deleteGroupError, setDeleteGroupError] = useState<string | null>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(
     null
   );
@@ -828,6 +833,50 @@ export function ExamGroupsPanel({
       setGroupRenameError("Network error.");
     }
     setGroupRenameBusy(false);
+  }
+
+  function beginDeleteGroup(groupId: string) {
+    setDeleteGroupError(null);
+    setPendingDeleteGroupId(groupId);
+  }
+
+  function cancelDeleteGroup() {
+    if (deleteGroupBusy) return;
+    setPendingDeleteGroupId(null);
+    setDeleteGroupError(null);
+  }
+
+  async function confirmDeleteGroup() {
+    if (!pendingDeleteGroupId || deleteGroupBusy) return;
+    const groupId = pendingDeleteGroupId;
+    setDeleteGroupBusy(true);
+    setDeleteGroupError(null);
+    try {
+      const res = await fetch(`/api/exam-groups/${groupId}`, {
+        method: "DELETE",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDeleteGroupError(
+          typeof body.error === "string"
+            ? body.error
+            : "Could not delete section."
+        );
+        setDeleteGroupBusy(false);
+        return;
+      }
+      // Move focus to the next available section before refresh so the UI
+      // doesn't blink on a dead activeId.
+      if (groupId === activeId) {
+        const fallback = groups.find((g) => g.id !== groupId);
+        if (fallback) setActiveId(fallback.id);
+      }
+      setPendingDeleteGroupId(null);
+      router.refresh();
+    } catch {
+      setDeleteGroupError("Network error.");
+    }
+    setDeleteGroupBusy(false);
   }
 
   async function createGroup(e: React.FormEvent) {
@@ -1126,22 +1175,45 @@ export function ExamGroupsPanel({
                   {g.name}
                 </button>
                 {active && (
-                  <button
-                    type="button"
-                    onClick={() => beginRenameGroup(g)}
-                    className="ml-1 mr-1 flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/20 hover:text-white"
-                    aria-label={`Rename ${g.name}`}
-                    title="Rename section"
-                  >
-                    <svg viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
-                      <path d="M11.013 2.513a1.75 1.75 0 0 1 2.475 2.474L6.226 12.25a2.75 2.75 0 0 1-.892.592l-2.585.95a.5.5 0 0 1-.634-.634l.95-2.585a2.75 2.75 0 0 1 .592-.892l7.356-7.168Z" />
-                    </svg>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => beginRenameGroup(g)}
+                      className="ml-1 flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/20 hover:text-white"
+                      aria-label={`Rename ${g.name}`}
+                      title="Rename section"
+                    >
+                      <svg viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
+                        <path d="M11.013 2.513a1.75 1.75 0 0 1 2.475 2.474L6.226 12.25a2.75 2.75 0 0 1-.892.592l-2.585.95a.5.5 0 0 1-.634-.634l.95-2.585a2.75 2.75 0 0 1 .592-.892l7.356-7.168Z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => beginDeleteGroup(g.id)}
+                      disabled={groups.length <= 1}
+                      className="mr-1 flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-white/70"
+                      aria-label={`Delete ${g.name}`}
+                      title={
+                        groups.length <= 1
+                          ? "Add another section before deleting this one"
+                          : "Delete section"
+                      }
+                    >
+                      <svg viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+                        <path d="M6.5 1.75a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 .75.75V2.5h3.25a.75.75 0 0 1 0 1.5H13l-.59 9.44A2.25 2.25 0 0 1 10.165 15.5H5.835a2.25 2.25 0 0 1-2.246-2.06L3 4h-.25a.75.75 0 0 1 0-1.5H6.5V1.75ZM4.504 4l.58 9.29a.75.75 0 0 0 .749.71h4.334a.75.75 0 0 0 .748-.71L11.496 4h-6.992ZM7 6.25a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 7 6.25Zm2.75.75a.75.75 0 0 0-1.5 0v4.5a.75.75 0 0 0 1.5 0v-4.5Z" />
+                      </svg>
+                    </button>
+                  </>
                 )}
               </div>
             );
           })}
         </div>
+        {deleteGroupError && (
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+            {deleteGroupError}
+          </p>
+        )}
         {groupRenameError && (
           <p className="mt-1 text-xs text-red-600 dark:text-red-400">{groupRenameError}</p>
         )}
@@ -1358,6 +1430,49 @@ export function ExamGroupsPanel({
           ) : null}
         </>
       )}
+    </ConfirmDialog>
+    <ConfirmDialog
+      open={Boolean(pendingDeleteGroupId)}
+      title="Delete this section?"
+      cancelLabel="Cancel"
+      confirmLabel="Delete section"
+      confirmBusy={deleteGroupBusy}
+      onCancel={cancelDeleteGroup}
+      onConfirm={confirmDeleteGroup}
+    >
+      {(() => {
+        const target = groups.find((g) => g.id === pendingDeleteGroupId);
+        const materialsInGroup = pendingDeleteGroupId
+          ? materials.filter((m) => m.exam_group_id === pendingDeleteGroupId)
+              .length
+          : 0;
+        return (
+          <>
+            <p>
+              Are you sure you want to delete{" "}
+              <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                {target?.name ?? "this section"}
+              </span>
+              ?
+            </p>
+            {materialsInGroup > 0 ? (
+              <p className="mt-2 text-amber-800 dark:text-amber-200">
+                This will also permanently delete{" "}
+                <span className="font-semibold">
+                  {materialsInGroup}{" "}
+                  upload{materialsInGroup === 1 ? "" : "s"}
+                </span>{" "}
+                in this section along with their generated lessons and quizzes.
+                This cannot be undone.
+              </p>
+            ) : (
+              <p className="mt-2 text-zinc-600 dark:text-zinc-400">
+                There are no uploads in this section, so nothing else is removed.
+              </p>
+            )}
+          </>
+        );
+      })()}
     </ConfirmDialog>
     </>
   );
