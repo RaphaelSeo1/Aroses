@@ -24,6 +24,7 @@ export async function POST(request: Request) {
     description?: string;
     is_self_study?: boolean;
     study_context?: string;
+    section_name?: string;
   };
   let title = typeof b.title === "string" ? b.title.trim() : "";
   const description =
@@ -32,6 +33,13 @@ export async function POST(request: Request) {
   const studyContext =
     typeof b.study_context === "string" && b.study_context.trim().length > 0
       ? b.study_context.trim().slice(0, 4000)
+      : null;
+  // Optional name for the auto-created materials folder/section. Mainly used
+  // by self-study so the user picks the tab label instead of getting the
+  // hardcoded "My materials" default.
+  const sectionName =
+    typeof b.section_name === "string" && b.section_name.trim().length > 0
+      ? b.section_name.trim().slice(0, 80)
       : null;
 
   // Self-study sessions don't require a title; we generate a friendly default
@@ -113,6 +121,25 @@ export async function POST(request: Request) {
     row = rowFallback;
   } else {
     row = rowFull;
+  }
+
+  // If the caller picked a section name (self-study with custom label),
+  // seed the first exam_group here so the workspace doesn't fall back to
+  // the hardcoded "My materials" default.
+  if (row && sectionName) {
+    const { error: groupErr } = await supabase
+      .from("exam_groups")
+      .insert({
+        course_id: row.id,
+        user_id: user.id,
+        name: sectionName,
+        sort_order: 0,
+      });
+    if (groupErr) {
+      // Non-fatal: the workspace page will fall back to creating a default
+      // section on first render. Log so we can spot recurring failures.
+      console.warn("[POST /api/courses] could not seed section", groupErr);
+    }
   }
 
   return NextResponse.json({ courseId: row!.id });

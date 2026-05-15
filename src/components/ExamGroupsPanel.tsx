@@ -1159,53 +1159,67 @@ export function ExamGroupsPanel({
               );
             }
 
-            return (
-              <div key={g.id} className="group/tab relative flex items-center">
-                <button
-                  type="button"
+            if (active) {
+              // Render the whole pill as one rounded container so the rename
+              // and delete actions feel embedded inside the tab instead of
+              // floating beside it (which previously caused asymmetric
+              // spacing — `pl-5 pr-3` text + icons beside it).
+              return (
+                <div
+                  key={g.id}
+                  className="group/tab inline-flex shrink-0 items-center gap-0.5 rounded-full bg-brand py-1 pl-4 pr-1 text-white shadow-md shadow-red-600/25 dark:bg-brand"
                   role="tab"
-                  aria-selected={active}
-                  onClick={() => setActiveId(g.id)}
-                  className={`shrink-0 rounded-full py-2.5 text-sm font-semibold transition ${
-                    active
-                      ? "bg-brand pl-5 pr-3 text-white shadow-md shadow-red-600/25 dark:bg-brand"
-                      : "bg-zinc-100 px-5 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                  }`}
+                  aria-selected
                 >
-                  {g.name}
-                </button>
-                {active && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => beginRenameGroup(g)}
-                      className="ml-1 flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/20 hover:text-white"
-                      aria-label={`Rename ${g.name}`}
-                      title="Rename section"
-                    >
-                      <svg viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
-                        <path d="M11.013 2.513a1.75 1.75 0 0 1 2.475 2.474L6.226 12.25a2.75 2.75 0 0 1-.892.592l-2.585.95a.5.5 0 0 1-.634-.634l.95-2.585a2.75 2.75 0 0 1 .592-.892l7.356-7.168Z" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => beginDeleteGroup(g.id)}
-                      disabled={groups.length <= 1}
-                      className="mr-1 flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-white/70"
-                      aria-label={`Delete ${g.name}`}
-                      title={
-                        groups.length <= 1
-                          ? "Add another section before deleting this one"
-                          : "Delete section"
-                      }
-                    >
-                      <svg viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
-                        <path d="M6.5 1.75a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 .75.75V2.5h3.25a.75.75 0 0 1 0 1.5H13l-.59 9.44A2.25 2.25 0 0 1 10.165 15.5H5.835a2.25 2.25 0 0 1-2.246-2.06L3 4h-.25a.75.75 0 0 1 0-1.5H6.5V1.75ZM4.504 4l.58 9.29a.75.75 0 0 0 .749.71h4.334a.75.75 0 0 0 .748-.71L11.496 4h-6.992ZM7 6.25a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 7 6.25Zm2.75.75a.75.75 0 0 0-1.5 0v4.5a.75.75 0 0 0 1.5 0v-4.5Z" />
-                      </svg>
-                    </button>
-                  </>
-                )}
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveId(g.id)}
+                    className="px-1 py-1.5 text-sm font-semibold"
+                  >
+                    {g.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => beginRenameGroup(g)}
+                    className="flex h-7 w-7 items-center justify-center rounded-full text-white/80 transition hover:bg-white/20 hover:text-white"
+                    aria-label={`Rename ${g.name}`}
+                    title="Rename section"
+                  >
+                    <svg viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
+                      <path d="M11.013 2.513a1.75 1.75 0 0 1 2.475 2.474L6.226 12.25a2.75 2.75 0 0 1-.892.592l-2.585.95a.5.5 0 0 1-.634-.634l.95-2.585a2.75 2.75 0 0 1 .592-.892l7.356-7.168Z" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => beginDeleteGroup(g.id)}
+                    disabled={groups.length <= 1}
+                    className="flex h-7 w-7 items-center justify-center rounded-full text-white/80 transition hover:bg-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-white/80"
+                    aria-label={`Delete ${g.name}`}
+                    title={
+                      groups.length <= 1
+                        ? "Add another section before deleting this one"
+                        : "Delete section"
+                    }
+                  >
+                    <svg viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+                      <path d="M6.5 1.75a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 .75.75V2.5h3.25a.75.75 0 0 1 0 1.5H13l-.59 9.44A2.25 2.25 0 0 1 10.165 15.5H5.835a2.25 2.25 0 0 1-2.246-2.06L3 4h-.25a.75.75 0 0 1 0-1.5H6.5V1.75ZM4.504 4l.58 9.29a.75.75 0 0 0 .749.71h4.334a.75.75 0 0 0 .748-.71L11.496 4h-6.992ZM7 6.25a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 7 6.25Zm2.75.75a.75.75 0 0 0-1.5 0v4.5a.75.75 0 0 0 1.5 0v-4.5Z" />
+                    </svg>
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <button
+                key={g.id}
+                type="button"
+                role="tab"
+                aria-selected={false}
+                onClick={() => setActiveId(g.id)}
+                className="shrink-0 rounded-full bg-zinc-100 px-5 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-200 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                {g.name}
+              </button>
             );
           })}
         </div>

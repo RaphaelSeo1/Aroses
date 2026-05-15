@@ -456,10 +456,10 @@ export function CourseDashboardList({
               materials and goals — nothing here is published to Explore.
             </p>
             <Link
-              href="/dashboard/courses/new"
+              href="/dashboard/courses/new?mode=public"
               className="mt-4 inline-flex text-sm font-semibold text-brand hover:underline dark:text-brand-soft"
             >
-              Start self study
+              Create a course
             </Link>
           </div>
         ) : (

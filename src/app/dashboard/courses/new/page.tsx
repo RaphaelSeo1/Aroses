@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
@@ -103,7 +103,16 @@ type Step = "mode" | "public" | "selfStudy";
 
 export default function NewCoursePage() {
   const router = useRouter();
-  const [step, setStep] = useState<Step>("mode");
+  const searchParams = useSearchParams();
+  // Allow deep-linking straight into a step (e.g. workspace shortcut
+  // "Start a course" → `?mode=public` skips the chooser).
+  const initialStep: Step =
+    searchParams.get("mode") === "public"
+      ? "public"
+      : searchParams.get("mode") === "selfStudy"
+        ? "selfStudy"
+        : "mode";
+  const [step, setStep] = useState<Step>(initialStep);
 
   // Public course fields
   const [title, setTitle] = useState("");
@@ -111,6 +120,7 @@ export default function NewCoursePage() {
 
   // Self-study fields
   const [studyContext, setStudyContext] = useState("");
+  const [sectionName, setSectionName] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [error, setError] = useState<string | null>(null);
@@ -171,6 +181,8 @@ export default function NewCoursePage() {
         body: JSON.stringify({
           is_self_study: true,
           study_context: studyContext.trim(),
+          // Optional — if blank the workspace falls back to "My materials".
+          section_name: sectionName.trim() || undefined,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -380,6 +392,29 @@ export default function NewCoursePage() {
                       {hint}
                     </button>
                   ))}
+                </div>
+
+                {/* Optional folder name for the materials tab in the workspace.
+                    Without this we fall back to "My materials" which the
+                    user can also rename inline later. */}
+                <div>
+                  <label
+                    htmlFor="self-study-section"
+                    className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
+                  >
+                    Folder name{" "}
+                    <span className="font-normal text-zinc-500">
+                      (optional — shows as the materials tab)
+                    </span>
+                  </label>
+                  <input
+                    id="self-study-section"
+                    value={sectionName}
+                    onChange={(e) => setSectionName(e.target.value)}
+                    maxLength={80}
+                    placeholder="e.g. Midterm prep, Lecture notes, Bio chapter 4"
+                    className="mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 outline-none ring-indigo-500 placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                  />
                 </div>
 
                 {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}

@@ -433,6 +433,9 @@ export function CoursePlayer({
   /** Keeps `module=` (and practice tab) in the URL when switching modules. */
   const syncModuleToUrl = useCallback(
     (modId: number) => {
+      // Snapshot before mutation so the "did the user actually navigate?"
+      // check below sees the previous active module.
+      const previousModuleId = activeModuleId;
       setActiveModuleId(modId);
       setQuizOpen(false);
       const tab =
@@ -446,8 +449,17 @@ export function CoursePlayer({
         tab === "focus" ? "focus" : undefined
       )}`;
       router.replace(`${navigationBasePath}${q}`, { scroll: false });
+      // Reset scroll on real navigation so a new lesson never starts halfway
+      // down the page. We let `router.replace` keep `scroll: false` so the
+      // history entry is consistent, then move the viewport ourselves only
+      // when the active module actually changed (avoids jumping when the
+      // caller just re-syncs the same module, e.g. starting a rename).
+      if (typeof window !== "undefined" && previousModuleId !== modId) {
+        window.scrollTo(0, 0);
+      }
     },
     [
+      activeModuleId,
       materialId,
       navigationBasePath,
       router,
@@ -677,6 +689,8 @@ export function CoursePlayer({
 
   const goToModule = useCallback(
     (targetMaterialId: string, modId: number) => {
+      const previousModuleId = activeModuleId;
+      const isSameMaterial = targetMaterialId === materialId;
       setQuizOpen(false);
       setRenamingModuleId(null);
       const tab =
@@ -689,14 +703,24 @@ export function CoursePlayer({
         learnMode,
         tab === "focus" ? "focus" : undefined
       )}`;
-      if (targetMaterialId === materialId) {
+      if (isSameMaterial) {
         setActiveModuleId(modId);
         router.replace(`${navigationBasePath}${q}`, { scroll: false });
       } else {
         router.push(`${navigationBasePath}${q}`);
       }
+      // Reset scroll so a freshly-clicked module never opens halfway down
+      // the page. For cross-material navigation (`router.push`) Next.js
+      // already scrolls, but doing it eagerly here also avoids a flash of
+      // the old scroll position before the new page mounts.
+      if (
+        typeof window !== "undefined" &&
+        (!isSameMaterial || previousModuleId !== modId)
+      ) {
+        window.scrollTo(0, 0);
+      }
     },
-    [materialId, navigationBasePath, router, learnMode, mode, searchParams]
+    [activeModuleId, materialId, navigationBasePath, router, learnMode, mode, searchParams]
   );
 
   const showAccordion = sidebarOutlines.length > 0;
