@@ -205,10 +205,21 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
 
   if (useChunkedPdfIngest) {
     after(() => {
-      // driveModules: true — run phase 1 AND all module writes in this single
-      // server invocation so the PDF processes fully even if the user navigates
-      // away before the browser polling loop starts driving /expand calls.
-      void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
+      // Mirror the manual "Restart this PDF" flow exactly: phase 1 only,
+      // worker exits after outline is saved, browser polling drives `/expand`
+      // for each module (each gets its own 5-minute Vercel budget).
+      //
+      // The previous `driveModules: true` path tried to do extract + outline
+      // + ALL modules in a single 5 min invocation. For N>4 modules or any
+      // queue/429-backoff wait the worker would hit `maxDuration`, get
+      // killed, and the auto-recovery would loop the job back to
+      // `reading_pdf` indefinitely. Restart works because it does *not* set
+      // driveModules — match that.
+      //
+      // Trade-off: if the user closes the tab before modules finish, module
+      // writing pauses (no client to drive `/expand`). They can reopen the
+      // course and click Restart to resume. Far better than the broken loop.
+      void runPdfIngestJob(jobId).catch((e) =>
         console.error("[process-pdf] after()", jobId, e)
       );
     });

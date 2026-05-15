@@ -186,13 +186,26 @@ export async function GET(_request: Request, ctx: Params) {
     ingestPhaseRawEarly === undefined ||
     ingestPhaseRawEarly === "";
 
+  // Break infinite restart loops. If we have already reset this job many times
+  // and it keeps dying, the underlying problem (tier exhaustion, malformed
+  // PDF, etc.) is not something another restart can solve — surface a real
+  // failure instead of looping forever. Each auto-recovery bumps the epoch;
+  // manual restarts also bump it, which is fine — after enough thrashing the
+  // user should see an actionable error.
+  const currentEpoch =
+    typeof (row as { ingest_epoch?: unknown }).ingest_epoch === "number"
+      ? (row as { ingest_epoch: number }).ingest_epoch
+      : 0;
+  const MAX_AUTO_RECOVERIES = 6;
+
   const isStuckPhase1 =
     STALL_PHASE1_MS != null &&
     stallAppliesToThisPhase &&
     row.status === "running" &&
     (row as { ingest_outline?: unknown }).ingest_outline == null &&
     Number.isFinite(updatedAt) &&
-    Date.now() - updatedAt > STALL_PHASE1_MS;
+    Date.now() - updatedAt > STALL_PHASE1_MS &&
+    currentEpoch < MAX_AUTO_RECOVERIES;
 
   if (isStuckPhase1) {
     const admin = createAdminClient();
