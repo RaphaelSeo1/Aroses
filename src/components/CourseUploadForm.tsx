@@ -84,9 +84,19 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
 export function CourseUploadForm({
   courseId,
   examGroupId,
+  /**
+   * Self-study courses pass the course-level goal here as a starting point —
+   * the textarea pre-fills with it, but the learner can edit (or wipe) the
+   * value to customise the goal for **this** lecture only. Public courses
+   * pass `undefined` and the goal block stays collapsed by default.
+   */
+  defaultStudyContext,
+  isSelfStudy = false,
 }: {
   courseId: string;
   examGroupId: string;
+  defaultStudyContext?: string | null;
+  isSelfStudy?: boolean;
 }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -96,10 +106,59 @@ export function CourseUploadForm({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Per-upload study goal. For self-study courses this seeds with the
+  // course-level default so the learner sees "this is what we'll use unless
+  // you change it for this lecture". For public courses it stays empty.
+  const initialGoal = (defaultStudyContext ?? "").trim();
+  const [studyGoal, setStudyGoal] = useState<string>(initialGoal);
+  const [showGoal, setShowGoal] = useState<boolean>(
+    isSelfStudy && initialGoal.length === 0
+  );
+  const [polishingGoal, setPolishingGoal] = useState(false);
+  const [goalError, setGoalError] = useState<string | null>(null);
   const [buildProgress, setBuildProgress] = useState<PdfBuildProgressUI | null>(
     null
   );
   const [dragOver, setDragOver] = useState(false);
+
+  /**
+   * Rewrite the per-upload goal into a tight one-liner using the same
+   * /api/self-study/polish-goal endpoint the course creation form uses.
+   * Updates the textarea in-place so the user can still tweak afterwards.
+   */
+  const polishGoalInPlace = useCallback(async () => {
+    const raw = studyGoal.trim();
+    if (!raw) {
+      setGoalError("Type your goal first, then polish it.");
+      return;
+    }
+    setGoalError(null);
+    setPolishingGoal(true);
+    try {
+      const res = await fetch("/api/self-study/polish-goal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ study_context: raw }),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        summary?: string;
+        error?: string;
+      };
+      if (!res.ok || typeof body.summary !== "string") {
+        setGoalError(
+          typeof body.error === "string"
+            ? body.error
+            : "Couldn't polish — try editing manually."
+        );
+        return;
+      }
+      setStudyGoal(body.summary.trim());
+    } catch {
+      setGoalError("Network error while polishing.");
+    } finally {
+      setPolishingGoal(false);
+    }
+  }, [studyGoal]);
 
   const addPdfFiles = useCallback((list: FileList | File[] | null | undefined) => {
     const arr = Array.from(list ?? []).filter(isPdfFile);
@@ -311,6 +370,10 @@ export function CourseUploadForm({
               examGroupId,
               storagePath,
               originalFileName: file.name,
+              // Per-upload goal — overrides the course-level study_context
+              // for this lecture only. Sent for every file in the batch so
+              // the runner sees the user's most recent intent.
+              studyContext: studyGoal.trim() || undefined,
             }),
           });
         } catch {
@@ -501,6 +564,95 @@ export function CourseUploadForm({
 
   return (
     <form onSubmit={(e) => void onSubmit(e)} className="space-y-4">
+      {/* Per-upload study goal — customise what the AI should focus on for
+          these specific files. Self-study courses see this expanded by
+          default (with the course goal pre-filled); public courses get a
+          collapsed "Customise for this upload" toggle. */}
+      <div className="rounded-2xl border border-zinc-200/90 bg-zinc-50/60 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+        {!showGoal ? (
+          <button
+            type="button"
+            onClick={() => setShowGoal(true)}
+            className="flex w-full items-center justify-between gap-2 text-left text-sm font-medium text-zinc-700 hover:text-brand dark:text-zinc-300 dark:hover:text-brand-soft"
+          >
+            <span className="flex items-center gap-2">
+              <span aria-hidden>🎯</span>
+              {initialGoal
+                ? "Customise the goal for this upload"
+                : "Tell the AI what to focus on (optional)"}
+            </span>
+            <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">
+              {initialGoal ? "Using your course goal" : "Add a goal"}
+            </span>
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between gap-2">
+              <label
+                htmlFor="per-upload-goal"
+                className="text-sm font-medium text-zinc-800 dark:text-zinc-200"
+              >
+                <span aria-hidden className="mr-1">🎯</span>
+                Goal for this upload
+                <span className="ml-2 text-xs font-normal text-zinc-500">
+                  ({files.length > 1
+                    ? `applies to all ${files.length} files`
+                    : "applies to this lecture"}
+                  )
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowGoal(false)}
+                className="text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+              >
+                Hide
+              </button>
+            </div>
+            <textarea
+              id="per-upload-goal"
+              rows={3}
+              value={studyGoal}
+              onChange={(e) => {
+                setStudyGoal(e.target.value);
+                if (goalError) setGoalError(null);
+              }}
+              maxLength={4000}
+              placeholder={
+                initialGoal
+                  ? "Replace this with what matters for this specific lecture…"
+                  : "e.g. Focus on the mechanism of ionic bonding — I already know Coulomb's law."
+              }
+              className="block w-full resize-none rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+            />
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void polishGoalInPlace()}
+                disabled={polishingGoal || !studyGoal.trim()}
+                className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                {polishingGoal ? "Polishing…" : "✨ Polish into a one-liner"}
+              </button>
+              {initialGoal && studyGoal.trim() !== initialGoal ? (
+                <button
+                  type="button"
+                  onClick={() => setStudyGoal(initialGoal)}
+                  className="text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                >
+                  Reset to course goal
+                </button>
+              ) : null}
+              {goalError ? (
+                <span className="text-xs text-red-600 dark:text-red-400">
+                  {goalError}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </div>
+
       <div>
         <span className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
           PDF or lecture slides

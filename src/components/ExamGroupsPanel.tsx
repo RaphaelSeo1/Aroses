@@ -567,6 +567,8 @@ export function ExamGroupsPanel({
   materials,
   failedJobs = [],
   initialSectionId,
+  courseStudyContext,
+  isSelfStudy = false,
 }: {
   courseId: string;
   groups: ExamGroupRow[];
@@ -574,6 +576,11 @@ export function ExamGroupsPanel({
   failedJobs?: FailedJobRow[];
   /** When set (e.g. from `?section=` after PDF upload redirect), selects that section tab. */
   initialSectionId?: string;
+  /** Course-level self-study goal — used as the default pre-fill for the
+   *  per-upload goal textarea so the learner doesn't have to retype the
+   *  same thing every PDF. */
+  courseStudyContext?: string | null;
+  isSelfStudy?: boolean;
 }) {
   const router = useRouter();
   const [dismissedJobIds, setDismissedJobIds] = useState<Set<string>>(() => new Set());
@@ -1280,7 +1287,12 @@ export function ExamGroupsPanel({
             Slides or readings for this section only.
           </p>
           <div className="mt-6">
-            <CourseUploadForm courseId={courseId} examGroupId={activeId} />
+            <CourseUploadForm
+              courseId={courseId}
+              examGroupId={activeId}
+              defaultStudyContext={courseStudyContext ?? undefined}
+              isSelfStudy={isSelfStudy}
+            />
           </div>
         </div>
       </div>

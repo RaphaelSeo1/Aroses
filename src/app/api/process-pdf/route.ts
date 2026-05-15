@@ -76,12 +76,20 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  const { courseId, examGroupId, storagePath, originalFileName } = body as {
-    courseId?: unknown;
-    examGroupId?: unknown;
-    storagePath?: unknown;
-    originalFileName?: unknown;
-  };
+  const { courseId, examGroupId, storagePath, originalFileName, studyContext } =
+    body as {
+      courseId?: unknown;
+      examGroupId?: unknown;
+      storagePath?: unknown;
+      originalFileName?: unknown;
+      // Per-upload goal that overrides the course-level `study_context` for
+      // this specific lecture. Optional; falls back to course context.
+      studyContext?: unknown;
+    };
+  const studyContextValue =
+    typeof studyContext === "string" && studyContext.trim().length > 0
+      ? studyContext.trim().slice(0, 4000)
+      : null;
 
   if (typeof courseId !== "string" || !UUID_RE.test(courseId)) {
     return NextResponse.json({ error: "Invalid course" }, { status: 400 });
@@ -158,21 +166,54 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     );
   }
 
-  const { data: jobRow, error: jobInsErr } = await supabase
+  const baseJobInsert = {
+    user_id: user.id,
+    course_id: courseId,
+    exam_group_id: examGroupId,
+    storage_path: storagePath,
+    original_file_name:
+      typeof originalFileName === "string" && originalFileName.trim().length > 0
+        ? originalFileName.trim()
+        : null,
+    status: "pending",
+  };
+
+  // `study_context` is part of migration 030; cast through `any` so the
+  // generated Supabase types (which may predate the migration) don't reject
+  // the field at compile time. The runtime fallback below covers the case
+  // where the column genuinely isn't there yet.
+  let { data: jobRow, error: jobInsErr } = await supabase
     .from("pdf_ingest_jobs")
-    .insert({
-      user_id: user.id,
-      course_id: courseId,
-      exam_group_id: examGroupId,
-      storage_path: storagePath,
-      original_file_name:
-        typeof originalFileName === "string" && originalFileName.trim().length > 0
-          ? originalFileName.trim()
-          : null,
-      status: "pending",
-    })
+    .insert(
+      (studyContextValue
+        ? { ...baseJobInsert, study_context: studyContextValue }
+        : baseJobInsert) as never
+    )
     .select("id")
     .single();
+
+  // Migration `030_pdf_ingest_per_upload_study_context.sql` adds the new
+  // `study_context` column. If that hasn't been applied yet the insert will
+  // fail with code 42703 (undefined_column) — retry without the field so
+  // uploads keep working until the operator applies migrations.
+  if (jobInsErr && studyContextValue) {
+    const isMissingCol =
+      jobInsErr.code === "42703" ||
+      (jobInsErr.message ?? "").includes("study_context") ||
+      (jobInsErr.message ?? "").includes("schema cache");
+    if (isMissingCol) {
+      console.warn(
+        "[process-pdf] study_context column missing; retrying without per-upload context"
+      );
+      const fallback = await supabase
+        .from("pdf_ingest_jobs")
+        .insert(baseJobInsert)
+        .select("id")
+        .single();
+      jobRow = fallback.data;
+      jobInsErr = fallback.error;
+    }
+  }
 
   if (jobInsErr || !jobRow) {
     console.error("[process-pdf] insert pdf_ingest_jobs", jobInsErr);

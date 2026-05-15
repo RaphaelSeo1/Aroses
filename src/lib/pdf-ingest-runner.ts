@@ -466,9 +466,26 @@ export async function runPdfIngestExpandOne(
     .eq("id", jobId)
     .maybeSingle();
 
-  // Fetch self-study context from the parent course (nullable).
+  // Prefer the per-upload context (set on the job row at upload time). Fall
+  // back to the parent course's context so existing self-study sessions keep
+  // working until the user customises individual lectures. The per-job
+  // lookup is a separate query so older schemas (pre-migration 030 where
+  // `study_context` doesn't exist on the table) still keep working — we
+  // swallow the error and continue.
   let expandStudyContext: string | null = null;
-  if (job?.course_id) {
+  if (job?.id) {
+    const { data: jobCtx } = await admin
+      .from("pdf_ingest_jobs")
+      .select("study_context")
+      .eq("id", job.id)
+      .maybeSingle();
+    const raw = (jobCtx as { study_context?: unknown } | null | undefined)
+      ?.study_context;
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      expandStudyContext = raw.trim();
+    }
+  }
+  if (!expandStudyContext && job?.course_id) {
     const { data: courseCtx } = await admin
       .from("courses")
       .select("study_context")
@@ -788,10 +805,24 @@ export async function runPdfIngestJob(
     )
     .maybeSingle();
 
-  // Fetch course-level self-study context (nullable). Done after the claim so
-  // we don't delay the claim itself; the context is only needed at outline time.
+  // Fetch self-study context. Per-upload (job-level) overrides the
+  // course-level default. Done after the claim so we don't delay the claim
+  // itself; the context is only needed at outline time. Per-job lookup is a
+  // separate query so older schemas (pre-migration 030) don't break.
   let courseStudyContext: string | null = null;
-  if (claimed?.course_id) {
+  if (claimed?.id) {
+    const { data: jobCtxRow } = await admin
+      .from("pdf_ingest_jobs")
+      .select("study_context")
+      .eq("id", claimed.id)
+      .maybeSingle();
+    const raw = (jobCtxRow as { study_context?: unknown } | null | undefined)
+      ?.study_context;
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      courseStudyContext = raw.trim();
+    }
+  }
+  if (!courseStudyContext && claimed?.course_id) {
     const { data: courseRow } = await admin
       .from("courses")
       .select("study_context")

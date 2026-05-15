@@ -214,6 +214,8 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                     materials={materials}
                     failedJobs={failedJobs}
                     initialSectionId={sectionFromUrl ?? undefined}
+                    courseStudyContext={course.study_context ?? undefined}
+                    isSelfStudy
                   />
                 </div>
               </div>
@@ -255,6 +257,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                 materials={materials}
                 failedJobs={failedJobs}
                 initialSectionId={sectionFromUrl ?? undefined}
+                courseStudyContext={course.study_context ?? undefined}
               />
             </>
           )}
