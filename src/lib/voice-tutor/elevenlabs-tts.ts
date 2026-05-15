@@ -1,23 +1,25 @@
 import { preprocessTtsText } from "./tts-pronunciation";
 
 /**
- * ElevenLabs TTS wrapper. Pronunciation accuracy improvements bundled in:
+ * ElevenLabs TTS wrapper. Conservative defaults — we explicitly tune the
+ * voice so it sounds natural and reliable across long study sessions,
+ * but we DO NOT do anything that risks the engine reading gibberish:
  *
- *   • `voice_settings` tuned for clear enunciation (lower style, higher
- *     similarity_boost, speaker_boost on). Override via env if a course
- *     needs a different vibe.
- *   • `apply_text_normalization` = "auto" so numbers, currencies, dates,
- *     and abbreviations are expanded before synthesis.
- *   • Text preprocessing pass that rewrites known scientific/technical
- *     terms (Coulomb, ionic, mitochondria, kubernetes, etc.) into either
- *     IPA phoneme tags (v3 / multilingual models) or plain phonetic
- *     spellings (turbo / english models). See `tts-pronunciation.ts`.
+ *   • `voice_settings` tuned for clarity (high stability, low style,
+ *     speaker_boost on). Overridable via env so you can tweak the
+ *     vibe without redeploying.
+ *   • `apply_text_normalization` left at the API default. The "auto"
+ *     setting we briefly tried caused the engine to inject random
+ *     words mid-sentence, so we keep ElevenLabs' own behaviour.
+ *   • Text preprocessing only fixes a tiny IPA whitelist on the `v3`
+ *     model family (the only one that reliably honours `<phoneme>`).
+ *     Other models receive your text untouched.
  *
  * Tunable env vars (all optional):
- *   ELEVENLABS_MODEL_ID          — default "eleven_turbo_v2_5"
- *   ELEVENLABS_VOICE_STABILITY   — 0.0–1.0, default 0.45
- *   ELEVENLABS_VOICE_SIMILARITY  — 0.0–1.0, default 0.85
- *   ELEVENLABS_VOICE_STYLE       — 0.0–1.0, default 0.10 (low = neutral)
+ *   ELEVENLABS_MODEL_ID          — default "eleven_multilingual_v2"
+ *   ELEVENLABS_VOICE_STABILITY   — 0.0–1.0, default 0.65
+ *   ELEVENLABS_VOICE_SIMILARITY  — 0.0–1.0, default 0.80
+ *   ELEVENLABS_VOICE_STYLE       — 0.0–1.0, default 0.00 (neutral)
  *   ELEVENLABS_SPEAKER_BOOST     — "true"/"false", default true
  */
 export async function synthesizeElevenLabs(params: {
@@ -47,9 +49,6 @@ export async function synthesizeElevenLabs(params: {
         model_id: params.modelId,
         text,
         voice_settings: voiceSettings,
-        // Lets ElevenLabs expand numbers, currency, dates, ordinals, and
-        // common abbreviations to their spoken form before synthesis.
-        apply_text_normalization: "auto",
       }),
     }
   );
@@ -76,15 +75,17 @@ function parseBoolEnv(name: string, fallback: boolean): boolean {
 
 function resolveVoiceSettings() {
   return {
-    // Lower stability = more expressive but slightly less consistent;
-    // 0.45 lands in the "clear, lively, still reliable" zone.
-    stability: parseFloatEnv("ELEVENLABS_VOICE_STABILITY", 0.45),
-    // High similarity_boost keeps the synthesized voice anchored to the
-    // reference, which usually improves enunciation of unfamiliar words.
-    similarity_boost: parseFloatEnv("ELEVENLABS_VOICE_SIMILARITY", 0.85),
-    // Low style = neutral delivery. Higher values exaggerate the
-    // reference voice's quirks, which can break technical pronunciation.
-    style: parseFloatEnv("ELEVENLABS_VOICE_STYLE", 0.1),
+    // High stability = even, predictable delivery (less likely to flip
+    // accents or mispronounce mid-sentence). Lower values are more
+    // expressive but reintroduced the "random words" artifacts.
+    stability: parseFloatEnv("ELEVENLABS_VOICE_STABILITY", 0.65),
+    // Moderate similarity_boost — high enough to stay anchored to the
+    // reference voice without forcing it to match too rigidly.
+    similarity_boost: parseFloatEnv("ELEVENLABS_VOICE_SIMILARITY", 0.8),
+    // Style 0 = absolutely neutral. Any style > 0 amplifies the
+    // reference voice's stylistic quirks, which is exactly when the
+    // pronunciation gets weird.
+    style: parseFloatEnv("ELEVENLABS_VOICE_STYLE", 0),
     use_speaker_boost: parseBoolEnv("ELEVENLABS_SPEAKER_BOOST", true),
   };
 }
