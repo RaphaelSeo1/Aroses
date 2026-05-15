@@ -5,57 +5,54 @@ import { useEffect, useRef } from "react";
 type Phase = "off" | "listening" | "recording" | "thinking" | "speaking";
 
 type Props = {
-  /** Live mic stream. The visualizer taps into this when the user is
-   *  recording / listening, so bars react to the user's voice. */
+  /** Live mic stream. Tapped when the user is recording / listening. */
   streamRef: React.MutableRefObject<MediaStream | null>;
-  /** AI playback audio element. Used when phase === "speaking" so bars
-   *  react to the assistant's voice instead of the mic. */
+  /** AI playback audio element. Tapped when phase === "speaking". */
   audioElementRef: React.MutableRefObject<HTMLAudioElement | null>;
   /** Drives source selection + the resting state. */
   phase: Phase;
-  /** Number of bars. Fewer = chunkier, more = smoother. Default 24. */
-  bars?: number;
-  /** Pixel height of the canvas. Default 36. */
+  /** Pixel height of the canvas. Default 56 (taller = more dramatic). */
   height?: number;
-  /** Tailwind text-color class — bars are drawn in this color. */
-  colorClass?: string;
+  /** Hex color stops for the gradient (left → right). The wave fades to
+   *  each in turn so the line feels alive. */
+  colors?: [string, string, string];
 };
 
 /**
- * Animated audio waveform. Renders a row of bars to a canvas using a
- * Web Audio `AnalyserNode`:
+ * Flowing audio waveform. Draws several offset, semi-transparent
+ * sinusoidal lines whose amplitudes are driven by an AnalyserNode's
+ * frequency data. The result is a smooth, neon-glow ribbon (not
+ * boxy EQ-style bars).
  *
- *   • When the user is speaking (phase = recording/listening) we tap the
- *     mic MediaStream.
- *   • When the assistant is speaking (phase = speaking) we tap the
- *     <audio> element via createMediaElementSource.
- *   • Otherwise we draw a calm idle line.
+ * Sources:
+ *   • Mic MediaStream when the user is talking (phase recording /
+ *     listening / thinking).
+ *   • <audio> element when the assistant is talking (phase speaking).
+ *   • A gentle sine ripple when idle.
  *
- * The component owns its own AudioContext + analyser so it does not
- * interfere with the VAD analyser already in the dock — we just read
- * the same MediaStream from a second source node.
+ * Connection is retried every animation frame, so the visualizer
+ * "catches up" as soon as the mic stream becomes available even if it
+ * wasn't ready when the phase first flipped to recording.
  */
 export function VoiceWaveform({
   streamRef,
   audioElementRef,
   phase,
-  bars = 24,
-  height = 36,
-  colorClass = "text-rose-500",
+  height = 56,
+  colors = ["#a855f7", "#ec4899", "#3b82f6"], // violet / pink / blue
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const streamSourceForRef = useRef<MediaStream | null>(null);
   const elementSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const elementSourceForRef = useRef<HTMLAudioElement | null>(null);
   const dataRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const rafRef = useRef<number | null>(null);
-  const smoothedRef = useRef<number[]>([]);
+  const phaseRef = useRef<Phase>(phase);
+  phaseRef.current = phase;
 
-  // Lazy-init the AudioContext on the first phase change that needs it.
-  // Browsers require this to follow a user gesture; by the time the user
-  // toggles live mode or taps the mic they've already gestured.
   const ensureCtx = (): AudioContext | null => {
     if (ctxRef.current) return ctxRef.current;
     const AC: typeof AudioContext | undefined =
@@ -70,8 +67,8 @@ export function VoiceWaveform({
       const ctx = new AC();
       ctxRef.current = ctx;
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 128;
-      analyser.smoothingTimeConstant = 0.7;
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.78;
       analyserRef.current = analyser;
       dataRef.current = new Uint8Array(
         new ArrayBuffer(analyser.frequencyBinCount)
@@ -82,76 +79,102 @@ export function VoiceWaveform({
     }
   };
 
-  // Connect the right source for the current phase.
-  useEffect(() => {
+  /** Connect/disconnect sources based on current phase + ref values.
+   *  Called from the animation loop so we re-evaluate every frame —
+   *  this handles the race where `phase` flips before `streamRef.current`
+   *  is populated by the parent. */
+  const syncSources = (): void => {
     const ctx = ensureCtx();
-    if (!ctx || !analyserRef.current) return;
+    const analyser = analyserRef.current;
+    if (!ctx || !analyser) return;
 
-    // Disconnect previous mic source (we always rebuild it because the
-    // dock can release + reacquire the stream between phases).
-    try {
-      streamSourceRef.current?.disconnect();
-    } catch {
-      /* ignore */
-    }
-    streamSourceRef.current = null;
-
+    const p = phaseRef.current;
     const wantsMic =
-      phase === "recording" ||
-      phase === "listening" ||
-      phase === "thinking";
-    const wantsAssistant = phase === "speaking";
+      p === "recording" || p === "listening" || p === "thinking";
+    const wantsAssistant = p === "speaking";
 
-    if (wantsMic && streamRef.current) {
-      try {
-        const src = ctx.createMediaStreamSource(streamRef.current);
-        src.connect(analyserRef.current);
-        streamSourceRef.current = src;
-      } catch {
-        /* swallow — mic might not be active yet */
+    // Mic source — rebuild if the underlying stream changed (or detach
+    // if we don't want mic anymore).
+    if (wantsMic) {
+      const s = streamRef.current;
+      if (s && streamSourceForRef.current !== s) {
+        try {
+          streamSourceRef.current?.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
+          const src = ctx.createMediaStreamSource(s);
+          src.connect(analyser);
+          streamSourceRef.current = src;
+          streamSourceForRef.current = s;
+        } catch {
+          streamSourceRef.current = null;
+          streamSourceForRef.current = null;
+        }
       }
+    } else if (streamSourceRef.current) {
+      try {
+        streamSourceRef.current.disconnect();
+      } catch {
+        /* ignore */
+      }
+      streamSourceRef.current = null;
+      streamSourceForRef.current = null;
     }
 
-    if (wantsAssistant && audioElementRef.current) {
-      // createMediaElementSource can only be called ONCE per element.
-      // Cache the source + reuse it on subsequent speaking phases.
+    // Assistant source — createMediaElementSource can only be called
+    // ONCE per element so we cache + reuse. Disconnect when we no
+    // longer want it but DON'T discard the source (no way to recreate).
+    if (wantsAssistant) {
       const el = audioElementRef.current;
-      try {
-        if (elementSourceForRef.current !== el) {
-          // New audio element — discard the old source.
-          try {
-            elementSourceRef.current?.disconnect();
-          } catch {
-            /* ignore */
-          }
+      if (el && elementSourceForRef.current !== el) {
+        try {
+          elementSourceRef.current?.disconnect();
+        } catch {
+          /* ignore */
+        }
+        try {
           const src = ctx.createMediaElementSource(el);
-          // Pipe both to the analyser AND to the destination so the user
-          // still hears the audio. (Otherwise it goes silent.)
-          src.connect(analyserRef.current);
+          src.connect(analyser);
+          // Still route audio to speakers so the user hears it.
           src.connect(ctx.destination);
           elementSourceRef.current = src;
           elementSourceForRef.current = el;
+        } catch {
+          /* element already tapped — ignore */
         }
+      } else if (el && elementSourceRef.current) {
+        // Ensure existing source is connected.
+        try {
+          elementSourceRef.current.connect(analyser);
+        } catch {
+          /* already connected — ignore */
+        }
+      }
+    } else if (elementSourceRef.current && elementSourceForRef.current) {
+      try {
+        elementSourceRef.current.disconnect(analyser);
       } catch {
-        /* element might already be tapped — ignore */
+        /* ignore */
       }
     }
 
     if (ctx.state === "suspended") {
       void ctx.resume().catch(() => undefined);
     }
-  }, [phase, streamRef, audioElementRef]);
+  };
 
   // Animation loop.
   useEffect(() => {
     let cancelled = false;
-    smoothedRef.current = new Array(bars).fill(0);
 
     const draw = () => {
       if (cancelled) return;
       const canvas = canvasRef.current;
       const analyser = analyserRef.current;
       const data = dataRef.current;
+      syncSources();
       if (!canvas || !analyser || !data) {
         rafRef.current = requestAnimationFrame(draw);
         return;
@@ -170,66 +193,74 @@ export function VoiceWaveform({
       c.setTransform(dpr, 0, 0, dpr, 0, 0);
       c.clearRect(0, 0, cssW, cssH);
 
-      const idle =
-        phase === "off" || (phase === "listening" && !streamSourceRef.current);
+      const p = phaseRef.current;
+      const hasLiveSource =
+        (streamSourceRef.current !== null &&
+          (p === "recording" || p === "listening" || p === "thinking")) ||
+        (elementSourceRef.current !== null && p === "speaking");
 
-      let buckets: number[];
-      if (idle) {
-        // Calm sine-y resting line so the strip doesn't look dead.
-        const t = performance.now() / 600;
-        buckets = new Array(bars).fill(0).map((_, i) => {
-          const v = (Math.sin(t + i * 0.4) + 1) / 2;
-          return v * 0.18; // 0..0.18 — small ripple
-        });
-      } else {
+      // Compute amplitude: from analyser when live, gentle sine when idle.
+      let amp: number;
+      const t = performance.now() / 1000;
+      if (hasLiveSource) {
         analyser.getByteFrequencyData(data);
-        // Bucket the frequency bins down to `bars` values.
-        const binsPerBar = Math.max(1, Math.floor(data.length / bars));
-        buckets = new Array(bars).fill(0).map((_, i) => {
-          let sum = 0;
-          let count = 0;
-          for (let j = 0; j < binsPerBar; j++) {
-            const idx = i * binsPerBar + j;
-            if (idx < data.length) {
-              sum += data[idx];
-              count++;
-            }
-          }
-          return count > 0 ? sum / count / 255 : 0;
-        });
+        // Average low + mid-frequency bins for a "voice energy" reading.
+        const cutoff = Math.min(data.length, 48);
+        let sum = 0;
+        for (let i = 0; i < cutoff; i++) sum += data[i];
+        amp = (sum / cutoff / 255) * 1.6; // boost slightly
+        amp = Math.min(1, Math.max(0.04, amp));
+      } else {
+        // Idle ripple — barely visible breathing motion.
+        amp = 0.06 + Math.sin(t * 1.5) * 0.015;
       }
 
-      // Smoothing — interpolate towards the latest value so bars don't
-      // flicker on every animation frame.
-      const smoothed = smoothedRef.current;
-      const alpha = idle ? 0.2 : 0.35;
-      for (let i = 0; i < bars; i++) {
-        smoothed[i] = smoothed[i] + (buckets[i] - smoothed[i]) * alpha;
-      }
-
-      // Resolve the color from the inherited text color of the canvas.
-      const color =
-        getComputedStyle(canvas).color || "rgb(244, 63, 94)" /* rose-500 */;
-      c.fillStyle = color;
-
-      const gap = 3;
-      const barWidth = Math.max(2, (cssW - gap * (bars - 1)) / bars);
+      // Draw 4 overlapping wave lines with different phase/frequency/colors
+      // to get the neon-glow ribbon effect. Each line uses a left→right
+      // gradient stop pulled from the `colors` prop.
       const midY = cssH / 2;
-      for (let i = 0; i < bars; i++) {
-        const amp = Math.min(1, Math.max(0.02, smoothed[i]));
-        const h = Math.max(2, amp * cssH);
-        const x = i * (barWidth + gap);
-        const y = midY - h / 2;
-        // Rounded bars — fall back to plain rect if not supported.
-        const r = Math.min(barWidth / 2, 3);
-        if (typeof c.roundRect === "function") {
-          c.beginPath();
-          c.roundRect(x, y, barWidth, h, r);
-          c.fill();
-        } else {
-          c.fillRect(x, y, barWidth, h);
+      const segments = 64;
+      const layers = [
+        { freq: 1.6, phase: 0.0, ampMul: 1.0, width: 2.2, alpha: 0.9 },
+        { freq: 2.3, phase: 1.4, ampMul: 0.75, width: 1.6, alpha: 0.65 },
+        { freq: 3.1, phase: 2.7, ampMul: 0.55, width: 1.2, alpha: 0.45 },
+        { freq: 4.4, phase: 4.1, ampMul: 0.4, width: 0.9, alpha: 0.3 },
+      ];
+
+      // Pre-build gradient once per frame.
+      const grad = c.createLinearGradient(0, 0, cssW, 0);
+      grad.addColorStop(0, colors[0]);
+      grad.addColorStop(0.5, colors[1]);
+      grad.addColorStop(1, colors[2]);
+
+      c.lineCap = "round";
+      c.lineJoin = "round";
+
+      for (const layer of layers) {
+        c.beginPath();
+        for (let i = 0; i <= segments; i++) {
+          const x = (i / segments) * cssW;
+          // Envelope — softer amplitude at the ends, biggest in the middle.
+          const env = Math.sin((i / segments) * Math.PI);
+          const wave =
+            Math.sin(t * layer.freq + (i / segments) * Math.PI * 4 + layer.phase) *
+            amp *
+            layer.ampMul *
+            env *
+            (cssH * 0.45);
+          const y = midY + wave;
+          if (i === 0) c.moveTo(x, y);
+          else c.lineTo(x, y);
         }
+        c.globalAlpha = layer.alpha;
+        c.strokeStyle = grad;
+        c.lineWidth = layer.width;
+        c.shadowColor = colors[1];
+        c.shadowBlur = 8;
+        c.stroke();
       }
+      c.shadowBlur = 0;
+      c.globalAlpha = 1;
 
       rafRef.current = requestAnimationFrame(draw);
     };
@@ -238,7 +269,8 @@ export function VoiceWaveform({
       cancelled = true;
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [bars, phase]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Cleanup on unmount.
   useEffect(() => {
@@ -261,17 +293,17 @@ export function VoiceWaveform({
       ctxRef.current = null;
       analyserRef.current = null;
       streamSourceRef.current = null;
+      streamSourceForRef.current = null;
       elementSourceRef.current = null;
       elementSourceForRef.current = null;
     };
   }, []);
 
-  // Tailwind text color drives the bar fill via getComputedStyle.
   return (
     <canvas
       ref={canvasRef}
       style={{ height, width: "100%" }}
-      className={`block ${colorClass}`}
+      className="block"
       aria-hidden
     />
   );

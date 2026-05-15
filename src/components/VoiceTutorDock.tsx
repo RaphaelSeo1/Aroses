@@ -1274,6 +1274,17 @@ export function VoiceTutorDock({
     return () => el.removeEventListener("wheel", handler);
   }, [cycleRate]);
 
+  // Stale error toasts ("Recording too short", etc) used to stick around
+  // forever after a single failed attempt. Auto-clear them after a few
+  // seconds so the dock doesn't permanently look broken.
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => {
+      setError((prev) => (prev === error ? null : prev));
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [error]);
+
   const speedIndex = Math.max(0, PLAYBACK_RATES.indexOf(playbackRate));
 
   // ---------- Hold / Tap handlers ----------
@@ -1367,6 +1378,77 @@ export function VoiceTutorDock({
     runPipeline,
     startRecording,
     tapRecording,
+  ]);
+
+  // ---------- "M" hotkey (Hold mode only) ----------
+  // Press-and-hold `M` on the keyboard to record without needing to
+  // mouse over to the Voice button. We mirror the pointer-hold flow
+  // exactly so the UX stays consistent.
+  const holdHotkeyActiveRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (inputMode !== "hold") return;
+
+    const isTextEditableTarget = (t: EventTarget | null): boolean => {
+      if (!(t instanceof HTMLElement)) return false;
+      const tag = t.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (t.isContentEditable) return true;
+      return false;
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "m" && e.key !== "M") return;
+      if (e.repeat) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTextEditableTarget(e.target)) return;
+      if (busy || holdHotkeyActiveRef.current) return;
+      e.preventDefault();
+      holdHotkeyActiveRef.current = true;
+      hasInteractedRef.current = true;
+      setHoldRecording(true);
+      const p = startRecording();
+      startPromiseRef.current = p;
+      void p.catch(() => {
+        setError("Microphone permission is required.");
+        setHoldRecording(false);
+        startPromiseRef.current = null;
+        holdHotkeyActiveRef.current = false;
+        void cleanupRecorder();
+      });
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== "m" && e.key !== "M") return;
+      if (!holdHotkeyActiveRef.current) return;
+      e.preventDefault();
+      holdHotkeyActiveRef.current = false;
+      setHoldRecording(false);
+      void (async () => {
+        try {
+          await startPromiseRef.current;
+        } catch {
+          return;
+        }
+        const blob = await finalizeBlob();
+        await cleanupRecorder();
+        await runPipeline(blob);
+      })();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      holdHotkeyActiveRef.current = false;
+    };
+  }, [
+    busy,
+    cleanupRecorder,
+    finalizeBlob,
+    inputMode,
+    runPipeline,
+    startRecording,
   ]);
 
   // ---------- Live mic button ----------
@@ -1508,14 +1590,14 @@ export function VoiceTutorDock({
         </div>
       ) : null}
 
-      {/* Live audio visualizer — spikes up when the user (or assistant) is
-          talking, settles into a calm idle ripple otherwise. Driven by a
-          Web Audio AnalyserNode tapped into either the mic stream or the
-          assistant's <audio> element depending on phase. */}
+      {/* Live audio visualizer — flowing neon ribbon that reacts to the
+          mic when the user is talking and to the assistant's <audio>
+          element when it's responding. The component itself handles
+          re-connection if the mic stream isn't ready when phase flips. */}
       {(inputMode === "live"
         ? livePhase !== "off"
         : holdRecording || tapRecording || busy) ? (
-        <div className="rounded-xl border border-zinc-200/90 bg-white/95 px-3 py-2 shadow-sm dark:border-zinc-700 dark:bg-zinc-900/95">
+        <div className="rounded-xl border border-zinc-200/90 bg-gradient-to-b from-zinc-900 to-zinc-950 px-3 py-2 shadow-sm dark:border-zinc-700">
           <VoiceWaveform
             streamRef={streamRef}
             audioElementRef={audioRef}
@@ -1527,11 +1609,6 @@ export function VoiceTutorDock({
                   : busy
                     ? "speaking"
                     : "off"
-            }
-            colorClass={
-              (inputMode === "live" && livePhase === "speaking")
-                ? "text-emerald-500"
-                : "text-rose-500"
             }
           />
         </div>
@@ -1603,7 +1680,7 @@ export function VoiceTutorDock({
           className={micButtonClass}
           title={
             inputMode === "hold"
-              ? "Hold to speak — release to send"
+              ? "Hold the button (or press & hold M) — release to send"
               : tapRecording
                 ? "Tap again to send"
                 : "Tap to start recording"
@@ -1621,6 +1698,13 @@ export function VoiceTutorDock({
             <>Recording… tap to send</>
           ) : inputMode === "hold" && holdRecording ? (
             <>Listening…</>
+          ) : inputMode === "hold" ? (
+            <>
+              Voice
+              <kbd className="ml-1 hidden rounded border border-zinc-300 bg-zinc-100 px-1 text-[10px] font-semibold text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 sm:inline">
+                hold M
+              </kbd>
+            </>
           ) : (
             <>Voice</>
           )}
