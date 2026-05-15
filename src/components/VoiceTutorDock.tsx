@@ -10,6 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
+import { VoiceWaveform } from "@/components/VoiceWaveform";
 import type { StudyChatResponse, StudyChatTurn } from "@/types/study-chat";
 
 type InputMode = "hold" | "tap" | "live";
@@ -1504,6 +1505,35 @@ export function VoiceTutorDock({
           <span className="min-w-[2.75rem] rounded-lg bg-zinc-100 px-2 py-0.5 text-center text-xs font-semibold tabular-nums text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100">
             {(pauseMs / 1000).toFixed(pauseMs % 1000 === 0 ? 0 : 1)}s
           </span>
+        </div>
+      ) : null}
+
+      {/* Live audio visualizer — spikes up when the user (or assistant) is
+          talking, settles into a calm idle ripple otherwise. Driven by a
+          Web Audio AnalyserNode tapped into either the mic stream or the
+          assistant's <audio> element depending on phase. */}
+      {(inputMode === "live"
+        ? livePhase !== "off"
+        : holdRecording || tapRecording || busy) ? (
+        <div className="rounded-xl border border-zinc-200/90 bg-white/95 px-3 py-2 shadow-sm dark:border-zinc-700 dark:bg-zinc-900/95">
+          <VoiceWaveform
+            streamRef={streamRef}
+            audioElementRef={audioRef}
+            phase={
+              inputMode === "live"
+                ? livePhase
+                : holdRecording || tapRecording
+                  ? "recording"
+                  : busy
+                    ? "speaking"
+                    : "off"
+            }
+            colorClass={
+              (inputMode === "live" && livePhase === "speaking")
+                ? "text-emerald-500"
+                : "text-rose-500"
+            }
+          />
         </div>
       ) : null}
 
