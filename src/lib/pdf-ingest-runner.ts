@@ -272,15 +272,21 @@ function parseStoredModules(raw: unknown): CourseModule[] {
 }
 
 
-function pdfIngestModuleBatchSize(remaining: number): number {
-  // Default to 1 module per expand call. Running modules in parallel server-side
-  // multiplies Anthropic load (with N PDFs in flight, batch=3 = 3N concurrent
-  // calls), which blows past TPM limits and makes each call retry with 60-90s
-  // backoff. Serial per-PDF (batch=1) keeps concurrent calls = number of PDFs.
+function pdfIngestModuleBatchSize(remaining: number, peerCount: number): number {
+  // Module concurrency vs Anthropic TPM trade-off:
+  //   - Solo PDF (peerCount=0): write 2 modules in parallel — Tier 1 Haiku
+  //     output TPM (~16 k/min) comfortably absorbs 2× ~5 k-token streams. ~2×
+  //     speedup on module writing for a typical 4-module course.
+  //   - 1+ peers: fall back to 1 per call so concurrent calls = number of PDFs.
+  //     Without this, N PDFs × batch≥2 = ≥2N concurrent streams → instant TPM
+  //     ceiling → 60-90 s 429 backoffs that erase any speedup.
+  //   - Env override (`PDF_INGEST_MODULE_BATCH_SIZE`) bypasses the heuristic
+  //     when you've upgraded to Tier 2/3/4 and want to crank concurrency.
   const raw = process.env.PDF_INGEST_MODULE_BATCH_SIZE?.trim();
-  const parsed = raw ? Number.parseInt(raw, 10) : 1;
-  const safe = Number.isFinite(parsed) ? parsed : 1;
-  return Math.max(1, Math.min(remaining, Math.trunc(safe)));
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  const fromEnv = Number.isFinite(parsed) ? Math.trunc(parsed) : null;
+  const target = fromEnv != null ? fromEnv : peerCount === 0 ? 2 : 1;
+  return Math.max(1, Math.min(remaining, target));
 }
 
 async function finalizePdfIngest(
@@ -568,7 +574,19 @@ export async function runPdfIngestExpandOne(
     };
   }
 
-  const batchCount = pdfIngestModuleBatchSize(n - idx);
+  // Peer-aware concurrency: how many *other* PDFs for this user are currently
+  // writing modules? If zero, we can safely parallelize. If any, stay serial.
+  let modulePeerCount = 0;
+  if (job.user_id) {
+    const { count: peers } = await admin
+      .from("pdf_ingest_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", job.user_id)
+      .eq("ingest_phase", "writing_modules")
+      .neq("id", jobId);
+    modulePeerCount = peers ?? 0;
+  }
+  const batchCount = pdfIngestModuleBatchSize(n - idx, modulePeerCount);
   const batchIndices = Array.from({ length: batchCount }, (_, offset) => idx + offset);
   let newModules: CourseModule[];
   const moduleHeartbeat = setInterval(() => {
