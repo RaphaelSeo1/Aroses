@@ -812,12 +812,15 @@ export function VoiceTutorDock({
 
   const runPipeline = useCallback(
     async (blob: Blob) => {
-      if (blob.size < 256) {
-        setError(
-          liveModeRef.current
-            ? "Didn't catch that — say something."
-            : "Recording too short — try again."
-        );
+      // Tiny blobs almost always come from accidental button bounces or
+      // a stray M-keypress, NOT a real attempt. We silently ignore those
+      // in Hold/Tap (where the user knows they pressed something brief)
+      // and only surface a friendly nudge in Live mode where the user
+      // can't easily tell they were too quiet.
+      if (blob.size < 4 * 1024) {
+        if (liveModeRef.current) {
+          setError("Didn't catch that — say something.");
+        }
         return;
       }
 
@@ -1274,14 +1277,14 @@ export function VoiceTutorDock({
     return () => el.removeEventListener("wheel", handler);
   }, [cycleRate]);
 
-  // Stale error toasts ("Recording too short", etc) used to stick around
-  // forever after a single failed attempt. Auto-clear them after a few
-  // seconds so the dock doesn't permanently look broken.
+  // Stale error toasts ("Didn't catch that", etc) used to stick around
+  // forever after a single failed attempt. Auto-clear them after a short
+  // window so the dock doesn't permanently look broken.
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(() => {
       setError((prev) => (prev === error ? null : prev));
-    }, 4000);
+    }, 2500);
     return () => clearTimeout(t);
   }, [error]);
 
@@ -1719,9 +1722,31 @@ export function VoiceTutorDock({
       )}
 
       {error && hasInteractedRef.current ? (
-        <p className="max-w-[14rem] text-xs leading-snug text-red-500 dark:text-red-400">
-          {error}
-        </p>
+        <div className="flex max-w-[14rem] items-start gap-1.5">
+          <p className="flex-1 text-xs leading-snug text-red-500 dark:text-red-400">
+            {error}
+          </p>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+            className="-mt-0.5 rounded p-0.5 text-red-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-3.5 w-3.5"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              aria-hidden
+            >
+              <path
+                fillRule="evenodd"
+                d="M10 8.586l4.293-4.293a1 1 0 011.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 011.414-1.414L10 8.586z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </button>
+        </div>
       ) : (
         <p className="max-w-[14rem] text-[10px] leading-snug text-zinc-400 dark:text-zinc-500">
           {inputMode === "hold"
