@@ -1285,6 +1285,13 @@ export function VoiceTutorDock({
     return () => clearTimeout(t);
   }, [error]);
 
+  // When the assistant kicks off a new request, any stale toast from a
+  // previous attempt is irrelevant — clear it immediately so the user
+  // doesn't see "Recording too short" while the AI is actively speaking.
+  useEffect(() => {
+    if (busy) setError(null);
+  }, [busy]);
+
   const speedIndex = Math.max(0, PLAYBACK_RATES.indexOf(playbackRate));
 
   // ---------- Hold / Tap handlers ----------
@@ -1692,7 +1699,7 @@ export function VoiceTutorDock({
                 className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent dark:border-zinc-500"
                 aria-hidden
               />
-              Working…
+              Speaking…
             </>
           ) : inputMode === "tap" && tapRecording ? (
             <>Recording… tap to send</>
