@@ -62,7 +62,7 @@ function tabStatusLine(
     return {
       line: "Reading PDF…",
       detail:
-        "Step 1/2: downloading and extracting text from your file before any outline AI runs.",
+        "Step 1/2: downloading and extracting text. Long decks use the first and last pages first so this finishes sooner.",
     };
   }
   if (snap?.status === "pending") {
@@ -78,7 +78,7 @@ function tabStatusLine(
     return {
       line: "Extracting…",
       detail:
-        "Step 1/2: reading PDF text. Large slide decks can take several minutes before a preview — other PDFs may show a layout first.",
+        "Step 1/2: reading PDF text. Long slide decks prioritize the start and end of the file so you see progress faster.",
     };
   }
   return {

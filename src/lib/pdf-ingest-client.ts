@@ -509,13 +509,13 @@ export async function pollPdfIngestJob(
           "Step 2/2: Planning course outline with AI (then writing each module)…";
       } else if (ingestPhase === "reading_pdf") {
         phaseLine =
-          "Step 1/2: Extracting text from your PDF (huge slide files can take several minutes before any AI runs)…";
+          "Step 1/2: Extracting text from your PDF (long slide decks read the first and last pages first so this step finishes sooner)…";
       } else if (streamPeek.length > 0) {
         phaseLine =
           "Step 2/2: Planning course outline with AI (receiving model output)…";
       } else {
         phaseLine =
-          "Step 1/2: Extracting text from your PDF (huge slide files can take several minutes before any AI runs)…";
+          "Step 1/2: Extracting text from your PDF (long slide decks read the first and last pages first so this step finishes sooner)…";
       }
       onProgress?.({
         line: `${phaseLine}${elapsedPart}`,
