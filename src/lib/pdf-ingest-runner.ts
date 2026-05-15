@@ -895,15 +895,6 @@ export async function runPdfIngestJob(
 
   const needsFullExtract = previewResult.skippedMiddle;
 
-  const fullTextPromise = needsFullExtract
-    ? extractPdfTextFullDocument(buf, {
-        onHeartbeat: () => touchJobProgress(admin, jobId),
-      })
-    : Promise.resolve({
-        text: previewResult.text,
-        numpages: previewResult.numpages,
-      });
-
   if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
     return;
   }
@@ -984,9 +975,19 @@ export async function runPdfIngestJob(
     return;
   }
 
+  // Start the full-document extraction AFTER the preview outline is saved so
+  // the page-render CPU work does not slow the live-preview AI stream that
+  // every parallel job is racing to finish.
   let fullText: string;
   try {
-    const fullRes = await fullTextPromise;
+    const fullRes = needsFullExtract
+      ? await extractPdfTextFullDocument(buf, {
+          onHeartbeat: () => touchJobProgress(admin, jobId),
+        })
+      : {
+          text: previewResult.text,
+          numpages: previewResult.numpages,
+        };
     fullText = fullRes.text;
   } catch (e) {
     console.error("[pdf-ingest] full extract", jobId, e);

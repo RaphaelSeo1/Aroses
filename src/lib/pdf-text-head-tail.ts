@@ -85,11 +85,11 @@ function envPositiveInt(name: string, fallback: number, max: number): number {
 }
 
 export type ExtractPdfTextFastOptions = {
-  /** First pages to extract when skipping the middle (default from env `PDF_INGEST_HEAD_PAGES`, else 12). */
+  /** First pages to extract when skipping the middle (default from env `PDF_INGEST_HEAD_PAGES`, else 4). */
   headPages?: number;
-  /** Last pages to extract when skipping the middle (default from env `PDF_INGEST_TAIL_PAGES`, else 6). */
+  /** Last pages to extract when skipping the middle (default from env `PDF_INGEST_TAIL_PAGES`, else 0). */
   tailPages?: number;
-  /** If total pages <= this, extract every page (default from env `PDF_INGEST_FULL_PARSE_MAX_PAGES`, else 16). */
+  /** If total pages <= this, extract every page (default from env `PDF_INGEST_FULL_PARSE_MAX_PAGES`, else 6). */
   fullParseMaxPages?: number;
   onHeartbeat?: () => Promise<void>;
 };
@@ -137,13 +137,15 @@ export async function extractPdfTextHeadTail(
     const pdf = doc;
     numpages = pdf.numPages;
 
-    // Defaults tuned for perceived speed: get a representative slice online fast
-    // so outline streaming can begin, especially when a batch uploads many decks.
-    const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 12, 120);
-    const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 6, 120);
+    // PREVIEW slice only — must be small enough that 9+ parallel jobs do not
+    // saturate the single Node thread before the live outline can stream. The
+    // final course is rebuilt from the FULL document by the runner, so a tiny
+    // slice here is safe.
+    const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 4, 120);
+    const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 0, 120);
     const fullBelowDefault = envPositiveInt(
       "PDF_INGEST_FULL_PARSE_MAX_PAGES",
-      16,
+      6,
       400
     );
 
@@ -157,10 +159,15 @@ export async function extractPdfTextHeadTail(
         : undefined;
 
     try {
-      // Full parse only for genuinely short PDFs. Do NOT use `numpages <= head+tail`
-      // here — that forced 40–50 page decks through every page and stalled Step 1.
+      // Full parse only for very short PDFs. Otherwise extract just the head
+      // (and optional tail) for the live preview — the runner reads every
+      // page separately for the final course.
       if (numpages <= fullBelow) {
         text = await renderPageRange(pdf, 1, numpages, beat);
+      } else if (tail === 0) {
+        const safeHead = Math.min(head, numpages);
+        text = await renderPageRange(pdf, 1, safeHead, beat);
+        skippedMiddle = safeHead < numpages;
       } else {
         const tailStart = numpages - tail + 1;
         // Head and tail ranges overlap — must merge as one full pass.
