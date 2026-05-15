@@ -230,14 +230,6 @@ export async function GET(_request: Request, ctx: Params) {
       ? ingestPhaseRaw
       : null;
 
-  const jobCreatedMs =
-    typeof row.created_at === "string" && row.created_at.trim()
-      ? Date.parse(row.created_at.trim())
-      : NaN;
-  /** After 1 minute, allow best-effort live preview from streaming outline tail. */
-  const jobAgeOkForStreamPreview =
-    Number.isFinite(jobCreatedMs) && Date.now() - jobCreatedMs >= 60_000;
-
   let previewCourse: CoursePayload | null = null;
   if (
     (outlineReady || row.status === "complete") &&
@@ -249,8 +241,7 @@ export async function GET(_request: Request, ctx: Params) {
     row.status === "running" &&
     ingestPhase === "planning_outline" &&
     streamPreview &&
-    streamPreview.length >= 400 &&
-    jobAgeOkForStreamPreview
+    streamPreview.length >= 200
   ) {
     previewCourse = tryOutlinePreviewFromStreamTail(streamPreview);
   }

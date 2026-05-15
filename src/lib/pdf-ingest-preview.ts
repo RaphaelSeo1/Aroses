@@ -7,10 +7,9 @@ import {
 import type { CourseLesson, CourseModule, CoursePayload } from "@/types/course";
 
 /**
- * Best-effort: the DB stores only a **tail** of the streaming outline JSON. After
- * ~1 minute of wall time the buffer is often long enough to contain a complete
- * parseable outline prefix so the UI can show live preview before the row is
- * finalized.
+ * Best-effort: the DB stores a **tail** of the streaming outline JSON. Try longer
+ * prefixes first so the UI can show a live course shell as soon as the stream
+ * contains a complete parseable outline object.
  */
 export function tryOutlinePreviewFromStreamTail(
   stream: string
@@ -22,7 +21,7 @@ export function tryOutlinePreviewFromStreamTail(
   if (start < 0) return null;
   const frag = cleaned.slice(start);
   const maxLen = Math.min(frag.length, 28_000);
-  for (let len = maxLen; len > 120; len -= 120) {
+  for (let len = maxLen; len > 120; len -= 60) {
     try {
       const parsed: unknown = JSON.parse(frag.slice(0, len));
       return buildLivePreviewCourse(parsed, []);

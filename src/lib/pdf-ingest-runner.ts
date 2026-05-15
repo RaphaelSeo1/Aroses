@@ -805,7 +805,7 @@ export async function runPdfIngestJob(
   /** pdf-parse and long CPU stretches may not call per-page heartbeat — keep row fresh. */
   const extractKeepAlive = setInterval(() => {
     void touchJobProgress(admin, jobId);
-  }, 12_000);
+  }, 8_000);
   let text = "";
   try {
   const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
@@ -819,8 +819,31 @@ export async function runPdfIngestJob(
   const useHeadTailPdfExtract =
     process.env.PDF_INGEST_FAST_EXTRACT?.trim() !== "0";
 
+  /** Fast path: pdf-parse on first N pages often beats PDF.js for text-heavy decks. */
+  const quickParseFirst =
+    process.env.PDF_INGEST_QUICK_PARSE_FIRST?.trim() !== "0";
+  const quickParseMaxPages = Math.min(40, safeMaxPages);
+
   let usedHeadTailPdfExtract = false;
-  if (useHeadTailPdfExtract) {
+  if (quickParseFirst && buf.length < 5 * 1024 * 1024) {
+    try {
+      const parsed = await pdfParse(buf, { max: quickParseMaxPages });
+      const t = (parsed.text ?? "").trim();
+      if (t.length >= 120) {
+        text = t;
+        usedHeadTailPdfExtract = true;
+        console.info("[pdf-ingest] extract quick pdf-parse", {
+          jobId,
+          chars: text.length,
+          maxPages: quickParseMaxPages,
+        });
+      }
+    } catch {
+      /* fall through to head-tail */
+    }
+  }
+
+  if (!usedHeadTailPdfExtract && useHeadTailPdfExtract) {
     try {
       const extracted = await extractPdfTextHeadTail(buf, {
         onHeartbeat: () => touchJobProgress(admin, jobId),
@@ -895,7 +918,7 @@ export async function runPdfIngestJob(
   const streamSink = createPdfStreamSink(admin, jobId);
   const heartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
-  }, 12_000);
+  }, 8_000);
   try {
     outline = await withAnthropicRateLimitRetries(
       jobId,

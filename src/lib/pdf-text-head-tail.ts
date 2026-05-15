@@ -42,7 +42,8 @@ async function pageToText(pageData: PageData): Promise<string> {
 }
 
 /** Process pages in parallel batches instead of one-by-one for much faster extraction. */
-const RENDER_BATCH_SIZE = 14;
+/** Larger batches = fewer awaits on slide-heavy PDFs (Node parallelizes getPage). */
+const RENDER_BATCH_SIZE = 26;
 
 async function renderPageRange(
   doc: PdfDoc,
@@ -111,7 +112,7 @@ export async function extractPdfTextHeadTail(
     void options.onHeartbeat();
     wallClock = setInterval(() => {
       void options.onHeartbeat!();
-    }, 12_000);
+    }, 8_000);
   }
 
   let doc: PdfDoc | null = null;

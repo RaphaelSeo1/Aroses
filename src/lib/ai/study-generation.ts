@@ -52,10 +52,11 @@ function resolveCourseBuildProfile(): CourseBuildProfile {
 /** Same truncation as outline/module generation — store on the job for expand steps. */
 export function materialTextForPdfIngest(fullText: string): string {
   const profile = resolveCourseBuildProfile();
-  return truncateMaterial(
-    fullText.trim(),
-    materialCharLimit(profile)
-  );
+  const compact = fullText
+    .trim()
+    .replace(/[\u00a0\u200b\uFEFF]/g, "")
+    .replace(/\n{6,}/g, "\n\n\n\n\n");
+  return truncateMaterial(compact, materialCharLimit(profile));
 }
 
 /**
@@ -332,7 +333,8 @@ async function readPdfIngestStreamOnce(
 
   let accumulated = "";
   let lastPushAt = 0;
-  const throttleMs = 280;
+  /** Lower = fresher `stream_preview` for live outline UI (more DB writes). */
+  const throttleMs = 90;
 
   for await (const event of stream) {
     if (event.type === "content_block_delta") {

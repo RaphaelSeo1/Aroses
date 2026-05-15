@@ -14,6 +14,7 @@ import {
   type PdfBuildProgressUI,
   type PollPdfIngestJobSnapshot,
 } from "@/lib/pdf-ingest-client";
+import { tryOutlinePreviewFromStreamTail } from "@/lib/pdf-ingest-preview";
 import type { CoursePayload } from "@/types/course";
 
 type RowState = {
@@ -44,7 +45,8 @@ function tabStatusLine(
   terminal: PollOutcome | null | undefined,
   preview: CoursePayload | null | undefined,
   snap: PollPdfIngestJobSnapshot | undefined,
-  phase: "boot" | "running" | "done"
+  phase: "boot" | "running" | "done",
+  streamTail?: string | null
 ): { line: string; detail: string } {
   if (terminal?.error) {
     return { line: "Failed", detail: terminal.error };
@@ -67,6 +69,17 @@ function tabStatusLine(
       line: "Live preview",
       detail:
         "Outline is visible; lessons fill in as each module finishes (order can differ from other PDFs in this batch).",
+    };
+  }
+  if (
+    snap?.ingestPhase === "planning_outline" &&
+    typeof streamTail === "string" &&
+    streamTail.length > 48
+  ) {
+    return {
+      line: "Live preview",
+      detail:
+        "Outline JSON is streaming from the model — the layout appears as soon as we can parse it.",
     };
   }
   if (snap?.ingestPhase === "planning_outline") {
@@ -121,6 +134,7 @@ function PdfJobPoll({
   onProgress,
   onPreview,
   onJobSnapshot,
+  onStreamPreview,
   onDone,
 }: {
   jobId: string;
@@ -128,6 +142,7 @@ function PdfJobPoll({
   onProgress: (id: string, info: PdfBuildProgressUI) => void;
   onPreview: (id: string, course: CoursePayload | null) => void;
   onJobSnapshot: (id: string, snap: PollPdfIngestJobSnapshot) => void;
+  onStreamPreview?: (id: string, text: string | null) => void;
   onDone: (id: string, result: PollOutcome) => void;
 }) {
   useEffect(() => {
@@ -146,22 +161,28 @@ function PdfJobPoll({
           onJobSnapshot: (snap) => {
             if (!ac.signal.aborted) onJobSnapshot(jobId, snap);
           },
+          onStreamPreview: onStreamPreview
+            ? (text) => {
+                if (!ac.signal.aborted) onStreamPreview(jobId, text);
+              }
+            : undefined,
         }
       );
       if (!ac.signal.aborted) onDone(jobId, polled);
     })();
     return () => ac.abort();
-  }, [jobId, nonce, onProgress, onPreview, onJobSnapshot, onDone]);
+  }, [jobId, nonce, onProgress, onPreview, onJobSnapshot, onStreamPreview, onDone]);
   return null;
 }
 
 function StaggeredPdfJobPoll({
-  index,
+  index: _index,
   jobId,
   nonce,
   onProgress,
   onPreview,
   onJobSnapshot,
+  onStreamPreview,
   onDone,
 }: {
   index: number;
@@ -170,16 +191,10 @@ function StaggeredPdfJobPoll({
   onProgress: (id: string, info: PdfBuildProgressUI) => void;
   onPreview: (id: string, course: CoursePayload | null) => void;
   onJobSnapshot: (id: string, snap: PollPdfIngestJobSnapshot) => void;
+  onStreamPreview?: (id: string, text: string | null) => void;
   onDone: (id: string, result: PollOutcome) => void;
 }) {
-  const [ready, setReady] = useState(index === 0);
-  useEffect(() => {
-    if (index === 0) return;
-    const ms = Math.min(1_800, index * 220);
-    const t = setTimeout(() => setReady(true), ms);
-    return () => clearTimeout(t);
-  }, [index]);
-  if (!ready) return null;
+  void _index;
   return (
     <PdfJobPoll
       jobId={jobId}
@@ -187,6 +202,7 @@ function StaggeredPdfJobPoll({
       onProgress={onProgress}
       onPreview={onPreview}
       onJobSnapshot={onJobSnapshot}
+      onStreamPreview={onStreamPreview}
       onDone={onDone}
     />
   );
@@ -228,6 +244,9 @@ export function CourseBuildTheater({
   const [snapshotByJob, setSnapshotByJob] = useState<
     Record<string, PollPdfIngestJobSnapshot>
   >({});
+  const [streamByJob, setStreamByJob] = useState<Record<string, string | null>>(
+    {}
+  );
 
   const courseHome = `/dashboard/courses/${courseId}`;
   const courseHomeWithSection =
@@ -271,6 +290,16 @@ export function CourseBuildTheater({
     setPreviewByJob((prev) => ({ ...prev, [id]: course }));
   }, []);
 
+  const onStreamTail = useCallback((id: string, text: string | null) => {
+    setStreamByJob((prev) => ({ ...prev, [id]: text }));
+    if (typeof text === "string" && text.length > 160) {
+      const course = tryOutlinePreviewFromStreamTail(text);
+      if (course) {
+        setPreviewByJob((prev) => ({ ...prev, [id]: course }));
+      }
+    }
+  }, []);
+
   const onJobSnapshot = useCallback(
     (id: string, snap: PollPdfIngestJobSnapshot) => {
       setSnapshotByJob((prev) => ({ ...prev, [id]: snap }));
@@ -311,6 +340,7 @@ export function CourseBuildTheater({
       setRetryErr(null);
       setRestartAckByJob({});
       setSnapshotByJob({});
+      setStreamByJob({});
     }, 0);
     return () => clearTimeout(t);
   }, [jobIds]);
@@ -484,6 +514,11 @@ export function CourseBuildTheater({
         return next;
       });
       setPreviewByJob((p) => ({ ...p, [id]: null }));
+      setStreamByJob((p) => {
+        const next = { ...p };
+        delete next[id];
+        return next;
+      });
       setTerminalByJob((p) => ({ ...p, [id]: null }));
       setRestartNonce((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
       setRows((p) => ({
@@ -527,6 +562,7 @@ export function CourseBuildTheater({
               onProgress={onProgress}
               onPreview={onPreview}
               onJobSnapshot={onJobSnapshot}
+              onStreamPreview={onStreamTail}
               onDone={onDone}
             />
           ))
@@ -543,8 +579,8 @@ export function CourseBuildTheater({
                 Tabs stay in the order you uploaded. Each PDF finishes on its own
                 schedule, so previews can appear in a different order than the list
                 — use the status under each name to see which step each file is on.
-                Large batches start the first few polls a few seconds apart (then the
-                rest together) so the browser is not overwhelmed.
+                All jobs poll in parallel so previews can land as soon as the server has
+                anything to show.
               </p>
               <div className="flex flex-wrap gap-2" role="tablist" aria-label="PDF builds">
                 {jobIds.map((id, idx) => {
@@ -552,7 +588,8 @@ export function CourseBuildTheater({
                     terminalByJob[id],
                     previewByJob[id] ?? null,
                     snapshotByJob[id],
-                    phase
+                    phase,
+                    streamByJob[id] ?? null
                   );
                   return (
                     <button
@@ -656,6 +693,29 @@ export function CourseBuildTheater({
           ) : null}
 
           {!preview ? (
+            (streamByJob[activeJob]?.length ?? 0) > 40 ? (
+              <div className="flex min-h-[40vh] flex-col gap-6 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-6 py-12 dark:border-zinc-800 dark:bg-zinc-900/40">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+                    Building your course
+                  </p>
+                  <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+                    Outline JSON is arriving from the model. The full layout appears
+                    here as soon as we can parse it — nothing is wrong while you see
+                    this skeleton.
+                  </p>
+                </div>
+                <div className="space-y-3">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="h-10 animate-pulse rounded-lg bg-zinc-200/90 dark:bg-zinc-800/80"
+                      style={{ width: `${62 + (i % 3) * 12}%` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : (
             <div className="flex min-h-[40vh] flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 px-6 py-16 text-center dark:border-zinc-800 dark:bg-zinc-900/20">
               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 {jobIds.length > 1
@@ -678,6 +738,7 @@ export function CourseBuildTheater({
                 )}
               </p>
             </div>
+            )
           ) : (
             <div className="space-y-10">
               <header className="border-b border-zinc-100 pb-8 dark:border-zinc-900">
