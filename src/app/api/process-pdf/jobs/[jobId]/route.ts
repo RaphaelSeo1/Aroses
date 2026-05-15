@@ -172,9 +172,16 @@ export async function GET(_request: Request, ctx: Params) {
   }
 
   const ingestPhaseRawEarly = (row as { ingest_phase?: unknown }).ingest_phase;
+  // Auto-recovery now also covers `planning_outline` when the outline has not
+  // been saved yet. A dead worker mid-stream looks identical to a dead worker
+  // mid-extract from the row's perspective — `ingest_outline` is null and
+  // `updated_at` stops advancing once the 8 s heartbeat interval dies with the
+  // function. Including this phase makes the auto-restart cover the same cases
+  // the manual "Restart this PDF" button does.
   const stallAppliesToThisPhase =
     ingestPhaseRawEarly === "reading_pdf" ||
     ingestPhaseRawEarly === "reading_full_pdf" ||
+    ingestPhaseRawEarly === "planning_outline" ||
     ingestPhaseRawEarly === null ||
     ingestPhaseRawEarly === undefined ||
     ingestPhaseRawEarly === "";
