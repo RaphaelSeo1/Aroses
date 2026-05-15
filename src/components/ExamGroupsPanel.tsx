@@ -567,7 +567,6 @@ export function ExamGroupsPanel({
   materials,
   failedJobs = [],
   initialSectionId,
-  courseStudyContext,
   isSelfStudy = false,
 }: {
   courseId: string;
@@ -576,10 +575,8 @@ export function ExamGroupsPanel({
   failedJobs?: FailedJobRow[];
   /** When set (e.g. from `?section=` after PDF upload redirect), selects that section tab. */
   initialSectionId?: string;
-  /** Course-level self-study goal — used as the default pre-fill for the
-   *  per-upload goal textarea so the learner doesn't have to retype the
-   *  same thing every PDF. */
-  courseStudyContext?: string | null;
+  /** Expands the per-upload goal block by default in the upload form so the
+   *  learner remembers to write a fresh goal for each lecture. */
   isSelfStudy?: boolean;
 }) {
   const router = useRouter();
@@ -1290,7 +1287,6 @@ export function ExamGroupsPanel({
             <CourseUploadForm
               courseId={courseId}
               examGroupId={activeId}
-              defaultStudyContext={courseStudyContext ?? undefined}
               isSelfStudy={isSelfStudy}
             />
           </div>

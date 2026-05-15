@@ -145,6 +145,8 @@ export function CoursePlayer({
     () => (mode === "quiz" ? `${studyBase}/quiz` : studyBase),
     [mode, studyBase]
   );
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const isDescriptionLong = (course.description?.length ?? 0) > 140;
   const [activeModuleId, setActiveModuleId] = useState(() =>
     pickInitialModuleId(course, initialModuleFromUrl)
   );
@@ -801,9 +803,28 @@ export function CoursePlayer({
             <h1 className="mt-1 text-xl font-semibold leading-snug tracking-tight text-zinc-900 dark:text-zinc-50">
               {course.title}
             </h1>
-            <p className="mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-              {course.description}
-            </p>
+            {course.description ? (
+              <>
+                <p
+                  className={`mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400 ${
+                    isDescriptionLong && !descriptionExpanded
+                      ? "line-clamp-3"
+                      : ""
+                  }`}
+                >
+                  {course.description}
+                </p>
+                {isDescriptionLong ? (
+                  <button
+                    type="button"
+                    onClick={() => setDescriptionExpanded((v) => !v)}
+                    className="mt-1 text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    {descriptionExpanded ? "Show less" : "Show more"}
+                  </button>
+                ) : null}
+              </>
+            ) : null}
           </div>
 
           <div>

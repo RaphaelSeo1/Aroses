@@ -84,18 +84,13 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
 export function CourseUploadForm({
   courseId,
   examGroupId,
-  /**
-   * Self-study courses pass the course-level goal here as a starting point —
-   * the textarea pre-fills with it, but the learner can edit (or wipe) the
-   * value to customise the goal for **this** lecture only. Public courses
-   * pass `undefined` and the goal block stays collapsed by default.
-   */
-  defaultStudyContext,
+  /** Self-study courses expand the per-upload goal block by default so the
+   *  learner is nudged to write a goal specific to *this* lecture. The
+   *  textarea always starts blank — goals are no longer course-wide. */
   isSelfStudy = false,
 }: {
   courseId: string;
   examGroupId: string;
-  defaultStudyContext?: string | null;
   isSelfStudy?: boolean;
 }) {
   const router = useRouter();
@@ -106,14 +101,11 @@ export function CourseUploadForm({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  // Per-upload study goal. For self-study courses this seeds with the
-  // course-level default so the learner sees "this is what we'll use unless
-  // you change it for this lecture". For public courses it stays empty.
-  const initialGoal = (defaultStudyContext ?? "").trim();
-  const [studyGoal, setStudyGoal] = useState<string>(initialGoal);
-  const [showGoal, setShowGoal] = useState<boolean>(
-    isSelfStudy && initialGoal.length === 0
-  );
+  // Per-upload study goal. Always starts blank — every upload deserves its
+  // own focus statement, not a stale course-wide one. For self-study courses
+  // we open the block by default so the learner remembers to fill it in.
+  const [studyGoal, setStudyGoal] = useState<string>("");
+  const [showGoal, setShowGoal] = useState<boolean>(isSelfStudy);
   const [polishingGoal, setPolishingGoal] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
   const [buildProgress, setBuildProgress] = useState<PdfBuildProgressUI | null>(
@@ -564,10 +556,8 @@ export function CourseUploadForm({
 
   return (
     <form onSubmit={(e) => void onSubmit(e)} className="space-y-4">
-      {/* Per-upload study goal — customise what the AI should focus on for
-          these specific files. Self-study courses see this expanded by
-          default (with the course goal pre-filled); public courses get a
-          collapsed "Customise for this upload" toggle. */}
+      {/* Per-upload study goal — applies only to this set of files. Self-study
+          courses see it expanded; public courses see a collapsed toggle. */}
       <div className="rounded-2xl border border-zinc-200/90 bg-zinc-50/60 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">
         {!showGoal ? (
           <button
@@ -577,12 +567,10 @@ export function CourseUploadForm({
           >
             <span className="flex items-center gap-2">
               <span aria-hidden>🎯</span>
-              {initialGoal
-                ? "Customise the goal for this upload"
-                : "Tell the AI what to focus on (optional)"}
+              Tell the AI what to focus on (optional)
             </span>
             <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">
-              {initialGoal ? "Using your course goal" : "Add a goal"}
+              Add a goal
             </span>
           </button>
         ) : (
@@ -618,11 +606,7 @@ export function CourseUploadForm({
                 if (goalError) setGoalError(null);
               }}
               maxLength={4000}
-              placeholder={
-                initialGoal
-                  ? "Replace this with what matters for this specific lecture…"
-                  : "e.g. Focus on the mechanism of ionic bonding — I already know Coulomb's law."
-              }
+              placeholder="e.g. Focus on the mechanism of ionic bonding — I already know Coulomb's law."
               className="block w-full resize-none rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
             />
             <div className="flex flex-wrap items-center gap-3">
@@ -634,15 +618,6 @@ export function CourseUploadForm({
               >
                 {polishingGoal ? "Polishing…" : "✨ Polish into a one-liner"}
               </button>
-              {initialGoal && studyGoal.trim() !== initialGoal ? (
-                <button
-                  type="button"
-                  onClick={() => setStudyGoal(initialGoal)}
-                  className="text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-                >
-                  Reset to course goal
-                </button>
-              ) : null}
               {goalError ? (
                 <span className="text-xs text-red-600 dark:text-red-400">
                   {goalError}

@@ -160,8 +160,8 @@ export function SelfStudyContextCard({ courseId, initialContext }: Props) {
                   </svg>
                 </button>
               </div>
-              {isLong ? (
-                <div className="mt-1.5 flex flex-wrap items-center gap-3">
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                {isLong ? (
                   <button
                     type="button"
                     onClick={() => setExpanded((v) => !v)}
@@ -169,22 +169,22 @@ export function SelfStudyContextCard({ courseId, initialContext }: Props) {
                   >
                     {expanded ? "Show less" : "Show full goal"}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void polishAndSave()}
-                    disabled={polishing}
-                    className="text-xs font-medium text-indigo-600 hover:underline disabled:opacity-50 dark:text-indigo-400"
-                    title="Let the AI rewrite this as a short one-liner"
-                  >
-                    {polishing ? "Polishing…" : "Polish into a one-liner"}
-                  </button>
-                  {error ? (
-                    <span className="text-xs text-red-600 dark:text-red-400">
-                      {error}
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void polishAndSave()}
+                  disabled={polishing}
+                  className="text-xs font-medium text-indigo-600 hover:underline disabled:opacity-50 dark:text-indigo-400"
+                  title="Rewrite this as a short, typo-free one-liner"
+                >
+                  {polishing ? "Polishing…" : "✨ Polish goal"}
+                </button>
+                {error ? (
+                  <span className="text-xs text-red-600 dark:text-red-400">
+                    {error}
+                  </span>
+                ) : null}
+              </div>
             </div>
           )}
         </div>

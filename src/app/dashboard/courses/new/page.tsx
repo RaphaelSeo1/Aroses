@@ -2,9 +2,60 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+
+/**
+ * Typewriter — reveals `text` one character at a time. Used in the
+ * self-study confirm step so the AI's draft feels alive instead of just
+ * appearing fully formed. `delayMs` shifts the start so a series of bullets
+ * can stagger naturally. `speed` is the per-character delay in ms.
+ */
+function Typewriter({
+  text,
+  delayMs = 0,
+  speed = 18,
+  onDone,
+}: {
+  text: string;
+  delayMs?: number;
+  speed?: number;
+  onDone?: () => void;
+}) {
+  const [shown, setShown] = useState(0);
+  const [started, setStarted] = useState(delayMs === 0);
+
+  useEffect(() => {
+    setShown(0);
+    if (delayMs <= 0) {
+      setStarted(true);
+      return;
+    }
+    setStarted(false);
+    const t = setTimeout(() => setStarted(true), delayMs);
+    return () => clearTimeout(t);
+  }, [text, delayMs]);
+
+  useEffect(() => {
+    if (!started) return;
+    if (shown >= text.length) {
+      onDone?.();
+      return;
+    }
+    const t = setTimeout(() => setShown((n) => n + 1), speed);
+    return () => clearTimeout(t);
+  }, [shown, text, started, speed, onDone]);
+
+  return (
+    <>
+      {text.slice(0, shown)}
+      {started && shown < text.length ? (
+        <span className="ml-px inline-block w-[1px] animate-pulse bg-current align-baseline" />
+      ) : null}
+    </>
+  );
+}
 
 // ─── Cycling placeholder text ────────────────────────────────────────────────
 const PLACEHOLDERS = [
@@ -98,6 +149,154 @@ function ModeCard({
   );
 }
 
+// ─── Self-study confirm step ─────────────────────────────────────────────────
+type DraftShape = { title: string; bullets: string[]; summary: string };
+
+function DraftReview({
+  draft,
+  editableTitle,
+  setEditableTitle,
+  sectionName,
+  setSectionName,
+  loading,
+  error,
+  onConfirm,
+  onEditAnswer,
+}: {
+  draft: DraftShape;
+  editableTitle: string;
+  setEditableTitle: (v: string) => void;
+  sectionName: string;
+  setSectionName: (v: string) => void;
+  loading: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onEditAnswer: () => void;
+}) {
+  // Stagger reveal: title first, then each bullet, then summary.
+  // Each segment waits ~its predecessor's char count × speed + a small pad.
+  const speed = 16;
+  const titleDelay = 0;
+  const bulletDelays = useMemo(() => {
+    const out: number[] = [];
+    let cursor = draft.title.length * speed + 150;
+    for (const b of draft.bullets) {
+      out.push(cursor);
+      cursor += b.length * speed + 90;
+    }
+    return out;
+  }, [draft]);
+  const summaryDelay =
+    bulletDelays.length > 0
+      ? bulletDelays[bulletDelays.length - 1] +
+        draft.bullets[draft.bullets.length - 1].length * speed +
+        150
+      : draft.title.length * speed + 200;
+
+  return (
+    <div className="mt-8 space-y-5">
+      <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-5 py-5 dark:border-indigo-900/60 dark:bg-indigo-950/30">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+          Is this what you want?
+        </p>
+
+        {/* Editable course title — the auto-rename problem dies here.
+            The user sees a meaningful name immediately and can tweak it. */}
+        <label
+          htmlFor="self-study-title"
+          className="mt-3 block text-xs font-medium text-zinc-500 dark:text-zinc-400"
+        >
+          Course title
+        </label>
+        <input
+          id="self-study-title"
+          value={editableTitle}
+          onChange={(e) => setEditableTitle(e.target.value)}
+          maxLength={80}
+          placeholder={draft.title}
+          className="mt-1 block w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-base font-semibold text-zinc-900 outline-none ring-indigo-500 placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 dark:border-indigo-900/60 dark:bg-zinc-950 dark:text-zinc-100"
+        />
+        {/* Show the AI's suggestion as a typing-in hint when the user
+            hasn't touched it yet (visual feedback only). */}
+        {editableTitle === draft.title ? (
+          <p className="mt-1 text-[11px] text-indigo-500 dark:text-indigo-400">
+            <Typewriter
+              text={`✨ Suggested: ${draft.title}`}
+              delayMs={titleDelay}
+              speed={speed}
+            />
+          </p>
+        ) : null}
+
+        <p className="mt-4 text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
+          We&apos;ll focus on
+        </p>
+        <ul className="mt-2 space-y-1.5 text-sm text-zinc-800 dark:text-zinc-100">
+          {draft.bullets.map((b, i) => (
+            <li
+              key={`${b}-${i}`}
+              className="flex items-start gap-2 leading-relaxed"
+            >
+              <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+              <span>
+                <Typewriter text={b} delayMs={bulletDelays[i]} speed={speed} />
+              </span>
+            </li>
+          ))}
+        </ul>
+
+        <p className="mt-4 text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
+          One-liner
+        </p>
+        <p className="mt-1 text-sm italic leading-relaxed text-zinc-700 dark:text-zinc-300">
+          <Typewriter text={draft.summary} delayMs={summaryDelay} speed={speed} />
+        </p>
+      </div>
+
+      <div>
+        <label
+          htmlFor="self-study-section-review"
+          className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
+        >
+          Folder name{" "}
+          <span className="font-normal text-zinc-500">(optional)</span>
+        </label>
+        <input
+          id="self-study-section-review"
+          value={sectionName}
+          onChange={(e) => setSectionName(e.target.value)}
+          maxLength={80}
+          placeholder="e.g. Midterm prep, Lecture notes, Bio chapter 4"
+          className="mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 outline-none ring-indigo-500 placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+        />
+      </div>
+
+      {error && (
+        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={loading || !editableTitle.trim()}
+          className="inline-flex flex-1 items-center justify-center rounded-full bg-indigo-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 disabled:opacity-50 sm:flex-none dark:bg-indigo-500 dark:hover:bg-indigo-600"
+        >
+          {loading ? "Setting up…" : "Confirm — upload PDF next →"}
+        </button>
+        <button
+          type="button"
+          onClick={onEditAnswer}
+          disabled={loading}
+          className="rounded-full border border-zinc-300 px-4 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+        >
+          Edit my answer
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 type Step = "mode" | "public" | "selfStudy";
 
@@ -121,11 +320,12 @@ export default function NewCoursePage() {
   // Self-study fields
   const [studyContext, setStudyContext] = useState("");
   const [sectionName, setSectionName] = useState("");
-  // Polished one-liner returned by `/api/self-study/polish-goal`. When set,
-  // the form shows a "is this right?" confirmation step before creating the
-  // course. The polished text is what we persist as `study_context` so the
-  // workspace badge stays short and clean.
-  const [polishedGoal, setPolishedGoal] = useState<string | null>(null);
+  // Structured draft (title + bullets + summary) returned by
+  // `/api/self-study/draft-summary`. When set, we show a "is this what you
+  // want?" review step before creating the course. Each piece typewriter-
+  // animates in so the user sees the AI compose the plan in real time.
+  const [draft, setDraft] = useState<DraftShape | null>(null);
+  const [editableTitle, setEditableTitle] = useState("");
   const [polishing, setPolishing] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -169,11 +369,11 @@ export default function NewCoursePage() {
     setLoading(false);
   }
 
-  // Ask the AI to summarise the learner's free-form goal into a tight
-  // one-liner. We display that summary back to them for confirmation
-  // before creating the course; the polished text becomes the persisted
-  // `study_context` so the workspace badge stays short.
-  async function polishGoal(e: React.FormEvent) {
+  // Ask the AI to produce a confirmable plan (title + bullets + summary)
+  // from the learner's raw input. The structured response lets the review
+  // step show concrete focus bullets — much better than a single one-liner
+  // when the learner mentions many topics.
+  async function draftPlan(e: React.FormEvent) {
     e.preventDefault();
     const raw = studyContext.trim();
     if (!raw) {
@@ -185,22 +385,35 @@ export default function NewCoursePage() {
     setError(null);
     setPolishing(true);
     try {
-      const res = await fetch("/api/self-study/polish-goal", {
+      const res = await fetch("/api/self-study/draft-summary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ study_context: raw }),
       });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok || typeof body.summary !== "string") {
+      const body = (await res.json().catch(() => ({}))) as Partial<DraftShape> & {
+        error?: string;
+      };
+      if (
+        !res.ok ||
+        typeof body.title !== "string" ||
+        typeof body.summary !== "string" ||
+        !Array.isArray(body.bullets) ||
+        body.bullets.length === 0
+      ) {
         setError(
           typeof body.error === "string"
             ? body.error
-            : "Couldn't summarise that — please rephrase and try again."
+            : "Couldn't draft a plan — please rephrase and try again."
         );
         setPolishing(false);
         return;
       }
-      setPolishedGoal(body.summary.trim());
+      setDraft({
+        title: body.title,
+        bullets: body.bullets,
+        summary: body.summary,
+      });
+      setEditableTitle(body.title);
     } catch {
       setError("Network error. Try again.");
     }
@@ -208,22 +421,24 @@ export default function NewCoursePage() {
   }
 
   // ── Create self-study course ──────────────────────────────────────────────
-  async function submitSelfStudy(finalContext: string) {
-    if (!finalContext.trim()) {
+  // We always pass an explicit title now (drawn from the confirmed draft)
+  // so the workspace never falls back to the auto-generated
+  // "Self study · May 15" date string the user kept seeing.
+  async function submitSelfStudy(d: DraftShape, finalTitle: string) {
+    if (!d.summary.trim()) {
       setError("Tell us a bit about your study situation so we can personalise it for you.");
       return;
     }
     setError(null);
     setLoading(true);
-    // Server picks a friendly default title ("Self study · May 14") when
-    // is_self_study=true — do NOT send the study_context as a title.
     try {
       const res = await fetch("/api/courses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           is_self_study: true,
-          study_context: finalContext.trim(),
+          title: finalTitle.trim() || d.title,
+          study_context: d.summary.trim(),
           // Optional — if blank the workspace falls back to "My materials".
           section_name: sectionName.trim() || undefined,
         }),
@@ -394,10 +609,10 @@ export default function NewCoursePage() {
                 What do you need from this material? The more specific you are, the better we can tailor it for you — upload your PDF next and we&apos;ll build a course around exactly your goal.
               </p>
 
-              {polishedGoal === null ? (
+              {draft === null ? (
                 /* Stage 1 — drafting: capture the learner's raw goal. */
                 <form
-                  onSubmit={(e) => void polishGoal(e)}
+                  onSubmit={(e) => void draftPlan(e)}
                   className="mt-8 space-y-5"
                 >
                   <div className="relative">
@@ -473,75 +688,27 @@ export default function NewCoursePage() {
                       className="inline-flex flex-1 items-center justify-center rounded-full bg-indigo-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 disabled:opacity-50 sm:flex-none dark:bg-indigo-500 dark:hover:bg-indigo-600"
                     >
                       {polishing
-                        ? "Polishing your goal…"
-                        : "Review my goal →"}
+                        ? "Drafting your plan…"
+                        : "Review my plan →"}
                     </button>
                   </div>
                 </form>
               ) : (
-                /* Stage 2 — review: confirm the polished one-liner. */
-                <div className="mt-8 space-y-5">
-                  <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-4 py-4 dark:border-indigo-900/60 dark:bg-indigo-950/30">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                      Is this what you want?
-                    </p>
-                    <p className="mt-2 text-base font-medium leading-relaxed text-zinc-900 dark:text-zinc-50">
-                      {polishedGoal}
-                    </p>
-                    <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-                      We&apos;ll use this to calibrate your lessons and the
-                      voice tutor. You can edit it anytime from the workspace.
-                    </p>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor="self-study-section-review"
-                      className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
-                    >
-                      Folder name{" "}
-                      <span className="font-normal text-zinc-500">
-                        (optional)
-                      </span>
-                    </label>
-                    <input
-                      id="self-study-section-review"
-                      value={sectionName}
-                      onChange={(e) => setSectionName(e.target.value)}
-                      maxLength={80}
-                      placeholder="e.g. Midterm prep, Lecture notes, Bio chapter 4"
-                      className="mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 outline-none ring-indigo-500 placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-                    />
-                  </div>
-
-                  {error && (
-                    <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-                  )}
-
-                  <div className="flex flex-wrap items-center gap-3 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => void submitSelfStudy(polishedGoal)}
-                      disabled={loading}
-                      className="inline-flex flex-1 items-center justify-center rounded-full bg-indigo-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 disabled:opacity-50 sm:flex-none dark:bg-indigo-500 dark:hover:bg-indigo-600"
-                    >
-                      {loading
-                        ? "Setting up…"
-                        : "Looks good — upload PDF next →"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPolishedGoal(null);
-                        setError(null);
-                      }}
-                      disabled={loading}
-                      className="rounded-full border border-zinc-300 px-4 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                    >
-                      Edit my answer
-                    </button>
-                  </div>
-                </div>
+                <DraftReview
+                  draft={draft}
+                  editableTitle={editableTitle}
+                  setEditableTitle={setEditableTitle}
+                  sectionName={sectionName}
+                  setSectionName={setSectionName}
+                  loading={loading}
+                  error={error}
+                  onConfirm={() => void submitSelfStudy(draft, editableTitle)}
+                  onEditAnswer={() => {
+                    setDraft(null);
+                    setEditableTitle("");
+                    setError(null);
+                  }}
+                />
               )}
             </div>
           )}

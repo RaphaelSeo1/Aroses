@@ -9,7 +9,6 @@ import {
   type MaterialRow,
 } from "@/components/ExamGroupsPanel";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
-import { SelfStudyContextCard } from "@/components/SelfStudyContextCard";
 import { ShareCourseButton } from "@/components/ShareCourseButton";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
@@ -158,14 +157,8 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                 <ShareCourseButton courseId={course.id} accent="indigo" />
               </div>
 
-              {course.study_context ? (
-                <div className="mt-6">
-                  <SelfStudyContextCard
-                    courseId={course.id}
-                    initialContext={course.study_context}
-                  />
-                </div>
-              ) : null}
+              {/* Note: per-upload goals replaced the course-wide "your study
+                  goal" badge — each PDF carries its own focus statement now. */}
 
               {/* Quick stats — simplified, no "manage" framing */}
               <div className="mt-6 grid grid-cols-2 gap-3">
@@ -214,7 +207,6 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                     materials={materials}
                     failedJobs={failedJobs}
                     initialSectionId={sectionFromUrl ?? undefined}
-                    courseStudyContext={course.study_context ?? undefined}
                     isSelfStudy
                   />
                 </div>
@@ -257,7 +249,6 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                 materials={materials}
                 failedJobs={failedJobs}
                 initialSectionId={sectionFromUrl ?? undefined}
-                courseStudyContext={course.study_context ?? undefined}
               />
             </>
           )}

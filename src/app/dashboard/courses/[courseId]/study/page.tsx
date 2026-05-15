@@ -4,7 +4,6 @@ import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
 import { CoursePlayer } from "@/components/CoursePlayer";
-import { SelfStudyContextCard } from "@/components/SelfStudyContextCard";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import { VoiceTutorDock } from "@/components/VoiceTutorDock";
 import { HighlightedSummary } from "@/components/HighlightedSummary";
@@ -224,14 +223,8 @@ export default async function StudyPage({ params, searchParams }: Props) {
             {displayMaterialSectionLabel(row.file_name)}
           </p>
         </div>
-        {courseRow.is_self_study && courseRow.study_context && (
-          <div className="mx-auto max-w-7xl px-4 pb-0 pt-4 sm:px-6">
-            <SelfStudyContextCard
-              courseId={courseId}
-              initialContext={courseRow.study_context}
-            />
-          </div>
-        )}
+        {/* Self-study goals are now per-upload (set when adding each PDF) so
+            we no longer surface a course-wide goal banner here. */}
         <CoursePlayer
           key={row.id}
           mode="lessons"
