@@ -597,12 +597,16 @@ export async function runPdfIngestExpandOne(
     const queueStartedAt = Date.now();
     let loggedQueueEnter = false;
     while (Date.now() - queueStartedAt < QUEUE_MAX_WAIT_MS) {
+      // Only count *live* competitors — see outline queue rationale.
+      const recentCutoff = new Date(Date.now() - 45_000).toISOString();
       const { count: aheadOfMe } = await admin
         .from("pdf_ingest_jobs")
         .select("id", { count: "exact", head: true })
         .eq("user_id", job.user_id)
+        .eq("status", "running")
         .eq("ingest_phase", "writing_modules")
         .lt("created_at", jobCreatedAt)
+        .gt("updated_at", recentCutoff)
         .neq("id", jobId);
       const position = aheadOfMe ?? 0;
       if (position < MODULE_CONCURRENCY) break;
@@ -1015,12 +1019,21 @@ export async function runPdfIngestJob(
     const queueStartedAt = Date.now();
     let loggedQueueEnter = false;
     while (Date.now() - queueStartedAt < QUEUE_MAX_WAIT_MS) {
+      // Only count *live* competitors: status=running AND updated_at within
+      // the last ~45 s. Old test rows from previous sessions can have
+      // ingest_phase='planning_outline' forever without ever being cleaned
+      // up; without this filter those stale rows would block fresh uploads
+      // from leaving the queue. Live workers heartbeat every ~8 s, so 45 s
+      // is comfortable headroom.
+      const recentCutoff = new Date(Date.now() - 45_000).toISOString();
       const { count: aheadOfMe } = await admin
         .from("pdf_ingest_jobs")
         .select("id", { count: "exact", head: true })
         .eq("user_id", claimed.user_id)
+        .eq("status", "running")
         .eq("ingest_phase", "planning_outline")
         .lt("created_at", myCreatedAt)
+        .gt("updated_at", recentCutoff)
         .neq("id", jobId);
       const position = aheadOfMe ?? 0;
       if (position < OUTLINE_CONCURRENCY) break;
