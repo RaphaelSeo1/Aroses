@@ -102,24 +102,26 @@ export async function GET(_request: Request, ctx: Params) {
     });
   }
 
-  // Optional self-heal: reset a **truly** stuck phase-1 job (`running`, no outline,
-  // `updated_at` frozen) to `pending` so the client's `/expand` kick can restart.
+  // Self-heal: reset a stuck phase-1 job (`running`, no outline, `updated_at`
+  // frozen) to `pending` so the client's `/expand` kick can restart.
   //
-  // **Off by default.** A fixed 4-minute window caused false positives: long PDF
-  // extraction or outline streaming looked like "Queued…" after ~4 min while the
-  // same work restarted from scratch — much slower than letting one run finish.
-  // Operators can opt in with `PDF_INGEST_STALL_PHASE1_MS` (milliseconds, 4–45
-  // minutes), e.g. `240000` for 4 minutes, when they need automatic recovery.
+  // Default **1 minute** (`PDF_INGEST_STALL_PHASE1_MS` unset). Override with
+  // milliseconds in **1–45 minutes**, or set **`0`** to disable this reset entirely.
+  const MIN_STALL_MS = 60 * 1000;
+  const MAX_STALL_MS = 45 * 60 * 1000;
+  const DEFAULT_STALL_MS = 60 * 1000;
   const stallPhase1Env = process.env.PDF_INGEST_STALL_PHASE1_MS?.trim();
   const stallPhase1Parsed = stallPhase1Env
     ? Number.parseInt(stallPhase1Env, 10)
     : Number.NaN;
   const STALL_PHASE1_MS =
-    Number.isFinite(stallPhase1Parsed) &&
-    stallPhase1Parsed >= 4 * 60 * 1000 &&
-    stallPhase1Parsed <= 45 * 60 * 1000
-      ? stallPhase1Parsed
-      : null;
+    stallPhase1Env === "0" || stallPhase1Parsed === 0
+      ? null
+      : Number.isFinite(stallPhase1Parsed) &&
+          stallPhase1Parsed >= MIN_STALL_MS &&
+          stallPhase1Parsed <= MAX_STALL_MS
+        ? stallPhase1Parsed
+        : DEFAULT_STALL_MS;
   const isStuckPhase1 =
     STALL_PHASE1_MS != null &&
     row.status === "running" &&

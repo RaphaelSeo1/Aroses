@@ -42,7 +42,7 @@ async function pageToText(pageData: PageData): Promise<string> {
 }
 
 /** Process pages in parallel batches instead of one-by-one for much faster extraction. */
-const RENDER_BATCH_SIZE = 14;
+const RENDER_BATCH_SIZE = 22;
 
 async function renderPageRange(
   doc: PdfDoc,
@@ -85,11 +85,11 @@ function envPositiveInt(name: string, fallback: number, max: number): number {
 }
 
 export type ExtractPdfTextFastOptions = {
-  /** First pages to extract when skipping the middle (default 32). */
+  /** First pages when skipping the middle (default from env `PDF_INGEST_HEAD_PAGES`, else 14). */
   headPages?: number;
-  /** Last pages to extract when skipping the middle (default 20). */
+  /** Last pages when skipping the middle (default from env `PDF_INGEST_TAIL_PAGES`, else 10). */
   tailPages?: number;
-  /** If total pages ≤ this, extract every page (default 48). */
+  /** If total pages ≤ this, extract every page (default from env `PDF_INGEST_FULL_PARSE_MAX_PAGES`, else 16). */
   fullParseMaxPages?: number;
   onHeartbeat?: () => Promise<void>;
 };
@@ -130,16 +130,20 @@ export async function extractPdfTextHeadTail(
     // Defaults tuned for lecture PDFs: only very short decks get a full parse.
     // Older logic also treated n <= head+tail as "full parse", which meant almost
     // every deck (≤52 pages) extracted every page — very slow on slide-heavy PDFs.
-    const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 24, 120);
-    const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 14, 120);
+    // Smaller defaults + overlap fix: with head=24 tail=14, any deck n≤38 hit the
+    // "overlap" branch and parsed **every** page — very slow for typical slide PDFs.
+    const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 14, 120);
+    const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 10, 120);
     const fullBelowDefault = envPositiveInt(
       "PDF_INGEST_FULL_PARSE_MAX_PAGES",
-      28,
+      16,
       400
     );
+    /** If head+tail would cover the whole file but the deck is larger than this, shrink head/tail to skip the middle instead of parsing every page. */
+    const mergeFullMax = envPositiveInt("PDF_INGEST_MERGE_FULL_MAX_PAGES", 22, 80);
 
-    const head = Math.min(options?.headPages ?? headDefault, numpages);
-    const tail = Math.min(options?.tailPages ?? tailDefault, numpages);
+    let head = Math.min(options?.headPages ?? headDefault, numpages);
+    let tail = Math.min(options?.tailPages ?? tailDefault, numpages);
     const fullBelow = options?.fullParseMaxPages ?? fullBelowDefault;
 
     const beat =
@@ -148,13 +152,24 @@ export async function extractPdfTextHeadTail(
         : undefined;
 
     try {
-      // Full parse only for genuinely short PDFs. Do NOT use `numpages <= head+tail`
-      // here — that forced 40–50 page decks through every page and stalled Step 1.
+      // Full parse only for genuinely short PDFs.
       if (numpages <= fullBelow) {
         text = await renderPageRange(pdf, 1, numpages, beat);
       } else {
-        const tailStart = numpages - tail + 1;
-        // Head and tail ranges overlap — must merge as one full pass.
+        let tailStart = numpages - tail + 1;
+        // When ranges touch/overlap, naive code would read all n pages. For decks
+        // above `mergeFullMax`, shrink head/tail until there is a middle gap to skip.
+        while (
+          tailStart <= head + 1 &&
+          numpages > mergeFullMax &&
+          (head > 8 || tail > 8)
+        ) {
+          if (head > 8) head -= 2;
+          if (tail > 8) tail -= 2;
+          tail = Math.min(tail, numpages);
+          head = Math.min(head, numpages);
+          tailStart = numpages - tail + 1;
+        }
         if (tailStart <= head + 1) {
           text = await renderPageRange(pdf, 1, numpages, beat);
         } else {
