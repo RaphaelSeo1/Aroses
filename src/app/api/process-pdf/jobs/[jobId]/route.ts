@@ -60,7 +60,7 @@ export async function GET(_request: Request, ctx: Params) {
   const { data: row, error } = await supabase
     .from("pdf_ingest_jobs")
     .select(
-      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_modules, original_file_name, stream_preview, ingest_phase, ingest_epoch"
+      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_preview_outline, ingest_modules, original_file_name, stream_preview, ingest_phase, ingest_epoch"
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -87,7 +87,7 @@ export async function GET(_request: Request, ctx: Params) {
       status: "failed",
       materialId: undefined,
       error:
-        "This build stopped making progress for a long time (the server may have hit a time limit or lost the connection). Try uploading the PDF again on a stable network. Hard-refresh the page first so your browser runs the latest upload code. Confirm migrations 020–027 are applied in Supabase and the service role key is set on the host.",
+        "This build stopped making progress for a long time (the server may have hit a time limit or lost the connection). Try uploading the PDF again on a stable network. Hard-refresh the page first so your browser runs the latest upload code. Confirm migrations 020–028 are applied in Supabase and the service role key is set on the host.",
       outlineReady: false,
       ingestPhase: null,
       modulesBuilt: 0,
@@ -128,6 +128,7 @@ export async function GET(_request: Request, ctx: Params) {
   const ingestPhaseRawEarly = (row as { ingest_phase?: unknown }).ingest_phase;
   const stallAppliesToThisPhase =
     ingestPhaseRawEarly === "reading_pdf" ||
+    ingestPhaseRawEarly === "reading_full_pdf" ||
     ingestPhaseRawEarly === null ||
     ingestPhaseRawEarly === undefined ||
     ingestPhaseRawEarly === "";
@@ -154,6 +155,7 @@ export async function GET(_request: Request, ctx: Params) {
           status: "pending",
           ingest_phase: null,
           stream_preview: null,
+          ingest_preview_outline: null,
           ingest_epoch: prevEpoch + 1,
           updated_at: new Date().toISOString(),
         })
@@ -191,6 +193,8 @@ export async function GET(_request: Request, ctx: Params) {
   }
 
   const outline = row.ingest_outline as { modules?: unknown[] } | null;
+  const previewOutlineRaw = (row as { ingest_preview_outline?: unknown })
+    .ingest_preview_outline;
   const modulesArr = Array.isArray(row.ingest_modules)
     ? (row.ingest_modules as unknown[])
     : [];
@@ -225,6 +229,9 @@ export async function GET(_request: Request, ctx: Params) {
   const ingestPhaseRaw = (row as { ingest_phase?: unknown }).ingest_phase;
   const ingestPhase =
     ingestPhaseRaw === "reading_pdf" ||
+    ingestPhaseRaw === "reading_full_pdf" ||
+    ingestPhaseRaw === "digesting_full_pdf" ||
+    ingestPhaseRaw === "planning_preview" ||
     ingestPhaseRaw === "planning_outline" ||
     ingestPhaseRaw === "writing_modules"
       ? ingestPhaseRaw
@@ -239,7 +246,13 @@ export async function GET(_request: Request, ctx: Params) {
     previewCourse = buildLivePreviewCourse(outline, modulesArr);
   } else if (
     row.status === "running" &&
-    ingestPhase === "planning_outline" &&
+    previewOutlineRaw != null &&
+    typeof previewOutlineRaw === "object"
+  ) {
+    previewCourse = buildLivePreviewCourse(previewOutlineRaw, []);
+  } else if (
+    row.status === "running" &&
+    (ingestPhase === "planning_outline" || ingestPhase === "planning_preview") &&
     streamPreview &&
     streamPreview.length >= 200
   ) {

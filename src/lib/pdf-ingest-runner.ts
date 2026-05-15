@@ -5,7 +5,7 @@ import {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 import pdfParse from "pdf-parse";
-import { extractPdfTextHeadTail } from "@/lib/pdf-text-head-tail";
+import { extractPdfTextFullDocument, extractPdfTextHeadTail } from "@/lib/pdf-text-head-tail";
 import {
   parseCourseModule,
   parseCourseOutlinePayload,
@@ -15,9 +15,9 @@ import type { CourseModule } from "@/types/course";
 import type { CourseOutlinePayload } from "@/lib/ai/course-payload";
 import type { CoursePayload } from "@/types/course";
 import {
+  buildMaterialDigestFromFullPdfText,
   generateCourseModuleFromMaterial,
   generateCourseOutlineFromMaterial,
-  materialTextForPdfIngest,
   type PdfIngestStreamSink,
 } from "@/lib/ai/study-generation";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -189,6 +189,7 @@ async function failJob(
       error_message: truncateErr(message),
       stream_preview: null,
       ingest_phase: null,
+      ingest_preview_outline: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);
@@ -806,84 +807,200 @@ export async function runPdfIngestJob(
   const extractKeepAlive = setInterval(() => {
     void touchJobProgress(admin, jobId);
   }, 8_000);
-  let text = "";
+
+  type PreviewExtract = {
+    text: string;
+    numpages: number;
+    skippedMiddle: boolean;
+  };
+
+  let previewResult: PreviewExtract | null = null;
   try {
-  const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
-  const maxPages = maxPagesRaw ? Number(maxPagesRaw) : 60;
-  const safeMaxPages =
-    Number.isFinite(maxPages) && maxPages >= 1 && maxPages <= 400
-      ? Math.floor(maxPages)
-      : 60;
+    const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
+    const maxPages = maxPagesRaw ? Number(maxPagesRaw) : 60;
+    const safeMaxPages =
+      Number.isFinite(maxPages) && maxPages >= 1 && maxPages <= 400
+        ? Math.floor(maxPages)
+        : 60;
 
-  /** Head+tail page text extraction (see `extractPdfTextHeadTail`). Unrelated to `COURSE_BUILD_PROFILE`. */
-  const useHeadTailPdfExtract =
-    process.env.PDF_INGEST_FAST_EXTRACT?.trim() !== "0";
+    const useHeadTailPdfExtract =
+      process.env.PDF_INGEST_FAST_EXTRACT?.trim() !== "0";
 
-  /** Fast path: pdf-parse on first N pages often beats PDF.js for text-heavy decks. */
-  const quickParseFirst =
-    process.env.PDF_INGEST_QUICK_PARSE_FIRST?.trim() !== "0";
-  const quickParseMaxPages = Math.min(40, safeMaxPages);
-
-  let usedHeadTailPdfExtract = false;
-  if (quickParseFirst && buf.length < 5 * 1024 * 1024) {
-    try {
-      const parsed = await pdfParse(buf, { max: quickParseMaxPages });
-      const t = (parsed.text ?? "").trim();
-      if (t.length >= 120) {
-        text = t;
-        usedHeadTailPdfExtract = true;
-        console.info("[pdf-ingest] extract quick pdf-parse", {
-          jobId,
-          chars: text.length,
-          maxPages: quickParseMaxPages,
+    let usedHeadTailPdfExtract = false;
+    if (useHeadTailPdfExtract) {
+      try {
+        const extracted = await extractPdfTextHeadTail(buf, {
+          onHeartbeat: () => touchJobProgress(admin, jobId),
         });
-      }
-    } catch {
-      /* fall through to head-tail */
-    }
-  }
-
-  if (!usedHeadTailPdfExtract && useHeadTailPdfExtract) {
-    try {
-      const extracted = await extractPdfTextHeadTail(buf, {
-        onHeartbeat: () => touchJobProgress(admin, jobId),
-      });
-      if (extracted.text.length >= 80) {
-        text = extracted.text;
-        usedHeadTailPdfExtract = true;
-        console.info("[pdf-ingest] extract", {
+        if (extracted.text.length >= 80) {
+          previewResult = extracted;
+          usedHeadTailPdfExtract = true;
+          console.info("[pdf-ingest] extract preview slice", {
+            jobId,
+            numpages: extracted.numpages,
+            skippedMiddle: extracted.skippedMiddle,
+            chars: extracted.text.length,
+          });
+        }
+      } catch (e) {
+        console.warn(
+          "[pdf-ingest] head-tail PDF extract failed; falling back to pdf-parse",
           jobId,
-          numpages: extracted.numpages,
-          skippedMiddle: extracted.skippedMiddle,
-          chars: text.length,
-        });
+          e
+        );
       }
-    } catch (e) {
-      console.warn(
-        "[pdf-ingest] head-tail PDF extract failed; falling back to pdf-parse",
-        jobId,
-        e
-      );
     }
-  }
 
-  if (!usedHeadTailPdfExtract) {
-    try {
-      const parsed = await pdfParse(buf, { max: safeMaxPages });
-      text = (parsed.text ?? "").trim();
-    } catch {
+    if (!previewResult) {
+      try {
+        const parsed = await pdfParse(buf, { max: safeMaxPages });
+        const t = (parsed.text ?? "").trim();
+        const np = typeof parsed.numpages === "number" ? parsed.numpages : 0;
+        const nr =
+          typeof (parsed as { numrender?: number }).numrender === "number"
+            ? (parsed as { numrender: number }).numrender
+            : np;
+        previewResult = {
+          text: t,
+          numpages: np,
+          skippedMiddle: np > 0 && nr < np,
+        };
+      } catch {
+        await failJobUnlessStale(
+          admin,
+          jobId,
+          storagePath,
+          "Could not read PDF. Try another file.",
+          claimedEpoch
+        );
+        return;
+      }
+    }
+
+    if (previewResult.text.length < 80) {
       await failJobUnlessStale(
         admin,
         jobId,
         storagePath,
-        "Could not read PDF. Try another file.",
+        "Not enough text extracted from this PDF. Try slides with selectable text or another file.",
         claimedEpoch
       );
       return;
     }
+
+    await touchJobProgress(admin, jobId);
+  } finally {
+    clearInterval(extractKeepAlive);
   }
 
-  if (text.length < 80) {
+  const needsFullExtract = previewResult.skippedMiddle;
+
+  const fullTextPromise = needsFullExtract
+    ? extractPdfTextFullDocument(buf, {
+        onHeartbeat: () => touchJobProgress(admin, jobId),
+      })
+    : Promise.resolve({
+        text: previewResult.text,
+        numpages: previewResult.numpages,
+      });
+
+  if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+    return;
+  }
+
+  await admin
+    .from("pdf_ingest_jobs")
+    .update({
+      ingest_phase: "planning_preview",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .eq("ingest_epoch", claimedEpoch);
+
+  const streamSinkPreview = createPdfStreamSink(admin, jobId);
+  const heartbeatPreview = setInterval(() => {
+    void touchJobProgress(admin, jobId);
+  }, 8_000);
+  let provisionalOutline: CourseOutlinePayload;
+  try {
+    provisionalOutline = await withAnthropicRateLimitRetries(
+      jobId,
+      "outline-preview",
+      () =>
+        generateCourseOutlineFromMaterial(
+          previewResult.text,
+          streamSinkPreview,
+          courseStudyContext ?? undefined
+        ),
+      { maxAttempts: 14 }
+    );
+  } catch (e) {
+    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+      return;
+    }
+    const message = mapAiFailureToMessage(jobId, e);
+    await failJobUnlessStale(admin, jobId, storagePath, message, claimedEpoch);
+    return;
+  } finally {
+    clearInterval(heartbeatPreview);
+  }
+
+  const { data: previewRow, error: previewErr } = await admin
+    .from("pdf_ingest_jobs")
+    .update({
+      ingest_preview_outline: provisionalOutline,
+      stream_preview: null,
+      ingest_phase: needsFullExtract ? "reading_full_pdf" : "digesting_full_pdf",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .eq("ingest_epoch", claimedEpoch)
+    .select("id")
+    .maybeSingle();
+
+  if (previewErr) {
+    console.error("[pdf-ingest] persist preview outline", jobId, previewErr);
+    await failJobUnlessStale(
+      admin,
+      jobId,
+      storagePath,
+      "Could not save preview outline. Apply migration 028_pdf_ingest_preview_outline.sql in Supabase, then try again.",
+      claimedEpoch
+    );
+    return;
+  }
+  if (!previewRow) {
+    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+      console.info("[pdf-ingest] preview outline persist skipped (restarted)", jobId);
+      return;
+    }
+    await failJobUnlessStale(
+      admin,
+      jobId,
+      storagePath,
+      "Could not save preview outline. Apply migration 028_pdf_ingest_preview_outline.sql in Supabase, then try again.",
+      claimedEpoch
+    );
+    return;
+  }
+
+  let fullText: string;
+  try {
+    const fullRes = await fullTextPromise;
+    fullText = fullRes.text;
+  } catch (e) {
+    console.error("[pdf-ingest] full extract", jobId, e);
+    await failJobUnlessStale(
+      admin,
+      jobId,
+      storagePath,
+      "Could not read the full PDF text. Try another file or fewer pages at once.",
+      claimedEpoch
+    );
+    return;
+  }
+
+  if (fullText.trim().length < 80) {
     await failJobUnlessStale(
       admin,
       jobId,
@@ -894,12 +1011,39 @@ export async function runPdfIngestJob(
     return;
   }
 
-  await touchJobProgress(admin, jobId);
-  } finally {
-    clearInterval(extractKeepAlive);
+  if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+    return;
   }
 
-  const storedMaterial = materialTextForPdfIngest(text);
+  await admin
+    .from("pdf_ingest_jobs")
+    .update({
+      ingest_phase: "digesting_full_pdf",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .eq("ingest_epoch", claimedEpoch);
+
+  let storedMaterial: string;
+  try {
+    storedMaterial = await buildMaterialDigestFromFullPdfText(fullText, {
+      studyContext: courseStudyContext ?? undefined,
+      onChunkDone: () => touchJobProgress(admin, jobId),
+    });
+  } catch (e) {
+    console.error("[pdf-ingest] digest material", jobId, e);
+    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
+      return;
+    }
+    await failJobUnlessStale(
+      admin,
+      jobId,
+      storagePath,
+      mapAiFailureToMessage(jobId, e),
+      claimedEpoch
+    );
+    return;
+  }
 
   if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
     return;
@@ -914,19 +1058,21 @@ export async function runPdfIngestJob(
     .eq("id", jobId)
     .eq("ingest_epoch", claimedEpoch);
 
-  let outline: CourseOutlinePayload;
-  const streamSink = createPdfStreamSink(admin, jobId);
-  const heartbeat = setInterval(() => {
+  await clearJobStreamPreview(admin, jobId);
+
+  const streamSinkFinal = createPdfStreamSink(admin, jobId);
+  const heartbeatFinal = setInterval(() => {
     void touchJobProgress(admin, jobId);
   }, 8_000);
+  let outline: CourseOutlinePayload;
   try {
     outline = await withAnthropicRateLimitRetries(
       jobId,
       "outline",
       () =>
         generateCourseOutlineFromMaterial(
-          text,
-          streamSink,
+          storedMaterial,
+          streamSinkFinal,
           courseStudyContext ?? undefined
         ),
       { maxAttempts: 14 }
@@ -939,7 +1085,7 @@ export async function runPdfIngestJob(
     await failJobUnlessStale(admin, jobId, storagePath, message, claimedEpoch);
     return;
   } finally {
-    clearInterval(heartbeat);
+    clearInterval(heartbeatFinal);
   }
 
   const { data: outlineRow, error: outlineErr } = await admin
@@ -948,6 +1094,7 @@ export async function runPdfIngestJob(
       ingest_source_text: storedMaterial,
       ingest_outline: outline,
       ingest_modules: [],
+      ingest_preview_outline: null,
       stream_preview: null,
       ingest_phase: "writing_modules",
       updated_at: new Date().toISOString(),

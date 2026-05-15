@@ -64,6 +64,16 @@ function tabStatusLine(
         "Outline is on screen; lesson bodies are still being generated for this PDF.",
     };
   }
+  if (
+    snap?.ingestPhase === "reading_full_pdf" ||
+    snap?.ingestPhase === "digesting_full_pdf"
+  ) {
+    return {
+      line: "Upgrading from full PDF…",
+      detail:
+        "A fast preview may already be visible. The server is reading every page and rebuilding the outline from the full document before lesson bodies are written.",
+    };
+  }
   if (preview) {
     return {
       line: "Live preview",
@@ -72,7 +82,8 @@ function tabStatusLine(
     };
   }
   if (
-    snap?.ingestPhase === "planning_outline" &&
+    (snap?.ingestPhase === "planning_outline" ||
+      snap?.ingestPhase === "planning_preview") &&
     typeof streamTail === "string" &&
     streamTail.length > 48
   ) {
@@ -80,6 +91,13 @@ function tabStatusLine(
       line: "Live preview",
       detail:
         "Outline JSON is streaming from the model — the layout appears as soon as we can parse it.",
+    };
+  }
+  if (snap?.ingestPhase === "planning_preview") {
+    return {
+      line: "Preview outline…",
+      detail:
+        "A quick outline from the first part of your PDF so the layout can appear while the full file is still processed.",
     };
   }
   if (snap?.ingestPhase === "planning_outline") {
@@ -93,7 +111,7 @@ function tabStatusLine(
     return {
       line: "Reading PDF…",
       detail:
-        "Step 1/2: downloading and extracting text. Long decks use the first and last pages first so this finishes sooner.",
+        "Step 1/2: quick slice for an early preview — the full file is read right after for the final course.",
     };
   }
   if (snap?.status === "pending") {

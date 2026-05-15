@@ -42,8 +42,7 @@ async function pageToText(pageData: PageData): Promise<string> {
 }
 
 /** Process pages in parallel batches instead of one-by-one for much faster extraction. */
-/** Larger batches = fewer awaits on slide-heavy PDFs (Node parallelizes getPage). */
-const RENDER_BATCH_SIZE = 26;
+const RENDER_BATCH_SIZE = 14;
 
 async function renderPageRange(
   doc: PdfDoc,
@@ -86,13 +85,23 @@ function envPositiveInt(name: string, fallback: number, max: number): number {
 }
 
 export type ExtractPdfTextFastOptions = {
-  /** First pages to extract when skipping the middle (default from env `PDF_INGEST_HEAD_PAGES`, else 24). */
+  /** First pages to extract when skipping the middle (default from env `PDF_INGEST_HEAD_PAGES`, else 12). */
   headPages?: number;
-  /** Last pages to extract when skipping the middle (default from env `PDF_INGEST_TAIL_PAGES`, else 14). */
+  /** Last pages to extract when skipping the middle (default from env `PDF_INGEST_TAIL_PAGES`, else 6). */
   tailPages?: number;
-  /** If total pages ≤ this, extract every page (default from env `PDF_INGEST_FULL_PARSE_MAX_PAGES`, else 28). */
+  /** If total pages <= this, extract every page (default from env `PDF_INGEST_FULL_PARSE_MAX_PAGES`, else 16). */
   fullParseMaxPages?: number;
   onHeartbeat?: () => Promise<void>;
+};
+
+export type ExtractPdfTextFullOptions = {
+  onHeartbeat?: () => Promise<void>;
+  /**
+   * Parallel page batch size for full-document reads (default from env
+   * `PDF_INGEST_FULL_RENDER_BATCH`, else 10 — lower than head/tail so many
+   * concurrent jobs do not oversubscribe the host).
+   */
+  renderBatchSize?: number;
 };
 
 /**
@@ -128,14 +137,13 @@ export async function extractPdfTextHeadTail(
     const pdf = doc;
     numpages = pdf.numPages;
 
-    // Defaults tuned for lecture PDFs: only very short decks get a full parse.
-    // Older logic also treated n <= head+tail as "full parse", which meant almost
-    // every deck (≤52 pages) extracted every page — very slow on slide-heavy PDFs.
-    const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 24, 120);
-    const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 14, 120);
+    // Defaults tuned for perceived speed: get a representative slice online fast
+    // so outline streaming can begin, especially when a batch uploads many decks.
+    const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 12, 120);
+    const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 6, 120);
     const fullBelowDefault = envPositiveInt(
       "PDF_INGEST_FULL_PARSE_MAX_PAGES",
-      28,
+      16,
       400
     );
 
@@ -159,8 +167,10 @@ export async function extractPdfTextHeadTail(
         if (tailStart <= head + 1) {
           text = await renderPageRange(pdf, 1, numpages, beat);
         } else {
-          const headPart = await renderPageRange(pdf, 1, head, beat);
-          const tailPart = await renderPageRange(pdf, tailStart, numpages, beat);
+          const [headPart, tailPart] = await Promise.all([
+            renderPageRange(pdf, 1, head, beat),
+            renderPageRange(pdf, tailStart, numpages, beat),
+          ]);
           skippedMiddle = true;
           text = `${headPart}\n\n[ … PDF pages ${head + 1}–${tailStart - 1} omitted during optimized text extraction … ]\n\n${tailPart}`;
         }
@@ -174,6 +184,100 @@ export async function extractPdfTextHeadTail(
     }
 
     return { text: text.trim(), numpages, skippedMiddle };
+  } finally {
+    if (wallClock) clearInterval(wallClock);
+  }
+}
+
+async function renderPageRangeWithBatchSize(
+  doc: PdfDoc,
+  fromInclusive: number,
+  toInclusive: number,
+  batchSize: number,
+  onEveryPages: { n: number; fn: () => Promise<void> } | undefined
+): Promise<string> {
+  const pageNums: number[] = [];
+  for (let p = fromInclusive; p <= toInclusive; p++) pageNums.push(p);
+
+  const parts: string[] = new Array(pageNums.length);
+  let rendered = 0;
+
+  for (let i = 0; i < pageNums.length; i += batchSize) {
+    const batch = pageNums.slice(i, i + batchSize);
+    const texts = await Promise.all(
+      batch.map(async (p) => {
+        const page = await doc.getPage(p);
+        return pageToText(page);
+      })
+    );
+    for (let j = 0; j < texts.length; j++) {
+      parts[i + j] = texts[j];
+      rendered++;
+      if (onEveryPages && rendered % onEveryPages.n === 0) {
+        await onEveryPages.fn();
+      }
+    }
+  }
+
+  return parts.join("\n\n");
+}
+
+/**
+ * Extract text from **every** page (for final ingest after a fast head/tail preview).
+ * Uses a smaller default batch size than the head/tail path to stay gentle when
+ * many PDF jobs run at once.
+ */
+export async function extractPdfTextFullDocument(
+  buffer: Buffer,
+  options?: ExtractPdfTextFullOptions
+): Promise<{ text: string; numpages: number }> {
+  PDFJS.disableWorker = true;
+
+  let wallClock: ReturnType<typeof setInterval> | undefined;
+  if (options?.onHeartbeat) {
+    void options.onHeartbeat();
+    wallClock = setInterval(() => {
+      void options.onHeartbeat!();
+    }, 8_000);
+  }
+
+  const batchSize = envPositiveInt(
+    "PDF_INGEST_FULL_RENDER_BATCH",
+    10,
+    RENDER_BATCH_SIZE
+  );
+
+  let doc: PdfDoc | null = null;
+  try {
+    doc = await PDFJS.getDocument(buffer);
+    if (!doc) {
+      throw new Error("Failed to load PDF document");
+    }
+    const pdf = doc;
+    const numpages = pdf.numPages;
+    const beat =
+      options?.onHeartbeat != null
+        ? { n: 5, fn: options.onHeartbeat }
+        : undefined;
+
+    let text: string;
+    try {
+      text = await renderPageRangeWithBatchSize(
+        pdf,
+        1,
+        numpages,
+        options?.renderBatchSize ?? batchSize,
+        beat
+      );
+    } finally {
+      try {
+        pdf.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return { text: text.trim(), numpages };
   } finally {
     if (wallClock) clearInterval(wallClock);
   }

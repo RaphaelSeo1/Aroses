@@ -93,6 +93,9 @@ type JobGetJson = {
 
 export type PdfIngestPhase =
   | "reading_pdf"
+  | "reading_full_pdf"
+  | "digesting_full_pdf"
+  | "planning_preview"
   | "planning_outline"
   | "writing_modules";
 
@@ -323,6 +326,9 @@ export async function pollPdfIngestJob(
     const rawPhase = data.ingestPhase;
     const ingestPhase: PdfIngestPhase | undefined =
       rawPhase === "reading_pdf" ||
+      rawPhase === "reading_full_pdf" ||
+      rawPhase === "digesting_full_pdf" ||
+      rawPhase === "planning_preview" ||
       rawPhase === "planning_outline" ||
       rawPhase === "writing_modules"
         ? rawPhase
@@ -504,18 +510,29 @@ export async function pollPdfIngestJob(
       if (data.status === "pending") {
         phaseLine =
           "Starting… (picking up your PDF now)";
+      } else if (ingestPhase === "planning_preview") {
+        phaseLine =
+          streamPeek.length > 0
+            ? "Step 2/2: Drafting a quick preview outline (streaming from the model)…"
+            : "Step 2/2: Drafting a quick preview outline from the start of your PDF…";
+      } else if (ingestPhase === "reading_full_pdf") {
+        phaseLine =
+          "Reading the full PDF (every page) for the final course — preview may already be on screen…";
+      } else if (ingestPhase === "digesting_full_pdf") {
+        phaseLine =
+          "Compressing the full document into study notes for the final outline and lessons…";
       } else if (ingestPhase === "planning_outline") {
         phaseLine =
-          "Step 2/2: Planning course outline with AI (then writing each module)…";
+          "Step 2/2: Building the final course outline from the full document (then writing each module)…";
       } else if (ingestPhase === "reading_pdf") {
         phaseLine =
-          "Step 1/2: Extracting text from your PDF (long slide decks read the first and last pages first so this step finishes sooner)…";
+          "Step 1/2: Extracting a fast preview slice from your PDF (first and last pages on long decks)…";
       } else if (streamPeek.length > 0) {
         phaseLine =
           "Step 2/2: Planning course outline with AI (receiving model output)…";
       } else {
         phaseLine =
-          "Step 1/2: Extracting text from your PDF (long slide decks read the first and last pages first so this step finishes sooner)…";
+          "Step 1/2: Preparing your PDF…";
       }
       onProgress?.({
         line: `${phaseLine}${elapsedPart}`,

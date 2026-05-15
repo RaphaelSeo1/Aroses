@@ -134,6 +134,7 @@ export async function POST(_request: Request, ctx: Params) {
       ingest_outline: null,
       ingest_modules: [],
       stream_preview: null,
+      ingest_preview_outline: null,
       ingest_phase: null,
       ingest_epoch: prevEpoch + 1,
       updated_at: restartedAt,

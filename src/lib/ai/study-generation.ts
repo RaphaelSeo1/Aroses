@@ -59,6 +59,103 @@ export function materialTextForPdfIngest(fullText: string): string {
   return truncateMaterial(compact, materialCharLimit(profile));
 }
 
+const DIGEST_CHUNK_CHARS = 22_000;
+const MAX_DIGEST_CHUNKS = 40;
+
+/**
+ * Turn full extracted PDF text into a single string that fits `materialCharLimit`.
+ * Short inputs return truncated raw text (no extra model calls). Long inputs are
+ * chunked and summarized so later outline/module steps can use the whole deck.
+ */
+export async function buildMaterialDigestFromFullPdfText(
+  fullText: string,
+  options?: { studyContext?: string; onChunkDone?: () => void | Promise<void> }
+): Promise<string> {
+  const profile = resolveCourseBuildProfile();
+  const compact = fullText
+    .trim()
+    .replace(/[\u00a0\u200b\uFEFF]/g, "")
+    .replace(/\n{6,}/g, "\n\n\n\n\n");
+
+  const cap = materialCharLimit(profile);
+  if (compact.length <= cap) {
+    return truncateMaterial(compact, cap);
+  }
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return materialTextForPdfIngest(compact);
+  }
+
+  const anthropic = new Anthropic({
+    apiKey,
+    timeout: getPdfAnthropicTimeoutMs(),
+    maxRetries: 0,
+  });
+  const model = resolveOutlineModel(profile);
+  const studySnippet =
+    typeof options?.studyContext === "string" && options.studyContext.trim().length > 0
+      ? options.studyContext.trim().slice(0, 2_500)
+      : "";
+
+  const chunks: string[] = [];
+  for (
+    let i = 0;
+    i < compact.length && chunks.length < MAX_DIGEST_CHUNKS;
+    i += DIGEST_CHUNK_CHARS
+  ) {
+    chunks.push(compact.slice(i, i + DIGEST_CHUNK_CHARS));
+  }
+
+  const summaries: string[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i]!;
+    const prompt = `You are compressing slice ${i + 1} of ${chunks.length} from a long PDF transcript into dense study notes. Another step will turn the merged digest into a course.
+
+RULES:
+- Preserve **facts**: definitions, formulas, theorems, numbered steps, dates, names, terminology.
+- Preserve **structure hints**: chapter/section titles visible in this slice.
+- No JSON, no roleplay.
+
+${studySnippet ? `Learner context (optional emphasis):\n${studySnippet}\n\n` : ""}--- SLICE ${i + 1}/${chunks.length} ---
+${chunk}`;
+
+    const digestMax =
+      profile === "express"
+        ? 3072
+        : profile === "fast"
+          ? 4096
+          : profile === "balanced"
+            ? 4096
+            : 6144;
+
+    const msg = await createMessageWithRetries(
+      anthropic,
+      {
+        model,
+        max_tokens: digestMax,
+        temperature: 0.12,
+        messages: [{ role: "user", content: prompt }],
+      },
+      {
+        maxAttempts:
+          profile === "express"
+            ? 1
+            : profile === "fast"
+              ? 2
+              : profile === "balanced"
+                ? 2
+                : 3,
+      }
+    );
+    summaries.push(extractTextBlock(msg));
+    await options?.onChunkDone?.();
+  }
+
+  const merged = `=== FULL DOCUMENT DIGEST (${chunks.length} slices) ===\n\n${summaries.join("\n\n---\n\n")}`;
+  return truncateMaterial(merged, cap);
+}
+
 /**
  * Optional `ANTHROPIC_COURSE_MODEL` overrides everything.
  * `fast` defaults to **Claude Haiku 4.5** (3.5 Haiku IDs are removed from the API — 404).
