@@ -82,8 +82,12 @@ export async function POST(request: Request) {
     );
   }
 
+  // `turbo_v2_5` is ElevenLabs' best balance of pronunciation accuracy +
+  // latency for English-dominant content. Stick with `eleven_multilingual_v2`
+  // if a course needs non-English passages — the IPA phoneme overrides
+  // still work on both. Override via env to test newer models (e.g. v3).
   const modelId =
-    process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_multilingual_v2";
+    process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_turbo_v2_5";
 
   try {
     const buf = await synthesizeElevenLabs({
