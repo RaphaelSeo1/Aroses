@@ -13,7 +13,61 @@ export type DashboardCourse = {
   user_id: string;
   /** Listed on /explore when true (requires DB migration 007). */
   is_public?: boolean;
+  /** Conversational / private self-study flow — never mixed into the public grid. */
+  is_self_study?: boolean;
 };
+
+type DashboardSection = "explore" | "private" | "self";
+
+function isExploreListed(c: DashboardCourse): boolean {
+  return Boolean(c.is_public) && !Boolean(c.is_self_study);
+}
+
+function isSelfStudyCourse(c: DashboardCourse): boolean {
+  return Boolean(c.is_self_study);
+}
+
+function isPrivateDraft(c: DashboardCourse): boolean {
+  return !isSelfStudyCourse(c) && !isExploreListed(c);
+}
+
+function sectionPredicate(section: DashboardSection): (c: DashboardCourse) => boolean {
+  switch (section) {
+    case "explore":
+      return isExploreListed;
+    case "self":
+      return isSelfStudyCourse;
+    case "private":
+      return isPrivateDraft;
+    default:
+      return () => false;
+  }
+}
+
+function mergeSectionOrder(
+  full: DashboardCourse[],
+  section: DashboardSection,
+  newSectionOrder: DashboardCourse[]
+): DashboardCourse[] {
+  const pred = sectionPredicate(section);
+  const slots: number[] = [];
+  full.forEach((c, i) => {
+    if (pred(c)) slots.push(i);
+  });
+  if (slots.length !== newSectionOrder.length) return full;
+  const out = [...full];
+  slots.forEach((idx, j) => {
+    out[idx] = newSectionOrder[j]!;
+  });
+  return out;
+}
+
+function reorderLocal<T>(arr: T[], from: number, to: number): T[] {
+  const next = [...arr];
+  const [removed] = next.splice(from, 1);
+  next.splice(to, 0, removed!);
+  return next;
+}
 
 export function CourseDashboardList({
   courses: initialCourses,
@@ -39,20 +93,68 @@ export function CourseDashboardList({
     title: string;
   } | null>(null);
 
-  // Drag-and-drop
+  const [dragSection, setDragSection] = useState<DashboardSection | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
 
-  // Live preview order while dragging
-  const previewCourses = useMemo(() => {
-    if (dragFrom === null || dragOver === null || dragFrom === dragOver) return courses;
-    const next = [...courses];
-    const [removed] = next.splice(dragFrom, 1);
-    next.splice(dragOver, 0, removed);
-    return next;
-  }, [courses, dragFrom, dragOver]);
+  const exploreCourses = useMemo(
+    () => courses.filter(isExploreListed),
+    [courses]
+  );
+  const privateCourses = useMemo(
+    () => courses.filter(isPrivateDraft),
+    [courses]
+  );
+  const selfStudyCourses = useMemo(
+    () => courses.filter(isSelfStudyCourse),
+    [courses]
+  );
 
-  const draggedId = dragFrom !== null ? courses[dragFrom]?.id : null;
+  const previewExplore = useMemo(() => {
+    if (
+      dragSection !== "explore" ||
+      dragFrom === null ||
+      dragOver === null ||
+      dragFrom === dragOver
+    ) {
+      return exploreCourses;
+    }
+    return reorderLocal(exploreCourses, dragFrom, dragOver);
+  }, [exploreCourses, dragSection, dragFrom, dragOver]);
+
+  const previewPrivate = useMemo(() => {
+    if (
+      dragSection !== "private" ||
+      dragFrom === null ||
+      dragOver === null ||
+      dragFrom === dragOver
+    ) {
+      return privateCourses;
+    }
+    return reorderLocal(privateCourses, dragFrom, dragOver);
+  }, [privateCourses, dragSection, dragFrom, dragOver]);
+
+  const previewSelfStudy = useMemo(() => {
+    if (
+      dragSection !== "self" ||
+      dragFrom === null ||
+      dragOver === null ||
+      dragFrom === dragOver
+    ) {
+      return selfStudyCourses;
+    }
+    return reorderLocal(selfStudyCourses, dragFrom, dragOver);
+  }, [selfStudyCourses, dragSection, dragFrom, dragOver]);
+
+  const draggedId =
+    dragFrom !== null && dragSection !== null
+      ? (dragSection === "explore"
+          ? exploreCourses[dragFrom]
+          : dragSection === "private"
+            ? privateCourses[dragFrom]
+            : selfStudyCourses[dragFrom]
+        )?.id
+      : null;
 
   useEffect(() => {
     setCourses(initialCourses);
@@ -159,34 +261,58 @@ export function CourseDashboardList({
     setBusyId(null);
   }
 
-  function handleDragStart(index: number) {
+  function handleDragStart(section: DashboardSection, index: number) {
+    setDragSection(section);
     setDragFrom(index);
   }
 
-  function handleDragOver(e: React.DragEvent, index: number) {
+  function handleDragOver(
+    section: DashboardSection,
+    e: React.DragEvent,
+    index: number
+  ) {
     e.preventDefault();
-    if (dragFrom !== null && dragOver !== index) setDragOver(index);
+    if (dragSection === section && dragFrom !== null && index !== dragOver) {
+      setDragOver(index);
+    }
   }
 
-  function handleDrop(toIndex: number) {
-    if (dragFrom === null || dragFrom === toIndex) {
+  function handleDrop(section: DashboardSection, toIndex: number) {
+    if (
+      dragSection !== section ||
+      dragFrom === null ||
+      dragFrom === toIndex
+    ) {
+      setDragSection(null);
       setDragFrom(null);
       setDragOver(null);
       return;
     }
-    const next = [...courses];
-    const [removed] = next.splice(dragFrom, 1);
-    next.splice(toIndex, 0, removed);
-    setCourses(next);
+    const slice =
+      section === "explore"
+        ? exploreCourses
+        : section === "private"
+          ? privateCourses
+          : selfStudyCourses;
+    const nextSlice = reorderLocal(slice, dragFrom, toIndex);
+    const merged = mergeSectionOrder(courses, section, nextSlice);
+    setCourses(merged);
+    setDragSection(null);
     setDragFrom(null);
     setDragOver(null);
-    void saveOrder(next.map((c) => c.id));
+    void saveOrder(merged.map((c) => c.id));
   }
 
   function handleDragEnd() {
+    setDragSection(null);
     setDragFrom(null);
     setDragOver(null);
   }
+
+  const courseGridClass =
+    density === "compact"
+      ? "grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+      : "grid gap-5 sm:grid-cols-2 lg:grid-cols-3";
 
   return (
     <div className={`space-y-4 ${className ?? "mt-12"}`}>
@@ -195,38 +321,177 @@ export function CourseDashboardList({
           {listError}
         </p>
       )}
-      <ul
-        className={
-          density === "compact"
-            ? "grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
-            : "grid gap-5 sm:grid-cols-2 lg:grid-cols-3"
-        }
-      >
-        {previewCourses.map((c, index) => (
-          <CourseCard
-            key={c.id}
-            course={c}
-            index={index}
-            density={density}
-            viewerUserId={viewerUserId}
-            busy={busyId === c.id || busyId === "__reorder__"}
-            editingId={editingId}
-            draftTitle={draftTitle}
-            draftDescription={draftDescription}
-            setDraftTitle={setDraftTitle}
-            setDraftDescription={setDraftDescription}
-            onStartEdit={startEdit}
-            onSaveEdit={saveEdit}
-            onCancelEdit={cancelEdit}
-            onRemove={removeCourse}
-            isDragging={c.id === draggedId}
-            onDragStart={() => handleDragStart(courses.indexOf(c))}
-            onDragOver={(e) => handleDragOver(e, index)}
-            onDrop={() => handleDrop(index)}
-            onDragEnd={handleDragEnd}
+
+      <section className="space-y-5">
+        <div className="flex flex-wrap items-start gap-4">
+          <span
+            className="mt-1 hidden h-10 w-1 shrink-0 rounded-full bg-gradient-to-b from-brand to-red-400 sm:block"
+            aria-hidden
           />
-        ))}
-      </ul>
+          <div>
+            <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
+              Public courses
+            </h3>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+              Visible on the explore page for others to discover and use.
+            </p>
+          </div>
+        </div>
+
+        {previewExplore.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-zinc-200/90 bg-zinc-50/40 px-5 py-8 text-center dark:border-zinc-700/80 dark:bg-zinc-900/30">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Nothing on Explore yet. When a course is ready, open it and enable
+              listing so learners can find it.
+            </p>
+            <Link
+              href="/dashboard/courses/new"
+              className="mt-4 inline-flex text-sm font-semibold text-brand hover:underline dark:text-brand-soft"
+            >
+              + Create a course
+            </Link>
+          </div>
+        ) : (
+          <ul className={courseGridClass}>
+            {previewExplore.map((c, index) => (
+              <CourseCard
+                key={c.id}
+                course={c}
+                index={index}
+                density={density}
+                viewerUserId={viewerUserId}
+                busy={busyId === c.id || busyId === "__reorder__"}
+                editingId={editingId}
+                draftTitle={draftTitle}
+                draftDescription={draftDescription}
+                setDraftTitle={setDraftTitle}
+                setDraftDescription={setDraftDescription}
+                onStartEdit={startEdit}
+                onSaveEdit={saveEdit}
+                onCancelEdit={cancelEdit}
+                onRemove={removeCourse}
+                isDragging={c.id === draggedId}
+                visualVariant="default"
+                onDragStart={() => handleDragStart("explore", index)}
+                onDragOver={(e) => handleDragOver("explore", e, index)}
+                onDrop={() => handleDrop("explore", index)}
+                onDragEnd={handleDragEnd}
+              />
+            ))}
+          </ul>
+        )}
+
+        {previewPrivate.length > 0 ? (
+          <>
+            <div className="mt-10 flex flex-wrap items-start gap-3">
+              <span
+                className="mt-1.5 hidden h-8 w-0.5 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600 sm:block"
+                aria-hidden
+              />
+              <div>
+                <h4 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+                  Private courses
+                </h4>
+                <p className="mt-1 max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">
+                  Not on Explore — only you can open them from here.
+                </p>
+              </div>
+            </div>
+            <ul className={courseGridClass}>
+              {previewPrivate.map((c, index) => (
+                <CourseCard
+                  key={c.id}
+                  course={c}
+                  index={index}
+                  density={density}
+                  viewerUserId={viewerUserId}
+                  busy={busyId === c.id || busyId === "__reorder__"}
+                  editingId={editingId}
+                  draftTitle={draftTitle}
+                  draftDescription={draftDescription}
+                  setDraftTitle={setDraftTitle}
+                  setDraftDescription={setDraftDescription}
+                  onStartEdit={startEdit}
+                  onSaveEdit={saveEdit}
+                  onCancelEdit={cancelEdit}
+                  onRemove={removeCourse}
+                  isDragging={c.id === draggedId}
+                  visualVariant="default"
+                  onDragStart={() => handleDragStart("private", index)}
+                  onDragOver={(e) => handleDragOver("private", e, index)}
+                  onDrop={() => handleDrop("private", index)}
+                  onDragEnd={handleDragEnd}
+                />
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </section>
+
+      <div
+        className="my-12 border-t border-zinc-200/80 dark:border-zinc-800"
+        aria-hidden
+      />
+
+      <section className="space-y-5">
+        <div className="flex flex-wrap items-start gap-4">
+          <span
+            className="mt-1 hidden h-10 w-1 shrink-0 rounded-full bg-gradient-to-b from-zinc-500 to-zinc-700 sm:block"
+            aria-hidden
+          />
+          <div>
+            <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
+              Self study
+            </h3>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+              Private — only visible to you in your workspace.
+            </p>
+          </div>
+        </div>
+
+        {previewSelfStudy.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-zinc-200/90 bg-zinc-50/40 px-5 py-8 text-center dark:border-zinc-700/80 dark:bg-zinc-900/30">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Start a self study session when you want a private space for your
+              materials and goals — nothing here is published to Explore.
+            </p>
+            <Link
+              href="/dashboard/courses/new"
+              className="mt-4 inline-flex text-sm font-semibold text-brand hover:underline dark:text-brand-soft"
+            >
+              Start self study
+            </Link>
+          </div>
+        ) : (
+          <ul className={courseGridClass}>
+            {previewSelfStudy.map((c, index) => (
+              <CourseCard
+                key={c.id}
+                course={c}
+                index={index}
+                density={density}
+                viewerUserId={viewerUserId}
+                busy={busyId === c.id || busyId === "__reorder__"}
+                editingId={editingId}
+                draftTitle={draftTitle}
+                draftDescription={draftDescription}
+                setDraftTitle={setDraftTitle}
+                setDraftDescription={setDraftDescription}
+                onStartEdit={startEdit}
+                onSaveEdit={saveEdit}
+                onCancelEdit={cancelEdit}
+                onRemove={removeCourse}
+                isDragging={c.id === draggedId}
+                visualVariant="selfStudy"
+                onDragStart={() => handleDragStart("self", index)}
+                onDragOver={(e) => handleDragOver("self", e, index)}
+                onDrop={() => handleDrop("self", index)}
+                onDragEnd={handleDragEnd}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* ─── Delete confirmation modal ─────────────────────────────────────── */}
       {pendingDelete && (
@@ -317,6 +582,7 @@ function CourseCard({
   onCancelEdit,
   onRemove,
   isDragging,
+  visualVariant = "default",
   onDragStart,
   onDragOver,
   onDrop,
@@ -337,6 +603,7 @@ function CourseCard({
   onCancelEdit: () => void;
   onRemove: (id: string, title: string) => void;
   isDragging: boolean;
+  visualVariant?: "default" | "selfStudy";
   onDragStart: () => void;
   onDragOver: (e: React.DragEvent) => void;
   onDrop: () => void;
@@ -372,12 +639,19 @@ function CourseCard({
     >
       <div
         className={[
-          "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/95 shadow-md shadow-zinc-900/[0.04] ring-1 ring-white/40 transition-[box-shadow,transform,border-color] duration-300 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] motion-reduce:hover:translate-y-0 dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50",
+          "group relative flex h-full flex-col overflow-hidden rounded-2xl border shadow-md ring-1 transition-[box-shadow,transform,border-color] duration-300 motion-reduce:hover:translate-y-0",
+          visualVariant === "selfStudy"
+            ? "border-violet-900/35 bg-white/95 shadow-violet-950/[0.06] ring-violet-950/15 hover:-translate-y-0.5 hover:border-violet-500/45 hover:shadow-lg hover:shadow-violet-950/10 dark:border-violet-400/20 dark:bg-zinc-950/95 dark:shadow-black/20 dark:ring-violet-400/10 dark:hover:border-violet-300/35"
+            : "border-zinc-200/90 bg-white/95 shadow-zinc-900/[0.04] ring-white/40 hover:-translate-y-0.5 hover:border-brand-border hover:shadow-xl hover:shadow-red-900/[0.07] dark:border-zinc-800 dark:bg-zinc-950/95 dark:ring-zinc-700/30 dark:hover:border-brand-border/50",
           density === "compact" ? "pt-6" : "pt-7",
         ].join(" ")}
       >
         <div
-          className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-red-500 to-brand-soft opacity-90"
+          className={
+            visualVariant === "selfStudy"
+              ? "absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-violet-700 via-fuchsia-600 to-violet-500 opacity-85"
+              : "absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-red-500 to-brand-soft opacity-90"
+          }
           aria-hidden
         />
 
@@ -510,9 +784,25 @@ function CourseCard({
               >
                 {c.title}
               </Link>
-              {c.is_public ? (
+              {isExploreListed(c) ? (
                 <span className="rounded-full border border-emerald-200/80 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
                   On Explore
+                </span>
+              ) : visualVariant === "selfStudy" ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-zinc-300/90 bg-zinc-100/90 px-2.5 py-0.5 text-xs font-semibold text-zinc-800 shadow-sm dark:border-zinc-600 dark:bg-zinc-900/90 dark:text-zinc-200">
+                  <svg
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    className="h-3 w-3 opacity-80"
+                    aria-hidden
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M10 1a4.5 4.5 0 00-4.5 4.5V7H5a2 2 0 00-2 2v7a2 2 0 002 2h10a2 2 0 002-2V9a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  Private
                 </span>
               ) : null}
             </div>

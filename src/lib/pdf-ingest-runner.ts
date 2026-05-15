@@ -802,7 +802,12 @@ export async function runPdfIngestJob(
     path: storagePath.slice(0, 80),
   });
 
+  /** pdf-parse and long CPU stretches may not call per-page heartbeat — keep row fresh. */
+  const extractKeepAlive = setInterval(() => {
+    void touchJobProgress(admin, jobId);
+  }, 12_000);
   let text = "";
+  try {
   const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
   const maxPages = maxPagesRaw ? Number(maxPagesRaw) : 60;
   const safeMaxPages =
@@ -867,6 +872,9 @@ export async function runPdfIngestJob(
   }
 
   await touchJobProgress(admin, jobId);
+  } finally {
+    clearInterval(extractKeepAlive);
+  }
 
   const storedMaterial = materialTextForPdfIngest(text);
 
@@ -887,7 +895,7 @@ export async function runPdfIngestJob(
   const streamSink = createPdfStreamSink(admin, jobId);
   const heartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
-  }, 25_000);
+  }, 12_000);
   try {
     outline = await withAnthropicRateLimitRetries(
       jobId,

@@ -102,57 +102,78 @@ export async function extractPdfTextHeadTail(
   options?: ExtractPdfTextFastOptions
 ): Promise<{ text: string; numpages: number; skippedMiddle: boolean }> {
   PDFJS.disableWorker = true;
-  const doc: PdfDoc = await PDFJS.getDocument(buffer);
 
-  const numpages = doc.numPages;
-
-  // Defaults tuned for lecture PDFs: only very short decks get a full parse.
-  // Older logic also treated n <= head+tail as "full parse", which meant almost
-  // every deck (≤52 pages) extracted every page — very slow on slide-heavy PDFs.
-  const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 24, 120);
-  const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 14, 120);
-  const fullBelowDefault = envPositiveInt(
-    "PDF_INGEST_FULL_PARSE_MAX_PAGES",
-    28,
-    400
-  );
-
-  const head = Math.min(options?.headPages ?? headDefault, numpages);
-  const tail = Math.min(options?.tailPages ?? tailDefault, numpages);
-  const fullBelow = options?.fullParseMaxPages ?? fullBelowDefault;
-
-  const beat =
-    options?.onHeartbeat != null
-      ? { n: 5, fn: options.onHeartbeat }
-      : undefined;
-
-  let text: string;
-  let skippedMiddle = false;
-
-  try {
-    // Full parse only for genuinely short PDFs. Do NOT use `numpages <= head+tail`
-    // here — that forced 40–50 page decks through every page and stalled Step 1.
-    if (numpages <= fullBelow) {
-      text = await renderPageRange(doc, 1, numpages, beat);
-    } else {
-      const tailStart = numpages - tail + 1;
-      // Head and tail ranges overlap — must merge as one full pass.
-      if (tailStart <= head + 1) {
-        text = await renderPageRange(doc, 1, numpages, beat);
-      } else {
-        const headPart = await renderPageRange(doc, 1, head, beat);
-        const tailPart = await renderPageRange(doc, tailStart, numpages, beat);
-        skippedMiddle = true;
-        text = `${headPart}\n\n[ … PDF pages ${head + 1}–${tailStart - 1} omitted during optimized text extraction … ]\n\n${tailPart}`;
-      }
-    }
-  } finally {
-    try {
-      doc.destroy();
-    } catch {
-      /* ignore */
-    }
+  // `getDocument` can block for minutes on huge PDFs with no per-page callbacks.
+  // Keep `updated_at` moving so GET /jobs/:id stall-recovery does not flip the
+  // job back to `pending` while extraction is legitimately still running.
+  let wallClock: ReturnType<typeof setInterval> | undefined;
+  if (options?.onHeartbeat) {
+    void options.onHeartbeat();
+    wallClock = setInterval(() => {
+      void options.onHeartbeat!();
+    }, 12_000);
   }
 
-  return { text: text.trim(), numpages, skippedMiddle };
+  let doc: PdfDoc | null = null;
+  let text = "";
+  let skippedMiddle = false;
+  let numpages = 0;
+
+  try {
+    doc = await PDFJS.getDocument(buffer);
+    if (!doc) {
+      throw new Error("Failed to load PDF document");
+    }
+    const pdf = doc;
+    numpages = pdf.numPages;
+
+    // Defaults tuned for lecture PDFs: only very short decks get a full parse.
+    // Older logic also treated n <= head+tail as "full parse", which meant almost
+    // every deck (≤52 pages) extracted every page — very slow on slide-heavy PDFs.
+    const headDefault = envPositiveInt("PDF_INGEST_HEAD_PAGES", 24, 120);
+    const tailDefault = envPositiveInt("PDF_INGEST_TAIL_PAGES", 14, 120);
+    const fullBelowDefault = envPositiveInt(
+      "PDF_INGEST_FULL_PARSE_MAX_PAGES",
+      28,
+      400
+    );
+
+    const head = Math.min(options?.headPages ?? headDefault, numpages);
+    const tail = Math.min(options?.tailPages ?? tailDefault, numpages);
+    const fullBelow = options?.fullParseMaxPages ?? fullBelowDefault;
+
+    const beat =
+      options?.onHeartbeat != null
+        ? { n: 5, fn: options.onHeartbeat }
+        : undefined;
+
+    try {
+      // Full parse only for genuinely short PDFs. Do NOT use `numpages <= head+tail`
+      // here — that forced 40–50 page decks through every page and stalled Step 1.
+      if (numpages <= fullBelow) {
+        text = await renderPageRange(pdf, 1, numpages, beat);
+      } else {
+        const tailStart = numpages - tail + 1;
+        // Head and tail ranges overlap — must merge as one full pass.
+        if (tailStart <= head + 1) {
+          text = await renderPageRange(pdf, 1, numpages, beat);
+        } else {
+          const headPart = await renderPageRange(pdf, 1, head, beat);
+          const tailPart = await renderPageRange(pdf, tailStart, numpages, beat);
+          skippedMiddle = true;
+          text = `${headPart}\n\n[ … PDF pages ${head + 1}–${tailStart - 1} omitted during optimized text extraction … ]\n\n${tailPart}`;
+        }
+      }
+    } finally {
+      try {
+        pdf.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return { text: text.trim(), numpages, skippedMiddle };
+  } finally {
+    if (wallClock) clearInterval(wallClock);
+  }
 }

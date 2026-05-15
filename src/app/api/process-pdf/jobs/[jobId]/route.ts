@@ -102,14 +102,26 @@ export async function GET(_request: Request, ctx: Params) {
     });
   }
 
-  // Self-heal: if a job has been `running` with no outline for >4 min the
-  // server invocation almost certainly died silently (Vercel killed it, OOM,
-  // unhandled error). Reset it to `pending` atomically so the client's
-  // existing kick fires and re-runs phase 1 — no manual "Restart" needed.
-  // 4 min is well above the worst-case legitimate extraction time (~2-3 min
-  // for very large slide decks) so we won't race a healthy invocation.
-  const STALL_PHASE1_MS = 4 * 60 * 1000;
+  // Optional self-heal: reset a **truly** stuck phase-1 job (`running`, no outline,
+  // `updated_at` frozen) to `pending` so the client's `/expand` kick can restart.
+  //
+  // **Off by default.** A fixed 4-minute window caused false positives: long PDF
+  // extraction or outline streaming looked like "Queued…" after ~4 min while the
+  // same work restarted from scratch — much slower than letting one run finish.
+  // Operators can opt in with `PDF_INGEST_STALL_PHASE1_MS` (milliseconds, 4–45
+  // minutes), e.g. `240000` for 4 minutes, when they need automatic recovery.
+  const stallPhase1Env = process.env.PDF_INGEST_STALL_PHASE1_MS?.trim();
+  const stallPhase1Parsed = stallPhase1Env
+    ? Number.parseInt(stallPhase1Env, 10)
+    : Number.NaN;
+  const STALL_PHASE1_MS =
+    Number.isFinite(stallPhase1Parsed) &&
+    stallPhase1Parsed >= 4 * 60 * 1000 &&
+    stallPhase1Parsed <= 45 * 60 * 1000
+      ? stallPhase1Parsed
+      : null;
   const isStuckPhase1 =
+    STALL_PHASE1_MS != null &&
     row.status === "running" &&
     (row as { ingest_outline?: unknown }).ingest_outline == null &&
     Number.isFinite(updatedAt) &&

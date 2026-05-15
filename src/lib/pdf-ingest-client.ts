@@ -536,7 +536,7 @@ export async function pollPdfIngestJob(
       }
     }
 
-    await sleep(1800);
+    await sleep(1_000);
   }
   const waitedMin = Math.round(maxWait / 60_000);
   return {

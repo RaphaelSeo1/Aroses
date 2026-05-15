@@ -18,6 +18,17 @@ function missingIsPublicColumn(err: {
   );
 }
 
+function missingSelfStudyColumn(err: {
+  code?: string;
+  message?: string;
+} | null): boolean {
+  if (!err) return false;
+  return (
+    err.code === "42703" ||
+    /is_self_study|schema cache/i.test(err.message ?? "")
+  );
+}
+
 /**
  * Owned workspace courses plus public (or readable) courses the user has study
  * activity on without owning — shown on the home dashboard.
@@ -26,14 +37,25 @@ export async function loadDashboardCourseLists(
   supabase: SupabaseClient,
   userId: string
 ): Promise<{ owned: DashboardCourse[]; studying: StudyingCourse[] }> {
-  const primary = await supabase
+  let primary = await supabase
     .from("courses")
     .select(
-      "id, title, description, created_at, sort_order, is_public, user_id"
+      "id, title, description, created_at, sort_order, is_public, is_self_study, user_id"
     )
     .eq("user_id", userId)
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
+
+  if (primary.error && missingSelfStudyColumn(primary.error)) {
+    primary = (await supabase
+      .from("courses")
+      .select(
+        "id, title, description, created_at, sort_order, is_public, user_id"
+      )
+      .eq("user_id", userId)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true })) as typeof primary;
+  }
 
   const fallback =
     primary.error && missingIsPublicColumn(primary.error)
@@ -56,6 +78,7 @@ export async function loadDashboardCourseLists(
       description: row.description,
       user_id: row.user_id,
       is_public: Boolean((row as { is_public?: boolean }).is_public),
+      is_self_study: Boolean((row as { is_self_study?: boolean }).is_self_study),
     }));
 
   const ownedIds = new Set(owned.map((c) => c.id));
