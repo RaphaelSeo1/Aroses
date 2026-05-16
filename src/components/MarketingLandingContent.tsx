@@ -444,7 +444,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
             <FeatureCard
               icon={<IconCards className="h-6 w-6" />}
               label="Spaced repetition"
-              title="Anki-like cards from your highlights"
+              title="Personal flashcards from your highlights"
               body="Highlight anything while reading and it becomes a personal flashcard. The scheduler spaces reviews over days — no importing decks by hand."
               accent="amber"
             />

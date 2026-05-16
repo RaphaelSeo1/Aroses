@@ -1,4 +1,4 @@
--- Spaced repetition fields for personal focus cards (Anki-like scheduling).
+-- Spaced repetition fields for personal focus cards (SRS-style scheduling).
 
 alter table public.user_personal_quiz_items
   add column if not exists srs_ease real not null default 2.5,
