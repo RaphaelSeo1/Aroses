@@ -69,6 +69,91 @@ function reorderLocal<T>(arr: T[], from: number, to: number): T[] {
   return next;
 }
 
+/** Ghost grid cell — dashed outline + skeleton lines, same footprint as
+ *  `CourseCard`, links to the course creation flow. */
+function AddCoursePlaceholderCard({
+  density,
+  href,
+  accent,
+}: {
+  density: "comfortable" | "compact";
+  href: string;
+  accent: "brand" | "selfStudy";
+}) {
+  const topBar =
+    accent === "selfStudy"
+      ? "from-violet-400/25 via-fuchsia-400/20 to-violet-400/25"
+      : "from-brand/20 via-red-400/15 to-brand-soft/20";
+  const borderRing =
+    accent === "selfStudy"
+      ? "border-violet-300/60 bg-violet-50/25 ring-violet-200/30 hover:border-violet-400/80 hover:bg-violet-50/45 hover:ring-violet-300/40 dark:border-violet-700/50 dark:bg-violet-950/20 dark:ring-violet-800/30 dark:hover:border-violet-500/60 dark:hover:bg-violet-950/35"
+      : "border-zinc-300/70 bg-zinc-50/40 ring-zinc-200/40 hover:border-brand/35 hover:bg-brand-blush/30 hover:ring-brand/15 dark:border-zinc-600 dark:bg-zinc-900/25 dark:ring-zinc-700/40 dark:hover:border-brand-border/50 dark:hover:bg-zinc-900/40";
+  const btnClass =
+    accent === "selfStudy"
+      ? "border-indigo-300/50 text-indigo-700 hover:border-indigo-400 hover:bg-indigo-50 dark:border-indigo-700/60 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
+      : "border-brand/30 text-brand hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white";
+
+  return (
+    <li className="flex h-full min-h-0">
+      <Link
+        href={href}
+        className={[
+          "group relative flex w-full min-h-[14.5rem] flex-1 flex-col overflow-hidden rounded-2xl border-2 border-dashed shadow-sm ring-1 transition-[transform,box-shadow,border-color,background-color] duration-300 motion-reduce:hover:translate-y-0",
+          borderRing,
+          density === "compact" ? "pt-6" : "pt-7",
+          "hover:-translate-y-0.5 hover:shadow-md",
+        ].join(" ")}
+      >
+        <div
+          className={`pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${topBar}`}
+          aria-hidden
+        />
+        <div className="pointer-events-none absolute right-3 top-3.5 flex gap-1 opacity-[0.22]">
+          <span className="flex h-7 w-6 items-center justify-center rounded-md text-zinc-400">
+            <svg viewBox="0 0 10 16" fill="currentColor" className="h-3 w-3.5">
+              <circle cx="2.5" cy="2" r="1.5" />
+              <circle cx="7.5" cy="2" r="1.5" />
+              <circle cx="2.5" cy="7" r="1.5" />
+              <circle cx="7.5" cy="7" r="1.5" />
+              <circle cx="2.5" cy="12" r="1.5" />
+              <circle cx="7.5" cy="12" r="1.5" />
+            </svg>
+          </span>
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400">
+            <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+              <circle cx="4" cy="10" r="1.5" />
+              <circle cx="10" cy="10" r="1.5" />
+              <circle cx="16" cy="10" r="1.5" />
+            </svg>
+          </span>
+        </div>
+
+        <div
+          className={`flex flex-1 flex-col justify-between gap-4 ${density === "compact" ? "px-5 pb-6" : "px-6 pb-7"}`}
+        >
+          <div className="space-y-3 pr-10 pt-1">
+            <div className="h-5 w-[60%] max-w-[12rem] rounded-md bg-zinc-200/80 dark:bg-zinc-700/60" />
+            <div className="h-3.5 w-24 rounded-full bg-zinc-200/60 dark:bg-zinc-700/45" />
+            <div className="space-y-2">
+              <div className="h-3 w-full rounded bg-zinc-200/50 dark:bg-zinc-700/35" />
+              <div className="h-3 w-[92%] rounded bg-zinc-200/40 dark:bg-zinc-700/30" />
+              <div className="h-3 w-[70%] rounded bg-zinc-200/35 dark:bg-zinc-700/25" />
+            </div>
+          </div>
+          <span
+            className={`inline-flex w-fit items-center gap-1.5 rounded-full border bg-white/60 px-4 py-2 text-sm font-semibold shadow-sm backdrop-blur-sm transition group-hover:shadow dark:bg-zinc-950/40 ${btnClass}`}
+          >
+            Add course
+            <span aria-hidden className="transition group-hover:translate-x-0.5">
+              →
+            </span>
+          </span>
+        </div>
+      </Link>
+    </li>
+  );
+}
+
 export function CourseDashboardList({
   courses: initialCourses,
   viewerUserId,
@@ -378,6 +463,11 @@ export function CourseDashboardList({
                 onDragEnd={handleDragEnd}
               />
             ))}
+            <AddCoursePlaceholderCard
+              density={density}
+              href="/dashboard/courses/new?mode=public"
+              accent="brand"
+            />
           </ul>
         )}
 
@@ -423,6 +513,11 @@ export function CourseDashboardList({
                   onDragEnd={handleDragEnd}
                 />
               ))}
+              <AddCoursePlaceholderCard
+                density={density}
+                href="/dashboard/courses/new?mode=public"
+                accent="brand"
+              />
             </ul>
           </>
         ) : null}
@@ -489,6 +584,11 @@ export function CourseDashboardList({
                 onDragEnd={handleDragEnd}
               />
             ))}
+            <AddCoursePlaceholderCard
+              density={density}
+              href="/dashboard/courses/new?mode=selfStudy"
+              accent="selfStudy"
+            />
           </ul>
         )}
       </section>
