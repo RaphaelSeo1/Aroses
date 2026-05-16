@@ -12,13 +12,15 @@ export type ResumeTarget = {
  * "Continue learning" without a specific material/module already in the
  * URL. Resolution order:
  *
- *   1. Most-recently-completed module in this course → the NEXT module
- *      of that material (or the same module if it was the last one).
- *      This gives the natural "resume where I left off" feel.
+ *   1. Most recent activity in this course (latest module completion OR
+ *      latest answered quiz question) → return that exact module so the
+ *      learner lands where they were last working, not on some "next"
+ *      module the system guessed.
  *   2. Earliest material (lowest sort_order, then earliest created_at)
- *      with at least one generated module → module 1.
- *   3. Whatever material exists at all → module 1.
- *   4. `null` if the course is empty (caller should render an empty state).
+ *      with at least one generated module → module 1. This branch is
+ *      only used when the learner has zero activity in the course.
+ *   3. Whatever material exists at all → module 1 / still-building state.
+ *   4. `null` if the course is empty (caller renders empty state).
  *
  * Designed to run server-side from a Next.js route handler / page.
  */
@@ -27,8 +29,8 @@ export async function resolveResumeTarget(
   courseId: string,
   userId: string
 ): Promise<ResumeTarget | null> {
-  // 1. Did this user complete anything in this course before? Pick up
-  //    from the freshest completion.
+  // 1a. Latest module completion — the strongest signal because it
+  //     carries both material AND module.
   const { data: lastComp } = await supabase
     .from("module_completion")
     .select("material_id, module_id, completed_at, study_materials!inner(course_id)")
@@ -38,35 +40,47 @@ export async function resolveResumeTarget(
     .limit(1)
     .maybeSingle();
 
-  if (lastComp && typeof lastComp.material_id === "string") {
-    const materialId = lastComp.material_id;
-    const lastModuleId =
-      typeof lastComp.module_id === "number" ? lastComp.module_id : null;
+  // 1b. Latest quiz attempt — used as a fallback "this user touched
+  //     this course" signal. We only get material_id from this table
+  //     (no module_id column), so module resolution falls back to the
+  //     first available module of that material.
+  const { data: lastAttempt } = await supabase
+    .from("question_attempts")
+    .select("material_id, answered_at, study_materials!inner(course_id)")
+    .eq("user_id", userId)
+    .eq("study_materials.course_id", courseId)
+    .order("answered_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-    // Pull the matching material's outline so we can find the NEXT
-    // unfinished module — that's almost always what a learner expects
-    // when they tap "Continue".
+  const compAt = lastComp?.completed_at
+    ? new Date(lastComp.completed_at as string).getTime()
+    : 0;
+  const attemptAt = lastAttempt?.answered_at
+    ? new Date(lastAttempt.answered_at as string).getTime()
+    : 0;
+
+  // Module completion wins ties because it pinpoints the exact module.
+  if (compAt && compAt >= attemptAt && lastComp) {
+    return {
+      materialId: lastComp.material_id as string,
+      moduleId:
+        typeof lastComp.module_id === "number" ? lastComp.module_id : null,
+    };
+  }
+
+  if (attemptAt && lastAttempt && typeof lastAttempt.material_id === "string") {
+    // We know which material was being practised but not which module —
+    // load its outline and return module 1 (better than bouncing the
+    // user to a different material entirely).
+    const matId = lastAttempt.material_id;
     const { data: mat } = await supabase
       .from("study_materials")
       .select("id, course_payload")
-      .eq("id", materialId)
+      .eq("id", matId)
       .maybeSingle();
-
-    const modules = extractModuleIds(mat?.course_payload);
-    if (modules.length > 0 && lastModuleId != null) {
-      const idx = modules.indexOf(lastModuleId);
-      if (idx >= 0 && idx < modules.length - 1) {
-        return { materialId, moduleId: modules[idx + 1] };
-      }
-      // Either the completed module was the last one, or we couldn't
-      // match it — just stay on the last completed module so the user
-      // sees something familiar.
-      return {
-        materialId,
-        moduleId: lastModuleId,
-      };
-    }
-    return { materialId, moduleId: lastModuleId };
+    const ids = extractModuleIds(mat?.course_payload);
+    return { materialId: matId, moduleId: ids[0] ?? null };
   }
 
   // 2. No completions yet — fall back to the earliest material that
