@@ -16,6 +16,7 @@ import {
 } from "@/lib/explore-course-outline";
 import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
+import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -31,7 +32,11 @@ const UUID_RE =
 
 type Props = {
   params: Promise<{ courseId: string }>;
-  searchParams: Promise<{ material?: string; module?: string }>;
+  searchParams: Promise<{
+    material?: string;
+    module?: string;
+    mode?: string;
+  }>;
 };
 
 export default async function ExploreStudyPage({ params, searchParams }: Props) {
@@ -78,6 +83,22 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
   if (!courseRow) notFound();
 
   const studyBase = `/explore/${courseId}/study`;
+
+  // Entry-point shortcut — when neither material nor module is in the
+  // URL, drop the learner where they last left off. Without this, the
+  // page used to grab whatever fetchStudyMaterialForPublicExplore picked
+  // first (sort_order asc, then a created_at tiebreak), which felt
+  // random as soon as the user had history elsewhere in the course.
+  if (!materialId && initialModuleFromUrl == null) {
+    const target = await resolveResumeTarget(supabase, courseRow.id, user.id);
+    if (target) {
+      const qs = new URLSearchParams();
+      qs.set("material", target.materialId);
+      if (target.moduleId != null) qs.set("module", String(target.moduleId));
+      if (sp.mode === "learn") qs.set("mode", "learn");
+      redirect(`${studyBase}?${qs.toString()}`);
+    }
+  }
 
   const { row: fetchedRow, error: fetchErr } =
     await fetchStudyMaterialForPublicExplore(supabase, courseRow.id, materialId);

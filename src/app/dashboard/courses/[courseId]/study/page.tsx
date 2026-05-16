@@ -10,6 +10,7 @@ import { HighlightedSummary } from "@/components/HighlightedSummary";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { McqQuiz } from "@/components/McqQuiz";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
+import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
@@ -54,6 +55,24 @@ export default async function StudyPage({ params, searchParams }: Props) {
   if (!courseRow) notFound();
 
   const courseTitle = courseRow.title?.trim() || "Course";
+
+  // Entry-point shortcut: when the URL doesn't already specify which
+  // material + module to open (i.e. the user tapped "Learn" / "Continue"
+  // from a course tile), redirect to wherever they last left off. Falls
+  // back to the earliest module of the earliest material if no progress
+  // exists yet. Without this, the study page used to grab the first
+  // material in sort_order and module 1 — which felt random the moment a
+  // user had progress further along.
+  if (!materialId && initialModuleFromUrl == null) {
+    const target = await resolveResumeTarget(supabase, courseRow.id, user.id);
+    if (target) {
+      const qs = new URLSearchParams();
+      qs.set("material", target.materialId);
+      if (target.moduleId != null) qs.set("module", String(target.moduleId));
+      if (learnMode) qs.set("mode", "learn");
+      redirect(`/dashboard/courses/${courseId}/study?${qs.toString()}`);
+    }
+  }
 
   let row: {
     id: string;
