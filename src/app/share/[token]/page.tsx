@@ -120,7 +120,7 @@ export default async function ShareViewerPage({ params, searchParams }: Props) {
             href="/"
             className="mt-6 inline-flex rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
           >
-            Try {APP_NAME}
+            {`Try ${APP_NAME}`}
           </Link>
         </main>
       </>
@@ -158,7 +158,7 @@ export default async function ShareViewerPage({ params, searchParams }: Props) {
           <>
             <HeaderNavLink href="/explore">Explore</HeaderNavLink>
             <HeaderNavLink href="/signup" variant="primary">
-              Try {APP_NAME}
+              {`Try ${APP_NAME}`}
             </HeaderNavLink>
           </>
         }

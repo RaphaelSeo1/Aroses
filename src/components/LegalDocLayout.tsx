@@ -48,7 +48,7 @@ export async function LegalDocLayout({
               href="/"
               className="text-sm font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
             >
-              ← Back to {APP_NAME}
+              {`← Back to ${APP_NAME}`}
             </Link>
           </p>
           <h1 className="mt-5 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">

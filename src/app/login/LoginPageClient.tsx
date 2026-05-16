@@ -75,7 +75,7 @@ function LoginForm({
           Log in
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-          Welcome back to {APP_NAME}.
+          {`Welcome back to ${APP_NAME}.`}
         </p>
 
         {preferredHint ? (

@@ -12,10 +12,7 @@ export default function TermsPage() {
     <LegalDocLayout title="Terms of Service">
       <>
         <p>
-          These Terms of Service (&quot;Terms&quot;) govern your access to and use
-          of {APP_NAME} (the &quot;Service&quot;), operated by us (&quot;we,&quot;
-          &quot;us,&quot; or &quot;our&quot;). By creating an account or using the
-          Service, you agree to these Terms.
+          {`These Terms of Service ("Terms") govern your access to and use of ${APP_NAME} (the "Service"), operated by us ("we," "us," or "our"). By creating an account or using the Service, you agree to these Terms.`}
         </p>
 
         <h2>1. Eligibility</h2>
@@ -28,11 +25,9 @@ export default function TermsPage() {
 
         <h2>2. The Service is a study aid</h2>
         <p>
-          {APP_NAME} provides tools to organize and study material you provide. It is{" "}
-          <strong>not</strong> a substitute for instructors, institutions,
-          professional academic advising, tutoring, medical or legal advice, or any
-          licensed professional service. You are solely responsible for your academic
-          decisions and outcomes.
+          {`${APP_NAME} provides tools to organize and study material you provide. It is `}
+          <strong>not</strong>
+          {` a substitute for instructors, institutions, professional academic advising, tutoring, medical or legal advice, or any licensed professional service. You are solely responsible for your academic decisions and outcomes.`}
         </p>
 
         <h2>3. Your content</h2>

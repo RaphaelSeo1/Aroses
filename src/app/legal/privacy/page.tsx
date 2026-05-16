@@ -13,9 +13,7 @@ export default function PrivacyPage() {
     <LegalDocLayout title="Privacy Policy">
       <>
         <p>
-          This Privacy Policy describes how {APP_NAME} (&quot;we,&quot;
-          &quot;us&quot;) collects, uses, and shares information when you use our
-          website and services (the &quot;Service&quot;).
+          {`This Privacy Policy describes how ${APP_NAME} ("we," "us") collects, uses, and shares information when you use our website and services (the "Service").`}
         </p>
 
         <h2>1. Information we collect</h2>

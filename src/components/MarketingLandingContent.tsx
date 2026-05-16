@@ -259,7 +259,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
               <span className="text-brand dark:text-brand-soft">Built from your material.</span>
             </h1>
             <p className="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-brand-muted dark:text-zinc-400">
-              Upload a PDF and {APP_NAME} turns it into lessons, quizzes, and a voice tutor that knows your notes inside out — personalised to your exact study goal.
+              {`Upload a PDF and ${APP_NAME} turns it into lessons, quizzes, and a voice tutor that knows your notes inside out — personalised to your exact study goal.`}
             </p>
             <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
               <Link
@@ -504,18 +504,18 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
                 AI that knows your situation, not just your subject
               </h2>
               <p className="mt-4 leading-relaxed text-zinc-600 dark:text-zinc-400">
-                Tell {APP_NAME} exactly where you&apos;re at — exam in two days, already know the basics, struggling with one topic, want a deep dive — and every lesson, quiz, and voice conversation is calibrated to match.
+                {`Tell ${APP_NAME} exactly where you're at — exam in two days, already know the basics, struggling with one topic, want a deep dive — and every lesson, quiz, and voice conversation is calibrated to match.`}
               </p>
-              <ul className="mt-6 space-y-3 text-sm">
+              <ul className="mt-6 space-y-4 text-sm">
                 {[
                   ["🗓️ Exam deadline?", "Content prioritises testable concepts and quick retention."],
                   ["📚 Already know the basics?", "Introductions are skipped. Nuance and depth get more space."],
                   ["❓ Struggling with one topic?", "That section expands significantly compared to everything else."],
                   ["🤷 No specific context?", "Balanced, well-rounded course — nothing assumed."],
                 ].map(([k, v]) => (
-                  <li key={k} className="flex gap-3">
-                    <span className="shrink-0 font-medium text-zinc-700 dark:text-zinc-300">{k}</span>
-                    <span className="text-zinc-500 dark:text-zinc-400">{v}</span>
+                  <li key={k} className="space-y-1">
+                    <p className="font-medium text-zinc-700 dark:text-zinc-300">{k}</p>
+                    <p className="leading-relaxed text-zinc-500 dark:text-zinc-400">{v}</p>
                   </li>
                 ))}
               </ul>
@@ -582,7 +582,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
             <div className="flex items-center gap-3">
               <BrandLogo className="h-9 w-9 sm:h-10 sm:w-10" />
               <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                © {year} {APP_NAME}
+                {`© ${year} ${APP_NAME}`}
               </p>
             </div>
             <nav

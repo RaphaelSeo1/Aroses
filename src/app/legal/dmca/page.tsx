@@ -13,9 +13,7 @@ export default function DmcaPage() {
     <LegalDocLayout title="DMCA / Copyright policy">
       <>
         <p>
-          {APP_NAME} respects intellectual property rights. We respond to notices of
-          alleged copyright infringement that comply with the U.S. Digital Millennium
-          Copyright Act (&quot;DMCA&quot;) where applicable.
+          {`${APP_NAME} respects intellectual property rights. We respond to notices of alleged copyright infringement that comply with the U.S. Digital Millennium Copyright Act ("DMCA") where applicable.`}
         </p>
 
         <h2>Filing a DMCA notice</h2>

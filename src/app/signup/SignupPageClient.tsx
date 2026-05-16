@@ -104,7 +104,7 @@ function SignupContent({
             Create your account
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-            Start studying smarter with {APP_NAME}.
+            {`Start studying smarter with ${APP_NAME}.`}
           </p>
 
           {preferredHint ? (
