@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { shuffleMcqChoices, type QuizSessionItem } from "@/lib/quiz-session";
 import { isQuizMcq } from "@/types/course";
 
@@ -43,6 +49,8 @@ export function ModuleQuiz({
 }: Props) {
   const [index, setIndex] = useState(0);
   const [wrongAttempts, setWrongAttempts] = useState(0);
+  const [finished, setFinished] = useState(false);
+  const [savingExit, setSavingExit] = useState(false);
 
   /** Multiple choice */
   const [mcSelected, setMcSelected] = useState<number | null>(null);
@@ -55,6 +63,7 @@ export function ModuleQuiz({
   const [frGraded, setFrGraded] = useState(false);
   const [frCorrect, setFrCorrect] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [continueReady, setContinueReady] = useState(false);
 
   const slot = items[index];
   const q = slot?.question;
@@ -81,6 +90,13 @@ export function ModuleQuiz({
     setFrCorrect(false);
     setSubmitError(null);
   }, [index, originalQuizIndex]);
+
+  useEffect(() => {
+    const feedbackVisible = mcRevealed || frGraded;
+    if (!feedbackVisible) return;
+    const t = window.setTimeout(() => setContinueReady(true), 800);
+    return () => window.clearTimeout(t);
+  }, [mcRevealed, frGraded]);
 
   const recordMcAttempt = useCallback(
     async (quizQuestionIndex: number, choice: number, isCorrect: boolean) => {
@@ -155,6 +171,7 @@ export function ModuleQuiz({
   const onMcChoose = useCallback(
     async (choiceIndex: number) => {
       if (!displayMcq || mcRevealed) return;
+      setContinueReady(false);
       setMcSelected(choiceIndex);
       setMcRevealed(true);
       const ok = choiceIndex === displayMcq.correctIndex;
@@ -165,18 +182,30 @@ export function ModuleQuiz({
   );
 
   const goForward = useCallback(() => {
+    if (!continueReady) return;
+    setContinueReady(false);
     if (isLast) {
       setFinished(true);
     } else {
       setIndex((i) => i + 1);
     }
-  }, [isLast]);
+  }, [continueReady, isLast]);
+
+  const suppressEarlyContinueKey = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (!continueReady && (event.key === " " || event.key === "Enter")) {
+        event.preventDefault();
+      }
+    },
+    [continueReady]
+  );
 
   const gradeFree = useCallback(async () => {
     if (!q || isQuizMcq(q) || frBusy || frGraded) return;
     const answer = frText.trim();
     if (answer.length < 2) return;
 
+    setContinueReady(false);
     setFrBusy(true);
     setFrFeedback(null);
     setSubmitError(null);
@@ -230,9 +259,6 @@ export function ModuleQuiz({
     items,
     index,
   ]);
-
-  const [finished, setFinished] = useState(false);
-  const [savingExit, setSavingExit] = useState(false);
 
   useEffect(() => {
     if (!finished || mixedCourseReview) return;
@@ -446,10 +472,16 @@ export function ModuleQuiz({
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button
                     type="button"
+                    disabled={!continueReady}
                     onClick={goForward}
-                    className="transition-none inline-flex items-center justify-center rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                    onKeyDown={suppressEarlyContinueKey}
+                    className="transition-none inline-flex items-center justify-center rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
-                    {isLast ? "See results" : "Continue"}
+                    {!continueReady
+                      ? "Read feedback…"
+                      : isLast
+                        ? "See results"
+                        : "Continue"}
                   </button>
                 </div>
               </div>
@@ -512,10 +544,16 @@ export function ModuleQuiz({
                 {frGraded ? (
                   <button
                     type="button"
+                    disabled={!continueReady}
                     onClick={goForward}
-                    className="transition-none mt-4 inline-flex rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                    onKeyDown={suppressEarlyContinueKey}
+                    className="transition-none mt-4 inline-flex rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
-                    {isLast ? "See results" : "Continue"}
+                    {!continueReady
+                      ? "Read feedback…"
+                      : isLast
+                        ? "See results"
+                        : "Continue"}
                   </button>
                 ) : null}
               </div>

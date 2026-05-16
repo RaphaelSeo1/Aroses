@@ -1165,7 +1165,10 @@ export function VoiceTutorDock({
         error?: string;
       };
       if (!tokenRes.ok || typeof tokenBody.accessToken !== "string") {
-        throw new Error(tokenBody.error || "Deepgram token failed");
+        throw new Error(
+          tokenBody.error ||
+            `Deepgram token failed with status ${tokenRes.status}.`
+        );
       }
 
       const qs = new URLSearchParams({
@@ -1189,7 +1192,12 @@ export function VoiceTutorDock({
       deepgramSocketRef.current = ws;
 
       await new Promise<void>((resolve, reject) => {
-        const fail = () => reject(new Error("Deepgram connection failed"));
+        const fail = () =>
+          reject(
+            new Error(
+              "Deepgram WebSocket connection failed. Check that the token was accepted and that the selected language/model is supported."
+            )
+          );
         ws.addEventListener("open", () => resolve(), { once: true });
         ws.addEventListener("error", fail, { once: true });
         window.setTimeout(() => {
@@ -1255,8 +1263,13 @@ export function VoiceTutorDock({
     } catch (e) {
       console.error(e);
       stopDeepgramLive();
-      setError("Deepgram live transcription could not start. Use Hold or Tap for now.");
-      setInputMode("hold");
+      liveModeRef.current = false;
+      setLivePhase("off");
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Deepgram live transcription could not start. Use Hold or Tap for now."
+      );
     } finally {
       deepgramStartingRef.current = false;
     }
@@ -1553,7 +1566,7 @@ export function VoiceTutorDock({
     } catch {
       liveModeRef.current = false;
       setLivePhase("off");
-      setError("Microphone permission is required for live mode.");
+      setError((prev) => prev || "Microphone permission is required for live mode.");
       setInputMode("hold");
     }
   }, [ensureStream, setLivePhase, startDeepgramLive]);
@@ -1953,6 +1966,7 @@ export function VoiceTutorDock({
           <button
             type="button"
             onClick={() => {
+              hasInteractedRef.current = true;
               setTapRecording(false);
               setHoldRecording(false);
               setInputMode("live");
