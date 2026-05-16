@@ -1,10 +1,14 @@
 export async function transcribeWithWhisper(params: {
   audio: Blob;
   apiKey: string;
+  language?: string;
 }): Promise<string> {
   const fd = new FormData();
   fd.append("file", params.audio, "speech.webm");
   fd.append("model", "whisper-1");
+  if (params.language) {
+    fd.append("language", params.language);
+  }
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
     headers: { Authorization: `Bearer ${params.apiKey}` },

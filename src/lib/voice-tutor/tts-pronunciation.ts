@@ -24,7 +24,7 @@ function modelFamily(modelId: string): ModelFamily {
   const id = modelId.toLowerCase();
   if (id.includes("v3")) return "v3";
   if (id.includes("multilingual")) return "multilingual";
-  if (id.includes("turbo")) return "turbo";
+  if (id.includes("flash")) return "english";
   return "english";
 }
 

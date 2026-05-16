@@ -9,9 +9,17 @@ import {
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { AI_ASSISTANT_NAME } from "@/lib/brand";
+import { VoiceTutorTranscriptSidebar } from "@/components/VoiceTutorTranscriptSidebar";
+import type {
+  TranscriptFilter,
+  VoiceAiTranscriptSegment,
+  VoiceUserTranscriptLine,
+} from "@/components/VoiceTutorTranscriptSidebar";
 import { VoiceWaveform } from "@/components/VoiceWaveform";
-import type { StudyChatResponse, StudyChatTurn } from "@/types/study-chat";
+import type { VoiceContinuationHint } from "@/lib/ai/study-chat";
+import { AI_ASSISTANT_NAME } from "@/lib/brand";
+import { playMpegFromResponse } from "@/lib/voice-tutor/play-mpeg-from-response";
+import type { StudyChatTurn } from "@/types/study-chat";
 
 type InputMode = "hold" | "tap" | "live";
 
@@ -19,6 +27,98 @@ type LivePhase = "off" | "listening" | "recording" | "thinking" | "speaking";
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 type PlaybackRate = (typeof PLAYBACK_RATES)[number];
+type VoiceLanguageCode =
+  | "auto"
+  | "en"
+  | "es"
+  | "fr"
+  | "ko"
+  | "ja"
+  | "zh";
+
+const VOICE_LANGUAGES: Array<{
+  code: VoiceLanguageCode;
+  label: string;
+  deepgram?: string;
+}> = [
+  { code: "auto", label: "Auto" },
+  { code: "en", label: "English", deepgram: "en" },
+  { code: "es", label: "Spanish", deepgram: "es" },
+  { code: "fr", label: "French", deepgram: "fr" },
+  { code: "ko", label: "Korean", deepgram: "ko" },
+  { code: "ja", label: "Japanese", deepgram: "ja" },
+  { code: "zh", label: "Chinese", deepgram: "zh" },
+];
+
+const CJK_VOICE_LANGUAGES = new Set<VoiceLanguageCode>(["ko", "ja", "zh"]);
+const SENTENCE_TERMINATORS = ".!?。！？";
+const CLOSING_PUNCTUATION = "\"')]}”’」』）〉》";
+
+function takeNaturalVoiceChunk(
+  text: string,
+  final: boolean,
+  voiceLanguage: VoiceLanguageCode
+): {
+  chunk: string | null;
+  rest: string;
+} {
+  if (!text.trim()) return { chunk: null, rest: "" };
+
+  let lastBoundary = -1;
+  let sentenceCount = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (!SENTENCE_TERMINATORS.includes(text[i])) continue;
+    let end = i + 1;
+    while (end < text.length && CLOSING_PUNCTUATION.includes(text[end])) {
+      end += 1;
+    }
+    const next = text[end];
+    if (
+      next &&
+      !/\s/.test(next) &&
+      !CJK_VOICE_LANGUAGES.has(voiceLanguage)
+    ) {
+      continue;
+    }
+    lastBoundary = end;
+    sentenceCount += 1;
+    if (sentenceCount >= 2 || end >= 180) break;
+  }
+
+  if (lastBoundary > 0) {
+    return {
+      chunk: text.slice(0, lastBoundary),
+      rest: text.slice(lastBoundary).replace(/^\s+/, ""),
+    };
+  }
+
+  if (text.length >= 360) {
+    const softBreaks = [", ", "; ", ": ", " — ", " and ", " but ", " so "];
+    let cut = -1;
+    for (const marker of softBreaks) {
+      cut = Math.max(cut, text.lastIndexOf(marker, 300));
+    }
+    if (cut > 140) {
+      const end = cut + 1;
+      return {
+        chunk: text.slice(0, end),
+        rest: text.slice(end).replace(/^\s+/, ""),
+      };
+    }
+  }
+
+  if (final) return { chunk: text, rest: "" };
+  return { chunk: null, rest: text };
+}
+
+type DeepgramResultMessage = {
+  type?: string;
+  is_final?: boolean;
+  speech_final?: boolean;
+  channel?: {
+    alternatives?: Array<{ transcript?: string }>;
+  };
+};
 
 // Voice Activity Detection tuning. RMS is on the 0..1 range of the
 // time-domain signal centered around 0. These are deliberately permissive
@@ -38,11 +138,22 @@ const PAUSE_STEP_MS = 250;
 // longer / louder signal before counting it as a real barge-in so room noise
 // and the assistant's own voice (after echo cancellation) don't trip it.
 const BARGE_IN_RMS = 0.07;
-const BARGE_IN_MS = 240;
+const BARGE_IN_MS = 220;
 // How often we fire a speculative transcription while the user is speaking,
 // so by the time they stop we already have (most of) the transcript.
-const SPEC_INTERVAL_MS = 900;
+const SPEC_INTERVAL_MS = 450;
 const SPEC_MIN_BLOB_BYTES = 4 * 1024;
+const THINKING_FILLERS = [
+  "Hmm.",
+  "Okay.",
+  "Yeah.",
+  "Right.",
+  "Let me think.",
+  "One sec.",
+] as const;
+const THINKING_FILLER_CHANCE = 0.12;
+const THINKING_FILLER_DELAY_MS = 900;
+const MIN_TTS_BUFFERED_CHUNKS = 2;
 
 type Props = {
   materialId: string;
@@ -93,6 +204,19 @@ function stopPlayback(audioRef: MutableRefObject<HTMLAudioElement | null>) {
   }
 }
 
+function pickThinkingFiller(
+  clips: Map<string, ArrayBuffer>,
+  last: string | null
+): { text: string; audio: ArrayBuffer } | null {
+  const options = THINKING_FILLERS.filter(
+    (text) => text !== last && clips.has(text)
+  );
+  if (options.length === 0) return null;
+  const text = options[Math.floor(Math.random() * options.length)];
+  const audio = clips.get(text);
+  return audio ? { text, audio } : null;
+}
+
 export function VoiceTutorDock({
   materialId,
   moduleId,
@@ -109,12 +233,44 @@ export function VoiceTutorDock({
   const [holdRecording, setHoldRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [playbackRate, setPlaybackRateState] = useState<PlaybackRate>(1);
+  const [livePhase, setLivePhaseState] = useState<LivePhase>("off");
+  const [pauseMs, setPauseMs] = useState<number>(DEFAULT_PAUSE_MS);
+  const [voiceLanguage, setVoiceLanguage] =
+    useState<VoiceLanguageCode>("auto");
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Only show errors after the user has actually used the mic at least once.
   const hasInteractedRef = useRef(false);
-  // Pre-fetched TTS clip that plays the instant the pause threshold fires,
-  // so the user hears audio before the LLM has even returned its first token.
-  const thinkingAudioRef = useRef<ArrayBuffer | null>(null);
+
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [transcriptFilter, setTranscriptFilter] =
+    useState<TranscriptFilter>("both");
+  const [partialUserDraft, setPartialUserDraft] = useState("");
+  const [userTranscriptLines, setUserTranscriptLines] = useState<
+    VoiceUserTranscriptLine[]
+  >([]);
+  const [aiTranscriptSegments, setAiTranscriptSegments] = useState<
+    VoiceAiTranscriptSegment[]
+  >([]);
+  const [liveAssistantText, setLiveAssistantText] = useState("");
+  const [assistantHighlight, setAssistantHighlight] = useState<{
+    start: number;
+    end: number;
+  } | null>(null);
+
+  const assistantStreamFullRef = useRef("");
+  const streamTokensDoneRef = useRef(true);
+  const playedAssistantAloudRef = useRef("");
+  const pendingVoiceContinuationRef = useRef<VoiceContinuationHint | null>(
+    null
+  );
+  const assistantCharOffsetRef = useRef(0);
+  const lastUserTranscriptIdRef = useRef<string | null>(null);
+  // Cached short thinking clips. We play them only occasionally and after a
+  // short delay so they don't become a repetitive verbal tic.
+  const thinkingAudioRef = useRef<Map<string, ArrayBuffer>>(new Map());
+  const lastThinkingFillerRef = useRef<string | null>(null);
+  const thinkingFillerUsedLastTurnRef = useRef(false);
 
   // Auto-clear transient errors after 5 seconds so the hint text shows again.
   useEffect(() => {
@@ -126,40 +282,44 @@ export function VoiceTutorDock({
     };
   }, [error]);
 
-  // Pre-fetch a short "thinking" TTS clip when live mode is active so it's
-  // ready to play instantly the moment the user stops talking — eliminating
-  // the perceived silence between speech and the first real response word.
+  // Pre-fetch a few short thinking clips when live mode is active. These are
+  // optional: the real answer always wins if it starts quickly.
   useEffect(() => {
-    if (inputMode !== "live") {
-      thinkingAudioRef.current = null;
+    if (inputMode !== "live" || voiceLanguage !== "en") {
+      thinkingAudioRef.current.clear();
       return;
     }
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/voice-tutor/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: "Hmm.",
-            materialId,
-            ...(courseId ? { courseId } : {}),
-          }),
-        });
-        if (!cancelled && res.ok) {
-          thinkingAudioRef.current = await res.arrayBuffer();
-        }
+        await Promise.all(
+          THINKING_FILLERS.map(async (text) => {
+            const res = await fetch("/api/voice-tutor/tts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                text,
+                materialId,
+                ...(courseId ? { courseId } : {}),
+              }),
+            });
+            if (!cancelled && res.ok) {
+              thinkingAudioRef.current.set(text, await res.arrayBuffer());
+            }
+          })
+        );
       } catch {
-        // Not critical — fall back to normal (no instant filler)
+        // Not critical — fall back to normal (no filler)
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [inputMode, materialId, courseId]);
-  const [playbackRate, setPlaybackRateState] = useState<PlaybackRate>(1);
-  const [livePhase, setLivePhaseState] = useState<LivePhase>("off");
-  const [pauseMs, setPauseMs] = useState<number>(DEFAULT_PAUSE_MS);
+  }, [inputMode, materialId, courseId, voiceLanguage]);
+  const voiceLanguageRef = useRef<VoiceLanguageCode>("auto");
+  useEffect(() => {
+    voiceLanguageRef.current = voiceLanguage;
+  }, [voiceLanguage]);
 
   const messagesRef = useRef<StudyChatTurn[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -187,6 +347,11 @@ export function VoiceTutorDock({
   const silenceStartedAtRef = useRef<number>(0);
   const bargeStartedAtRef = useRef<number>(0);
   const cancelPlaybackRef = useRef<(() => void) | null>(null);
+  const deepgramSocketRef = useRef<WebSocket | null>(null);
+  const deepgramRecorderRef = useRef<MediaRecorder | null>(null);
+  const deepgramFinalRef = useRef("");
+  const deepgramStartingRef = useRef(false);
+  const deepgramSendingRef = useRef(false);
 
   // Speculative transcription state — we transcribe in chunks while the user
   // is still speaking so the assistant can start thinking the instant they go
@@ -319,46 +484,6 @@ export function VoiceTutorDock({
     mr.start(120);
   }, [endRecorder, ensureStream]);
 
-  const playMp3 = useCallback(async (buf: ArrayBuffer) => {
-    stopPlayback(audioRef);
-    const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
-    const a = new Audio(url);
-    try {
-      a.playbackRate = playbackRateRef.current;
-    } catch {
-      /* ignore */
-    }
-    audioRef.current = a;
-
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (
-        kind: "ended" | "cancelled" | "error",
-        err?: unknown
-      ) => {
-        if (settled) return;
-        settled = true;
-        cancelPlaybackRef.current = null;
-        URL.revokeObjectURL(url);
-        if (kind === "error") reject(err ?? new Error("Audio playback failed"));
-        else resolve();
-      };
-      a.onended = () => finish("ended");
-      a.onerror = () => finish("error");
-      cancelPlaybackRef.current = () => {
-        try {
-          a.pause();
-        } catch {
-          /* ignore */
-        }
-        a.src = "";
-        if (audioRef.current === a) audioRef.current = null;
-        finish("cancelled");
-      };
-      void a.play().catch((e) => finish("error", e));
-    });
-  }, []);
-
   const applyNavigation = useCallback(
     (action: unknown) => {
       if (variant !== "course") return;
@@ -389,91 +514,6 @@ export function VoiceTutorDock({
       router.push(`${studyHrefBase}?${p.toString()}`);
     },
     [learnMode, materialId, router, studyHrefBase, variant]
-  );
-
-  const runChatAndTts = useCallback(
-    async (transcript: string) => {
-      const prev = messagesRef.current;
-      const nextMessages: StudyChatTurn[] = [
-        ...prev,
-        { role: "user", content: transcript },
-      ];
-      messagesRef.current = nextMessages;
-
-      const chatRes = await fetch("/api/study-chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          materialId,
-          moduleId,
-          quizOpen,
-          messages: nextMessages,
-        }),
-      });
-      const chatBody = (await chatRes.json().catch(() => ({}))) as Partial<
-        StudyChatResponse
-      > & { error?: string };
-
-      if (!chatRes.ok) {
-        setError(
-          typeof chatBody.error === "string"
-            ? chatBody.error
-            : "Tutor could not answer."
-        );
-        messagesRef.current = prev;
-        return;
-      }
-
-      const reply = chatBody.reply;
-      if (typeof reply !== "string" || !reply.trim()) {
-        setError("Bad tutor response.");
-        messagesRef.current = prev;
-        return;
-      }
-
-      const trimmed = reply.trim();
-      messagesRef.current = [
-        ...nextMessages,
-        { role: "assistant", content: trimmed },
-      ];
-
-      applyNavigation(chatBody.action ?? null);
-
-      const ttsRes = await fetch("/api/voice-tutor/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: trimmed,
-          materialId,
-          ...(courseId ? { courseId } : {}),
-        }),
-      });
-
-      if (!ttsRes.ok) {
-        const tb = (await ttsRes.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        setError(
-          typeof tb.error === "string"
-            ? tb.error
-            : "Could not play voice response. The written answer is still saved in this session."
-        );
-        return;
-      }
-
-      const audioBuf = await ttsRes.arrayBuffer();
-      if (liveModeRef.current) setLivePhase("speaking");
-      await playMp3(audioBuf);
-    },
-    [
-      applyNavigation,
-      courseId,
-      materialId,
-      moduleId,
-      playMp3,
-      quizOpen,
-      setLivePhase,
-    ]
   );
 
   const transcribeBlob = useCallback(
@@ -525,22 +565,80 @@ export function VoiceTutorDock({
       ];
       messagesRef.current = nextMessages;
 
+      const userLineId = crypto.randomUUID();
+      lastUserTranscriptIdRef.current = userLineId;
+      setUserTranscriptLines((p) => [
+        ...p,
+        { id: userLineId, ts: Date.now(), text: transcript },
+      ]);
+      void (async () => {
+        try {
+          const r = await fetch("/api/voice-tutor/utterance-bullets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: transcript }),
+          });
+          if (!r.ok) return;
+          const j = (await r.json()) as { bullets?: string[] };
+          const bullets = Array.isArray(j.bullets) ? j.bullets : [];
+          if (!bullets.length) return;
+          setUserTranscriptLines((lines) =>
+            lines.map((row) =>
+              row.id === userLineId ? { ...row, bullets } : row
+            )
+          );
+        } catch {
+          /* ignore */
+        }
+      })();
+
+      setLiveAssistantText("");
+      assistantStreamFullRef.current = "";
+      playedAssistantAloudRef.current = "";
+      assistantCharOffsetRef.current = 0;
+      streamTokensDoneRef.current = false;
+      const hadPendingInterruption =
+        pendingVoiceContinuationRef.current != null;
+
       // Cancellation for barge-in or mode-switch.
       let cancelled = false;
-      let currentAudio: HTMLAudioElement | null = null;
       const ttsControllers: AbortController[] = [];
       const cancelAll = () => {
         cancelled = true;
-        if (currentAudio) {
-          try {
-            currentAudio.pause();
-          } catch {
-            /* ignore */
+        const full = assistantStreamFullRef.current;
+        const spoken = playedAssistantAloudRef.current;
+        const hadAssistantProgress =
+          full.trim().length > 0 || spoken.trim().length > 0;
+        if (hadAssistantProgress) {
+          const notYet = full.startsWith(spoken) ? full.slice(spoken.length) : full;
+          if (spoken.trim() || notYet.trim()) {
+            pendingVoiceContinuationRef.current = {
+              spokenBeforeInterrupt: spoken,
+              notYetSpoken: notYet,
+              streamIncomplete: !streamTokensDoneRef.current,
+            };
           }
-          currentAudio.src = "";
-          if (audioRef.current === currentAudio) audioRef.current = null;
-          currentAudio = null;
+          setAiTranscriptSegments((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              kind: "divider",
+              content: "",
+              label: "Interrupted",
+            },
+          ]);
         }
+        try {
+          audioRef.current?.pause();
+        } catch {
+          /* ignore */
+        }
+        try {
+          audioRef.current && (audioRef.current.src = "");
+        } catch {
+          /* ignore */
+        }
+        audioRef.current = null;
         for (const c of ttsControllers) {
           try {
             c.abort();
@@ -559,21 +657,7 @@ export function VoiceTutorDock({
       // queue only awaits the already-in-flight result.
       let firstAudioStarted = false;
 
-      const fetchTts = (text: string, ctrl: AbortController): Promise<ArrayBuffer | null> =>
-        fetch("/api/voice-tutor/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text,
-            materialId,
-            ...(courseId ? { courseId } : {}),
-          }),
-          signal: ctrl.signal,
-        })
-          .then((r) => (r.ok ? r.arrayBuffer() : null))
-          .catch(() => null);
-
-      const playBuffer = async (buf: ArrayBuffer): Promise<void> => {
+      const playMp3ArrayBuffer = async (buf: ArrayBuffer): Promise<void> => {
         if (cancelled) return;
         await new Promise<void>((resolve) => {
           const url = URL.createObjectURL(
@@ -585,17 +669,16 @@ export function VoiceTutorDock({
           } catch {
             /* ignore */
           }
-          currentAudio = a;
           audioRef.current = a;
           const cleanup = () => {
             URL.revokeObjectURL(url);
-            if (currentAudio === a) currentAudio = null;
             if (audioRef.current === a) audioRef.current = null;
             resolve();
           };
           a.onended = cleanup;
           a.onerror = cleanup;
-          void a.play()
+          void a
+            .play()
             .then(() => {
               if (!firstAudioStarted && liveModeRef.current && !cancelled) {
                 firstAudioStarted = true;
@@ -606,82 +689,158 @@ export function VoiceTutorDock({
         });
       };
 
-      // Each item in the queue is a pre-started TTS promise so the fetch
-      // overlaps with playback of the previous chunk.
-      type QueueItem = { bufPromise: Promise<ArrayBuffer | null> };
-      const queue: QueueItem[] = [];
-      let playbackTail: Promise<void> = Promise.resolve();
+      const fetchTtsStream = (
+        text: string,
+        ctrl: AbortController,
+        context?: { previousText?: string; nextText?: string }
+      ) =>
+        fetch("/api/voice-tutor/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            materialId,
+            stream: true,
+            voiceLanguage,
+            ...(context?.previousText ? { previousText: context.previousText } : {}),
+            ...(context?.nextText ? { nextText: context.nextText } : {}),
+            ...(courseId ? { courseId } : {}),
+          }),
+          signal: ctrl.signal,
+        }).then((r) => (r.ok ? r : null));
 
-      // If we have a pre-fetched "thinking" clip, enqueue it at the head of the
-      // queue right now — it starts playing immediately while the LLM streams in
-      // the background, so the user hears audio with zero perceived delay.
-      if (earlyAudio) {
-        const earlyItem: QueueItem = { bufPromise: Promise.resolve(earlyAudio) };
-        queue.push(earlyItem);
-        playbackTail = playbackTail.then(async () => {
-          if (cancelled) return;
-          const buf = await earlyItem.bufPromise;
-          if (!buf || cancelled) return;
-          await playBuffer(buf);
-        });
+      type QueueItem =
+        | { kind: "thinking"; bufPromise: Promise<ArrayBuffer | null> }
+        | {
+            kind: "tts";
+            spokenChunk: string;
+            responsePromise: Promise<Response | null>;
+            ctrl: AbortController;
+          };
+
+      let playbackTail: Promise<void> = Promise.resolve();
+      let playableChunksQueued = 0;
+      let playbackGateResolve: (() => void) | null = null;
+      const playbackGate = new Promise<void>((resolve) => {
+        playbackGateResolve = resolve;
+      });
+      const openPlaybackGate = () => {
+        playbackGateResolve?.();
+        playbackGateResolve = null;
+      };
+
+      // Optional filler: wait briefly, then play a random thinking cue only
+      // sometimes, never twice in a row, and never after interruptions.
+      if (
+        earlyAudio &&
+        voiceLanguage === "en" &&
+        !hadPendingInterruption &&
+        !thinkingFillerUsedLastTurnRef.current &&
+        Math.random() < THINKING_FILLER_CHANCE
+      ) {
+        const picked = pickThinkingFiller(
+          thinkingAudioRef.current,
+          lastThinkingFillerRef.current
+        );
+        if (picked) {
+          lastThinkingFillerRef.current = picked.text;
+          thinkingFillerUsedLastTurnRef.current = true;
+          const earlyItem: QueueItem = {
+            kind: "thinking",
+            bufPromise: (async () => {
+              await new Promise((r) =>
+                setTimeout(r, THINKING_FILLER_DELAY_MS)
+              );
+              return picked.audio;
+            })(),
+          };
+          playbackTail = playbackTail.then(async () => {
+            if (cancelled || firstAudioStarted) return;
+            const buf = await earlyItem.bufPromise;
+            if (!buf || cancelled || firstAudioStarted) return;
+            await playMp3ArrayBuffer(buf);
+          });
+        } else {
+          thinkingFillerUsedLastTurnRef.current = false;
+        }
+      } else {
+        thinkingFillerUsedLastTurnRef.current = false;
       }
 
-      const enqueueSentence = (text: string) => {
-        const trimmed = text.trim();
+      const pendingTtsChunks: string[] = [];
+      const enqueueTtsChunk = (spokenChunk: string, nextText?: string) => {
+        const trimmed = spokenChunk.trim();
         if (!trimmed) return;
-        // Fire the TTS fetch NOW so it runs in parallel with whatever is
-        // currently playing.
         const ctrl = new AbortController();
         ttsControllers.push(ctrl);
-        const item: QueueItem = { bufPromise: fetchTts(trimmed, ctrl) };
-        queue.push(item);
+        const previousText = [
+          playedAssistantAloudRef.current,
+          ...pendingTtsChunks,
+        ].join(" ");
+        const responsePromise = fetchTtsStream(trimmed, ctrl, {
+          previousText: previousText || playedAssistantAloudRef.current,
+          nextText,
+        });
+        const item: QueueItem = {
+          kind: "tts",
+          spokenChunk: trimmed,
+          responsePromise,
+          ctrl,
+        };
+        playableChunksQueued += 1;
+        if (playableChunksQueued >= MIN_TTS_BUFFERED_CHUNKS) openPlaybackGate();
         playbackTail = playbackTail.then(async () => {
           if (cancelled) return;
-          const buf = await item.bufPromise;
-          if (!buf || cancelled) return;
-          await playBuffer(buf);
+          await playbackGate;
+          const res = await item.responsePromise;
+          if (!res || cancelled) return;
+          const start = assistantCharOffsetRef.current;
+          const end = start + item.spokenChunk.length;
+          assistantCharOffsetRef.current = end;
+          setAssistantHighlight({ start, end });
+          await playMpegFromResponse(res, {
+            signal: item.ctrl.signal,
+            playbackRate: playbackRateRef.current,
+            audioRef,
+            onFirstPlay: () => {
+              if (!firstAudioStarted && liveModeRef.current && !cancelled) {
+                firstAudioStarted = true;
+                setLivePhase("speaking");
+              }
+            },
+          });
+          if (!cancelled) {
+            playedAssistantAloudRef.current = `${playedAssistantAloudRef.current} ${item.spokenChunk}`.trim();
+          }
         });
       };
 
-      // Sentence-boundary extraction over a streaming buffer.
-      // We split only on strong terminators (.!?) so opener phrases like
-      // "Okay so," stay attached to the real content that follows them,
-      // keeping playback gapless. The force-flush threshold handles runaway
-      // long replies without a break.
+      const flushPendingTtsChunks = (final: boolean) => {
+        while (pendingTtsChunks.length >= (final ? 1 : 2)) {
+          const current = pendingTtsChunks.shift();
+          if (!current) continue;
+          const nextText = pendingTtsChunks[0] ?? "";
+          enqueueTtsChunk(current, nextText);
+        }
+        if (final) openPlaybackGate();
+      };
+
+      // Sentence-boundary extraction over a streaming buffer. Prefer complete
+      // sentence groups so ElevenLabs has enough text for natural prosody.
       let sentenceBuf = "";
       const extractChunk = (final: boolean): string | null => {
-        if (!sentenceBuf) return null;
-        // Strong terminator: . ! ? (optionally followed by quote/bracket)
-        const strong = sentenceBuf.match(/^([\s\S]*?[.!?]+["')\]]?)(\s|$)/);
-        if (strong) {
-          const chunk = strong[1];
-          sentenceBuf = sentenceBuf
-            .slice(strong[0].length)
-            .replace(/^\s+/, "");
-          return chunk;
-        }
-        // Force-flush on a word boundary if the buffer grows very long
-        // with no sentence terminator (e.g. a run-on spoken style reply).
-        if (sentenceBuf.length >= 160) {
-          const i = sentenceBuf.lastIndexOf(" ", 130);
-          if (i > 40) {
-            const chunk = sentenceBuf.slice(0, i);
-            sentenceBuf = sentenceBuf.slice(i + 1);
-            return chunk;
-          }
-        }
-        if (final && sentenceBuf.trim()) {
-          const chunk = sentenceBuf;
-          sentenceBuf = "";
-          return chunk;
-        }
-        return null;
+        const result = takeNaturalVoiceChunk(sentenceBuf, final, voiceLanguage);
+        sentenceBuf = result.rest;
+        return result.chunk;
       };
 
       let fullText = "";
       let detectedAction: unknown | null = null;
 
       try {
+        const voiceContinuation = pendingVoiceContinuationRef.current;
+        pendingVoiceContinuationRef.current = null;
+
         const res = await fetch("/api/voice-tutor/converse", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -690,10 +849,17 @@ export function VoiceTutorDock({
             moduleId,
             quizOpen,
             messages: nextMessages,
+            voiceLanguage,
+            ...(voiceContinuation
+              ? { voiceContinuation }
+              : {}),
           }),
         });
 
         if (!res.ok || !res.body) {
+          if (voiceContinuation) {
+            pendingVoiceContinuationRef.current = voiceContinuation;
+          }
           const eb = (await res.json().catch(() => ({}))) as {
             error?: string;
           };
@@ -740,9 +906,12 @@ export function VoiceTutorDock({
               if (evt === "text" && typeof data.delta === "string") {
                 fullText += data.delta;
                 sentenceBuf += data.delta;
+                assistantStreamFullRef.current = fullText;
+                setLiveAssistantText(fullText);
                 let chunk;
                 while ((chunk = extractChunk(false)) !== null) {
-                  enqueueSentence(chunk);
+                  pendingTtsChunks.push(chunk);
+                  flushPendingTtsChunks(false);
                 }
               } else if (evt === "action") {
                 detectedAction = data;
@@ -759,9 +928,12 @@ export function VoiceTutorDock({
           }
         }
 
+        streamTokensDoneRef.current = true;
+
         // Flush whatever remains in the sentence buffer.
         const tail = extractChunk(true);
-        if (tail) enqueueSentence(tail);
+        if (tail) pendingTtsChunks.push(tail);
+        flushPendingTtsChunks(true);
 
         await playbackTail;
 
@@ -783,6 +955,19 @@ export function VoiceTutorDock({
         }
 
         if (detectedAction) applyNavigation(detectedAction);
+
+        if (fullText.trim()) {
+          setAiTranscriptSegments((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              kind: "text",
+              content: fullText.trim(),
+            },
+          ]);
+        }
+        setLiveAssistantText("");
+        setAssistantHighlight(null);
       } catch {
         if (!cancelled) setError("Network error — try again.");
         messagesRef.current = prev;
@@ -807,6 +992,7 @@ export function VoiceTutorDock({
       moduleId,
       quizOpen,
       setLivePhase,
+      voiceLanguage,
     ]
   );
 
@@ -832,6 +1018,9 @@ export function VoiceTutorDock({
         const ext = mimeTypeToExtension(actualType);
         const fd = new FormData();
         fd.append("materialId", materialId);
+        if (voiceLanguage !== "auto") {
+          fd.append("language", voiceLanguage);
+        }
         fd.append("file", new File([blob], `speech.${ext}`, { type: actualType }));
 
         const tr = await fetch("/api/voice-tutor/transcribe", {
@@ -861,7 +1050,7 @@ export function VoiceTutorDock({
           return;
         }
 
-        await runChatAndTts(transcript);
+        await runVoiceStream(transcript, null);
       } catch {
         setError("Network error — try again.");
       } finally {
@@ -876,7 +1065,7 @@ export function VoiceTutorDock({
         }
       }
     },
-    [materialId, runChatAndTts, setLivePhase]
+    [materialId, runVoiceStream, setLivePhase, voiceLanguage]
   );
 
   // ---------- Live mode (always-on VAD) ----------
@@ -888,7 +1077,197 @@ export function VoiceTutorDock({
     specLatestTextRef.current = "";
     specLastFiredAtRef.current = 0;
     finalSpecRequestedRef.current = false;
+    setPartialUserDraft("");
   }, []);
+
+  const stopDeepgramLive = useCallback(() => {
+    deepgramSendingRef.current = false;
+    deepgramStartingRef.current = false;
+    const recorder = deepgramRecorderRef.current;
+    deepgramRecorderRef.current = null;
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    const ws = deepgramSocketRef.current;
+    deepgramSocketRef.current = null;
+    if (ws) {
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "CloseStream" }));
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    deepgramFinalRef.current = "";
+  }, []);
+
+  const handleVoiceLanguageChange = useCallback(
+    (nextLanguage: VoiceLanguageCode) => {
+      setVoiceLanguage(nextLanguage);
+      voiceLanguageRef.current = nextLanguage;
+      if (inputMode === "live") {
+        stopDeepgramLive();
+        setLivePhase("off");
+      }
+    },
+    [inputMode, setLivePhase, stopDeepgramLive]
+  );
+
+  const sendDeepgramUtterance = useCallback(
+    (reason: "speech_final" | "utterance_end") => {
+      const transcript = deepgramFinalRef.current.trim();
+      if (!transcript || !liveModeRef.current || deepgramSendingRef.current) {
+        return;
+      }
+      deepgramSendingRef.current = true;
+      deepgramFinalRef.current = "";
+      setPartialUserDraft("");
+      if (livePhaseRef.current !== "thinking") {
+        setLivePhase("thinking");
+      }
+      const fillerCandidate =
+        thinkingAudioRef.current.values().next().value ?? null;
+      void runVoiceStream(transcript, fillerCandidate).finally(() => {
+        deepgramSendingRef.current = false;
+        if (liveModeRef.current && reason === "utterance_end") {
+          setLivePhase("listening");
+        }
+      });
+    },
+    [runVoiceStream, setLivePhase]
+  );
+
+  const startDeepgramLive = useCallback(async () => {
+    if (deepgramStartingRef.current || deepgramSocketRef.current) return;
+    deepgramStartingRef.current = true;
+    try {
+      const stream = await ensureStream();
+      const tokenRes = await fetch("/api/voice-tutor/deepgram-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          materialId,
+          ...(courseId ? { courseId } : {}),
+        }),
+      });
+      const tokenBody = (await tokenRes.json().catch(() => ({}))) as {
+        accessToken?: string;
+        error?: string;
+      };
+      if (!tokenRes.ok || typeof tokenBody.accessToken !== "string") {
+        throw new Error(tokenBody.error || "Deepgram token failed");
+      }
+
+      const qs = new URLSearchParams({
+        model: "nova-3",
+        smart_format: "true",
+        interim_results: "true",
+        endpointing: "300",
+        utterance_end_ms: "1000",
+        vad_events: "true",
+      });
+      const language = VOICE_LANGUAGES.find(
+        (l) => l.code === voiceLanguageRef.current
+      );
+      if (language?.deepgram) {
+        qs.set("language", language.deepgram);
+      }
+      const ws = new WebSocket(
+        `wss://api.deepgram.com/v1/listen?${qs.toString()}`,
+        ["bearer", tokenBody.accessToken]
+      );
+      deepgramSocketRef.current = ws;
+
+      await new Promise<void>((resolve, reject) => {
+        const fail = () => reject(new Error("Deepgram connection failed"));
+        ws.addEventListener("open", () => resolve(), { once: true });
+        ws.addEventListener("error", fail, { once: true });
+        window.setTimeout(() => {
+          if (ws.readyState !== WebSocket.OPEN) fail();
+        }, 6000);
+      });
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(String(event.data)) as DeepgramResultMessage;
+          if (msg.type === "UtteranceEnd") {
+            sendDeepgramUtterance("utterance_end");
+            return;
+          }
+          if (msg.type && msg.type !== "Results") return;
+          const transcript =
+            msg.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
+          if (!transcript) return;
+
+          if (livePhaseRef.current === "speaking") {
+            cancelPlaybackRef.current?.();
+            setLivePhase("recording");
+          }
+
+          if (msg.is_final) {
+            deepgramFinalRef.current = `${deepgramFinalRef.current} ${transcript}`.trim();
+            setPartialUserDraft(deepgramFinalRef.current);
+          } else {
+            const base = deepgramFinalRef.current.trim();
+            setPartialUserDraft(base ? `${base} ${transcript}` : transcript);
+          }
+
+          if (msg.speech_final) {
+            sendDeepgramUtterance("speech_final");
+          } else if (livePhaseRef.current === "listening") {
+            setLivePhase("recording");
+          }
+        } catch {
+          /* ignore malformed Deepgram frame */
+        }
+      };
+      ws.onclose = () => {
+        if (deepgramSocketRef.current === ws) {
+          deepgramSocketRef.current = null;
+        }
+      };
+
+      const mimeType = pickMimeType();
+      const recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined
+      );
+      deepgramRecorderRef.current = recorder;
+      recorder.ondataavailable = (ev) => {
+        if (
+          ev.data.size > 0 &&
+          deepgramSocketRef.current?.readyState === WebSocket.OPEN
+        ) {
+          deepgramSocketRef.current.send(ev.data);
+        }
+      };
+      recorder.start(120);
+    } catch (e) {
+      console.error(e);
+      stopDeepgramLive();
+      setError("Deepgram live transcription could not start. Use Hold or Tap for now.");
+      setInputMode("hold");
+    } finally {
+      deepgramStartingRef.current = false;
+    }
+  }, [
+    courseId,
+    ensureStream,
+    materialId,
+    sendDeepgramUtterance,
+    setLivePhase,
+    stopDeepgramLive,
+  ]);
 
   const fireSpeculative = useCallback(
     async (opts: { final: boolean }) => {
@@ -942,6 +1321,7 @@ export function VoiceTutorDock({
           const j = (await r.json()) as { text?: string };
           if (typeof j.text === "string") {
             specLatestTextRef.current = j.text.trim();
+            setPartialUserDraft(specLatestTextRef.current);
           }
         } catch {
           /* abort or network — ignore */
@@ -1016,7 +1396,9 @@ export function VoiceTutorDock({
             endRecorder();
           })();
           resetSpeculative();
-          await runVoiceStream(transcript, thinkingAudioRef.current);
+          const fillerCandidate =
+            thinkingAudioRef.current.values().next().value ?? null;
+          await runVoiceStream(transcript, fillerCandidate);
           return;
         }
 
@@ -1027,7 +1409,9 @@ export function VoiceTutorDock({
         resetSpeculative();
         const text = await transcribeBlob(blob);
         if (text) {
-          await runVoiceStream(text, thinkingAudioRef.current);
+          const fillerCandidate =
+            thinkingAudioRef.current.values().next().value ?? null;
+          await runVoiceStream(text, fillerCandidate);
         } else {
           setError(
             "Didn't catch that — try speaking a little louder or closer to the mic."
@@ -1165,18 +1549,14 @@ export function VoiceTutorDock({
       bargeStartedAtRef.current = 0;
       setLivePhase("listening");
 
-      if (vadIntervalRef.current === null) {
-        // ~30 Hz is enough for VAD and avoids the React-19 lint warning
-        // about a useCallback that references itself for rAF rescheduling.
-        vadIntervalRef.current = window.setInterval(vadTick, 30);
-      }
+      await startDeepgramLive();
     } catch {
       liveModeRef.current = false;
       setLivePhase("off");
       setError("Microphone permission is required for live mode.");
       setInputMode("hold");
     }
-  }, [ensureStream, setLivePhase, vadTick]);
+  }, [ensureStream, setLivePhase, startDeepgramLive]);
 
   const leaveLiveMode = useCallback(() => {
     liveModeRef.current = false;
@@ -1201,11 +1581,18 @@ export function VoiceTutorDock({
       audioCtxRef.current = null;
     }
     cancelPlaybackRef.current?.();
+    stopDeepgramLive();
     endRecorder();
     releaseStream();
     resetSpeculative();
     setLivePhase("off");
-  }, [endRecorder, releaseStream, resetSpeculative, setLivePhase]);
+  }, [
+    endRecorder,
+    releaseStream,
+    resetSpeculative,
+    setLivePhase,
+    stopDeepgramLive,
+  ]);
 
   useEffect(() => {
     if (inputMode !== "live") return undefined;
@@ -1239,10 +1626,11 @@ export function VoiceTutorDock({
           /* ignore */
         }
       }
+      stopDeepgramLive();
       void cleanupRecorder();
       stopPlayback(audioRef);
     };
-  }, [cleanupRecorder]);
+  }, [cleanupRecorder, stopDeepgramLive]);
 
   // ---------- Speed control ----------
 
@@ -1306,7 +1694,12 @@ export function VoiceTutorDock({
       : tapRecording || holdRecording || busy)
       ? "border-rose-400 bg-rose-50 text-rose-900 dark:border-rose-700 dark:bg-rose-950/50 dark:text-rose-100 "
       : "border-zinc-200 bg-white text-zinc-900 hover:border-brand hover:text-brand dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:border-brand-soft dark:hover:text-brand-soft ") +
-    (docked ? "" : "fixed bottom-[7.5rem] right-6 z-[100] sm:bottom-[8.5rem] ");
+    (inputMode === "live" && livePhase === "recording"
+      ? "ring-2 ring-rose-400/60 ring-offset-2 ring-offset-white motion-safe:animate-pulse dark:ring-rose-500/50 dark:ring-offset-zinc-950 "
+      : "") +
+    (docked
+      ? ""
+      : "fixed bottom-[7.5rem] right-6 z-[100] sm:bottom-[8.5rem] ");
 
   const onPointerDownHold = useCallback(
     (e: ReactPointerEvent<HTMLButtonElement>) => {
@@ -1495,15 +1888,41 @@ export function VoiceTutorDock({
     }`;
 
   return (
-    <div
-      className={
-        docked
-          ? "flex flex-col items-stretch gap-2"
-          : "fixed bottom-6 right-6 z-[100] flex flex-col items-stretch gap-2 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
-      }
-      role="group"
-      aria-label={`Voice tutor — ${AI_ASSISTANT_NAME}`}
-    >
+    <>
+      <div
+        className={
+          docked
+            ? "flex w-[min(16rem,calc(100vw-2rem))] flex-col items-stretch gap-2"
+            : "fixed bottom-6 right-6 z-[100] flex w-[min(16rem,calc(100vw-2rem))] flex-col items-stretch gap-2 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+        }
+        role="group"
+        aria-label={`Voice tutor — ${AI_ASSISTANT_NAME}`}
+      >
+        <VoiceTutorTranscriptSidebar
+          open={transcriptOpen}
+          filter={transcriptFilter}
+          onFilterChange={setTranscriptFilter}
+          micActive={
+            inputMode === "live" &&
+            (livePhase === "recording" || livePhase === "listening")
+          }
+          aiSpeaking={inputMode === "live" && livePhase === "speaking"}
+          partialUserText={partialUserDraft}
+          userLines={userTranscriptLines}
+          aiSegments={aiTranscriptSegments}
+          liveAssistantText={liveAssistantText}
+          assistantHighlight={assistantHighlight}
+          floating={false}
+        />
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            onClick={() => setTranscriptOpen((o) => !o)}
+            className="rounded-lg border border-zinc-200/90 bg-white/90 px-2 py-1 text-[10px] font-semibold text-zinc-600 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900/90 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            {transcriptOpen ? "Hide transcript" : "Transcript"}
+          </button>
+        </div>
       <div className="flex items-center justify-between gap-2 rounded-xl border border-zinc-200/90 bg-white/95 px-2 py-1.5 text-[10px] font-medium text-zinc-600 shadow-sm dark:border-zinc-700 dark:bg-zinc-900/95 dark:text-zinc-300">
         <span className="pl-1">Input</span>
         <div className="flex rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
@@ -1544,6 +1963,24 @@ export function VoiceTutorDock({
             Live
           </button>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 rounded-xl border border-zinc-200/90 bg-white/95 px-2 py-1.5 text-[10px] font-medium text-zinc-600 shadow-sm dark:border-zinc-700 dark:bg-zinc-900/95 dark:text-zinc-300">
+        <span className="pl-1">Lang</span>
+        <select
+          value={voiceLanguage}
+          onChange={(e) =>
+            handleVoiceLanguageChange(e.target.value as VoiceLanguageCode)
+          }
+          className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs font-semibold text-zinc-800 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+          aria-label="Voice language"
+        >
+          {VOICE_LANGUAGES.map((lang) => (
+            <option key={lang.code} value={lang.code}>
+              {lang.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div
@@ -1600,13 +2037,7 @@ export function VoiceTutorDock({
         </div>
       ) : null}
 
-      {/* Live audio visualizer — flowing neon ribbon that reacts to the
-          mic when the user is talking and to the assistant's <audio>
-          element when it's responding. The component itself handles
-          re-connection if the mic stream isn't ready when phase flips. */}
-      {(inputMode === "live"
-        ? livePhase !== "off"
-        : holdRecording || tapRecording || busy) ? (
+      {/* Audio visualizer — flowing neon ribbon for mic input and assistant playback. */}
         <div className="rounded-xl border border-zinc-200/90 bg-gradient-to-b from-zinc-900 to-zinc-950 px-3 py-2 shadow-sm dark:border-zinc-700">
           <VoiceWaveform
             streamRef={streamRef}
@@ -1622,7 +2053,6 @@ export function VoiceTutorDock({
             }
           />
         </div>
-      ) : null}
 
       {inputMode === "live" ? (
         <button
@@ -1758,6 +2188,7 @@ export function VoiceTutorDock({
                 : "Listening — just start talking to Rose."}
         </p>
       )}
-    </div>
+      </div>
+    </>
   );
 }

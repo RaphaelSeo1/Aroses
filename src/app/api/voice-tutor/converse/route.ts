@@ -5,6 +5,7 @@ import {
   buildLegacyStudyContext,
   buildStudyContextText,
   streamVoiceReply,
+  type VoiceContinuationHint,
 } from "@/lib/ai/study-chat";
 import {
   findBestModuleIdForQuery,
@@ -74,6 +75,7 @@ export async function POST(request: Request) {
     moduleId?: number;
     quizOpen?: boolean;
     messages?: StudyChatTurn[];
+    voiceLanguage?: string;
   };
 
   if (typeof b.materialId !== "string" || !UUID_RE.test(b.materialId)) {
@@ -85,6 +87,8 @@ export async function POST(request: Request) {
       ? b.moduleId
       : undefined;
   const quizOpen = Boolean(b.quizOpen);
+  const voiceLanguage =
+    typeof b.voiceLanguage === "string" ? b.voiceLanguage : undefined;
 
   if (!Array.isArray(b.messages) || b.messages.length === 0) {
     return NextResponse.json({ error: "messages required" }, { status: 400 });
@@ -114,6 +118,22 @@ export async function POST(request: Request) {
       { error: "Last message must be from user" },
       { status: 400 }
     );
+  }
+
+  let voiceInterruption: VoiceContinuationHint | undefined;
+  const rawVc = (b as { voiceContinuation?: unknown }).voiceContinuation;
+  if (rawVc && typeof rawVc === "object") {
+    const o = rawVc as Record<string, unknown>;
+    const sp =
+      typeof o.spokenBeforeInterrupt === "string" ? o.spokenBeforeInterrupt : "";
+    const nt = typeof o.notYetSpoken === "string" ? o.notYetSpoken : "";
+    if (sp.trim() || nt.trim()) {
+      voiceInterruption = {
+        spokenBeforeInterrupt: sp.slice(0, 12_000),
+        notYetSpoken: nt.slice(0, 12_000),
+        streamIncomplete: o.streamIncomplete === true,
+      };
+    }
   }
 
   const { data: row, error: fetchErr } = await supabase
@@ -235,7 +255,13 @@ export async function POST(request: Request) {
       if (detectedAction) send("action", detectedAction);
 
       try {
-        for await (const delta of streamVoiceReply(contextText, messages, studyContext)) {
+        for await (const delta of streamVoiceReply(
+          contextText,
+          messages,
+          studyContext,
+          voiceInterruption,
+          voiceLanguage
+        )) {
           send("text", { delta });
         }
         send("done", {});

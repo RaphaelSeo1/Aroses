@@ -9,6 +9,7 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 const MAX_BYTES = 4 * 1024 * 1024;
+const WHISPER_LANGUAGE_CODES = new Set(["en", "es", "fr", "ko", "ja", "zh"]);
 
 export async function POST(request: Request) {
   let openaiKey: string;
@@ -37,7 +38,12 @@ export async function POST(request: Request) {
   }
 
   const materialIdRaw = formData.get("materialId");
+  const languageRaw = formData.get("language");
   const file = formData.get("file");
+  const language =
+    typeof languageRaw === "string" && WHISPER_LANGUAGE_CODES.has(languageRaw)
+      ? languageRaw
+      : undefined;
 
   if (typeof materialIdRaw !== "string" || !isUuid(materialIdRaw)) {
     return NextResponse.json({ error: "Invalid materialId" }, { status: 400 });
@@ -71,7 +77,11 @@ export async function POST(request: Request) {
     const audio = new Blob([await file.arrayBuffer()], {
       type: file.type || "application/octet-stream",
     });
-    const text = await transcribeWithWhisper({ audio, apiKey: openaiKey });
+    const text = await transcribeWithWhisper({
+      audio,
+      apiKey: openaiKey,
+      language,
+    });
     return NextResponse.json({ text });
   } catch (e) {
     console.error(e);
