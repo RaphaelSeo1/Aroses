@@ -350,13 +350,21 @@ export function SrsReviewSession({
     setFrSubmitError(null);
     setFrFeedback(null);
     try {
+      // If the saved referenceAnswer is a snake_case slug (a known
+      // glitch from older course generations), the explanation is the
+      // real answer — send that to the grader instead so it doesn't
+      // score the student's prose against garbage.
+      const rawRef = current.question.referenceAnswer ?? "";
+      const gradingRef = looksLikeSlug(rawRef)
+        ? current.question.explanation || rawRef
+        : rawRef;
       const res = await fetch("/api/quiz-grade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           materialId: current.materialId,
           question: current.question.question,
-          referenceAnswer: current.question.referenceAnswer,
+          referenceAnswer: gradingRef,
           studentAnswer: answer,
         }),
       });
@@ -772,6 +780,24 @@ function FrqGradeBlock({
   );
 }
 
+/**
+ * Some older AI-generated courses emitted snake_case identifier strings as
+ * their `referenceAnswer` instead of natural prose (e.g.
+ * "high_blood_pressure_detected_by_baroreceptors_..."). The explanation
+ * paragraph that follows usually contains the same info in readable form,
+ * so we detect and hide the slug rather than show garbage to the learner.
+ */
+function looksLikeSlug(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 30) return false;
+  // No real sentence-style whitespace anywhere.
+  if (/\s/.test(trimmed)) return false;
+  // At least a few underscores, and at least one alphabetical chunk.
+  const underscoreCount = (trimmed.match(/_/g) ?? []).length;
+  if (underscoreCount < 3) return false;
+  return /[a-z]_[a-z]/i.test(trimmed);
+}
+
 function RevealedAnswer({ question }: { question: CourseQuizItem }) {
   if (isQuizMcq(question)) {
     return (
@@ -786,15 +812,21 @@ function RevealedAnswer({ question }: { question: CourseQuizItem }) {
       </>
     );
   }
+  const ref = question.referenceAnswer ?? "";
+  const hideRef = looksLikeSlug(ref);
   return (
     <>
       <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
         Answer
       </p>
-      <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-800 dark:text-zinc-200 [overflow-wrap:anywhere]">
-        {question.referenceAnswer}
-      </p>
-      <p className="mt-3 break-words text-sm leading-relaxed text-zinc-600 dark:text-zinc-400 [overflow-wrap:anywhere]">
+      {!hideRef ? (
+        <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-800 dark:text-zinc-200 [overflow-wrap:anywhere]">
+          {ref}
+        </p>
+      ) : null}
+      <p
+        className={`${hideRef ? "mt-2" : "mt-3"} break-words text-sm leading-relaxed text-zinc-700 dark:text-zinc-300 [overflow-wrap:anywhere]`}
+      >
         {question.explanation}
       </p>
     </>
