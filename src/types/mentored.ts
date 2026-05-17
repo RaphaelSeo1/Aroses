@@ -114,6 +114,15 @@ export type MentoredLessonChunk = {
    * highlight the right paragraph on the course page).
    */
   sourceLessonIndex?: number;
+  /**
+   * Short phrases (1-4 words each) that appear verbatim somewhere in the
+   * source lesson content. The immersive runner glows these in the source
+   * lesson glass panel while the AI is teaching this chunk.
+   *
+   * The lesson plan generator extracts them. Match is case-insensitive but
+   * preserves the original surface form in the rendered panel.
+   */
+  keyTerms?: string[];
 };
 
 /** Cached plan for a module — produced by Claude on first entry. */

@@ -14,7 +14,6 @@ import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { CourseModeToggle } from "@/components/CourseModeToggle";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
 import { LessonNotesCapture } from "@/components/LessonNotesCapture";
-import { MentoredLearningEntry } from "@/components/MentoredLearningEntry";
 import { ModuleQuizReview } from "@/components/ModuleQuizReview";
 import { PersonalQuizSection } from "@/components/PersonalQuizSection";
 import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
@@ -1203,25 +1202,24 @@ export function CoursePlayer({
             <>
               <CourseModeToggle
                 mode={courseMode}
-                onChange={setCourseMode}
-                hint={
-                  courseMode === "mentored"
-                    ? "You can switch to Free Exploration any time without losing progress."
-                    : "Switch back to Mentored Learning whenever you want the AI to walk you through."
-                }
-              />
-              {courseMode === "mentored" ? (
-                <MentoredLearningEntry
-                  materialId={materialId}
-                  course={course}
-                  activeModule={activeModule}
-                  onSwitchToFree={() => setCourseMode("free")}
-                  onAdvanceModule={(nextModuleId) =>
-                    goToModule(materialId, nextModuleId)
+                onChange={(next) => {
+                  // Mentored Learning lives in the dedicated immersive route
+                  // now — switching here just navigates there and lets that
+                  // page persist the mode + run onboarding/lesson.
+                  if (next === "mentored") {
+                    setCourseMode("mentored");
+                    const qs = new URLSearchParams();
+                    qs.set("material", materialId);
+                    qs.set("module", String(activeModule.id));
+                    router.push(
+                      `/dashboard/courses/${courseId}/learn?${qs.toString()}`
+                    );
+                  } else {
+                    setCourseMode("free");
                   }
-                />
-              ) : (
-                <>
+                }}
+                hint="Mentored Learning opens in a focused tutoring view; Free Exploration is the reading mode you're in now."
+              />
               <header className="border-b border-zinc-100 pb-8 dark:border-zinc-900">
                 <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
                   Module {activeModule.id}
@@ -1307,8 +1305,6 @@ export function CoursePlayer({
                   </Link>
                 </div>
               </div>
-                </>
-              )}
             </>
           ) : (
             <>

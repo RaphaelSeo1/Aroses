@@ -107,7 +107,10 @@ export type LessonPlanInput = {
   knowledgeLevel: KnowledgeLevel;
 };
 
-const LESSON_PLAN_VERSION = 1;
+// Bump when the prompt or parser changes in a way that invalidates cached
+// plans. v2 adds `keyTerms` so the immersive runner can glow phrases in the
+// source-lesson panel.
+const LESSON_PLAN_VERSION = 2;
 
 function levelGuidance(level: KnowledgeLevel): string {
   switch (level) {
@@ -173,7 +176,8 @@ Output a JSON array only (no markdown fences). Each object:
   "checkQuestion": "ONE question that tests this exact concept (not the next one, not the previous one)",
   "referenceAnswer": "what a strong answer should say (used internally to grade; 1-3 sentences)",
   "keyPoints": ["3-5 short bullet phrases the student's answer should hit"],
-  "sourceLessonIndex": 0-based index of the lesson this chunk corresponds to (integer)
+  "sourceLessonIndex": 0-based index of the lesson this chunk corresponds to (integer),
+  "keyTerms": ["2-5 short phrases (1-4 words each) that appear VERBATIM in the SOURCE LESSON CONTENT above. These are the exact words the student should see glow in their source material while this chunk is being taught. Match the surface form exactly, including capitalization."]
 }
 
 Strict rules:
@@ -181,7 +185,8 @@ Strict rules:
 2) ORDER: Chunks must teach in pedagogical order — prerequisites before what depends on them.
 3) NO REPETITION: Don't re-ask the same fact across chunks.
 4) CHECK = MEANINGFUL: Each checkQuestion must be answerable with 1-3 sentences of explanation, not a trivia recall.
-5) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.`;
+5) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.
+6) KEY TERMS APPEAR IN SOURCE: Every keyTerm MUST be a substring of the lesson the chunk maps to. Do not invent terms. If a chunk is hard to anchor (e.g. pure overview), it's fine to return fewer keyTerms or an empty array.`;
 
   const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 0 });
   const msg = await anthropic.messages.create({
@@ -233,6 +238,24 @@ Strict rules:
       Number.isFinite(raw.sourceLessonIndex)
         ? Math.max(0, Math.min(input.module.lessons.length - 1, raw.sourceLessonIndex))
         : undefined;
+
+    // Filter keyTerms down to phrases that actually appear in the source
+    // lesson content (case-insensitive). If the AI hallucinated terms that
+    // don't exist verbatim, drop them — they'd just fail to highlight.
+    const sourceText =
+      typeof sourceIndex === "number"
+        ? (input.module.lessons[sourceIndex]?.content ?? "")
+        : input.module.lessons.map((l) => l.content ?? "").join(" ");
+    const sourceLower = sourceText.toLowerCase();
+    const keyTermsRaw = Array.isArray(raw.keyTerms)
+      ? (raw.keyTerms as unknown[])
+          .map((t) => (typeof t === "string" ? t.trim() : ""))
+          .filter((t) => t.length >= 2 && t.length <= 60)
+      : [];
+    const keyTerms = keyTermsRaw
+      .filter((t) => sourceLower.includes(t.toLowerCase()))
+      .slice(0, 5);
+
     chunks.push({
       id: shortIdFor(concept, i),
       concept,
@@ -242,6 +265,7 @@ Strict rules:
       keyPoints,
       analogy,
       sourceLessonIndex: sourceIndex,
+      keyTerms: keyTerms.length > 0 ? keyTerms : undefined,
     });
   }
 
