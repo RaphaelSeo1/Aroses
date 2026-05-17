@@ -7,16 +7,18 @@ type Mode = "speaking" | "listening" | "idle";
 /**
  * Glowing pink→purple waveform for the immersive Mentored Learning view.
  *
- * Implementation: 32 vertical bars. Each bar's height is driven by a sine
- * combined with a hash-offset so the wave looks organic, not synchronized.
+ * Implementation: 32 vertical bars driven by sine + hash-offset so the
+ * wave looks organic, not synchronized. Heights/positions are written
+ * directly to each <rect> via refs on rAF — no React state per frame —
+ * so the animation costs ~0 reconciliation work and stays at 60fps even
+ * when the rest of the page is busy.
  *
  *   - mode="speaking"   → tall, fast, vivid (AI voice playing)
  *   - mode="listening"  → soft, breathing (mic open)
  *   - mode="idle"       → very subtle baseline pulse
  *
- * Renders as a single SVG with a gradient stroke + soft glow filter. We
- * step the animation with requestAnimationFrame so it pauses cleanly when
- * the tab is hidden.
+ * Respects `prefers-reduced-motion` by freezing the bars at a static
+ * mode-appropriate profile.
  */
 export function AnimatedWaveform({
   mode,
@@ -29,23 +31,19 @@ export function AnimatedWaveform({
   const WIDTH = 360;
   const HEIGHT = 96;
   const MID = HEIGHT / 2;
+  const gap = WIDTH / BARS;
+  const barWidth = Math.max(2, gap * 0.45);
 
-  const [heights, setHeights] = useState<number[]>(() =>
-    Array.from({ length: BARS }, () => 8)
-  );
+  const rectRefs = useRef<Array<SVGRectElement | null>>([]);
+  const modeRef = useRef<Mode>(mode);
   const rafRef = useRef<number | null>(null);
   const startRef = useRef<number>(0);
-  const modeRef = useRef<Mode>(mode);
   const [reducedMotion, setReducedMotion] = useState(false);
 
-  // Track the latest mode without restarting the animation loop.
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
 
-  // Respect prefers-reduced-motion. When set, swap the animated bars for a
-  // static "presence indicator" — short bars when idle, taller solid bars
-  // when speaking, mid-height when listening. No rAF, no flicker.
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
     const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -56,46 +54,48 @@ export function AnimatedWaveform({
   }, []);
 
   useEffect(() => {
+    // Write a single bar's geometry directly to its <rect>. Defined inside
+    // the effect so it closes over MID without needing it in the dep list.
+    const setBarHeight = (i: number, h: number) => {
+      const rect = rectRefs.current[i];
+      if (!rect) return;
+      rect.setAttribute("y", String(MID - h / 2));
+      rect.setAttribute("height", String(h));
+    };
+
     if (reducedMotion) {
-      // Render a stable bar profile based on the current mode.
       const staticHeight =
         mode === "speaking" ? 32 : mode === "listening" ? 18 : 8;
-      setHeights((prev) =>
-        prev.map((_, i) => {
-          const distFromCenter =
-            Math.abs(i - (BARS - 1) / 2) / ((BARS - 1) / 2);
-          const taper = 1 - distFromCenter ** 1.6 * 0.65;
-          return Math.max(4, taper * staticHeight);
-        })
-      );
+      for (let i = 0; i < BARS; i++) {
+        const distFromCenter =
+          Math.abs(i - (BARS - 1) / 2) / ((BARS - 1) / 2);
+        const taper = 1 - distFromCenter ** 1.6 * 0.65;
+        setBarHeight(i, Math.max(4, taper * staticHeight));
+      }
       return;
     }
+
     startRef.current = performance.now();
 
     const tick = (now: number) => {
       const t = (now - startRef.current) / 1000;
       const current = modeRef.current;
+      const speed =
+        current === "speaking" ? 5.2 : current === "listening" ? 1.8 : 1.0;
+      const amplitude =
+        current === "speaking" ? 38 : current === "listening" ? 14 : 6;
 
-      const next: number[] = new Array(BARS);
       for (let i = 0; i < BARS; i++) {
-        // Distance from center → bars taper at the edges.
-        const distFromCenter = Math.abs(i - (BARS - 1) / 2) / ((BARS - 1) / 2);
+        const distFromCenter =
+          Math.abs(i - (BARS - 1) / 2) / ((BARS - 1) / 2);
         const taper = 1 - distFromCenter ** 1.6 * 0.65;
-
-        // Per-bar phase offset gives organic, non-synced motion.
         const phase = (i * 37) % 11;
-        const speed =
-          current === "speaking" ? 5.2 : current === "listening" ? 1.8 : 1.0;
-        const amplitude =
-          current === "speaking" ? 38 : current === "listening" ? 14 : 6;
-
         const wave =
           Math.sin(t * speed + phase) * 0.6 +
           Math.sin(t * speed * 1.7 + phase * 0.6) * 0.4;
         const h = Math.max(4, taper * (amplitude * (0.55 + wave * 0.5) + 6));
-        next[i] = h;
+        setBarHeight(i, h);
       }
-      setHeights(next);
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -103,10 +103,27 @@ export function AnimatedWaveform({
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
-  }, [mode, reducedMotion]);
+  }, [mode, reducedMotion, MID]);
 
-  const gap = WIDTH / BARS;
-  const barWidth = Math.max(2, gap * 0.45);
+  // Initial bars rendered once. Subsequent height updates happen via
+  // refs above — React never touches these elements after first paint.
+  const initialBars = Array.from({ length: BARS }, (_, i) => {
+    const x = i * gap + (gap - barWidth) / 2;
+    return (
+      <rect
+        key={i}
+        ref={(el) => {
+          rectRefs.current[i] = el;
+        }}
+        x={x}
+        y={MID - 4}
+        width={barWidth}
+        height={8}
+        rx={barWidth / 2}
+        fill="url(#wf-grad)"
+      />
+    );
+  });
 
   return (
     <div className={`relative ${className}`}>
@@ -131,22 +148,7 @@ export function AnimatedWaveform({
             </feMerge>
           </filter>
         </defs>
-        <g filter="url(#wf-glow)">
-          {heights.map((h, i) => {
-            const x = i * gap + (gap - barWidth) / 2;
-            return (
-              <rect
-                key={i}
-                x={x}
-                y={MID - h / 2}
-                width={barWidth}
-                height={h}
-                rx={barWidth / 2}
-                fill="url(#wf-grad)"
-              />
-            );
-          })}
-        </g>
+        <g filter="url(#wf-glow)">{initialBars}</g>
       </svg>
     </div>
   );

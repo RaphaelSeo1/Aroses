@@ -20,21 +20,40 @@ export function CloudBackground() {
           "linear-gradient(180deg, #f0f6ff 0%, #fdf2f8 55%, #f8e8f5 100%)",
       }}
     >
-      {/* Drifting cloud puffs — each one a soft radial gradient circle. */}
+      {/*
+       * Drifting cloud puffs — each one a soft radial gradient circle.
+       * On mobile we hide the three "decorative" puffs (d/e/f) and use a
+       * smaller blur radius. `filter: blur(60px)` on six fullscreen
+       * elements absolutely tanks scroll perf on lower-end phones, and
+       * three subtle puffs over the gradient backdrop reads identically
+       * past the first second.
+       */}
       <div className="cb-puff cb-puff-a" />
       <div className="cb-puff cb-puff-b" />
       <div className="cb-puff cb-puff-c" />
-      <div className="cb-puff cb-puff-d" />
-      <div className="cb-puff cb-puff-e" />
-      <div className="cb-puff cb-puff-f" />
+      <div className="cb-puff cb-puff-d cb-puff-decorative" />
+      <div className="cb-puff cb-puff-e cb-puff-decorative" />
+      <div className="cb-puff cb-puff-f cb-puff-decorative" />
 
       <style jsx>{`
         .cb-puff {
           position: absolute;
           border-radius: 9999px;
-          filter: blur(60px);
+          filter: blur(34px);
           opacity: 0.7;
           will-change: transform;
+          transform: translateZ(0);
+          contain: layout paint;
+        }
+        @media (min-width: 768px) {
+          .cb-puff {
+            filter: blur(60px);
+          }
+        }
+        @media (max-width: 767px) {
+          .cb-puff-decorative {
+            display: none;
+          }
         }
         .cb-puff-a {
           width: 38rem;

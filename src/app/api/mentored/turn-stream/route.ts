@@ -1,0 +1,183 @@
+import { createClient } from "@/lib/supabase/server";
+import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
+import { runMentoredTurnStream } from "@/lib/ai/mentored";
+import type {
+  KnowledgeLevel,
+  MentoredLessonChunk,
+  MentoredTurnRequest,
+} from "@/types/mentored";
+
+/**
+ * POST /api/mentored/turn-stream
+ *
+ * Same input as `/api/mentored/turn` but responds with Server-Sent
+ * Events so the client can start TTS on the FIRST sentence before
+ * Claude has finished generating the full reply. This is the main
+ * latency lever for Mentored Learning: with the non-streaming endpoint
+ * the student waits for the full ~3-6s response; here they start
+ * hearing the tutor within 1-2s.
+ *
+ * Event stream:
+ *   event: text   data: { delta: string }   — incremental reply tokens
+ *   event: meta   data: { intent, advance, addToFocusedReview }
+ *   event: done   data: {}
+ *   event: error  data: { message }
+ *
+ * Focused-Review side-effect: same as the non-streaming route — if
+ * `addToFocusedReview` flips true we insert a `user_personal_quiz_items`
+ * row server-side AFTER the stream finishes, before emitting `done`.
+ */
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isLevel(v: unknown): v is KnowledgeLevel {
+  return v === "beginner" || v === "intermediate" || v === "advanced";
+}
+
+function isChunk(v: unknown): v is MentoredLessonChunk {
+  if (!v || typeof v !== "object") return false;
+  const c = v as MentoredLessonChunk;
+  return (
+    typeof c.concept === "string" &&
+    typeof c.explanation === "string" &&
+    typeof c.checkQuestion === "string" &&
+    typeof c.referenceAnswer === "string"
+  );
+}
+
+function sseLine(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function jsonError(message: string, status: number): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function POST(request: Request) {
+  let body: MentoredTurnRequest;
+  try {
+    body = (await request.json()) as MentoredTurnRequest;
+  } catch {
+    return jsonError("Invalid JSON", 400);
+  }
+
+  if (typeof body.materialId !== "string" || !UUID_RE.test(body.materialId)) {
+    return jsonError("Invalid material id.", 400);
+  }
+  if (typeof body.moduleId !== "number" || !Number.isFinite(body.moduleId)) {
+    return jsonError("Invalid module id.", 400);
+  }
+  if (!isChunk(body.chunk)) {
+    return jsonError("Invalid chunk.", 400);
+  }
+  if (typeof body.attempts !== "number" || body.attempts < 0) {
+    return jsonError("Invalid attempts.", 400);
+  }
+  if (
+    typeof body.studentUtterance !== "string" ||
+    body.studentUtterance.trim().length === 0
+  ) {
+    return jsonError("studentUtterance is required.", 400);
+  }
+  const level: KnowledgeLevel = isLevel(body.knowledgeLevel)
+    ? body.knowledgeLevel
+    : "beginner";
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return jsonError("Not signed in", 401);
+
+  const ok = await canAccessStudyMaterial(supabase, user.id, body.materialId);
+  if (!ok) return jsonError("Not found.", 404);
+
+  const userId = user.id;
+  const materialId = body.materialId;
+  const moduleId = body.moduleId;
+  const chunk = body.chunk;
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: string, data: unknown) => {
+        try {
+          controller.enqueue(encoder.encode(sseLine(event, data)));
+        } catch {
+          /* client disconnected */
+        }
+      };
+
+      let addToFocusedReview = false;
+
+      try {
+        for await (const evt of runMentoredTurnStream({
+          chunk,
+          attempts: body.attempts,
+          studentUtterance: body.studentUtterance,
+          knowledgeLevel: level,
+        })) {
+          if (evt.type === "text") {
+            send("text", { delta: evt.delta });
+          } else if (evt.type === "meta") {
+            addToFocusedReview = evt.addToFocusedReview;
+            send("meta", {
+              intent: evt.intent,
+              advance: evt.advance,
+              addToFocusedReview: evt.addToFocusedReview,
+            });
+          }
+        }
+
+        // Persist Focused Review insertion BEFORE done so the client can
+        // safely advance once the stream closes.
+        if (addToFocusedReview) {
+          try {
+            await supabase.from("user_personal_quiz_items").insert({
+              user_id: userId,
+              material_id: materialId,
+              module_id: moduleId,
+              item: {
+                type: "free_response",
+                question: chunk.checkQuestion,
+                referenceAnswer: chunk.referenceAnswer,
+                explanation: chunk.explanation,
+              },
+            });
+          } catch (e) {
+            // Non-fatal — student still gets their reply.
+            console.error("[mentored/turn-stream focused-review]", e);
+          }
+        }
+
+        send("done", {});
+      } catch (e) {
+        console.error("[mentored/turn-stream]", e);
+        send("error", { message: "AI could not respond. Try again shortly." });
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}

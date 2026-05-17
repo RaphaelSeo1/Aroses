@@ -204,16 +204,25 @@ export function ImmersiveLessonRunner({
     void voice.speak(text);
   }, [chunk, interactionMode, phase, voice]);
 
-  // ----- submit -----
+  // ----- submit (streaming turn → sentence-streamed TTS) -----
+  //
+  // Hits /api/mentored/turn-stream and pipes:
+  //   • `text` SSE deltas → setTutorReply (incrementally) and a sentence
+  //                         splitter that feeds voice.speakSentenceStream
+  //   • `meta` SSE event  → captured for advance / focused-review logic
+  //
+  // The voice playback pipeline starts as soon as the first sentence is
+  // available — usually 0.5-1.5s after submit instead of waiting for
+  // Claude to finish (~3-6s) AND a full TTS round-trip.
   const submitAnswer = useCallback(
     async (utterance: string) => {
       if (!chunk || !plan) return;
       const text = utterance.trim();
       if (text.length < 2) return;
       setSubmitting(true);
-      setTutorReply(null);
+      setTutorReply("");
       try {
-        const res = await fetch("/api/mentored/turn", {
+        const res = await fetch("/api/mentored/turn-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -225,28 +234,145 @@ export function ImmersiveLessonRunner({
             knowledgeLevel: onboarding.knowledgeLevel,
           }),
         });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok || !res.body) {
+          const body = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
           throw new Error(body.error || `HTTP ${res.status}`);
         }
-        const body = (await res.json()) as MentoredTurnResponse;
-        setTutorReply(body.reply);
-        if (interactionMode === "voice") void voice.speak(body.reply);
+
+        // Parse SSE chunks lazily into a single async generator. We pipe
+        // text deltas into both setTutorReply (UI) and a sentence queue
+        // (TTS). Meta and done are consumed but don't yield sentences.
+        let finalIntent: MentoredTurnResponse["intent"] =
+          "other" as MentoredTurnResponse["intent"];
+        let finalAdvance = false;
+        const decoder = new TextDecoder();
+        const reader = res.body.getReader();
+
+        async function* eachSseEvent(): AsyncGenerator<
+          | { type: "text"; delta: string }
+          | { type: "meta"; intent: MentoredTurnResponse["intent"]; advance: boolean }
+          | { type: "done" }
+          | { type: "error"; message: string },
+          void,
+          void
+        > {
+          let buf = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) return;
+            buf += decoder.decode(value, { stream: true });
+            // SSE messages are separated by blank lines.
+            let sepIdx: number;
+            while ((sepIdx = buf.indexOf("\n\n")) >= 0) {
+              const raw = buf.slice(0, sepIdx);
+              buf = buf.slice(sepIdx + 2);
+              let event = "message";
+              let data = "";
+              for (const line of raw.split("\n")) {
+                if (line.startsWith("event:")) event = line.slice(6).trim();
+                else if (line.startsWith("data:")) data += line.slice(5).trim();
+              }
+              if (!data) continue;
+              try {
+                const parsed = JSON.parse(data) as Record<string, unknown>;
+                if (event === "text" && typeof parsed.delta === "string") {
+                  yield { type: "text", delta: parsed.delta };
+                } else if (event === "meta") {
+                  yield {
+                    type: "meta",
+                    intent:
+                      typeof parsed.intent === "string"
+                        ? (parsed.intent as MentoredTurnResponse["intent"])
+                        : "other",
+                    advance: parsed.advance === true,
+                  };
+                } else if (event === "done") {
+                  yield { type: "done" };
+                } else if (event === "error") {
+                  yield {
+                    type: "error",
+                    message:
+                      typeof parsed.message === "string"
+                        ? parsed.message
+                        : "Tutor stream failed",
+                  };
+                }
+              } catch {
+                /* malformed line — skip */
+              }
+            }
+          }
+        }
+
+        // Sentence splitter: yields complete sentences as they appear in
+        // the text stream. Final tail (no trailing terminator) is flushed
+        // on `done`. Drives both setTutorReply (cumulative) and voice TTS.
+        let fullReply = "";
+        let pendingBuf = "";
+
+        const sentenceStream = (async function* (): AsyncGenerator<
+          string,
+          void,
+          void
+        > {
+          for await (const ev of eachSseEvent()) {
+            if (ev.type === "text") {
+              pendingBuf += ev.delta;
+              fullReply += ev.delta;
+              setTutorReply(fullReply);
+              // Flush complete sentences (ending in . ! ? or newline).
+              // We require a terminator + whitespace OR end-of-buffer so
+              // we don't cut mid-decimal ("3.14") in pathological cases.
+              const re = /([\s\S]*?[.!?\n])(\s+|$)/g;
+              let lastIdx = 0;
+              let m: RegExpExecArray | null;
+              while ((m = re.exec(pendingBuf)) !== null) {
+                const sentence = m[1].trim();
+                if (sentence.length >= 3) {
+                  yield sentence;
+                }
+                lastIdx = re.lastIndex;
+              }
+              if (lastIdx > 0) pendingBuf = pendingBuf.slice(lastIdx);
+            } else if (ev.type === "meta") {
+              finalIntent = ev.intent;
+              finalAdvance = ev.advance;
+            } else if (ev.type === "done") {
+              const tail = pendingBuf.trim();
+              if (tail.length >= 1) yield tail;
+              pendingBuf = "";
+              return;
+            } else if (ev.type === "error") {
+              throw new Error(ev.message);
+            }
+          }
+        })();
+
+        if (interactionMode === "voice") {
+          await voice.speakSentenceStream(sentenceStream);
+        } else {
+          // Drain the stream so meta/done events still execute.
+          for await (const _ of sentenceStream) {
+            void _;
+          }
+        }
 
         const historyEval: MentoredHistoryEntry["evaluation"] =
-          body.intent === "answer_correct"
+          finalIntent === "answer_correct"
             ? "correct"
-            : body.intent === "answer_partial"
+            : finalIntent === "answer_partial"
               ? "partial"
-              : body.intent === "answer_wrong"
+              : finalIntent === "answer_wrong"
                 ? "wrong"
-                : body.intent === "skip_concept" || body.intent === "move_on"
+                : finalIntent === "skip_concept" || finalIntent === "move_on"
                   ? "skipped"
                   : "partial";
         const attemptEval: "correct" | "partial" | "wrong" | null =
           historyEval === "skipped" ? null : historyEval;
 
-        if (body.advance) {
+        if (finalAdvance) {
           const nextIdx = chunkIdx + 1;
           setChunkIdx(nextIdx);
           setAttempts(0);
@@ -326,12 +452,32 @@ export function ImmersiveLessonRunner({
     const blob = await recordPromiseRef.current;
     recordPromiseRef.current = null;
     if (!blob) {
-      setVoiceNotice("Didn't catch any audio — try holding the mic a little longer.");
+      // Either the recording failed to start (mic permission) or no
+      // audio was captured. The hook's `state.error` carries the more
+      // specific permission/device message when that path was taken;
+      // fall back to a generic "no audio" hint otherwise.
+      if (voice.state.error) {
+        setVoiceNotice(voice.state.error);
+      } else {
+        setVoiceNotice(
+          "Didn't catch any audio — try holding the mic a little longer."
+        );
+      }
+      return;
+    }
+    if (blob.size < 1500) {
+      // ~50ms of opus — too short to transcribe reliably.
+      setVoiceNotice(
+        "That was very short — hold the mic and speak a full sentence."
+      );
       return;
     }
     const text = await voice.transcribe(blob);
     if (!text) {
-      setVoiceNotice("Couldn't make out what you said — try again a bit closer to the mic.");
+      setVoiceNotice(
+        voice.state.error ??
+          "I didn't catch that — could you try again, a bit closer to the mic?"
+      );
       return;
     }
     setAnswerText(text);
@@ -469,41 +615,12 @@ export function ImmersiveLessonRunner({
   }, [course.modules, moduleIdx, onAdvanceModule, persist]);
 
   // ----- top bar (always rendered) -----
+  // We intentionally keep the top bar minimal — just voice/text mode +
+  // Exit. The Hold M / Live toggle now lives inside the composer (see
+  // AnswerComposer below) where the student's eyes are already focused,
+  // so the choice is discoverable without a glance to the top-right.
   const topBar = (
     <div className="flex items-center gap-2">
-      {interactionMode === "voice" ? (
-        <div
-          className="flex items-center gap-0.5 rounded-full border border-white/50 bg-white/45 p-0.5 text-xs font-medium text-zinc-700 shadow-sm backdrop-blur-md"
-          role="group"
-          aria-label="Voice mic mode"
-          title="Choose how the mic listens"
-        >
-          <button
-            type="button"
-            onClick={() => setVoiceMode("push")}
-            aria-pressed={voiceMode === "push"}
-            className={
-              voiceMode === "push"
-                ? "rounded-full bg-zinc-900/90 px-3 py-1 text-white shadow-sm"
-                : "rounded-full px-3 py-1 text-zinc-700 hover:bg-white/60"
-            }
-          >
-            Hold M
-          </button>
-          <button
-            type="button"
-            onClick={() => setVoiceMode("live")}
-            aria-pressed={voiceMode === "live"}
-            className={
-              voiceMode === "live"
-                ? "rounded-full bg-zinc-900/90 px-3 py-1 text-white shadow-sm"
-                : "rounded-full px-3 py-1 text-zinc-700 hover:bg-white/60"
-            }
-          >
-            Live
-          </button>
-        </div>
-      ) : null}
       <button
         type="button"
         onClick={() =>
@@ -535,20 +652,25 @@ export function ImmersiveLessonRunner({
   // mode AND give a clear hint for push mode so the student knows the
   // hold-M shortcut is available without having to read docs. Voice
   // errors (e.g. empty transcription) take priority so silent failures
-  // can't happen.
+  // can't happen. The "Thinking…" state covers the window between
+  // submit and the first audible sentence from the streaming turn.
+  const thinkingNow =
+    submitting && !voice.state.speaking && !voice.state.transcribing;
   const liveHint =
     voiceNotice ??
     (voice.state.transcribing
       ? "Transcribing…"
-      : voice.state.autoCapturing
-        ? "Listening — I'll stop when you're done"
-        : voice.state.recording
-          ? "Listening — release M (or the mic) to send"
-          : interactionMode === "voice" && voiceMode === "push"
-            ? "Hold M to talk · or hold the mic button"
-            : interactionMode === "voice" && voiceMode === "live"
-              ? "Live mode — just start speaking"
-              : null);
+      : thinkingNow
+        ? "Thinking…"
+        : voice.state.autoCapturing
+          ? "Listening — I'll stop when you're done"
+          : voice.state.recording
+            ? "Listening — release M (or the mic) to send"
+            : interactionMode === "voice" && voiceMode === "push"
+              ? "Hold M to talk · or hold the mic button"
+              : interactionMode === "voice" && voiceMode === "live"
+                ? "Live mode — just start speaking"
+                : null);
 
   // ---- branches that don't need the composer ----
   if (phase === "loading-session" || phase === "loading-plan") {
@@ -768,6 +890,7 @@ export function ImmersiveLessonRunner({
           <AnswerComposer
             interactionMode={interactionMode}
             voiceMode={voiceMode}
+            onVoiceModeChange={setVoiceMode}
             text={answerText}
             onTextChange={setAnswerText}
             onSubmitText={() => void submitAnswer(answerText)}
@@ -933,6 +1056,7 @@ function ProgressHeader({
 function AnswerComposer({
   interactionMode,
   voiceMode,
+  onVoiceModeChange,
   text,
   onTextChange,
   onSubmitText,
@@ -945,6 +1069,7 @@ function AnswerComposer({
 }: {
   interactionMode: InteractionMode;
   voiceMode: "push" | "live";
+  onVoiceModeChange: (mode: "push" | "live") => void;
   text: string;
   onTextChange: (v: string) => void;
   onSubmitText: () => void;
@@ -961,8 +1086,62 @@ function AnswerComposer({
   // hold-to-talk button only makes sense in push mode. We still keep the
   // textarea so the student can fall back to typing whenever they like.
   const showMicButton = interactionMode === "voice" && voiceMode === "push";
+  const showModeToggle = interactionMode === "voice";
+
+  // The Hold M / Live toggle is now embedded directly in the composer
+  // card — same border, same blur, same shadow — so it reads as one
+  // continuous "talk surface" instead of a disconnected top-right
+  // control. The toggle sits in a slim header row above the textarea
+  // so it's always visible without taking real estate from the input.
   return (
-    <div className="rounded-3xl border border-white/50 bg-white/55 p-3 shadow-[0_25px_60px_-25px_rgba(60,60,90,0.25)] ring-1 ring-white/50 backdrop-blur-2xl backdrop-saturate-150">
+    <div className="rounded-3xl border border-white/50 bg-white/55 p-3 shadow-[0_25px_60px_-25px_rgba(60,60,90,0.25)] ring-1 ring-white/50 backdrop-blur-md sm:backdrop-blur-xl">
+      {showModeToggle ? (
+        <div className="mb-2 flex items-center justify-between gap-2 px-1">
+          <div
+            className="inline-flex items-center gap-0.5 rounded-full border border-white/60 bg-white/55 p-0.5 text-[11px] font-medium text-zinc-700 shadow-sm"
+            role="group"
+            aria-label="Voice mic mode"
+          >
+            <button
+              type="button"
+              onClick={() => onVoiceModeChange("push")}
+              aria-pressed={voiceMode === "push"}
+              className={
+                voiceMode === "push"
+                  ? "rounded-full bg-zinc-900/90 px-3 py-1 text-white shadow-sm"
+                  : "rounded-full px-3 py-1 text-zinc-700 hover:bg-white/70"
+              }
+            >
+              Hold M
+            </button>
+            <button
+              type="button"
+              onClick={() => onVoiceModeChange("live")}
+              aria-pressed={voiceMode === "live"}
+              className={
+                voiceMode === "live"
+                  ? "rounded-full bg-zinc-900/90 px-3 py-1 text-white shadow-sm"
+                  : "rounded-full px-3 py-1 text-zinc-700 hover:bg-white/70"
+              }
+            >
+              Live
+            </button>
+          </div>
+          {recording ? (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full bg-rose-50/80 px-2 py-0.5 text-[11px] font-medium text-rose-700 ring-1 ring-rose-200"
+              aria-live="polite"
+            >
+              <span className="ac-pulse h-1.5 w-1.5 rounded-full bg-rose-500" />
+              Listening
+            </span>
+          ) : transcribing ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-fuchsia-50/80 px-2 py-0.5 text-[11px] font-medium text-fuchsia-700 ring-1 ring-fuchsia-200">
+              Transcribing…
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
         <textarea
           rows={2}
@@ -1022,6 +1201,27 @@ function AnswerComposer({
       {error ? (
         <p className="mt-1 text-xs text-rose-600">{error}</p>
       ) : null}
+      <style jsx>{`
+        .ac-pulse {
+          animation: ac-pulse 1.1s ease-in-out infinite;
+        }
+        @keyframes ac-pulse {
+          0%,
+          100% {
+            opacity: 1;
+            transform: scale(1);
+          }
+          50% {
+            opacity: 0.5;
+            transform: scale(1.6);
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .ac-pulse {
+            animation: none;
+          }
+        }
+      `}</style>
     </div>
   );
 }

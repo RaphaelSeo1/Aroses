@@ -38,7 +38,12 @@ export function GlassPanel({
 
   return (
     <div
-      className={`glass-panel relative rounded-3xl border border-white/40 p-6 shadow-[0_25px_60px_-25px_rgba(60,60,90,0.25)] ring-1 backdrop-blur-2xl backdrop-saturate-150 ${toneClasses} ${className}`}
+      // We use `backdrop-blur-md` on mobile (≈12px) and bump up to `xl`
+      // (≈24px) on sm+. `2xl` (40px) tanks scrolling on lower-end mobile
+      // GPUs — the visual difference vs. xl is minimal but the perf
+      // gain is huge. `transform-gpu` forces the panel onto its own
+      // compositor layer so the blur isn't recomputed every paint.
+      className={`glass-panel transform-gpu relative rounded-3xl border border-white/40 p-6 shadow-[0_25px_60px_-25px_rgba(60,60,90,0.25)] ring-1 backdrop-blur-md backdrop-saturate-150 sm:backdrop-blur-xl ${toneClasses} ${className}`}
       style={{
         animationDelay:
           typeof delayMs === "number" ? `${delayMs}ms` : undefined,
@@ -58,6 +63,7 @@ export function GlassPanel({
       <style jsx>{`
         .glass-panel {
           animation: glass-in 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+          will-change: transform, opacity;
         }
         @keyframes glass-in {
           0% {

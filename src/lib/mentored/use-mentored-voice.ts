@@ -229,6 +229,23 @@ export function useMentoredVoice(opts: {
     setState((s) => ({ ...s, speaking: false }));
   }, [stopBargeMonitor]);
 
+  const ttsFetch = useCallback(
+    (text: string, previousText: string | undefined, signal: AbortSignal) =>
+      fetch("/api/voice-tutor/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          materialId: opts.materialId,
+          voiceId: TTS_VOICE_ID,
+          stream: true,
+          ...(previousText ? { previousText: previousText.slice(-1500) } : {}),
+        }),
+        signal,
+      }),
+    [opts.materialId]
+  );
+
   const speak = useCallback(
     async (text: string): Promise<void> => {
       if (!text.trim()) return;
@@ -241,17 +258,7 @@ export function useMentoredVoice(opts: {
       // this becomes a no-op and speech still plays.
       void startBargeMonitor();
       try {
-        const res = await fetch("/api/voice-tutor/tts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text,
-            materialId: opts.materialId,
-            voiceId: TTS_VOICE_ID,
-            stream: true,
-          }),
-          signal: ac.signal,
-        });
+        const res = await ttsFetch(text, undefined, ac.signal);
         if (!res.ok) {
           let msg = `TTS failed (${res.status})`;
           try {
@@ -279,7 +286,100 @@ export function useMentoredVoice(opts: {
         setState((s) => ({ ...s, speaking: false }));
       }
     },
-    [cancelSpeak, opts.materialId, playbackRate, startBargeMonitor, stopBargeMonitor]
+    [cancelSpeak, playbackRate, startBargeMonitor, stopBargeMonitor, ttsFetch]
+  );
+
+  /**
+   * Speak a stream of sentences as they become available, pipelining
+   * the TTS fetches: while sentence N is playing, sentence N+1 is
+   * already being fetched. This is the main latency lever for the
+   * streaming Mentored turn — the student hears the first sentence
+   * within 1-2s of finishing their utterance instead of waiting for
+   * the whole reply to generate.
+   *
+   * Each sentence is sent with `previous_text` so ElevenLabs can keep
+   * prosody continuous across the chunks.
+   *
+   * The caller controls the iterator; closing it (return/break) ends
+   * playback once the in-flight sentences are done.
+   */
+  const speakSentenceStream = useCallback(
+    async (sentences: AsyncIterable<string>): Promise<void> => {
+      cancelSpeak();
+      const ac = new AbortController();
+      speakAbortRef.current = ac;
+      setState((s) => ({ ...s, speaking: true, error: null }));
+      void startBargeMonitor();
+
+      let previousText = "";
+      // Sentence playback is serial — we await the prior playback before
+      // starting the next one's playback, but the TTS network fetch for
+      // sentence N+1 runs in parallel with sentence N's playback so we
+      // don't restart latency from zero between sentences.
+      let priorPlayback: Promise<void> = Promise.resolve();
+      const failures: unknown[] = [];
+
+      try {
+        for await (const raw of sentences) {
+          if (ac.signal.aborted) break;
+          const sentence = raw.trim();
+          if (!sentence) continue;
+
+          const previousForThis = previousText;
+          previousText = `${previousText} ${sentence}`.trim();
+          const fetchPromise = ttsFetch(sentence, previousForThis, ac.signal);
+
+          // Chain this sentence's playback onto the prior one. We don't
+          // throw mid-stream so a single failed sentence doesn't kill
+          // the rest of the reply.
+          priorPlayback = priorPlayback
+            .catch(() => undefined)
+            .then(async () => {
+              if (ac.signal.aborted) return;
+              let res: Response;
+              try {
+                res = await fetchPromise;
+              } catch (e) {
+                failures.push(e);
+                return;
+              }
+              if (!res.ok || ac.signal.aborted) {
+                failures.push(new Error(`TTS failed (${res.status})`));
+                try {
+                  await res.body?.cancel();
+                } catch {
+                  /* ignore */
+                }
+                return;
+              }
+              try {
+                await playMpegFromResponse(res, {
+                  signal: ac.signal,
+                  playbackRate,
+                  audioRef,
+                });
+              } catch (e) {
+                failures.push(e);
+              }
+            });
+        }
+        await priorPlayback;
+        if (failures.length > 0 && !ac.signal.aborted) {
+          const first = failures[0];
+          const msg = first instanceof Error ? first.message : "Speak failed";
+          setState((s) => ({ ...s, error: msg }));
+        }
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        const message = e instanceof Error ? e.message : "Speak failed";
+        setState((s) => ({ ...s, error: message }));
+      } finally {
+        if (speakAbortRef.current === ac) speakAbortRef.current = null;
+        stopBargeMonitor();
+        setState((s) => ({ ...s, speaking: false }));
+      }
+    },
+    [cancelSpeak, playbackRate, startBargeMonitor, stopBargeMonitor, ttsFetch]
   );
 
   // ----- record -----
@@ -298,11 +398,26 @@ export function useMentoredVoice(opts: {
     cancelSpeak();
     if (recorderRef.current) await stopRecording();
 
+    if (typeof navigator === "undefined" || !navigator.mediaDevices) {
+      setState((s) => ({
+        ...s,
+        error: "Microphone access isn't available in this browser.",
+        recording: false,
+      }));
+      return null;
+    }
+
     try {
+      // The browser's getUserMedia handles consent. We request audio with
+      // echoCancellation + noiseSuppression so the recording is clean
+      // even when the AI voice is still playing in the room. We omit
+      // sampleRate because forcing it breaks several Android browsers
+      // — the server-side Whisper handler resamples internally.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
         },
       });
       mediaStreamRef.current = stream;
@@ -310,7 +425,9 @@ export function useMentoredVoice(opts: {
         ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm")
           ? "audio/webm"
-          : "";
+          : MediaRecorder.isTypeSupported("audio/mp4")
+            ? "audio/mp4"
+            : "";
       const rec = mime
         ? new MediaRecorder(stream, { mimeType: mime })
         : new MediaRecorder(stream);
@@ -352,7 +469,20 @@ export function useMentoredVoice(opts: {
       setState((s) => ({ ...s, recording: true, error: null }));
       return done;
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Mic access denied";
+      // Distinguish denial from absence so the error pill is actionable.
+      let message = e instanceof Error ? e.message : "Mic access denied";
+      if (e instanceof DOMException) {
+        if (e.name === "NotAllowedError" || e.name === "SecurityError") {
+          message =
+            "Microphone permission was blocked. Allow mic access in your browser, then try again.";
+        } else if (e.name === "NotFoundError" || e.name === "OverconstrainedError") {
+          message = "No microphone detected. Check your input device and retry.";
+        } else if (e.name === "NotReadableError") {
+          message =
+            "Another app is using the microphone. Close it and try again.";
+        }
+      }
+      console.error("[useMentoredVoice startRecording]", e);
       setState((s) => ({ ...s, error: message, recording: false }));
       return null;
     }
@@ -524,28 +654,56 @@ export function useMentoredVoice(opts: {
     [cancelSpeak, stopRecording, stopSilenceWatcher]
   );
 
-  const transcribe = useCallback(async (blob: Blob): Promise<string> => {
-    setState((s) => ({ ...s, transcribing: true, error: null }));
-    try {
-      const form = new FormData();
-      form.set("audio", blob, "answer.webm");
-      const res = await fetch("/api/voice-tutor/transcribe", {
-        method: "POST",
-        body: form,
-      });
-      if (!res.ok) {
-        throw new Error(`Transcribe failed (${res.status})`);
+  const transcribe = useCallback(
+    async (blob: Blob): Promise<string> => {
+      setState((s) => ({ ...s, transcribing: true, error: null }));
+      try {
+        // /api/voice-tutor/transcribe expects multipart fields named
+        // `file` + `materialId` (Whisper handler). An earlier version
+        // here used `audio` and no materialId, which made every Mentored
+        // Learning transcription fail with HTTP 400. Keep these in sync
+        // with `src/app/api/voice-tutor/transcribe/route.ts`.
+        const form = new FormData();
+        const filename = blob.type.includes("webm")
+          ? "answer.webm"
+          : blob.type.includes("ogg")
+            ? "answer.ogg"
+            : "answer.bin";
+        const file =
+          blob instanceof File
+            ? blob
+            : new File([blob], filename, {
+                type: blob.type || "audio/webm",
+              });
+        form.set("file", file, filename);
+        form.set("materialId", opts.materialId);
+        const res = await fetch("/api/voice-tutor/transcribe", {
+          method: "POST",
+          body: form,
+        });
+        if (!res.ok) {
+          let detail = "";
+          try {
+            const b = (await res.json()) as { error?: string };
+            if (b.error) detail = `: ${b.error}`;
+          } catch {
+            /* ignore */
+          }
+          throw new Error(`Transcribe failed (${res.status})${detail}`);
+        }
+        const body = (await res.json()) as { text?: string };
+        return (body.text ?? "").trim();
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Transcribe failed";
+        console.error("[useMentoredVoice transcribe]", e);
+        setState((s) => ({ ...s, error: message }));
+        return "";
+      } finally {
+        setState((s) => ({ ...s, transcribing: false }));
       }
-      const body = (await res.json()) as { text?: string };
-      return (body.text ?? "").trim();
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Transcribe failed";
-      setState((s) => ({ ...s, error: message }));
-      return "";
-    } finally {
-      setState((s) => ({ ...s, transcribing: false }));
-    }
-  }, []);
+    },
+    [opts.materialId]
+  );
 
   // Cleanup on unmount.
   useEffect(() => {
@@ -566,6 +724,7 @@ export function useMentoredVoice(opts: {
   return {
     state,
     speak,
+    speakSentenceStream,
     cancelSpeak,
     startRecording,
     stopRecording,

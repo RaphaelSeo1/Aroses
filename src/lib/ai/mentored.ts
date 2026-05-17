@@ -317,11 +317,13 @@ function isIntent(v: unknown): v is MentoredIntent {
   return typeof v === "string" && (INTENT_VALUES as string[]).includes(v);
 }
 
-export async function runMentoredTurn(input: TurnInput): Promise<TurnOutput> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+// Sentinel separating spoken reply text from trailing metadata JSON in
+// the streaming prompt format. Anything before the sentinel is read
+// aloud / displayed; anything after gets parsed as classification.
+const TURN_META_SENTINEL = "---META---";
 
-  const prompt = `You are an AI tutor mid-lesson. The student is on this CHUNK:
+function buildTurnPrompt(input: TurnInput): string {
+  return `You are an AI tutor mid-lesson. The student is on this CHUNK:
 
 CONCEPT: ${input.chunk.concept}
 EXPLANATION YOU JUST GAVE: ${input.chunk.explanation}
@@ -336,17 +338,18 @@ STUDENT JUST SAID: """
 ${input.studentUtterance.trim().slice(0, 2000)}
 """
 
-Classify what the student just said and craft your spoken reply.
+Output format (STRICT):
+1. First, write your spoken reply as plain text. 1-4 sentences. Conversational tutor voice. No markdown, no "as an AI", no quotes around it.
+2. Then on a new line write exactly: ${TURN_META_SENTINEL}
+3. Then on a new line emit a JSON object with classification:
+{"intent":"answer_correct|answer_partial|answer_wrong|pace_slower|pace_faster|skip_concept|move_on|tangent_question|request_repeat|request_pause|request_clarify|other","advance":true|false,"addToFocusedReview":true|false}
 
-Output STRICT JSON only, no markdown fences:
-{
-  "intent": one of [answer_correct, answer_partial, answer_wrong, pace_slower, pace_faster, skip_concept, move_on, tangent_question, request_repeat, request_pause, request_clarify, other],
-  "reply": "the natural-language reply you should speak out loud (1-4 sentences). Conversational. No markdown. No 'as an AI'.",
-  "advance": true|false  — true ONLY if you're confident this chunk is now complete and you can move to the next one,
-  "addToFocusedReview": true|false  — true if this concept should silently be added to the student's Focused Review queue (use this when intent is answer_wrong on attempt >= 2, or repeated answer_partial)
-}
+Example:
+Nice work — you nailed the key idea there. Want to move on?
+${TURN_META_SENTINEL}
+{"intent":"answer_correct","advance":true,"addToFocusedReview":false}
 
-Guidelines:
+Guidelines for classification + reply tone:
 - answer_correct → praise briefly and signal "advance": true.
 - answer_partial → name what they got right, fill the gap, then re-ask or invite refinement. "advance": false.
 - answer_wrong on attempt 1 → re-explain from a different angle (use the analogy if you have one). "advance": false, "addToFocusedReview": false.
@@ -361,39 +364,153 @@ Guidelines:
 - other → infer best interpretation; default "advance": false.
 
 Tone: real human tutor. Conversational. Never lecture-y.`;
+}
+
+function parseTurnMetaJson(
+  raw: string,
+  intentFallback: MentoredIntent = "other"
+): { intent: MentoredIntent; advance: boolean; addToFocusedReview: boolean } {
+  // Tolerate stray prose around the JSON by extracting the first balanced
+  // brace block. If parsing fails entirely, fall back to sensible defaults.
+  const trimmed = stripJsonFence(raw).trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  const slice = start >= 0 && end > start ? trimmed.slice(start, end + 1) : trimmed;
+  try {
+    const parsed = JSON.parse(slice) as Record<string, unknown>;
+    const intent: MentoredIntent = isIntent(parsed.intent)
+      ? parsed.intent
+      : intentFallback;
+    return {
+      intent,
+      advance:
+        parsed.advance === true ||
+        intent === "answer_correct" ||
+        intent === "skip_concept" ||
+        intent === "move_on",
+      addToFocusedReview: parsed.addToFocusedReview === true,
+    };
+  } catch {
+    return { intent: intentFallback, advance: false, addToFocusedReview: false };
+  }
+}
+
+export async function runMentoredTurn(input: TurnInput): Promise<TurnOutput> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
   const msg = await anthropic.messages.create({
     model: FAST_MODEL,
     max_tokens: 700,
     temperature: 0.5,
-    messages: [{ role: "user", content: prompt }],
+    messages: [{ role: "user", content: buildTurnPrompt(input) }],
   });
 
   const block = msg.content.find((b) => b.type === "text");
   if (!block || block.type !== "text") {
     throw new Error("Unexpected response from Claude");
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonFence(block.text));
-  } catch {
-    throw new Error("Claude did not return valid JSON");
-  }
-  const raw = parsed as Record<string, unknown>;
-  const intent: MentoredIntent = isIntent(raw.intent) ? raw.intent : "other";
-  const reply =
-    typeof raw.reply === "string" && raw.reply.trim().length > 0
-      ? raw.reply.trim()
-      : "Let's keep going.";
-  const advance =
-    raw.advance === true ||
-    intent === "answer_correct" ||
-    intent === "skip_concept" ||
-    intent === "move_on";
-  const addToFocusedReview = raw.addToFocusedReview === true;
+  const full = block.text;
+  const sentinelIdx = full.indexOf(TURN_META_SENTINEL);
+  const replyText =
+    sentinelIdx >= 0 ? full.slice(0, sentinelIdx).trim() : full.trim();
+  const metaText = sentinelIdx >= 0 ? full.slice(sentinelIdx + TURN_META_SENTINEL.length) : "";
+  const meta = parseTurnMetaJson(metaText);
+  const reply = replyText.length > 0 ? replyText : "Let's keep going.";
+  return { reply, ...meta };
+}
 
-  return { intent, reply, advance, addToFocusedReview };
+/**
+ * Streaming variant of `runMentoredTurn`. Yields:
+ *
+ *   { type: "text", delta }   — reply tokens, as Claude emits them
+ *   { type: "meta", ... }     — classification (intent/advance/focused), once
+ *                                the trailing metadata JSON has been parsed
+ *
+ * The route handler relays these as SSE events so the client can start
+ * speaking the reply BEFORE Claude finishes — first audible token in
+ * 1-2s instead of waiting the full ~3-6s for the whole turn.
+ */
+export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
+  | { type: "text"; delta: string }
+  | { type: "meta"; intent: MentoredIntent; advance: boolean; addToFocusedReview: boolean },
+  void,
+  void
+> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+
+  const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
+  const stream = anthropic.messages.stream({
+    model: FAST_MODEL,
+    max_tokens: 700,
+    temperature: 0.5,
+    messages: [{ role: "user", content: buildTurnPrompt(input) }],
+  });
+
+  // We accumulate the entire stream so we can detect the sentinel safely
+  // across token boundaries (e.g. Claude might split "---META---" across
+  // two deltas). Anything BEFORE the sentinel is forwarded as text; once
+  // we see the sentinel we stop forwarding text and start buffering for
+  // metadata.
+  let buffered = "";
+  let inMeta = false;
+  let textForwardedUpTo = 0;
+
+  for await (const event of stream) {
+    if (
+      event.type === "content_block_delta" &&
+      event.delta.type === "text_delta" &&
+      event.delta.text
+    ) {
+      buffered += event.delta.text;
+
+      if (!inMeta) {
+        const idx = buffered.indexOf(TURN_META_SENTINEL);
+        if (idx >= 0) {
+          // Flush any text up to the sentinel, then switch to meta mode.
+          const tail = buffered.slice(textForwardedUpTo, idx);
+          if (tail) yield { type: "text", delta: tail };
+          inMeta = true;
+          textForwardedUpTo = idx + TURN_META_SENTINEL.length;
+        } else {
+          // Hold back the last few chars in case the sentinel is straddling
+          // a chunk boundary. 16 chars is plenty (sentinel is 11 chars).
+          const safeUpTo = Math.max(textForwardedUpTo, buffered.length - 16);
+          if (safeUpTo > textForwardedUpTo) {
+            yield {
+              type: "text",
+              delta: buffered.slice(textForwardedUpTo, safeUpTo),
+            };
+            textForwardedUpTo = safeUpTo;
+          }
+        }
+      }
+    }
+  }
+
+  if (!inMeta) {
+    // Sentinel never showed up — flush remaining text and emit best-guess meta.
+    const tail = buffered.slice(textForwardedUpTo);
+    if (tail) yield { type: "text", delta: tail };
+    yield {
+      type: "meta",
+      intent: "other",
+      advance: false,
+      addToFocusedReview: false,
+    };
+    return;
+  }
+
+  const metaSlice = buffered.slice(textForwardedUpTo);
+  const meta = parseTurnMetaJson(metaSlice);
+  yield {
+    type: "meta",
+    intent: meta.intent,
+    advance: meta.advance,
+    addToFocusedReview: meta.addToFocusedReview,
+  };
 }
 
 // ---------------------------------------------------------------------------

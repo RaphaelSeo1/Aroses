@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import type { CourseLesson } from "@/types/course";
 
@@ -19,17 +19,18 @@ import type { CourseLesson } from "@/types/course";
  *   - `panelKey`     Bumped by the parent to re-trigger the pulse animation
  *                    when the chunk changes.
  */
-export function SourceLessonPanel({
+function SourceLessonPanelImpl({
   lesson,
   keyTerms,
 }: {
   lesson: CourseLesson | undefined;
   keyTerms: string[];
 }) {
+  const lessonContent = lesson?.content;
   const segments = useMemo(() => {
-    if (!lesson?.content) return null;
-    return splitWithKeyTerms(lesson.content, keyTerms);
-  }, [keyTerms, lesson?.content]);
+    if (!lessonContent) return null;
+    return splitWithKeyTerms(lessonContent, keyTerms);
+  }, [keyTerms, lessonContent]);
 
   if (!lesson) {
     return null;
@@ -101,6 +102,11 @@ export function SourceLessonPanel({
     </GlassPanel>
   );
 }
+
+// Memoized so re-renders of the runner (chunkIdx, attempts, voice state…)
+// don't re-segment / re-render the source body. Key terms array identity
+// is stable across renders because the runner derives it via useMemo.
+export const SourceLessonPanel = memo(SourceLessonPanelImpl);
 
 // ---------------------------------------------------------------------------
 // Segmentation
