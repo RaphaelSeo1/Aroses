@@ -6,6 +6,14 @@ import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown"
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import type { StudyChatResponse, StudyChatTurn } from "@/types/study-chat";
 
+export const STUDY_CHAT_PREFILL_EVENT = "aroses-study-chat-prefill";
+
+export type StudyChatPrefillDetail = {
+  materialId?: string;
+  moduleId?: number;
+  text: string;
+};
+
 type Props = {
   materialId: string;
   moduleId: number;
@@ -63,6 +71,25 @@ export function StudyChatDrawer({
     }, 100);
     return () => window.clearTimeout(t);
   }, [open]);
+
+  useEffect(() => {
+    const onPrefill = (event: Event) => {
+      const detail = (event as CustomEvent<StudyChatPrefillDetail>).detail;
+      if (!detail?.text?.trim()) return;
+      if (detail.materialId && detail.materialId !== materialId) return;
+      if (
+        typeof detail.moduleId === "number" &&
+        Number.isFinite(detail.moduleId) &&
+        detail.moduleId !== moduleId
+      ) {
+        return;
+      }
+      setInput(detail.text.trim());
+      setOpen(true);
+    };
+    window.addEventListener(STUDY_CHAT_PREFILL_EVENT, onPrefill);
+    return () => window.removeEventListener(STUDY_CHAT_PREFILL_EVENT, onPrefill);
+  }, [materialId, moduleId]);
 
   const send = useCallback(async () => {
     const text = input.trim();

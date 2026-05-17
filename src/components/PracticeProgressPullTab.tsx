@@ -15,7 +15,12 @@ import { APP_NAME } from "@/lib/brand";
 const RING_EASE =
   "transition-[stroke-dashoffset] duration-[1200ms] cubic-bezier(0.22,0.82,0.28,1)";
 
-const TAB_W_PX = 44;
+// Pill lives at top-right just below the app header so it doesn't fight the
+// voice tutor dock (bottom-right) or its transcript tab (mid-right).
+const PILL_TOP_PX = 88; // ~5.5rem — clears the global header
+const PILL_RIGHT_PX = 16; // 1rem
+// Used to slide the panel just enough to fully clear the pill when closed.
+const PILL_BLEED_PX = 56;
 
 function SweepBar({
   label,
@@ -52,6 +57,89 @@ function SweepBar({
         />
       </div>
     </div>
+  );
+}
+
+/** 28px dual-ring used inside the pill button. Outer = modules, inner = mastery. */
+function PillRing({
+  progress,
+  mastery,
+}: {
+  progress: number;
+  mastery: number | null;
+}) {
+  const size = 26;
+  const cx = size / 2;
+  const cy = size / 2;
+  const outerR = 11;
+  const innerR = 6.5;
+  const outerC = 2 * Math.PI * outerR;
+  const innerC = 2 * Math.PI * innerR;
+  const outerOffset = outerC * (1 - progress / 100);
+  const innerOffset = mastery == null ? innerC : innerC * (1 - mastery / 100);
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      <circle
+        cx={cx}
+        cy={cy}
+        r={outerR}
+        fill="none"
+        stroke="currentColor"
+        strokeOpacity="0.15"
+        strokeWidth="2.5"
+      />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={outerR}
+        fill="none"
+        stroke="url(#pill-ring-outer)"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeDasharray={outerC}
+        strokeDashoffset={outerOffset}
+        transform={`rotate(-90 ${cx} ${cy})`}
+      />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={innerR}
+        fill="none"
+        stroke="currentColor"
+        strokeOpacity="0.12"
+        strokeWidth="2"
+      />
+      {mastery != null ? (
+        <circle
+          cx={cx}
+          cy={cy}
+          r={innerR}
+          fill="none"
+          stroke="url(#pill-ring-inner)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray={innerC}
+          strokeDashoffset={innerOffset}
+          transform={`rotate(-90 ${cx} ${cy})`}
+        />
+      ) : null}
+      <defs>
+        <linearGradient id="pill-ring-outer" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#f43f5e" />
+          <stop offset="100%" stopColor="#be123c" />
+        </linearGradient>
+        <linearGradient id="pill-ring-inner" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#fb7185" />
+          <stop offset="100%" stopColor="#e11d48" />
+        </linearGradient>
+      </defs>
+    </svg>
   );
 }
 
@@ -165,8 +253,8 @@ export function PracticeProgressPullTab({
 
   const innerQuizForRing = masteryPct == null ? null : viz.quiz;
 
-  /** Panel uses `right: TAB_W_PX`; translateX(100%) alone leaves a TAB_W_PX‑wide strip visible — add TAB_W_PX more to clear the viewport. */
-  const panelClosedX = `calc(100% + ${TAB_W_PX}px)`;
+  // Slide the panel fully past the pill so nothing peeks when closed.
+  const panelClosedX = `calc(100% + ${PILL_BLEED_PX}px)`;
 
   const sharedShadow =
     "shadow-[0_12px_40px_-8px_rgba(0,0,0,0.22)] dark:shadow-black/40";
@@ -178,19 +266,19 @@ export function PracticeProgressPullTab({
       role="region"
       aria-label="Practice progress"
       aria-hidden={!open}
-      className={`fixed z-[140] flex max-h-[90vh] flex-col overflow-hidden rounded-l-2xl border border-r-0 border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-950 ${sharedShadow} ${
+      className={`fixed z-[140] flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-950 ${sharedShadow} ${
         reduceMotion
           ? ""
           : "transition-transform duration-500 ease-[cubic-bezier(0.25,0.82,0.35,1)]"
       } ${!open ? "pointer-events-none" : ""}`}
       style={{
-        right: TAB_W_PX,
-        top: "50%",
-        width: "min(22rem, calc(100vw - 3rem))",
-        maxWidth: "calc(100vw - 3rem)",
-        transform: open
-          ? "translateY(-50%) translateX(0)"
-          : `translateY(-50%) translateX(${panelClosedX})`,
+        right: PILL_RIGHT_PX,
+        // Park the panel just under the pill so it visually unfurls from it.
+        top: PILL_TOP_PX + 48,
+        width: "min(22rem, calc(100vw - 2rem))",
+        maxWidth: "calc(100vw - 2rem)",
+        maxHeight: `calc(100vh - ${PILL_TOP_PX + 64}px)`,
+        transform: open ? "translateX(0)" : `translateX(${panelClosedX})`,
       }}
     >
       <div className="shrink-0 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
@@ -304,21 +392,28 @@ export function PracticeProgressPullTab({
     </div>
   );
 
+  const pillProgress = Math.max(0, Math.min(100, Math.round(progressPct)));
+  const pillMastery =
+    masteryPct == null ? null : Math.max(0, Math.min(100, Math.round(masteryPct)));
+
   const tab = (
     <button
       type="button"
       onClick={() => onOpenChange(!open)}
       aria-expanded={open}
       aria-controls="practice-progress-panel"
+      title="Practice progress"
       style={{
-        width: TAB_W_PX,
-        right: 0,
-        top: "50%",
-        transform: "translateY(-50%)",
+        right: PILL_RIGHT_PX,
+        top: PILL_TOP_PX,
       }}
-      className={`fixed z-[141] flex min-h-[7rem] cursor-pointer flex-col items-center justify-center gap-2 rounded-l-lg border border-r-0 border-zinc-200 bg-gradient-to-b from-white to-zinc-50 px-1 py-4 text-[10px] font-bold uppercase tracking-widest text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:from-zinc-950 dark:to-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-900 ${sharedShadow}`}
+      className={`fixed z-[141] inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border border-zinc-200/90 bg-white/95 pl-1.5 pr-3 text-[11px] font-semibold tracking-wide text-zinc-700 backdrop-blur transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950/90 dark:text-zinc-200 dark:hover:bg-zinc-900 ${sharedShadow}`}
     >
-      <span style={{ writingMode: "vertical-rl" }}>Progress</span>
+      <PillRing progress={pillProgress} mastery={pillMastery} />
+      <span className="uppercase tracking-widest text-[10px]">Progress</span>
+      <span className="tabular-nums text-zinc-500 dark:text-zinc-400">
+        {pillProgress}%
+      </span>
     </button>
   );
 

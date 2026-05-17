@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ModuleQuiz } from "@/components/ModuleQuiz";
 import { ModuleQuizReview } from "@/components/ModuleQuizReview";
-import { buildPersonalQuizSessionItems } from "@/lib/quiz-session";
+import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
+import { useSrsDueCounts } from "@/lib/srs-due";
 import type { CourseQuizItem } from "@/types/course";
 import type { QuizReviewStatsDto } from "@/types/quiz-review";
 
@@ -195,12 +195,16 @@ export function PersonalQuizSection({
     return out;
   }, [missedIndices, dueIndices]);
 
-  const sessionItems = useMemo(
-    () => buildPersonalQuizSessionItems(rows, priorityIndices, epoch),
-    [rows, priorityIndices, epoch]
-  );
-
   const quizList = useMemo(() => rows.map((r) => r.item), [rows]);
+
+  // Surface "X focus cards due" on the Start button so the learner can see
+  // when they actually have work to do.
+  const { counts: dueCounts } = useSrsDueCounts(materialId, {
+    enabled: !runOpen,
+    refreshKey: epoch,
+  });
+  const focusDue =
+    dueCounts?.byMaterial.find((m) => m.materialId === materialId)?.personal ?? 0;
 
   function toggleNote(id: string) {
     setSelectedNoteIds((prev) => {
@@ -631,12 +635,22 @@ export function PersonalQuizSection({
                 ? "Generate focus questions first"
                 : undefined
             }
-            className="transition-none inline-flex items-center justify-center rounded-full border border-brand-border bg-brand-blush/90 px-8 py-3.5 text-sm font-semibold text-brand-ink shadow-sm hover:bg-brand-blush disabled:cursor-not-allowed disabled:opacity-50 dark:border-brand-border/50 dark:bg-[#1e1616]/90 dark:text-brand-soft dark:hover:bg-[#2a2020]"
+            className="transition-none inline-flex items-center justify-center gap-2 rounded-full border border-brand-border bg-brand-blush/90 px-8 py-3.5 text-sm font-semibold text-brand-ink shadow-sm hover:bg-brand-blush disabled:cursor-not-allowed disabled:opacity-50 dark:border-brand-border/50 dark:bg-[#1e1616]/90 dark:text-brand-soft dark:hover:bg-[#2a2020]"
           >
-            Start my focus quiz
+            {focusDue > 0
+              ? `Review ${focusDue} due card${focusDue === 1 ? "" : "s"}`
+              : "Start my focus review"}
+            {focusDue > 0 ? (
+              <span className="inline-flex items-center justify-center rounded-full bg-brand/15 px-2 py-0.5 text-[11px] font-bold tabular-nums">
+                {focusDue}
+              </span>
+            ) : null}
           </button>
         ) : (
-          <div>
+          // `lg:pr-72` reserves clearance on large screens so the floating
+          // voice-tutor dock (fixed bottom-right) never overlaps the
+          // review UI.
+          <div className="lg:pr-72">
             <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 pb-4 dark:border-zinc-900">
               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
                 Focus quiz run
@@ -649,20 +663,21 @@ export function PersonalQuizSection({
                 ← Back
               </button>
             </div>
-            <ModuleQuiz
+            <SrsReviewLauncher
               key={`personal-${moduleId}-${epoch}`}
+              scope="personal"
               materialId={materialId}
               moduleId={moduleId}
-              items={sessionItems}
-              shuffleEpoch={epoch}
-              hasNextModule={hasNextModule}
-              onCompleteQuiz={async (choice) => {
+              sessionKey={`personal-${materialId}-${moduleId}`}
+              heading="Focus quiz review"
+              onExit={() => {
                 setRunOpen(false);
                 setEpoch((e) => e + 1);
-                await refresh();
-                if (choice === "next_module") {
-                  onAdvanceModule?.();
-                }
+                void refresh();
+              }}
+              onComplete={() => {
+                setEpoch((e) => e + 1);
+                void refresh();
               }}
             />
           </div>

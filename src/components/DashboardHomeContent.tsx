@@ -7,6 +7,7 @@ import type { DashboardCourse } from "@/components/CourseDashboardList";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { ContinueStudyingCarousel } from "@/components/ContinueStudyingCarousel";
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
+import { ReviewDueBanner } from "@/components/ReviewDueBanner";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
 import type { StudyingCourse } from "@/lib/load-dashboard-courses";
 
@@ -38,6 +39,7 @@ export function DashboardHomeContent({
         <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
           <div className="grid gap-8 lg:grid-cols-[1fr_22rem] lg:items-start">
             <div className="min-w-0">
+              <ReviewDueBanner />
               <div className="relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/75 p-6 shadow-xl shadow-zinc-900/[0.06] ring-1 ring-white/60 backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-950/75 dark:shadow-black/30 dark:ring-zinc-600/40 sm:p-8">
             <div
               className="pointer-events-none absolute -right-24 -top-24 h-56 w-56 rounded-full bg-gradient-to-br from-brand/15 via-brand-soft/10 to-transparent blur-2xl dark:from-brand/25 dark:via-brand/5"

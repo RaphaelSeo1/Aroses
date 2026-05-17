@@ -3,6 +3,7 @@
 import { useDashboardAdminNav } from "@/components/DashboardAdminNavContext";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { LogoutButton } from "@/components/LogoutButton";
+import { useSrsDueCounts } from "@/lib/srs-due";
 
 /**
  * Same primary navigation on every authenticated screen. Home is your workspace (`/`).
@@ -18,6 +19,8 @@ export function HeaderNavLoggedIn({
 }) {
   const dashboardNav = useDashboardAdminNav();
   const adminHubHref = adminHubHrefProp ?? dashboardNav?.adminHubHref;
+  const { counts: dueCounts } = useSrsDueCounts(undefined, { enabled: true });
+  const dueTotal = dueCounts?.total ?? 0;
   return (
     <>
       <HeaderNavLink
@@ -45,6 +48,35 @@ export function HeaderNavLoggedIn({
         <span>Home</span>
       </HeaderNavLink>
       <HeaderNavLink href="/explore">Explore</HeaderNavLink>
+      <HeaderNavLink
+        href="/dashboard/review"
+        activeWhen={(p) => p.startsWith("/dashboard/review")}
+        className="relative inline-flex items-center gap-1.5"
+        title={dueTotal > 0 ? `${dueTotal} cards due for review` : "Spaced repetition review"}
+      >
+        <svg
+          className="h-4 w-4 shrink-0 opacity-80"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <path d="M12 2a8 8 0 0 0-8 8c0 3.5 2 6 5 7.5V21h6v-3.5c3-1.5 5-4 5-7.5a8 8 0 0 0-8-8Z" />
+          <path d="M9 21h6" />
+        </svg>
+        <span>Review</span>
+        {dueTotal > 0 ? (
+          <span
+            aria-label={`${dueTotal} cards due`}
+            className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-brand px-1.5 py-0.5 text-[10px] font-bold leading-none text-white tabular-nums"
+          >
+            {dueTotal > 99 ? "99+" : dueTotal}
+          </span>
+        ) : null}
+      </HeaderNavLink>
       <HeaderNavLink
         href="/dashboard/profile"
         activeWhen={(p) => p === "/dashboard/profile"}

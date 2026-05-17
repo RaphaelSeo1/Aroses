@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent,
 } from "react";
@@ -52,6 +53,15 @@ export function ModuleQuiz({
   const [finished, setFinished] = useState(false);
   const [savingExit, setSavingExit] = useState(false);
 
+  // Lock the question list for the lifetime of this session. The parent
+  // (CoursePlayer) bumps a `key` on quizSessionEpoch, so a new session gives
+  // us a new component instance with a fresh snapshot. This prevents the
+  // session from being silently reshuffled by mid-quiz refetches of
+  // missed-question indices, which used to swap the current question out
+  // from under the learner the moment they answered.
+  const sessionItemsRef = useRef(items);
+  const sessionItems = sessionItemsRef.current;
+
   /** Multiple choice */
   const [mcSelected, setMcSelected] = useState<number | null>(null);
   const [mcRevealed, setMcRevealed] = useState(false);
@@ -65,21 +75,27 @@ export function ModuleQuiz({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [continueReady, setContinueReady] = useState(false);
 
-  const slot = items[index];
+  const slot = sessionItems[index];
   const q = slot?.question;
   const originalQuizIndex = slot?.originalIndex ?? index;
-  const total = items.length;
+  const total = sessionItems.length;
   const isLast = index === total - 1;
   const isMc = q ? isQuizMcq(q) : false;
 
   /** Fresh permutation of A–D each question / session (not taken from stored JSON order). */
   const displayMcq = useMemo(() => {
-    const slot = items[index];
+    const slot = sessionItems[index];
     const slotQ = slot?.question;
     if (!slotQ || !isQuizMcq(slotQ)) return null;
     return shuffleMcqChoices(slotQ);
-  }, [items, index, shuffleEpoch]);
+    // sessionItems is locked at mount, so it is intentionally not a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index, shuffleEpoch]);
 
+  // Reset transient per-question UI when (and only when) the learner
+  // advances to a new question. Do NOT also key this on originalQuizIndex —
+  // if some prop re-render produced a different slot at the same index we
+  // would clobber the feedback panel mid-read.
   useEffect(() => {
     setMcSelected(null);
     setMcRevealed(false);
@@ -89,7 +105,7 @@ export function ModuleQuiz({
     setFrGraded(false);
     setFrCorrect(false);
     setSubmitError(null);
-  }, [index, originalQuizIndex]);
+  }, [index]);
 
   useEffect(() => {
     const feedbackVisible = mcRevealed || frGraded;
@@ -100,7 +116,7 @@ export function ModuleQuiz({
 
   const recordMcAttempt = useCallback(
     async (quizQuestionIndex: number, choice: number, isCorrect: boolean) => {
-      const slot = items[index];
+      const slot = sessionItems[index];
       const pid = slot?.personalItemId;
       const bankMaterialId = slot?.attemptMaterialId ?? materialId;
       const bankModuleId = slot?.attemptModuleId ?? moduleId;
@@ -130,12 +146,12 @@ export function ModuleQuiz({
         /* non-blocking */
       }
     },
-    [materialId, moduleId, items, index, onAttemptRecorded]
+    [materialId, moduleId, sessionItems, index, onAttemptRecorded]
   );
 
   const recordFreeAttempt = useCallback(
     async (quizQuestionIndex: number, isCorrect: boolean) => {
-      const slot = items[index];
+      const slot = sessionItems[index];
       const pid = slot?.personalItemId;
       const bankMaterialId = slot?.attemptMaterialId ?? materialId;
       const bankModuleId = slot?.attemptModuleId ?? moduleId;
@@ -165,7 +181,7 @@ export function ModuleQuiz({
         /* non-blocking */
       }
     },
-    [materialId, moduleId, items, index, onAttemptRecorded]
+    [materialId, moduleId, sessionItems, index, onAttemptRecorded]
   );
 
   const onMcChoose = useCallback(
@@ -211,7 +227,7 @@ export function ModuleQuiz({
     setSubmitError(null);
     try {
       const gradeMaterialId =
-        items[index]?.attemptMaterialId ?? materialId;
+        sessionItems[index]?.attemptMaterialId ?? materialId;
       const res = await fetch("/api/quiz-grade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -256,7 +272,7 @@ export function ModuleQuiz({
     materialId,
     originalQuizIndex,
     recordFreeAttempt,
-    items,
+    sessionItems,
     index,
   ]);
 
@@ -393,9 +409,11 @@ export function ModuleQuiz({
   return (
     <div className="space-y-6">
       <p className="rounded-xl border border-brand-border bg-brand-blush/80 px-4 py-3 text-sm text-brand-ink dark:border-brand-border/50 dark:bg-brand-blush/8 dark:text-brand-blush">
-        <span className="font-semibold">Single pass:</span> answer each question
-        once. If you miss, you&apos;ll move on — missed questions are logged and
-        prioritized in your next run or in the review queue below the lessons.
+        <span className="font-semibold">Single pass:</span>
+        {" "}
+        answer each question once. If you miss, you&apos;ll move on — missed
+        questions are logged and prioritized in your next run or in the review
+        queue below the lessons.
       </p>
 
       <div className="flex items-center justify-between text-sm text-zinc-500">

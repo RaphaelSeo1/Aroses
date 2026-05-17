@@ -13,10 +13,10 @@ import {
 import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
 import { LessonNotesCapture } from "@/components/LessonNotesCapture";
-import { ModuleQuiz } from "@/components/ModuleQuiz";
 import { ModuleQuizReview } from "@/components/ModuleQuizReview";
 import { PersonalQuizSection } from "@/components/PersonalQuizSection";
-import { buildQuizSessionItems } from "@/lib/quiz-session";
+import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
+import { useSrsDueCounts } from "@/lib/srs-due";
 import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
 import { PracticeProgressPullTab } from "@/components/PracticeProgressPullTab";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
@@ -380,24 +380,15 @@ export function CoursePlayer({
 
   const moduleQuizBank = activeModule?.quiz ?? EMPTY_MODULE_QUIZ;
 
-  const quizSessionItems = useMemo(
-    () =>
-      mode === "quiz" && practiceTab === "module" && activeModule
-        ? buildQuizSessionItems(
-            moduleQuizBank,
-            missedQuizIndices,
-            quizSessionEpoch
-          )
-        : [],
-    [
-      mode,
-      practiceTab,
-      activeModule,
-      moduleQuizBank,
-      missedQuizIndices,
-      quizSessionEpoch,
-    ]
-  );
+  // Live due-count for this material so the Start button can advertise
+  // pending review work.
+  const { counts: dueCounts } = useSrsDueCounts(materialId, {
+    enabled: mode === "quiz",
+    refreshKey: reviewRefreshEpoch,
+  });
+  const dueForThisMaterial =
+    dueCounts?.byMaterial.find((m) => m.materialId === materialId) ??
+    (dueCounts ? { module: 0, personal: 0, total: 0 } : null);
 
   const moduleQuizPageHref = useMemo(
     () =>
@@ -1520,14 +1511,24 @@ export function CoursePlayer({
                               ? "Finish your focus quiz first"
                               : undefined
                         }
-                        className="mt-6 inline-flex items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
+                        className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
                       >
-                        Start module quiz
+                        {dueForThisMaterial && dueForThisMaterial.module > 0
+                          ? `Review ${dueForThisMaterial.module} due card${dueForThisMaterial.module === 1 ? "" : "s"}`
+                          : "Start module review"}
+                        {dueForThisMaterial && dueForThisMaterial.module > 0 ? (
+                          <span className="inline-flex items-center justify-center rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums">
+                            {dueForThisMaterial.module}
+                          </span>
+                        ) : null}
                       </button>
                     ) : (
                       <div
                         id="module-quiz-run"
-                        className="mt-8 rounded-2xl border border-zinc-200 bg-zinc-50/50 p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/30 sm:p-7"
+                        // `lg:pr-72` reserves clearance on large screens so
+                        // the floating voice-tutor dock (fixed bottom-right,
+                        // ~16rem wide) never overlaps the review UI.
+                        className="mt-8 rounded-2xl border border-zinc-200 bg-zinc-50/50 p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/30 sm:p-7 lg:pr-72"
                       >
                         <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200/80 pb-5 dark:border-zinc-800">
                           <div className="min-w-0">
@@ -1546,33 +1547,28 @@ export function CoursePlayer({
                             ← Back to overview
                           </button>
                         </div>
-                        <ModuleQuiz
+                        <SrsReviewLauncher
                           key={`${activeModule.id}-${quizSessionEpoch}`}
+                          scope="module"
                           materialId={materialId}
                           moduleId={activeModule.id}
-                          items={quizSessionItems}
-                          shuffleEpoch={quizSessionEpoch}
-                          hasNextModule={hasNextModule}
-                          nextMaterialFileName={nextMaterialInfo?.fileName}
-                          onAttemptRecorded={bumpReviewRefresh}
-                          onPassFinished={handleQuizPassFinished}
-                          onCompleteQuiz={(choice) =>
-                            completeModuleOnServer(activeModule.id, {
-                              advanceToNextModule: choice === "next_module",
-                            })
-                          }
-                          onNextMaterial={
-                            nextMaterialInfo
-                              ? () => {
-                                  const q = `?${buildStudySearchParams(
-                                    nextMaterialInfo.materialId,
-                                    nextMaterialInfo.moduleId,
-                                    learnMode
-                                  )}`;
-                                  router.push(`${studyBase}${q}`);
-                                }
-                              : undefined
-                          }
+                          sessionKey={`module-${materialId}-${activeModule.id}`}
+                          heading="Module review"
+                          onExit={() => {
+                            setQuizOpen(false);
+                            bumpReviewRefresh();
+                          }}
+                          onComplete={() => {
+                            // Fire-and-forget: refresh review/progress state,
+                            // and mark the module complete if the learner
+                            // finished the deck. The SRS card scheduling has
+                            // already happened on the server.
+                            bumpReviewRefresh();
+                            handleQuizPassFinished?.();
+                            void completeModuleOnServer(activeModule.id, {
+                              advanceToNextModule: false,
+                            });
+                          }}
                         />
                       </div>
                     )}
