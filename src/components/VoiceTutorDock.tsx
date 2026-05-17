@@ -21,7 +21,7 @@ import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import { playMpegFromResponse } from "@/lib/voice-tutor/play-mpeg-from-response";
 import type { StudyChatTurn } from "@/types/study-chat";
 
-type InputMode = "hold" | "tap" | "live";
+type InputMode = "hold" | "live";
 
 type LivePhase = "off" | "listening" | "recording" | "thinking" | "speaking";
 
@@ -229,7 +229,6 @@ export function VoiceTutorDock({
 }: Props) {
   const router = useRouter();
   const [inputMode, setInputMode] = useState<InputMode>("hold");
-  const [tapRecording, setTapRecording] = useState(false);
   const [holdRecording, setHoldRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1566,7 +1565,9 @@ export function VoiceTutorDock({
     } catch {
       liveModeRef.current = false;
       setLivePhase("off");
-      setError((prev) => prev || "Microphone permission is required for live mode.");
+      setError(
+        (prev) => prev || "Microphone permission is required for live mode."
+      );
       setInputMode("hold");
     }
   }, [ensureStream, setLivePhase, startDeepgramLive]);
@@ -1704,7 +1705,7 @@ export function VoiceTutorDock({
     "flex min-w-[11rem] items-center justify-center gap-2 rounded-2xl border-2 px-5 py-3 text-sm font-semibold shadow-xl transition disabled:opacity-60 " +
     ((inputMode === "live"
       ? livePhase === "recording" || livePhase === "thinking"
-      : tapRecording || holdRecording || busy)
+      : holdRecording || busy)
       ? "border-rose-400 bg-rose-50 text-rose-900 dark:border-rose-700 dark:bg-rose-950/50 dark:text-rose-100 "
       : "border-zinc-200 bg-white text-zinc-900 hover:border-brand hover:text-brand dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:border-brand-soft dark:hover:text-brand-soft ") +
     (inputMode === "live" && livePhase === "recording"
@@ -1757,44 +1758,6 @@ export function VoiceTutorDock({
     },
     [cleanupRecorder, finalizeBlob, inputMode, runPipeline]
   );
-
-  const onTapMic = useCallback(async () => {
-    if (inputMode !== "tap" || busy) return;
-    if (!tapRecording) {
-      hasInteractedRef.current = true;
-      setTapRecording(true);
-      setError(null);
-      try {
-        const p = startRecording();
-        startPromiseRef.current = p;
-        await p;
-      } catch {
-        setTapRecording(false);
-        setError("Microphone permission is required.");
-        await cleanupRecorder();
-      }
-      return;
-    }
-
-    setTapRecording(false);
-    try {
-      await startPromiseRef.current;
-    } catch {
-      await cleanupRecorder();
-      return;
-    }
-    const blob = await finalizeBlob();
-    await cleanupRecorder();
-    await runPipeline(blob);
-  }, [
-    busy,
-    cleanupRecorder,
-    finalizeBlob,
-    inputMode,
-    runPipeline,
-    startRecording,
-    tapRecording,
-  ]);
 
   // ---------- "M" hotkey (Hold mode only) ----------
   // Press-and-hold `M` on the keyboard to record without needing to
@@ -1943,31 +1906,18 @@ export function VoiceTutorDock({
             type="button"
             onClick={() => {
               void cleanupRecorder();
-              setTapRecording(false);
               setHoldRecording(false);
               setInputMode("hold");
             }}
             className={modeButtonClass(inputMode === "hold")}
+            title="Hold the mic button or press & hold M to talk"
           >
-            Hold
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              void cleanupRecorder();
-              setTapRecording(false);
-              setHoldRecording(false);
-              setInputMode("tap");
-            }}
-            className={modeButtonClass(inputMode === "tap")}
-          >
-            Tap
+            Hold M
           </button>
           <button
             type="button"
             onClick={() => {
               hasInteractedRef.current = true;
-              setTapRecording(false);
               setHoldRecording(false);
               setInputMode("live");
             }}
@@ -2059,7 +2009,7 @@ export function VoiceTutorDock({
             phase={
               inputMode === "live"
                 ? livePhase
-                : holdRecording || tapRecording
+                : holdRecording
                   ? "recording"
                   : busy
                     ? "speaking"
@@ -2117,28 +2067,15 @@ export function VoiceTutorDock({
           type="button"
           disabled={busy}
           aria-busy={busy}
-          aria-pressed={inputMode === "hold" ? holdRecording : tapRecording}
-          onPointerDown={inputMode === "hold" ? onPointerDownHold : undefined}
-          onPointerUp={inputMode === "hold" ? onPointerUpHold : undefined}
-          onPointerCancel={
-            inputMode === "hold" ? onPointerUpHold : undefined
-          }
-          onPointerLeave={
-            inputMode === "hold"
-              ? (e) => {
-                  if (e.buttons === 0) void onPointerUpHold(e);
-                }
-              : undefined
-          }
-          onClick={inputMode === "tap" ? () => void onTapMic() : undefined}
+          aria-pressed={holdRecording}
+          onPointerDown={onPointerDownHold}
+          onPointerUp={onPointerUpHold}
+          onPointerCancel={onPointerUpHold}
+          onPointerLeave={(e) => {
+            if (e.buttons === 0) void onPointerUpHold(e);
+          }}
           className={micButtonClass}
-          title={
-            inputMode === "hold"
-              ? "Hold the button (or press & hold M) — release to send"
-              : tapRecording
-                ? "Tap again to send"
-                : "Tap to start recording"
-          }
+          title="Hold the button (or press & hold M) — release to send"
         >
           {busy ? (
             <>
@@ -2148,19 +2085,15 @@ export function VoiceTutorDock({
               />
               Speaking…
             </>
-          ) : inputMode === "tap" && tapRecording ? (
-            <>Recording… tap to send</>
-          ) : inputMode === "hold" && holdRecording ? (
+          ) : holdRecording ? (
             <>Listening…</>
-          ) : inputMode === "hold" ? (
+          ) : (
             <>
               Voice
               <kbd className="ml-1 hidden rounded border border-zinc-300 bg-zinc-100 px-1 text-[10px] font-semibold text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 sm:inline">
                 hold M
               </kbd>
             </>
-          ) : (
-            <>Voice</>
           )}
         </button>
       )}
@@ -2195,11 +2128,9 @@ export function VoiceTutorDock({
         <p className="max-w-[14rem] text-[10px] leading-snug text-zinc-400 dark:text-zinc-500">
           {inputMode === "hold"
             ? "Hold the button and speak — Rose will reply when you let go."
-            : inputMode === "tap"
-              ? "Tap to start speaking, tap again to send."
-              : livePhase === "off"
-                ? "Starting up…"
-                : "Listening — just start talking to Rose."}
+            : livePhase === "off"
+              ? "Starting up…"
+              : "Listening — just start talking to Rose."}
         </p>
       )}
       </div>

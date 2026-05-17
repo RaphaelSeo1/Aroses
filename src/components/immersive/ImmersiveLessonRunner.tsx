@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatedWaveform } from "@/components/immersive/AnimatedWaveform";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { ImmersiveShell } from "@/components/immersive/ImmersiveShell";
+import { LessonPlanLoading } from "@/components/immersive/LessonPlanLoading";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
 import type { CourseModule, CoursePayload } from "@/types/course";
@@ -72,6 +73,12 @@ export function ImmersiveLessonRunner({
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(
     onboarding.interactionMode
   );
+
+  // Voice capture mode:
+  //   "push"  — student holds M (or the on-screen status pill) to talk
+  //   "live"  — mic auto-listens after each AI utterance; VAD endpoints
+  //             the recording when the student stops speaking
+  const [voiceMode, setVoiceMode] = useState<"push" | "live">("push");
 
   // ---- exit confirmation modal ----
   const [showExitMenu, setShowExitMenu] = useState(false);
@@ -306,17 +313,75 @@ export function ImmersiveLessonRunner({
     recordPromiseRef.current = voice.startRecording();
   }, [submitting, voice]);
 
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!voiceNotice) return;
+    const id = window.setTimeout(() => setVoiceNotice(null), 3500);
+    return () => window.clearTimeout(id);
+  }, [voiceNotice]);
+
   const finishVoiceAnswer = useCallback(async () => {
     if (!recordPromiseRef.current) return;
     await voice.stopRecording();
     const blob = await recordPromiseRef.current;
     recordPromiseRef.current = null;
-    if (!blob) return;
+    if (!blob) {
+      setVoiceNotice("Didn't catch any audio — try holding the mic a little longer.");
+      return;
+    }
     const text = await voice.transcribe(blob);
-    if (!text) return;
+    if (!text) {
+      setVoiceNotice("Couldn't make out what you said — try again a bit closer to the mic.");
+      return;
+    }
     setAnswerText(text);
     void submitAnswer(text);
   }, [submitAnswer, voice]);
+
+  // ----- global "hold M to talk" -----
+  // Listens at the window level so the student can talk from anywhere in
+  // the immersive view without focusing a button. Suppressed when typing
+  // in the textarea / other form fields, and when modifier keys are held
+  // (so M as part of ⌘M / Ctrl+M still works for the browser).
+  const mDownRef = useRef(false);
+  useEffect(() => {
+    if (interactionMode !== "voice") return;
+    if (voiceMode !== "push") return;
+
+    const isTextTarget = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el.isContentEditable
+      );
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "m" && e.key !== "M") return;
+      if (e.repeat) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTextTarget(e.target)) return;
+      e.preventDefault();
+      if (mDownRef.current) return;
+      mDownRef.current = true;
+      void startVoiceAnswer();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== "m" && e.key !== "M") return;
+      if (!mDownRef.current) return;
+      mDownRef.current = false;
+      void finishVoiceAnswer();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [finishVoiceAnswer, interactionMode, startVoiceAnswer, voiceMode]);
 
   // ----- barge-in handler -----
   // Fires when the VAD detects the student talking over the AI. We auto
@@ -339,6 +404,49 @@ export function ImmersiveLessonRunner({
   useEffect(() => {
     onBargeInRef.current = () => void handleBargeIn();
   }, [handleBargeIn]);
+
+  // ----- live mode: auto-listen after AI finishes speaking -----
+  // When live mode is on AND the AI has just stopped speaking AND we're
+  // not already capturing, kick off a silence-endpointed recording. This
+  // gives the conversational "they speak, you speak, repeat" feel without
+  // ever needing to press a key. Push mode skips this — the student
+  // controls the mic with M.
+  const liveCycleGuardRef = useRef(false);
+  useEffect(() => {
+    if (voiceMode !== "live") return;
+    if (interactionMode !== "voice") return;
+    if (phase !== "teaching") return;
+    if (voice.state.speaking) return;
+    if (voice.state.recording) return;
+    if (voice.state.transcribing) return;
+    if (submitting) return;
+    if (liveCycleGuardRef.current) return;
+    liveCycleGuardRef.current = true;
+    (async () => {
+      try {
+        const blob = await voice.recordUntilSilence();
+        if (!blob) return;
+        const text = await voice.transcribe(blob);
+        if (!text) return;
+        setAnswerText(text);
+        await submitAnswer(text);
+      } catch (e) {
+        console.error("[imm runner live mode]", e);
+      } finally {
+        liveCycleGuardRef.current = false;
+      }
+    })();
+  }, [
+    interactionMode,
+    phase,
+    submitAnswer,
+    submitting,
+    voice,
+    voice.state.recording,
+    voice.state.speaking,
+    voice.state.transcribing,
+    voiceMode,
+  ]);
 
   const resumeFromRecap = useCallback(() => {
     setPhase("loading-plan");
@@ -363,6 +471,39 @@ export function ImmersiveLessonRunner({
   // ----- top bar (always rendered) -----
   const topBar = (
     <div className="flex items-center gap-2">
+      {interactionMode === "voice" ? (
+        <div
+          className="flex items-center gap-0.5 rounded-full border border-white/50 bg-white/45 p-0.5 text-xs font-medium text-zinc-700 shadow-sm backdrop-blur-md"
+          role="group"
+          aria-label="Voice mic mode"
+          title="Choose how the mic listens"
+        >
+          <button
+            type="button"
+            onClick={() => setVoiceMode("push")}
+            aria-pressed={voiceMode === "push"}
+            className={
+              voiceMode === "push"
+                ? "rounded-full bg-zinc-900/90 px-3 py-1 text-white shadow-sm"
+                : "rounded-full px-3 py-1 text-zinc-700 hover:bg-white/60"
+            }
+          >
+            Hold M
+          </button>
+          <button
+            type="button"
+            onClick={() => setVoiceMode("live")}
+            aria-pressed={voiceMode === "live"}
+            className={
+              voiceMode === "live"
+                ? "rounded-full bg-zinc-900/90 px-3 py-1 text-white shadow-sm"
+                : "rounded-full px-3 py-1 text-zinc-700 hover:bg-white/60"
+            }
+          >
+            Live
+          </button>
+        </div>
+      ) : null}
       <button
         type="button"
         onClick={() =>
@@ -390,40 +531,36 @@ export function ImmersiveLessonRunner({
       ? "listening"
       : "idle";
 
-  // Subtle status pill above the composer for live mic states.
-  const liveHint = voice.state.autoCapturing
-    ? "Listening — I'll stop when you're done"
-    : voice.state.transcribing
+  // Subtle status pill above the composer. Surface mic state for live
+  // mode AND give a clear hint for push mode so the student knows the
+  // hold-M shortcut is available without having to read docs. Voice
+  // errors (e.g. empty transcription) take priority so silent failures
+  // can't happen.
+  const liveHint =
+    voiceNotice ??
+    (voice.state.transcribing
       ? "Transcribing…"
-      : null;
+      : voice.state.autoCapturing
+        ? "Listening — I'll stop when you're done"
+        : voice.state.recording
+          ? "Listening — release M (or the mic) to send"
+          : interactionMode === "voice" && voiceMode === "push"
+            ? "Hold M to talk · or hold the mic button"
+            : interactionMode === "voice" && voiceMode === "live"
+              ? "Live mode — just start speaking"
+              : null);
 
   // ---- branches that don't need the composer ----
   if (phase === "loading-session" || phase === "loading-plan") {
     return (
-      <ImmersiveShell
+      <LessonPlanLoading
+        courseTitle={course.title}
+        moduleIdx={Math.max(moduleIdx, 0)}
+        moduleCount={moduleCount}
+        moduleTitle={activeModule.title}
+        stage={phase === "loading-session" ? "session" : "plan"}
         topBar={topBar}
-        bottomBar={
-          <div className="flex justify-center">
-            <div className="h-16 w-full max-w-md">
-              <AnimatedWaveform mode="idle" />
-            </div>
-          </div>
-        }
-      >
-        <ProgressHeader
-          courseTitle={course.title}
-          moduleIdx={Math.max(moduleIdx, 0)}
-          moduleCount={moduleCount}
-          moduleTitle={activeModule.title}
-        />
-        <GlassPanel className="mt-8" tone="subtle" delayMs={100}>
-          <p className="text-center text-sm text-zinc-600">
-            {phase === "loading-session"
-              ? "Loading your tutor session…"
-              : "Tutor is building today's lesson plan…"}
-          </p>
-        </GlassPanel>
-      </ImmersiveShell>
+      />
     );
   }
 
@@ -630,6 +767,7 @@ export function ImmersiveLessonRunner({
           ) : null}
           <AnswerComposer
             interactionMode={interactionMode}
+            voiceMode={voiceMode}
             text={answerText}
             onTextChange={setAnswerText}
             onSubmitText={() => void submitAnswer(answerText)}
@@ -794,6 +932,7 @@ function ProgressHeader({
 
 function AnswerComposer({
   interactionMode,
+  voiceMode,
   text,
   onTextChange,
   onSubmitText,
@@ -805,6 +944,7 @@ function AnswerComposer({
   error,
 }: {
   interactionMode: InteractionMode;
+  voiceMode: "push" | "live";
   text: string;
   onTextChange: (v: string) => void;
   onSubmitText: () => void;
@@ -817,6 +957,10 @@ function AnswerComposer({
 }) {
   const canSubmit = text.trim().length >= 2 && !submitting;
   const busy = submitting || transcribing;
+  // In live mode the mic is handled by the auto-listen effect; the manual
+  // hold-to-talk button only makes sense in push mode. We still keep the
+  // textarea so the student can fall back to typing whenever they like.
+  const showMicButton = interactionMode === "voice" && voiceMode === "push";
   return (
     <div className="rounded-3xl border border-white/50 bg-white/55 p-3 shadow-[0_25px_60px_-25px_rgba(60,60,90,0.25)] ring-1 ring-white/50 backdrop-blur-2xl backdrop-saturate-150">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
@@ -832,7 +976,9 @@ function AnswerComposer({
           }}
           placeholder={
             interactionMode === "voice"
-              ? "Speak or type your answer…"
+              ? voiceMode === "live"
+                ? "Speak whenever — or type here…"
+                : "Hold M (or the mic) to speak · or type here…"
               : "Type your answer (⌘↵ to submit)…"
           }
           className="block w-full flex-1 resize-none rounded-2xl border border-white/50 bg-white/60 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-500 focus:border-fuchsia-300 focus:bg-white/80 focus:outline-none focus:ring-2 focus:ring-fuchsia-200/60"
@@ -846,27 +992,31 @@ function AnswerComposer({
           >
             {submitting ? "Sending…" : "Submit"}
           </button>
-          <button
-            type="button"
-            disabled={busy}
-            onMouseDown={onMicDown}
-            onMouseUp={onMicUp}
-            onMouseLeave={recording ? onMicUp : undefined}
-            onTouchStart={onMicDown}
-            onTouchEnd={onMicUp}
-            className={
-              recording
-                ? "flex-1 rounded-2xl bg-rose-500/90 px-4 py-2 text-sm font-semibold text-white shadow-lg sm:flex-none"
-                : "flex-1 rounded-2xl border border-white/50 bg-white/60 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-white/80 disabled:opacity-50 sm:flex-none"
-            }
-            title={recording ? "Release to send" : "Hold to talk"}
-          >
-            {transcribing
-              ? "Transcribing…"
-              : recording
-                ? "● Release"
-                : "🎤 Hold to talk"}
-          </button>
+          {showMicButton ? (
+            <button
+              type="button"
+              disabled={busy}
+              onMouseDown={onMicDown}
+              onMouseUp={onMicUp}
+              onMouseLeave={recording ? onMicUp : undefined}
+              onTouchStart={onMicDown}
+              onTouchEnd={onMicUp}
+              className={
+                recording
+                  ? "flex-1 rounded-2xl bg-rose-500/90 px-4 py-2 text-sm font-semibold text-white shadow-lg sm:flex-none"
+                  : "flex-1 rounded-2xl border border-white/50 bg-white/60 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-white/80 disabled:opacity-50 sm:flex-none"
+              }
+              title={
+                recording ? "Release to send" : "Hold to talk (or press & hold M)"
+              }
+            >
+              {transcribing
+                ? "Transcribing…"
+                : recording
+                  ? "● Release"
+                  : "🎤 Hold to talk"}
+            </button>
+          ) : null}
         </div>
       </div>
       {error ? (

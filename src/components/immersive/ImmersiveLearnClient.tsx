@@ -51,17 +51,20 @@ export function ImmersiveLearnClient({
     | "runner"
     | "transitioning-to-free";
 
-  // Returning users (onboarding done, last mode = mentored) skip the welcome
-  // ritual and drop straight into the lesson runner. `?intro=1` is the
-  // escape hatch — append it to the URL to force the picker (e.g. when the
-  // student explicitly wants to switch modes mid-course).
+  // Pressing "Start learning" should drop the student straight into the
+  // mentored experience — no welcome ritual, no mode choice. The picker
+  // only renders when the URL carries `?intro=1` (e.g. the student wants
+  // to revisit the welcome / explicitly re-pick a mode). Free Exploration
+  // has its own entry via the "Open study room" CTA on the course page,
+  // or via the toggle inside the runner's Exit menu.
   const forceIntro = searchParams?.get("intro") === "1";
-  const canSkipPicker =
-    !forceIntro &&
-    Boolean(initialOnboarding?.completedAt) &&
-    initialMode === "mentored";
+  const initialStage: Stage = forceIntro
+    ? "picker"
+    : initialOnboarding?.completedAt
+      ? "runner"
+      : "onboarding";
 
-  const [stage, setStage] = useState<Stage>(canSkipPicker ? "runner" : "picker");
+  const [stage, setStage] = useState<Stage>(initialStage);
   const [activeModuleId, setActiveModuleId] = useState<number>(initialModuleId);
   const [onboarding, setOnboarding] = useState<MentoredOnboardingRecord | null>(
     initialOnboarding
