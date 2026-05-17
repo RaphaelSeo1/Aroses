@@ -1525,10 +1525,7 @@ export function CoursePlayer({
                     ) : (
                       <div
                         id="module-quiz-run"
-                        // `lg:pr-72` reserves clearance on large screens so
-                        // the floating voice-tutor dock (fixed bottom-right,
-                        // ~16rem wide) never overlaps the review UI.
-                        className="mt-8 rounded-2xl border border-zinc-200 bg-zinc-50/50 p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/30 sm:p-7 lg:pr-72"
+                        className="mt-8 rounded-2xl border border-zinc-200 bg-zinc-50/50 p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/30 sm:p-7"
                       >
                         <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200/80 pb-5 dark:border-zinc-800">
                           <div className="min-w-0">

@@ -647,10 +647,7 @@ export function PersonalQuizSection({
             ) : null}
           </button>
         ) : (
-          // `lg:pr-72` reserves clearance on large screens so the floating
-          // voice-tutor dock (fixed bottom-right) never overlaps the
-          // review UI.
-          <div className="lg:pr-72">
+          <div>
             <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 pb-4 dark:border-zinc-900">
               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
                 Focus quiz run
