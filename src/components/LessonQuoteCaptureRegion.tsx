@@ -303,7 +303,9 @@ function wrapTextRange(
   mark.style.borderRadius = "0.2rem";
   mark.style.padding = "0 0.08em";
   mark.style.boxDecorationBreak = "clone";
-  mark.style.webkitBoxDecorationBreak = "clone";
+  // `webkitBoxDecorationBreak` isn't in the standard CSSStyleDeclaration
+  // type. Set via setProperty to stay strict-TS compatible.
+  mark.style.setProperty("-webkit-box-decoration-break", "clone");
 
   try {
     range.surroundContents(mark);
