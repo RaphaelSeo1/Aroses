@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { buildResumeCourseHref } from "@/lib/dashboard/resume-course-href";
+import type { CourseMode } from "@/types/mentored";
 
 type RecentPractice = {
   courseId: string;
+  materialId: string;
   title: string;
   answeredAt: string;
   correctLast10: number;
@@ -11,6 +14,12 @@ type RecentPractice = {
   modulesCompleted: number;
   modulesTotal: number;
   isExploreLearner: boolean;
+  /**
+   * Drives the "Jump back in" target so the student returns to the
+   * experience they were last using — Mentored Learning or Free
+   * Exploration — at the lesson they left off on.
+   */
+  lastUsedMode: CourseMode;
 };
 
 function weekdayLabelsLast7(): { key: string; label: string }[] {
@@ -145,9 +154,14 @@ export function HomeRightSidebar({
                   : "—";
               const progress =
                 r.modulesTotal > 0 ? `${r.modulesCompleted}/${r.modulesTotal}` : null;
-              const href = r.isExploreLearner
-                ? `/explore/${r.courseId}/study?mode=learn`
-                : `/dashboard/courses/${r.courseId}/study?mode=learn`;
+              // Mirror the Continue Studying card — route to the
+              // experience the student last used for THIS course rather
+              // than always sending them to the reading view.
+              const href = buildResumeCourseHref({
+                courseId: r.courseId,
+                lastUsedMode: r.lastUsedMode,
+                isExploreLearner: r.isExploreLearner,
+              });
               return (
                 <li
                   key={r.courseId}

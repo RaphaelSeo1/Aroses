@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { buildResumeCourseHref } from "@/lib/dashboard/resume-course-href";
+import type { CourseMode } from "@/types/mentored";
 
 type Entry = {
   courseId: string;
+  materialId: string;
   title: string;
   answeredAt: string;
   correctLast10: number;
@@ -11,6 +14,14 @@ type Entry = {
   modulesCompleted: number;
   modulesTotal: number;
   isExploreLearner: boolean;
+  /**
+   * Drives the "Open" button target. "mentored" lands the student on
+   * the immersive AI tutor at the lesson they left off on; "free" lands
+   * them on the reading view. Resolved server-side from
+   * `user_course_mode_prefs` (default mentored for never-opened
+   * courses).
+   */
+  lastUsedMode: CourseMode;
 };
 
 function clamp(n: number, min: number, max: number): number {
@@ -62,9 +73,15 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
             const progressPct = pct(e.modulesCompleted, e.modulesTotal);
             const score =
               e.totalLast10 > 0 ? `${e.correctLast10}/${e.totalLast10}` : "—";
-            const href = e.isExploreLearner
-              ? `/explore/${e.courseId}/study?mode=learn`
-              : `/dashboard/courses/${e.courseId}/study?mode=learn`;
+            // Route to the experience the student last used — Mentored
+            // Learning OR Free Exploration — instead of always landing
+            // them on the reading view. New / never-opened courses
+            // default to Mentored, the flagship experience.
+            const href = buildResumeCourseHref({
+              courseId: e.courseId,
+              lastUsedMode: e.lastUsedMode,
+              isExploreLearner: e.isExploreLearner,
+            });
 
             const detailsHref = e.isExploreLearner
               ? `/explore/${e.courseId}`

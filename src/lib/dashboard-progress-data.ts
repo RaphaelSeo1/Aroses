@@ -5,6 +5,7 @@ import {
   type CourseLearningSummary,
   type GlobalLearningTotals,
 } from "@/lib/learning-stats";
+import type { CourseMode } from "@/types/mentored";
 
 export type DashboardProgressPayload = {
   hasCourses: boolean;
@@ -14,6 +15,13 @@ export type DashboardProgressPayload = {
   dayLabels: string[];
   recentPractice: {
     courseId: string;
+    /**
+     * Most-recently-practiced material in this course. We carry it so the
+     * home page can deep-link straight back into the right route (Mentored
+     * `/learn` or Free Exploration `/study`) for the right upload, not
+     * just the first one.
+     */
+    materialId: string;
     title: string;
     answeredAt: string;
     correctLast10: number;
@@ -21,6 +29,14 @@ export type DashboardProgressPayload = {
     modulesCompleted: number;
     modulesTotal: number;
     isExploreLearner: boolean;
+    /**
+     * Which experience the student last used for this material. New
+     * courses default to `mentored` per the migration; the row is
+     * written when they enter Mentored Learning or flip the in-course
+     * Mentored/Free toggle. The home page reads this to drive the
+     * "Open" / "Jump back in" link target.
+     */
+    lastUsedMode: CourseMode;
   }[];
 };
 
@@ -213,6 +229,13 @@ export async function loadDashboardProgress(
     string,
     {
       courseId: string;
+      /**
+       * material_id of the FIRST attempt we see for this course in the
+       * recent-attempts list (which is ordered DESC by answered_at), so
+       * it's the most-recently-practiced material for that course. We
+       * use it as the key for the per-course Mentored/Free mode lookup.
+       */
+      materialId: string;
       title: string;
       answeredAt: string;
       correctLast10: number;
@@ -227,6 +250,7 @@ export async function loadDashboardProgress(
     const existing = recentPracticeByCourse.get(courseId);
     const base = existing ?? {
       courseId,
+      materialId: att.material_id,
       title,
       answeredAt: att.answered_at,
       correctLast10: 0,
@@ -259,20 +283,53 @@ export async function loadDashboardProgress(
     summaryByCourseId.set(s.courseId, s);
   }
 
-  const recentPractice = [...recentPracticeByCourse.values()]
-    .sort(
-      (a, b) => new Date(b.answeredAt).getTime() - new Date(a.answeredAt).getTime()
-    )
-    .slice(0, 8)
-    .map((r) => {
-      const s = summaryByCourseId.get(r.courseId);
-      return {
-        ...r,
-        modulesCompleted: s?.modulesCompleted ?? 0,
-        modulesTotal: s?.modulesTotal ?? 0,
-        isExploreLearner: Boolean(s?.isExploreLearner),
-      };
-    });
+  const sortedRecent = [...recentPracticeByCourse.values()].sort(
+    (a, b) =>
+      new Date(b.answeredAt).getTime() - new Date(a.answeredAt).getTime()
+  );
+
+  // Per-(user, material) "lastUsedMode" — drives where the home page
+  // "Open" / "Jump back in" links send the student. New rows default to
+  // 'mentored' at the SQL level; rows are written when the student
+  // enters Mentored Learning or flips the in-course mode toggle. We
+  // batch-load just for the materials that appear in the carousel,
+  // not every course they own — keeps this query bounded.
+  const recentMaterialIdsForMode = Array.from(
+    new Set(sortedRecent.slice(0, 8).map((r) => r.materialId))
+  );
+  const modeByMaterialId = new Map<string, CourseMode>();
+  if (recentMaterialIdsForMode.length > 0) {
+    const { data: modeRows, error: modeErr } = await supabase
+      .from("user_course_mode_prefs")
+      .select("material_id, mode")
+      .eq("user_id", ownerUserId)
+      .in("material_id", recentMaterialIdsForMode);
+    if (modeErr) {
+      console.error("[dashboard-progress mode prefs]", modeErr);
+    }
+    for (const row of modeRows ?? []) {
+      if (
+        typeof row.material_id === "string" &&
+        (row.mode === "mentored" || row.mode === "free")
+      ) {
+        modeByMaterialId.set(row.material_id, row.mode);
+      }
+    }
+  }
+
+  const recentPractice = sortedRecent.slice(0, 8).map((r) => {
+    const s = summaryByCourseId.get(r.courseId);
+    // First-time entry → Mentored, per spec ("flagship experience").
+    const lastUsedMode: CourseMode =
+      modeByMaterialId.get(r.materialId) ?? "mentored";
+    return {
+      ...r,
+      modulesCompleted: s?.modulesCompleted ?? 0,
+      modulesTotal: s?.modulesTotal ?? 0,
+      isExploreLearner: Boolean(s?.isExploreLearner),
+      lastUsedMode,
+    };
+  });
 
   const activityBuckets = bucketAttemptsLastDays(
     (recentAnswered ?? []).map((r) => r.answered_at),
