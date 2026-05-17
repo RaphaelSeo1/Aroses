@@ -11,12 +11,15 @@ import {
   useState,
 } from "react";
 import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
+import { CourseModeToggle } from "@/components/CourseModeToggle";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
 import { LessonNotesCapture } from "@/components/LessonNotesCapture";
+import { MentoredLearningEntry } from "@/components/MentoredLearningEntry";
 import { ModuleQuizReview } from "@/components/ModuleQuizReview";
 import { PersonalQuizSection } from "@/components/PersonalQuizSection";
 import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
 import { useSrsDueCounts } from "@/lib/srs-due";
+import { useCourseMode } from "@/lib/mentored/use-course-mode";
 import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
 import { PracticeProgressPullTab } from "@/components/PracticeProgressPullTab";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
@@ -386,6 +389,11 @@ export function CoursePlayer({
     enabled: mode === "quiz",
     refreshKey: reviewRefreshEpoch,
   });
+
+  // Mentored Learning vs. Free Exploration toggle (Phase 1 of the
+  // Mentored Learning rollout). New courses default to Mentored.
+  const { mode: courseMode, setMode: setCourseMode } =
+    useCourseMode(materialId);
   const dueForThisMaterial =
     dueCounts?.byMaterial.find((m) => m.materialId === materialId) ??
     (dueCounts ? { module: 0, personal: 0, total: 0 } : null);
@@ -1193,6 +1201,27 @@ export function CoursePlayer({
           <AiStudyDisclaimer className="mb-6 sm:mb-8" />
           {mode === "lessons" ? (
             <>
+              <CourseModeToggle
+                mode={courseMode}
+                onChange={setCourseMode}
+                hint={
+                  courseMode === "mentored"
+                    ? "You can switch to Free Exploration any time without losing progress."
+                    : "Switch back to Mentored Learning whenever you want the AI to walk you through."
+                }
+              />
+              {courseMode === "mentored" ? (
+                <MentoredLearningEntry
+                  materialId={materialId}
+                  course={course}
+                  activeModule={activeModule}
+                  onSwitchToFree={() => setCourseMode("free")}
+                  onAdvanceModule={(nextModuleId) =>
+                    goToModule(materialId, nextModuleId)
+                  }
+                />
+              ) : (
+                <>
               <header className="border-b border-zinc-100 pb-8 dark:border-zinc-900">
                 <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
                   Module {activeModule.id}
@@ -1278,6 +1307,8 @@ export function CoursePlayer({
                   </Link>
                 </div>
               </div>
+                </>
+              )}
             </>
           ) : (
             <>
