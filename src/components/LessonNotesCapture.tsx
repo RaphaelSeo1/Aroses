@@ -222,6 +222,100 @@ export function LessonNotesCapture({
     setLoading(false);
   }, [materialId, moduleId, lessonIndex]);
 
+  /**
+   * Low-level persistence used by both the Save button and the auto-save
+   * triggered by chip removals. Accepts explicit values so callers can
+   * persist a *just-mutated* state without waiting for React to flush.
+   *
+   * Auto-save callers pass `silent=true` so we don't flash transient
+   * "Saved" messages on every chip click.
+   *
+   * When BOTH `h` and `n` end up empty AND we have an existing `noteId`,
+   * we DELETE the row outright instead of POSTing an empty note — that's
+   * how removing the last chip becomes "removed permanently."
+   */
+  const persistNote = useCallback(
+    async (h: string, n: string, silent = false) => {
+      setSaving(true);
+      if (!silent) setMessage(null);
+      try {
+        const trimmedH = h.trim();
+        const trimmedN = n.trim();
+
+        if (trimmedH.length === 0 && trimmedN.length === 0) {
+          if (noteId) {
+            const delRes = await fetch(
+              `/api/study-materials/${materialId}/lesson-notes?id=${encodeURIComponent(noteId)}`,
+              { method: "DELETE" }
+            );
+            if (delRes.ok) {
+              setNoteId(null);
+              if (!silent) setMessage("Removed.");
+            } else if (delRes.status === 401) {
+              setMessage("Sign in to save private notes for this lesson.");
+            } else if (!silent) {
+              setMessage("Could not remove this note.");
+            }
+          } else if (!silent) {
+            setMessage("Add a highlight or a note before saving.");
+          }
+          setSaving(false);
+          return;
+        }
+
+        const res = noteId
+          ? await fetch(`/api/study-materials/${materialId}/lesson-notes`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                id: noteId,
+                highlightExcerpt: trimmedH,
+                noteBody: trimmedN,
+              }),
+            })
+          : await fetch(`/api/study-materials/${materialId}/lesson-notes`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                moduleId,
+                lessonIndex,
+                highlightExcerpt: trimmedH,
+                noteBody: trimmedN,
+              }),
+            });
+
+        const j = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          setMessage("Sign in to save private notes for this lesson.");
+          setSaving(false);
+          return;
+        }
+        if (!res.ok) {
+          const err =
+            typeof j.error === "string" ? j.error : "Could not save notes.";
+          const hint =
+            typeof j.hint === "string" && j.hint.trim().length > 0
+              ? ` ${j.hint}`
+              : "";
+          setMessage(`${err}${hint}`);
+          setSaving(false);
+          return;
+        }
+        if (!noteId && j.note?.id) {
+          setNoteId(j.note.id as string);
+        }
+        if (!silent) {
+          setMessage("Saved — you can quiz this from the practice room.");
+          await load();
+        }
+      } catch {
+        setMessage("Network error.");
+      }
+      setSaving(false);
+    },
+    [load, materialId, moduleId, lessonIndex, noteId]
+  );
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -352,7 +446,9 @@ export function LessonNotesCapture({
     // re-highlight if needed; for now we restore the saved excerpt + note.
     setMessage("Restored — save to keep your previous notes.");
     setUndoState(null);
-  }, [undoState]);
+    // Persist the restored state immediately so undo also survives a reload.
+    void persistNote(undoState.highlight, undoState.noteBody, true);
+  }, [undoState, persistNote]);
 
   const removeChip = useCallback(
     (entry: { text: string; color?: LessonHighlightColor }) => {
@@ -360,21 +456,29 @@ export function LessonNotesCapture({
         highlight: highlightRef.current,
         noteBody: noteBodyRef.current,
       };
-      console.log("[notes] removing chip", entry);
-      setHighlight((prev) => removeHighlightEntry(prev, entry.text));
+      // Compute the next highlight content up front so we can both update
+      // state AND persist the same value without a render round-trip.
+      const nextHighlight = removeHighlightEntry(
+        highlightRef.current,
+        entry.text
+      );
+      setHighlight(nextHighlight);
       dispatchHighlightRemoveFromNotes({
         lessonIndex,
         text: entry.text,
         color: entry.color,
       });
-      setMessage("Removed highlight from notes and page — save to keep this.");
+      setMessage("Removed.");
       setUndoState({
         ...snapshot,
         label: "Undo remove highlight",
         expiresAt: Date.now() + UNDO_WINDOW_MS,
       });
+      // Persist immediately so removal survives a refresh. If both
+      // highlight and note end up empty, persistNote deletes the row.
+      void persistNote(nextHighlight, noteBodyRef.current, true);
     },
-    [lessonIndex]
+    [lessonIndex, persistNote]
   );
 
   const clearAllHighlights = useCallback(() => {
@@ -383,7 +487,6 @@ export function LessonNotesCapture({
       noteBody: noteBodyRef.current,
     };
     const parsed = parseHighlightEntries(highlightRef.current);
-    console.log("[notes] clearing all highlights", parsed.length);
     setHighlight("");
     for (const entry of parsed) {
       if (!entry.color) continue;
@@ -393,74 +496,18 @@ export function LessonNotesCapture({
         color: entry.color,
       });
     }
-    setMessage("Cleared all highlights — save to keep this.");
+    setMessage("Cleared.");
     setUndoState({
       ...snapshot,
       label: "Undo clear",
       expiresAt: Date.now() + UNDO_WINDOW_MS,
     });
-  }, [lessonIndex]);
+    void persistNote("", noteBodyRef.current, true);
+  }, [lessonIndex, persistNote]);
 
-  async function save() {
-    setSaving(true);
-    setMessage(null);
-    try {
-      const trimmedH = highlight.trim();
-      const trimmedN = noteBody.trim();
-      if (trimmedH.length === 0 && trimmedN.length === 0) {
-        setMessage("Add a highlight or a note before saving.");
-        setSaving(false);
-        return;
-      }
-
-      const res = noteId
-        ? await fetch(`/api/study-materials/${materialId}/lesson-notes`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              id: noteId,
-              highlightExcerpt: trimmedH,
-              noteBody: trimmedN,
-            }),
-          })
-        : await fetch(`/api/study-materials/${materialId}/lesson-notes`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              moduleId,
-              lessonIndex,
-              highlightExcerpt: trimmedH,
-              noteBody: trimmedN,
-            }),
-          });
-
-      const j = await res.json().catch(() => ({}));
-      if (res.status === 401) {
-        setMessage("Sign in to save private notes for this lesson.");
-        setSaving(false);
-        return;
-      }
-      if (!res.ok) {
-        const err =
-          typeof j.error === "string" ? j.error : "Could not save notes.";
-        const hint =
-          typeof j.hint === "string" && j.hint.trim().length > 0
-            ? ` ${j.hint}`
-            : "";
-        setMessage(`${err}${hint}`);
-        setSaving(false);
-        return;
-      }
-      if (!noteId && j.note?.id) {
-        setNoteId(j.note.id as string);
-      }
-      setMessage("Saved — you can quiz this from the practice room.");
-      await load();
-    } catch {
-      setMessage("Network error.");
-    }
-    setSaving(false);
-  }
+  const save = useCallback(async () => {
+    await persistNote(highlight, noteBody, false);
+  }, [highlight, noteBody, persistNote]);
 
   const highlightEntries = useMemo(
     () => parseHighlightEntries(highlight),
