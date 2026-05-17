@@ -125,14 +125,21 @@ export function AnimatedWaveform({
     );
   });
 
+  // Keep the glow filter inside the SVG box (`overflow: hidden`) and
+  // pin its filter region tight to the source area so it can't bleed
+  // into adjacent rows of the layout — that was making the bars look
+  // like they were crossing through the toggle/textarea below the
+  // dock's activity row.
   return (
-    <div className={`relative ${className}`}>
+    <div className={`relative overflow-hidden ${className}`}>
       <svg
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         width="100%"
         height="100%"
+        preserveAspectRatio="xMidYMid meet"
         aria-hidden
         className="block"
+        style={{ overflow: "hidden" }}
       >
         <defs>
           <linearGradient id="wf-grad" x1="0" y1="0" x2="1" y2="0">
@@ -140,8 +147,10 @@ export function AnimatedWaveform({
             <stop offset="55%" stopColor="#c084fc" />
             <stop offset="100%" stopColor="#818cf8" />
           </linearGradient>
-          <filter id="wf-glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="2.2" result="blur" />
+          {/* Tight filter region — just enough room for the blur without
+              spilling outside the SVG's own bounds. */}
+          <filter id="wf-glow" x="-5%" y="-5%" width="110%" height="110%">
+            <feGaussianBlur stdDeviation="1.6" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />
               <feMergeNode in="SourceGraphic" />

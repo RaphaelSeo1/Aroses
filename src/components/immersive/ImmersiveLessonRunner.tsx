@@ -94,6 +94,13 @@ export function ImmersiveLessonRunner({
   const lastSpokenChunkIdRef = useRef<string | null>(null);
   const recordPromiseRef = useRef<Promise<Blob | null> | null>(null);
 
+  // ---- session opening greeting ----
+  // Plays once per mount, the moment the runner has a session loaded.
+  // `greetingPlayed` gates the auto-speak-chunk effect so the chunk
+  // doesn't talk over the welcome line.
+  const [greetingPlayed, setGreetingPlayed] = useState(false);
+  const greetingFiredRef = useRef(false);
+
   // ----- load session -----
   const loadSession = useCallback(async () => {
     setPhase("loading-session");
@@ -193,16 +200,115 @@ export function ImmersiveLessonRunner({
   const moduleCount = course.modules.length;
   const moduleIdx = course.modules.findIndex((m) => m.id === activeModule.id);
 
+  // ----- session opening greeting (spoken + transcript) -----
+  //
+  // Plays once per page load. Picks a scenario from the loaded session:
+  //   - no history & first chunk of first module → "first_time"
+  //   - every module touched at least once       → "all_complete"
+  //   - anything else with any prior progress    → "returning"
+  //
+  // The greeting text is dropped into `tutorReply` so it appears in the
+  // transcript card (same place AI replies show), and the same string
+  // is sent through ElevenLabs so it plays out loud. The Mentored vs
+  // Free Exploration gate is implicit — this runner only mounts in
+  // Mentored mode.
+
+  useEffect(() => {
+    if (greetingFiredRef.current) return;
+    // Wait until either the teaching plan is loaded OR we have enough
+    // session info to render the welcome-back screen. Don't fire
+    // during loading-session / loading-plan / error.
+    const ready =
+      (phase === "teaching" && plan != null) ||
+      (phase === "welcome-back" && session != null) ||
+      (phase === "module-complete" && session != null);
+    if (!ready) return;
+    greetingFiredRef.current = true;
+
+    const history = session?.history ?? [];
+    const touchedModuleIds = new Set(history.map((h) => h.moduleId));
+    const allComplete =
+      moduleCount > 0 && touchedModuleIds.size >= moduleCount;
+    const hasProgress =
+      history.length > 0 || moduleIdx > 0 || chunkIdx > 0;
+    const scenario: "first_time" | "returning" | "all_complete" = allComplete
+      ? "all_complete"
+      : hasProgress
+        ? "returning"
+        : "first_time";
+
+    // Pull the most natural "last lesson title". Prefer the lesson
+    // mapped to the most recent history chunk; fall back to the
+    // concept name; fall back to the active module's title.
+    const lastHistory = history.length > 0 ? history[history.length - 1] : null;
+    const lastLessonTitle =
+      lastHistory?.concept ?? activeModule.title ?? undefined;
+    const firstLessonTitle =
+      activeModule.lessons[0]?.title ?? activeModule.title ?? undefined;
+
+    void (async () => {
+      let text = "";
+      try {
+        const res = await fetch("/api/mentored/greeting", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            materialId,
+            courseTitle: course.title,
+            courseDescription: course.description ?? undefined,
+            firstLessonTitle,
+            lastLessonTitle: scenario === "returning" ? lastLessonTitle : undefined,
+            scenario,
+          }),
+        });
+        if (res.ok) {
+          const body = (await res.json()) as { greeting?: string };
+          text = (body.greeting ?? "").trim();
+        }
+      } catch (e) {
+        console.error("[imm runner greeting fetch]", e);
+      }
+      if (!text) {
+        // Safe fallback — never leave the student in silence.
+        text =
+          scenario === "first_time"
+            ? `Welcome to ${course.title}. Ready to dive in?`
+            : scenario === "all_complete"
+              ? `Welcome back — looks like you've already worked through this whole course. Want to review anything specific?`
+              : lastLessonTitle
+                ? `Welcome back. Last time we were on "${lastLessonTitle}". Ready to keep going?`
+                : `Welcome back. Ready to keep going?`;
+      }
+
+      setTutorReply(text);
+      if (interactionMode === "voice") {
+        try {
+          await voice.speak(text);
+        } catch (e) {
+          console.error("[imm runner greeting speak]", e);
+        }
+      }
+      setGreetingPlayed(true);
+    })();
+    // We deliberately exclude `voice` / `course` / module-derived deps —
+    // this should fire EXACTLY once per mount based on initial readiness.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, plan, session]);
+
   // ----- auto-speak fresh chunk -----
+  // Held back until the greeting is done so the tutor doesn't talk over
+  // itself. Once the greeting finishes (or text mode skips it), this
+  // takes over and speaks the chunk's explanation + check question.
   useEffect(() => {
     if (phase !== "teaching") return;
     if (!chunk) return;
     if (interactionMode !== "voice") return;
+    if (!greetingPlayed) return;
     if (lastSpokenChunkIdRef.current === chunk.id) return;
     lastSpokenChunkIdRef.current = chunk.id;
     const text = `${chunk.explanation}\n\n${chunk.checkQuestion}`;
     void voice.speak(text);
-  }, [chunk, interactionMode, phase, voice]);
+  }, [chunk, interactionMode, phase, voice, greetingPlayed]);
 
   // ----- submit (streaming turn → sentence-streamed TTS) -----
   //
@@ -764,7 +870,12 @@ export function ImmersiveLessonRunner({
           </p>
           <p className="mt-3 text-base leading-relaxed text-zinc-800">
             <TypewriterText
-              text={session.lastRecap ?? "Welcome back."}
+              // Prefer the freshly-generated greeting once it lands —
+              // it's tailored to this session and matches the audio
+              // the student is hearing. Fall back to the saved recap
+              // (or a default) while we wait for the greeting fetch.
+              key={tutorReply ? "greeting" : "recap"}
+              text={tutorReply ?? session.lastRecap ?? "Welcome back."}
               wordIntervalMs={55}
             />
           </p>
@@ -827,8 +938,11 @@ export function ImmersiveLessonRunner({
             Nice — that wraps up &quot;{activeModule.title}&quot;
           </h3>
           <p className="mt-3 text-sm leading-relaxed text-zinc-700">
-            How are you feeling about what we just covered? Head into the next
-            section when you&apos;re ready.
+            {tutorReply ? (
+              <TypewriterText text={tutorReply} wordIntervalMs={55} />
+            ) : (
+              "How are you feeling about what we just covered? Head into the next section when you're ready."
+            )}
           </p>
           <div className="mt-5 flex flex-wrap gap-3">
             {hasNext ? (
@@ -891,19 +1005,22 @@ export function ImmersiveLessonRunner({
       bottomBar={
         <div className="immersive-dock border-t border-white/70 bg-white/85 shadow-[0_-12px_28px_-18px_rgba(60,60,90,0.20)] backdrop-blur-md">
           <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pt-3">
-            {/* Mini activity row: waveform + status pill. Stays mounted so
-                the waveform animation doesn't restart every time the
-                student hits the mic, but height collapses to 0 when
-                idle so the dock shrinks gracefully. */}
+            {/* Mini activity row above the controls. The waveform is a
+                FIXED-WIDTH, overflow-clipped slot — using flex-1 here
+                let it (and its glow filter) bleed across the toggle
+                and textarea below it. Status pill (Listening /
+                Transcribing / Thinking) sits to its right. The whole
+                row collapses to height 0 when idle so the dock isn't
+                taller than it needs to be. */}
             <div
               className={
                 voiceDockActive || liveHint
-                  ? "mb-1.5 flex items-center justify-between gap-3 transition-[height,opacity] duration-200"
+                  ? "mb-1.5 flex items-center justify-center gap-3 transition-[height,opacity] duration-200"
                   : "h-0 overflow-hidden opacity-0 transition-[height,opacity] duration-200"
               }
               aria-hidden={!voiceDockActive && !liveHint}
             >
-              <div className="h-6 w-44 flex-1 max-w-[18rem] opacity-90 sm:w-56">
+              <div className="h-5 w-32 shrink-0 overflow-hidden opacity-80">
                 <AnimatedWaveform mode={waveformMode} />
               </div>
               {liveHint ? (

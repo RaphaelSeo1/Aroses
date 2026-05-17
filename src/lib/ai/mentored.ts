@@ -514,7 +514,99 @@ export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
 }
 
 // ---------------------------------------------------------------------------
-// 4. Knowledge-level inference from the onboarding quiz score
+// 4. Session opening greeting — short, warm, conversational
+// ---------------------------------------------------------------------------
+
+export type SessionGreetingInput = {
+  /** Course title, used in the warm welcome. */
+  courseTitle: string;
+  /** Course one-liner. Optional — when missing we skip the "what we'll
+   *  cover" beat instead of inventing one. */
+  courseDescription?: string;
+  /** Title of the first lesson the student will hit on continuation —
+   *  used when we naturally transition into the lesson. */
+  firstLessonTitle?: string;
+  /** Where the student is in the course. Drives first-time vs returning
+   *  framing in the prompt. */
+  scenario: "first_time" | "returning" | "all_complete";
+  /** For returning users only — the title of the last lesson/concept
+   *  they actually worked on. Falls back to a generic "Welcome back"
+   *  framing in the prompt when missing. */
+  lastLessonTitle?: string;
+};
+
+const GREETING_SYSTEM = `You are Rose, a friendly, encouraging AI tutor inside a one-on-one Mentored Learning session. Generate a brief, warm GREETING for a student who just opened a course. Sound human and conversational, like a real tutor would when a student walks in. Do not use overly formal language. Do not list bullet points. Do not say "as an AI". Do not narrate what you'll do — just greet them.
+
+Hard constraints:
+- 2 to 3 sentences, max ~35 words.
+- One greeting line + one personalized line. Optionally one short follow-up question.
+- No markdown, no quotes around the output.
+- Use the course title verbatim if it fits naturally.
+- Vary phrasing — do not start with the same opener every time.
+- Never invent a "last lesson" if one wasn't given. If returning with no last lesson, just welcome them back without referencing a specific section.`;
+
+/**
+ * Generates the spoken greeting the AI tutor plays the moment the
+ * student opens Mentored Learning. Uses the fast Haiku model so it's
+ * ready within ~1s of session load.
+ */
+export async function generateSessionGreeting(
+  input: SessionGreetingInput
+): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+
+  const desc = input.courseDescription?.trim()
+    ? `\nCOURSE DESCRIPTION (use only if it fits naturally — do NOT recite verbatim):\n${input.courseDescription.trim().slice(0, 400)}`
+    : "\n(No course description available — do not mention course content specifics.)";
+
+  const scenarioBlock = (() => {
+    switch (input.scenario) {
+      case "first_time":
+        return `SCENARIO: First-time opening this course.
+Tone: welcoming, warm, "let's get started" energy. Optionally invite them to begin (e.g. "ready to dive in?"). Reference the course title.${input.firstLessonTitle ? `\n(First lesson coming up is "${input.firstLessonTitle}" — only mention it if it makes the greeting flow more naturally.)` : ""}`;
+      case "returning":
+        return `SCENARIO: Returning student — they've worked on this course before.
+Tone: "good to see you back" warmth.${
+          input.lastLessonTitle
+            ? `\nLAST LESSON THEY WORKED ON: "${input.lastLessonTitle}". Reference it briefly when asking if they want to keep going.`
+            : `\n(No last-lesson title available — just welcome them back and ask if they want to keep going. Do not invent a specific topic.)`
+        }`;
+      case "all_complete":
+        return `SCENARIO: The student has worked through every lesson in this course already.
+Tone: cheerful "look who's back, you finished it!" Warmly acknowledge the completion and ask if they want to review anything specific or quiz themselves. Do NOT reference an unfinished lesson.`;
+    }
+  })();
+
+  const user = `COURSE TITLE: ${input.courseTitle.slice(0, 200)}${desc}
+
+${scenarioBlock}
+
+Output ONLY the greeting text Rose should say out loud. No preamble, no closing tag, no quotes.`;
+
+  const anthropic = new Anthropic({ apiKey, timeout: 30_000, maxRetries: 0 });
+  const msg = await anthropic.messages.create({
+    model: FAST_MODEL,
+    max_tokens: 180,
+    temperature: 0.85,
+    system: GREETING_SYSTEM,
+    messages: [{ role: "user", content: user }],
+  });
+
+  const block = msg.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") {
+    throw new Error("Unexpected response from Claude");
+  }
+  const raw = block.text.trim().replace(/^["'`]+|["'`]+$/g, "");
+  if (!raw) {
+    throw new Error("Empty greeting from Claude");
+  }
+  // Safety cap — never let a runaway response play more than ~25s of speech.
+  return raw.length > 400 ? `${raw.slice(0, 400).trim()}…` : raw;
+}
+
+// ---------------------------------------------------------------------------
+// 5. Knowledge-level inference from the onboarding quiz score
 // ---------------------------------------------------------------------------
 
 export function inferKnowledgeLevel(scorePct: number): KnowledgeLevel {
