@@ -63,7 +63,10 @@ export default async function ExploreCoursePage({ params }: Props) {
     : exploreOutlineFromRpcPayload(outlineRaw);
 
   const isOwner = Boolean(user && user.id === course.user_id);
-  const studyHref = `/explore/${course.id}/study`;
+  // "Start learning" now lands the learner in Mentored Learning (immersive
+  // AI tutor) — the reading-mode entry is still available from the toggle
+  // inside the runner.
+  const studyHref = `/explore/${course.id}/learn`;
 
   const adminHubHref = adminHubHrefForSessionUser(user);
 
@@ -135,7 +138,7 @@ export default async function ExploreCoursePage({ params }: Props) {
               Start learning
             </Link>
             <p className="max-w-md text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
-              Full lessons, diagrams where available, and quizzes — opens in study mode.
+              Opens your AI tutor in Mentored Learning. Switch to reading mode anytime.
             </p>
           </div>
 

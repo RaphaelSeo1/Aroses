@@ -34,6 +34,7 @@ export function ImmersiveLearnClient({
   initialModuleId,
   initialOnboarding,
   initialMode,
+  surface = "dashboard",
 }: {
   courseId: string;
   materialId: string;
@@ -41,9 +42,26 @@ export function ImmersiveLearnClient({
   initialModuleId: number;
   initialOnboarding: MentoredOnboardingRecord | null;
   initialMode: CourseMode | null;
+  /**
+   * Where the runner was launched from. Determines the Free-Exploration
+   * / Exit destinations so an explore-side learner doesn't get bounced
+   * into a `/dashboard` URL that 404s for non-owners.
+   *   - "dashboard" → exit to `/dashboard/courses/[id]`, free to `/dashboard/.../study`
+   *   - "explore"   → exit to `/explore/[id]`,           free to `/explore/.../study`
+   */
+  surface?: "dashboard" | "explore";
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
+
+  const studyBase =
+    surface === "explore"
+      ? `/explore/${courseId}/study`
+      : `/dashboard/courses/${courseId}/study`;
+  const courseHomeHref =
+    surface === "explore"
+      ? `/explore/${courseId}`
+      : `/dashboard/courses/${courseId}`;
 
   type Stage =
     | "picker"
@@ -98,9 +116,7 @@ export function ImmersiveLearnClient({
         const qs = new URLSearchParams();
         qs.set("material", materialId);
         if (activeModuleId != null) qs.set("module", String(activeModuleId));
-        router.push(
-          `/dashboard/courses/${courseId}/study?${qs.toString()}`
-        );
+        router.push(`${studyBase}?${qs.toString()}`);
         return;
       }
       // Mentored — decide whether to onboard first.
@@ -112,25 +128,25 @@ export function ImmersiveLearnClient({
     },
     [
       activeModuleId,
-      courseId,
       materialId,
       onboarding?.completedAt,
       persistMode,
       router,
+      studyBase,
     ]
   );
 
   const onExit = useCallback(() => {
-    router.push(`/dashboard/courses/${courseId}`);
-  }, [courseId, router]);
+    router.push(courseHomeHref);
+  }, [courseHomeHref, router]);
 
   const onSwitchToFreeFromRunner = useCallback(() => {
     persistMode("free");
     const qs = new URLSearchParams();
     qs.set("material", materialId);
     if (activeModuleId != null) qs.set("module", String(activeModuleId));
-    router.push(`/dashboard/courses/${courseId}/study?${qs.toString()}`);
-  }, [activeModuleId, courseId, materialId, persistMode, router]);
+    router.push(`${studyBase}?${qs.toString()}`);
+  }, [activeModuleId, materialId, persistMode, router, studyBase]);
 
   // ----- stage rendering -----
   if (stage === "transitioning-to-free") {
