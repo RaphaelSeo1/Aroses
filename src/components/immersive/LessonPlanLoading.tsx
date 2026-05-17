@@ -80,8 +80,9 @@ export function LessonPlanLoading({
     <ImmersiveShell
       topBar={topBar}
       bottomBar={
-        <div className="flex justify-center">
-          <div className="h-16 w-full max-w-md">
+        // Slim decorative strip — no input controls during loading.
+        <div className="pointer-events-none flex justify-center pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
+          <div className="h-12 w-full max-w-md opacity-80">
             <AnimatedWaveform mode="listening" />
           </div>
         </div>

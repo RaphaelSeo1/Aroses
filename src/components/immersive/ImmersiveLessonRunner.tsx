@@ -691,8 +691,11 @@ export function ImmersiveLessonRunner({
       <ImmersiveShell
         topBar={topBar}
         bottomBar={
-          <div className="flex justify-center">
-            <div className="h-16 w-full max-w-md">
+          // No voice input on the error screen — render a slim decorative
+          // strip with the idle waveform so the page still feels alive
+          // without re-introducing the floating-mid-page overlap bug.
+          <div className="pointer-events-none flex justify-center pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
+            <div className="h-12 w-full max-w-md opacity-70">
               <AnimatedWaveform mode="idle" />
             </div>
           </div>
@@ -742,8 +745,8 @@ export function ImmersiveLessonRunner({
       <ImmersiveShell
         topBar={topBar}
         bottomBar={
-          <div className="flex justify-center">
-            <div className="h-16 w-full max-w-md">
+          <div className="pointer-events-none flex justify-center pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
+            <div className="h-12 w-full max-w-md opacity-80">
               <AnimatedWaveform mode={waveformMode} />
             </div>
           </div>
@@ -803,8 +806,8 @@ export function ImmersiveLessonRunner({
       <ImmersiveShell
         topBar={topBar}
         bottomBar={
-          <div className="flex justify-center">
-            <div className="h-16 w-full max-w-md">
+          <div className="pointer-events-none flex justify-center pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
+            <div className="h-12 w-full max-w-md opacity-80">
               <AnimatedWaveform mode={waveformMode} />
             </div>
           </div>
@@ -874,33 +877,57 @@ export function ImmersiveLessonRunner({
   }
 
   // ----- main teaching view -----
+  // Voice controls (toggle, textarea, submit, mic) and the waveform now
+  // live in a real docked bar pinned to the bottom of the viewport so
+  // they can't overlap the Concept / Source / Quick Check cards. The
+  // dock is full-bleed (edge-to-edge background) with the actual
+  // controls centered to max-w-3xl so they line up with the lesson
+  // content above.
+  const voiceDockActive =
+    voice.state.recording || voice.state.speaking || voice.state.transcribing;
   return (
     <ImmersiveShell
       topBar={topBar}
       bottomBar={
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-16 w-full max-w-md">
-            <AnimatedWaveform mode={waveformMode} />
-          </div>
-          {liveHint ? (
-            <div className="rounded-full bg-white/55 px-3 py-1 text-xs font-medium text-zinc-700 shadow-sm ring-1 ring-white/50 backdrop-blur-md">
-              {liveHint}
+        <div className="immersive-dock border-t border-white/70 bg-white/85 shadow-[0_-12px_28px_-18px_rgba(60,60,90,0.20)] backdrop-blur-md">
+          <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pt-3">
+            {/* Mini activity row: waveform + status pill. Stays mounted so
+                the waveform animation doesn't restart every time the
+                student hits the mic, but height collapses to 0 when
+                idle so the dock shrinks gracefully. */}
+            <div
+              className={
+                voiceDockActive || liveHint
+                  ? "mb-1.5 flex items-center justify-between gap-3 transition-[height,opacity] duration-200"
+                  : "h-0 overflow-hidden opacity-0 transition-[height,opacity] duration-200"
+              }
+              aria-hidden={!voiceDockActive && !liveHint}
+            >
+              <div className="h-6 w-44 flex-1 max-w-[18rem] opacity-90 sm:w-56">
+                <AnimatedWaveform mode={waveformMode} />
+              </div>
+              {liveHint ? (
+                <span className="shrink-0 rounded-full bg-white/70 px-2.5 py-0.5 text-[11px] font-medium text-zinc-700 ring-1 ring-white/60">
+                  {liveHint}
+                </span>
+              ) : null}
             </div>
-          ) : null}
-          <AnswerComposer
-            interactionMode={interactionMode}
-            voiceMode={voiceMode}
-            onVoiceModeChange={setVoiceMode}
-            text={answerText}
-            onTextChange={setAnswerText}
-            onSubmitText={() => void submitAnswer(answerText)}
-            recording={voice.state.recording}
-            transcribing={voice.state.transcribing}
-            onMicDown={() => void startVoiceAnswer()}
-            onMicUp={() => void finishVoiceAnswer()}
-            submitting={submitting}
-            error={voice.state.error}
-          />
+
+            <AnswerComposer
+              interactionMode={interactionMode}
+              voiceMode={voiceMode}
+              onVoiceModeChange={setVoiceMode}
+              text={answerText}
+              onTextChange={setAnswerText}
+              onSubmitText={() => void submitAnswer(answerText)}
+              recording={voice.state.recording}
+              transcribing={voice.state.transcribing}
+              onMicDown={() => void startVoiceAnswer()}
+              onMicUp={() => void finishVoiceAnswer()}
+              submitting={submitting}
+              error={voice.state.error}
+            />
+          </div>
         </div>
       }
     >
@@ -1088,17 +1115,17 @@ function AnswerComposer({
   const showMicButton = interactionMode === "voice" && voiceMode === "push";
   const showModeToggle = interactionMode === "voice";
 
-  // The Hold M / Live toggle is now embedded directly in the composer
-  // card — same border, same blur, same shadow — so it reads as one
-  // continuous "talk surface" instead of a disconnected top-right
-  // control. The toggle sits in a slim header row above the textarea
-  // so it's always visible without taking real estate from the input.
+  // No floating-card styling here — the composer lives INSIDE the docked
+  // bottom bar, which owns the bg / border / shadow. We just lay out the
+  // controls horizontally: toggle (left) | textarea (center, flex-1) |
+  // submit + mic (right). On narrow screens the row wraps so the textarea
+  // never gets squeezed below readable width.
   return (
-    <div className="rounded-3xl border border-white/50 bg-white/55 p-3 shadow-[0_25px_60px_-25px_rgba(60,60,90,0.25)] ring-1 ring-white/50 backdrop-blur-md sm:backdrop-blur-xl">
-      {showModeToggle ? (
-        <div className="mb-2 flex items-center justify-between gap-2 px-1">
+    <div>
+      <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+        {showModeToggle ? (
           <div
-            className="inline-flex items-center gap-0.5 rounded-full border border-white/60 bg-white/55 p-0.5 text-[11px] font-medium text-zinc-700 shadow-sm"
+            className="inline-flex items-stretch rounded-2xl border border-white/60 bg-white/55 p-0.5 text-[11px] font-medium text-zinc-700 shadow-sm"
             role="group"
             aria-label="Voice mic mode"
           >
@@ -1108,11 +1135,11 @@ function AnswerComposer({
               aria-pressed={voiceMode === "push"}
               className={
                 voiceMode === "push"
-                  ? "rounded-full bg-zinc-900/90 px-3 py-1 text-white shadow-sm"
-                  : "rounded-full px-3 py-1 text-zinc-700 hover:bg-white/70"
+                  ? "rounded-xl bg-zinc-900/90 px-3 py-1.5 text-white shadow-sm"
+                  : "rounded-xl px-3 py-1.5 text-zinc-700 hover:bg-white/70"
               }
             >
-              Hold M
+              Hold&nbsp;M
             </button>
             <button
               type="button"
@@ -1120,31 +1147,17 @@ function AnswerComposer({
               aria-pressed={voiceMode === "live"}
               className={
                 voiceMode === "live"
-                  ? "rounded-full bg-zinc-900/90 px-3 py-1 text-white shadow-sm"
-                  : "rounded-full px-3 py-1 text-zinc-700 hover:bg-white/70"
+                  ? "rounded-xl bg-zinc-900/90 px-3 py-1.5 text-white shadow-sm"
+                  : "rounded-xl px-3 py-1.5 text-zinc-700 hover:bg-white/70"
               }
             >
               Live
             </button>
           </div>
-          {recording ? (
-            <span
-              className="inline-flex items-center gap-1.5 rounded-full bg-rose-50/80 px-2 py-0.5 text-[11px] font-medium text-rose-700 ring-1 ring-rose-200"
-              aria-live="polite"
-            >
-              <span className="ac-pulse h-1.5 w-1.5 rounded-full bg-rose-500" />
-              Listening
-            </span>
-          ) : transcribing ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-fuchsia-50/80 px-2 py-0.5 text-[11px] font-medium text-fuchsia-700 ring-1 ring-fuchsia-200">
-              Transcribing…
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+        ) : null}
+
         <textarea
-          rows={2}
+          rows={1}
           value={text}
           onChange={(e) => onTextChange(e.target.value)}
           onKeyDown={(e) => {
@@ -1160,14 +1173,15 @@ function AnswerComposer({
                 : "Hold M (or the mic) to speak · or type here…"
               : "Type your answer (⌘↵ to submit)…"
           }
-          className="block w-full flex-1 resize-none rounded-2xl border border-white/50 bg-white/60 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-500 focus:border-fuchsia-300 focus:bg-white/80 focus:outline-none focus:ring-2 focus:ring-fuchsia-200/60"
+          className="block min-h-[2.5rem] flex-1 resize-none rounded-2xl border border-white/60 bg-white/70 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-500 focus:border-fuchsia-300 focus:bg-white/90 focus:outline-none focus:ring-2 focus:ring-fuchsia-200/60"
         />
-        <div className="flex flex-row gap-2 sm:flex-col">
+
+        <div className="flex shrink-0 items-stretch gap-2">
           <button
             type="button"
             disabled={!canSubmit}
             onClick={onSubmitText}
-            className="flex-1 rounded-2xl bg-zinc-900/90 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
+            className="rounded-2xl bg-zinc-900/90 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting ? "Sending…" : "Submit"}
           </button>
@@ -1182,8 +1196,8 @@ function AnswerComposer({
               onTouchEnd={onMicUp}
               className={
                 recording
-                  ? "flex-1 rounded-2xl bg-rose-500/90 px-4 py-2 text-sm font-semibold text-white shadow-lg sm:flex-none"
-                  : "flex-1 rounded-2xl border border-white/50 bg-white/60 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-white/80 disabled:opacity-50 sm:flex-none"
+                  ? "ac-pulse-ring rounded-2xl bg-rose-500/95 px-4 py-2 text-sm font-semibold text-white shadow-lg"
+                  : "rounded-2xl border border-white/60 bg-white/70 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-white/90 disabled:opacity-50"
               }
               title={
                 recording ? "Release to send" : "Hold to talk (or press & hold M)"
@@ -1193,31 +1207,40 @@ function AnswerComposer({
                 ? "Transcribing…"
                 : recording
                   ? "● Release"
-                  : "🎤 Hold to talk"}
+                  : "🎤 Hold"}
             </button>
           ) : null}
         </div>
       </div>
       {error ? (
-        <p className="mt-1 text-xs text-rose-600">{error}</p>
+        <p className="mt-1 px-1 text-xs text-rose-600">{error}</p>
       ) : null}
       <style jsx>{`
-        .ac-pulse {
-          animation: ac-pulse 1.1s ease-in-out infinite;
+        .ac-pulse-ring {
+          box-shadow:
+            0 0 0 0 rgba(244, 63, 94, 0.55),
+            0 10px 20px -8px rgba(244, 63, 94, 0.45);
+          animation: ac-pulse-ring 1.1s ease-out infinite;
         }
-        @keyframes ac-pulse {
-          0%,
-          100% {
-            opacity: 1;
-            transform: scale(1);
+        @keyframes ac-pulse-ring {
+          0% {
+            box-shadow:
+              0 0 0 0 rgba(244, 63, 94, 0.55),
+              0 10px 20px -8px rgba(244, 63, 94, 0.45);
           }
-          50% {
-            opacity: 0.5;
-            transform: scale(1.6);
+          70% {
+            box-shadow:
+              0 0 0 10px rgba(244, 63, 94, 0),
+              0 10px 20px -8px rgba(244, 63, 94, 0.35);
+          }
+          100% {
+            box-shadow:
+              0 0 0 0 rgba(244, 63, 94, 0),
+              0 10px 20px -8px rgba(244, 63, 94, 0.45);
           }
         }
         @media (prefers-reduced-motion: reduce) {
-          .ac-pulse {
+          .ac-pulse-ring {
             animation: none;
           }
         }

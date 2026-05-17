@@ -35,16 +35,21 @@ export function ImmersiveShell({
         </div>
       ) : null}
 
-      <main className="immersive-main relative z-0 flex flex-1 flex-col items-center overflow-y-auto px-4 pb-[clamp(180px,22vh,260px)] pt-20 sm:px-6 sm:pt-24">
+      {/* Bottom padding is generous enough to clear the docked voice bar
+          rendered by the teaching view. We deliberately apply it on the
+          scroll container (not via a spacer in `children`) so callers
+          don't need to know about the dock height. */}
+      <main className="immersive-main relative z-0 flex flex-1 flex-col items-center overflow-y-auto px-4 pb-[clamp(200px,26vh,300px)] pt-20 sm:px-6 sm:pt-24">
         <div className="immersive-fade-in w-full max-w-3xl">{children}</div>
       </main>
 
       {bottomBar ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col items-center gap-3 px-4 pb-6 sm:px-6">
-          <div className="pointer-events-auto w-full max-w-3xl">
-            {bottomBar}
-          </div>
-        </div>
+        // Caller controls the dock styling (background, padding, max
+        // width of inner content). We just pin the slot to the bottom
+        // edge full-bleed so the dock can extend wall-to-wall when the
+        // teaching view wants it. z-20 keeps it above scrollable
+        // content but below modals (ExitConfirm uses z-30).
+        <div className="absolute inset-x-0 bottom-0 z-20">{bottomBar}</div>
       ) : null}
 
       <style jsx>{`
