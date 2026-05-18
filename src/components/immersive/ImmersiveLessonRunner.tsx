@@ -136,6 +136,15 @@ export function ImmersiveLessonRunner({
   const lastCheckAtRef = useRef<number | null>(null);
   const lastStudentSpokeAtRef = useRef<number | null>(null);
 
+  // ---- walk-through narration (§1) ----
+  // The single most recent sentence Rose has spoken aloud. Drives
+  // SourceLessonPanel's paragraph highlight + auto-scroll so the
+  // student visually sees which part of the source Rose is
+  // currently paraphrasing. We use state (not a ref) so the panel
+  // re-renders when it changes; the panel is memo'd so other state
+  // changes don't trigger unnecessary work here.
+  const [narrationText, setNarrationText] = useState<string>("");
+
   // ---- session opening greeting ----
   // Plays once per mount, the moment the runner has a session loaded.
   // `greetingPlayed` gates the auto-speak-chunk effect so the chunk
@@ -382,6 +391,11 @@ export function ImmersiveLessonRunner({
       onPlay: () => {
         lastSpokenRef.current = text;
         lastCheckAtRef.current = Date.now();
+        // Walk-through highlight feed: use just the explanation
+        // half (not the trailing check question) so the source
+        // panel highlights the part of the lesson Rose's
+        // explanation is paraphrasing, not the question itself.
+        setNarrationText(chunk.explanation);
       },
     });
   }, [chunk, interactionMode, phase, voice, greetingPlayed]);
@@ -584,7 +598,7 @@ export function ImmersiveLessonRunner({
           // student actually heard, which is what they should see.
           let revealedUpTo = 0;
           await voice.speakSentenceStream(sentenceStream, {
-            onSentencePlaying: (_text, index) => {
+            onSentencePlaying: (text, index) => {
               if (index < revealedUpTo) return;
               revealedUpTo = index + 1;
               const spoken = sentences.slice(0, revealedUpTo).join(" ");
@@ -593,6 +607,11 @@ export function ImmersiveLessonRunner({
               // current — used as `interruptedAfter` if the student
               // barges in next.
               lastSpokenRef.current = spoken;
+              // Walk-through highlight: the SOURCE panel highlights
+              // the paragraph closest to whatever Rose is saying
+              // RIGHT NOW. Use the latest sentence (not the running
+              // total) so the match doesn't dilute across sentences.
+              setNarrationText(text);
             },
           });
         } else {
@@ -620,6 +639,10 @@ export function ImmersiveLessonRunner({
           setChunkIdx(nextIdx);
           setAttempts(0);
           setAnswerText("");
+          // Clear walk-through highlight + tutor reply so the new
+          // chunk starts visually fresh.
+          setNarrationText("");
+          setTutorReply(null);
 
           await persist({
             chunkIndex: nextIdx,
@@ -1288,28 +1311,32 @@ export function ImmersiveLessonRunner({
             key={`src-${chunk.id}`}
             lesson={lesson}
             keyTerms={terms}
+            narrationText={narrationText}
           />
         );
       })()}
 
-      {/* Check question */}
-      <GlassPanel
-        key={`q-${chunk.id}`}
-        className="mt-4"
-        tone="question"
-        delayMs={350}
-      >
-        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-700">
-          Quick check
-        </p>
-        <p className="mt-2 text-base font-medium leading-relaxed text-zinc-900">
-          <TypewriterText
-            key={`q-text-${chunk.id}`}
-            text={chunk.checkQuestion}
-            wordIntervalMs={50}
-          />
-        </p>
-      </GlassPanel>
+      {/* Check question — rendered as a sticky floating cloud above
+          the lesson content rather than a plain stacked card. It
+          drifts in with a soft float-up animation, stays visible at
+          the top of the viewport as the student scrolls through the
+          source text, and can be dismissed if they want it out of
+          the way. Replays use Rose's voice; dismiss is purely
+          visual (the question stays in the chunk state and can be
+          submitted via the dock as usual). */}
+      <QuestionCloud
+        key={`q-cloud-${chunk.id}`}
+        chunkId={chunk.id}
+        text={chunk.checkQuestion}
+        onRepeat={() =>
+          void voice.speak(chunk.checkQuestion, {
+            onPlay: () => {
+              lastSpokenRef.current = chunk.checkQuestion;
+              lastCheckAtRef.current = Date.now();
+            },
+          })
+        }
+      />
 
       {tutorReply ? (
         <GlassPanel
@@ -1367,6 +1394,115 @@ function ProgressHeader({
       <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl">
         {moduleTitle}
       </h1>
+    </div>
+  );
+}
+
+/**
+ * Floating "thought-bubble" style overlay for the check question.
+ *
+ * Sticky-positioned at the top of the scroll area so it stays
+ * visible as the student reads through the source content below.
+ * Drifts in with a soft opacity + translateY animation when the
+ * chunk changes (~400ms ease-out per spec). The student can:
+ *
+ *   • Dismiss it with the × button (hides locally — answer state
+ *     and submission via the dock continue to work).
+ *   • Hit the replay button to have Rose speak the question again.
+ *
+ * Resets to visible automatically when the chunk changes (new
+ * question = new cloud).
+ */
+function QuestionCloud({
+  chunkId,
+  text,
+  onRepeat,
+}: {
+  chunkId: string;
+  text: string;
+  onRepeat: () => void;
+}) {
+  // Reset visibility every time a new chunk arrives — the previous
+  // chunk's cloud might have been dismissed, but a fresh question
+  // always deserves the spotlight. We do this purely via the
+  // `key={chunkId}` the parent passes, which remounts this
+  // component on chunk change so `visible` re-initializes to true
+  // without a setState-in-effect dance.
+  const [visible, setVisible] = useState(true);
+
+  if (!visible) return null;
+
+  return (
+    <div
+      key={`q-cloud-${chunkId}`}
+      className="question-cloud sticky top-3 z-10 mt-4 transform-gpu"
+    >
+      <div className="relative overflow-hidden rounded-3xl border border-amber-200/70 bg-gradient-to-br from-amber-50/90 via-white/85 to-amber-100/85 px-5 py-4 shadow-[0_20px_50px_-25px_rgba(180,140,40,0.45)] ring-1 ring-amber-200/60 backdrop-blur-md sm:px-6 sm:py-5">
+        {/* Soft decorative cloud edges */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -top-6 left-8 h-12 w-12 rounded-full bg-amber-200/40 blur-xl"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-6 right-12 h-12 w-12 rounded-full bg-rose-200/40 blur-xl"
+        />
+        <div className="relative flex items-start gap-3">
+          <div className="flex-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-700">
+              Quick check
+            </p>
+            <p className="mt-2 text-base font-medium leading-relaxed text-zinc-900">
+              <TypewriterText
+                key={`q-text-${chunkId}`}
+                text={text}
+                wordIntervalMs={50}
+              />
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onRepeat}
+              className="rounded-full border border-white/60 bg-white/70 px-2 py-1 text-[11px] font-medium text-zinc-700 transition hover:bg-white"
+              title="Have Rose ask again"
+              aria-label="Replay the question"
+            >
+              ↻
+            </button>
+            <button
+              type="button"
+              onClick={() => setVisible(false)}
+              className="rounded-full border border-white/60 bg-white/70 px-2 py-1 text-[11px] font-medium text-zinc-700 transition hover:bg-white"
+              title="Dismiss this question card"
+              aria-label="Dismiss the question card"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      </div>
+      <style jsx>{`
+        .question-cloud {
+          animation: q-cloud-in 400ms ease-out both;
+          will-change: transform, opacity;
+        }
+        @keyframes q-cloud-in {
+          from {
+            opacity: 0;
+            transform: translateY(10px) scale(0.985);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .question-cloud {
+            animation: none;
+          }
+        }
+      `}</style>
     </div>
   );
 }
