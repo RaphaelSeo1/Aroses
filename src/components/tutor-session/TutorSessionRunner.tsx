@@ -2,9 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { NotesPanel, type NotesPanelHandle } from "@/components/immersive/NotesPanel";
+import {
+  NotesPanel,
+  type NotesPanelHandle,
+} from "@/components/immersive/NotesPanel";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
-import type { TutorSessionRecord } from "@/types/tutor-session";
+import type {
+  TutorSessionRecord,
+  TutorSessionUpload,
+} from "@/types/tutor-session";
 
 /**
  * Active Tutor Session interface.
@@ -34,9 +40,22 @@ type LocalMessage = {
   content: string;
   /** True while assistant text is still streaming in. */
   streaming?: boolean;
+  /**
+   * Optional image rendered inline alongside the message bubble.
+   * Set when Rose's turn meta included an imageRequest and the
+   * client successfully fetched a Wikimedia result.
+   */
+  image?: {
+    url: string;
+    thumbUrl: string;
+    sourceUrl: string;
+    attribution: string;
+    type: "diagram" | "photo" | "illustration";
+  };
 };
 
-const TURN_META_NOOP = "__meta-event__";
+const IDLE_CHECK_IN_MS = 5 * 60 * 1000; // 5 min silent → Rose checks in
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -103,8 +122,35 @@ export function TutorSessionRunner({
     onBargeIn: () => onBargeInRef.current(),
   });
 
-  // ----- notes panel handle (for future "+ Add to notes" buttons) -----
+  // ----- notes panel handle ("+ Add to notes" buttons use this) -----
   const notesPanelRef = useRef<NotesPanelHandle | null>(null);
+  const [addedNoteIds, setAddedNoteIds] = useState<Set<string>>(new Set());
+
+  // ----- mid-session uploads -----
+  // Local mirror of the session's uploads — seeded from `initial`,
+  // appended whenever the student attaches more files mid-session.
+  const [uploads, setUploads] = useState<TutorSessionUpload[]>(
+    initial.uploads ?? []
+  );
+  const [uploading, setUploading] = useState(false);
+  const [showMaterialsDrawer, setShowMaterialsDrawer] = useState(false);
+  const midUploadInputRef = useRef<HTMLInputElement>(null);
+
+  // ----- idle / long-session nudges -----
+  // We stamp activity (any send or any Rose-spoken sentence) and
+  // schedule a check-in if nothing happens for IDLE_CHECK_IN_MS.
+  // The 1-hour nudge fires at most once per session.
+  const lastActivityRef = useRef<number>(Date.now());
+  const idleNudgeSentRef = useRef<boolean>(false);
+  const hourNudgeSentRef = useRef<boolean>(false);
+  const sessionStartRef = useRef<number>(Date.parse(initial.startedAt) || Date.now());
+
+  // ----- live caption sync: revealed sentences -----
+  // Text is appended to the assistant bubble ONLY when its sentence
+  // is actually being SPOKEN by TTS — never before. This matches
+  // the Mentored Learning behavior so voice and captions stay in
+  // lockstep. The ref is reset at the start of every assistant turn.
+  const revealedSentencesRef = useRef<string[]>([]);
 
   // ----- auto-scroll the feed on new content -----
   useEffect(() => {
@@ -118,12 +164,55 @@ export function TutorSessionRunner({
   // message in place, and feeds full sentences to TTS as they form.
   // ---------------------------------------------------------------
 
+  // Fire-and-forget image fetch (server caches), updates the
+  // assistant message with the resolved image when ready. Used when
+  // Rose's turn meta sets `imageRequest`.
+  const fetchImageForMessage = useCallback(
+    async (
+      assistantId: string,
+      query: string,
+      type: "diagram" | "photo" | "illustration"
+    ) => {
+      try {
+        const res = await fetch(
+          `/api/tutor-session/${initial.id}/image`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query, imageType: type }),
+          }
+        );
+        if (!res.ok) return;
+        const body = (await res.json()) as {
+          image?: {
+            url: string;
+            thumbUrl: string;
+            sourceUrl: string;
+            attribution: string;
+            type: "diagram" | "photo" | "illustration";
+          } | null;
+        };
+        if (!body.image) return;
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, image: body.image ?? undefined } : m
+          )
+        );
+      } catch (e) {
+        console.error("[TutorSessionRunner fetchImageForMessage]", e);
+      }
+    },
+    [initial.id]
+  );
+
   const submitTurn = useCallback(
     async (utterance: string) => {
       const text = utterance.trim();
       if (!text || submitting) return;
       setComposer("");
       setSubmitting(true);
+      lastActivityRef.current = Date.now();
+      idleNudgeSentRef.current = false;
 
       // Append user message immediately.
       const userMsg: LocalMessage = {
@@ -141,8 +230,10 @@ export function TutorSessionRunner({
       };
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
-      // Set up an async sentence pump for TTS that consumes the
-      // streaming reply as it comes in.
+      // Reset the revealed-sentences tracker for this turn.
+      revealedSentencesRef.current = [];
+
+      // Sentence pump for TTS — consumes deltas as they form.
       const sentenceQueue: string[] = [];
       let streamDone = false;
       const sentenceIterable: AsyncIterable<string> = {
@@ -160,13 +251,37 @@ export function TutorSessionRunner({
           };
         },
       };
-      // Kick off speaking. `speakSentenceStream` will resolve when
-      // the iterable is exhausted (streamDone=true + queue empty).
-      voice.speakSentenceStream(sentenceIterable).catch((e) => {
-        console.error("[TutorSessionRunner speakSentenceStream]", e);
-      });
 
-      // Stream the SSE.
+      // §12 — Live caption sync. Captions are appended to the
+      // assistant bubble ONLY when the matching sentence is actually
+      // being spoken. When TTS fails for a particular sentence we
+      // still reveal it (info.failed === true) so the student isn't
+      // staring at an empty bubble.
+      voice
+        .speakSentenceStream(sentenceIterable, {
+          onSentencePlaying: (sentence) => {
+            const s = sentence.trim();
+            if (!s) return;
+            revealedSentencesRef.current = [
+              ...revealedSentencesRef.current,
+              s,
+            ];
+            const revealed = revealedSentencesRef.current.join(" ");
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, content: revealed } : m
+              )
+            );
+            // Each spoken sentence counts as activity — Rose is
+            // working, the student isn't actually idle.
+            lastActivityRef.current = Date.now();
+          },
+        })
+        .catch((e) => {
+          console.error("[TutorSessionRunner speakSentenceStream]", e);
+        });
+
+      // SSE stream.
       let buffered = "";
       let lastFlushedAt = 0;
       const SENTENCE_RE = /([.!?])\s+(?=[A-Z“"'(\[])/g;
@@ -226,22 +341,34 @@ export function TutorSessionRunner({
                 const parsed = JSON.parse(data) as { delta?: string };
                 if (typeof parsed.delta === "string") {
                   buffered += parsed.delta;
+                  // §12 — Do NOT update the bubble's content here.
+                  // The onSentencePlaying callback drives reveal in
+                  // lockstep with TTS playback.
                   flushSentences(false);
-                  setMessages((prev) =>
-                    prev.map((m) =>
-                      m.id === assistantId
-                        ? { ...m, content: buffered }
-                        : m
-                    )
-                  );
                 }
               } catch {
                 /* ignore */
               }
             } else if (event === "meta") {
-              // Image requests are deferred to the next phase; just
-              // mark the event so we can extend later.
-              void TURN_META_NOOP;
+              try {
+                const parsed = JSON.parse(data) as {
+                  imageRequest?: {
+                    query?: string;
+                    type?: string;
+                  } | null;
+                };
+                const ir = parsed.imageRequest;
+                if (ir && typeof ir.query === "string") {
+                  const t =
+                    ir.type === "diagram" || ir.type === "photo"
+                      ? ir.type
+                      : "illustration";
+                  // Fire-and-forget — image arrives on its own.
+                  void fetchImageForMessage(assistantId, ir.query, t);
+                }
+              } catch {
+                /* ignore malformed meta */
+              }
             } else if (event === "done") {
               break;
             } else if (event === "error") {
@@ -259,15 +386,20 @@ export function TutorSessionRunner({
       } catch (e) {
         console.error("[TutorSessionRunner submitTurn]", e);
         streamDone = true;
+        // Fallback: if we never revealed anything (TTS never fired
+        // either), show the raw buffer so the student isn't stuck.
+        const fallback =
+          revealedSentencesRef.current.length === 0
+            ? buffered.trim() ||
+              "Sorry — I hit a snag. Try saying that again."
+            : revealedSentencesRef.current.join(" ");
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
               ? {
                   ...m,
                   streaming: false,
-                  content:
-                    m.content ||
-                    "Sorry — I hit a snag. Try saying that again.",
+                  content: fallback,
                 }
               : m
           )
@@ -276,8 +408,150 @@ export function TutorSessionRunner({
         setSubmitting(false);
       }
     },
-    [initial.id, submitting, voice]
+    [fetchImageForMessage, initial.id, submitting, voice]
   );
+
+  // ----- mid-session uploads -----
+  // Posts files to /api/tutor-session/:id/upload (same extraction
+  // pipeline as /start), then injects a synthetic instruction so
+  // Rose actually says something about the new material.
+  const handleUploadFiles = useCallback(
+    async (fileList: FileList | null) => {
+      if (!fileList || fileList.length === 0) return;
+      if (uploading) return;
+      setUploading(true);
+      try {
+        const form = new FormData();
+        const names: string[] = [];
+        for (let i = 0; i < fileList.length; i += 1) {
+          const f = fileList.item(i);
+          if (!f) continue;
+          form.append("files", f);
+          names.push(f.name);
+        }
+        if (names.length === 0) return;
+        const res = await fetch(
+          `/api/tutor-session/${initial.id}/upload`,
+          { method: "POST", body: form }
+        );
+        if (!res.ok) {
+          const errBody = (await res
+            .json()
+            .catch(() => ({ error: "Upload failed." }))) as {
+            error?: string;
+          };
+          throw new Error(errBody.error ?? "Upload failed.");
+        }
+        const body = (await res.json()) as {
+          uploads: TutorSessionUpload[];
+          failed: string[];
+        };
+        setUploads((prev) => [...prev, ...body.uploads]);
+        if (body.failed.length > 0) {
+          const failMsg: LocalMessage = {
+            id: `sys-fail-${Date.now()}`,
+            role: "assistant",
+            content: `(I had trouble reading ${body.failed.join(
+              ", "
+            )} — can you describe what's in it or try a clearer photo?)`,
+          };
+          setMessages((prev) => [...prev, failMsg]);
+        }
+        if (body.uploads.length > 0) {
+          const trigger = `[The student just attached: ${names.join(
+            ", "
+          )}. Look at it briefly and react in one or two sentences — acknowledge what you see, ask what they want to do with it.]`;
+          void submitTurn(trigger);
+        }
+      } catch (e) {
+        console.error("[TutorSessionRunner handleUploadFiles]", e);
+        const errMsg: LocalMessage = {
+          id: `sys-err-${Date.now()}`,
+          role: "assistant",
+          content: "(Couldn't upload that — try again in a sec.)",
+        };
+        setMessages((prev) => [...prev, errMsg]);
+      } finally {
+        setUploading(false);
+        if (midUploadInputRef.current) midUploadInputRef.current.value = "";
+      }
+    },
+    [initial.id, submitTurn, uploading]
+  );
+
+  // ----- "+ Add to notes" — push a message into the notes panel -----
+  const addMessageToNotes = useCallback(
+    (msg: LocalMessage) => {
+      const handle = notesPanelRef.current;
+      if (!handle) return;
+      // We split the message text into a short heading + body. If
+      // the message has a natural lead sentence under ~70 chars we
+      // use it as the heading; otherwise we just use "From Rose".
+      const trimmed = msg.content.trim();
+      if (!trimmed) return;
+      const firstSentence = trimmed.split(/(?<=[.!?])\s+/)[0] ?? trimmed;
+      const heading =
+        firstSentence.length > 0 && firstSentence.length <= 80
+          ? firstSentence.replace(/[.!?]$/, "")
+          : "From Rose";
+      const intro =
+        firstSentence === trimmed
+          ? undefined
+          : trimmed.slice(firstSentence.length).trim() || undefined;
+      handle.appendBlock({
+        heading,
+        intro,
+        bullets: [],
+      });
+      setAddedNoteIds((prev) => {
+        const next = new Set(prev);
+        next.add(msg.id);
+        return next;
+      });
+      window.setTimeout(() => {
+        setAddedNoteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(msg.id);
+          return next;
+        });
+      }, 2000);
+    },
+    []
+  );
+
+  // ----- idle check-in + 1-hour nudge -----
+  // Both run on a single 30s interval. They're cheap to evaluate and
+  // intentionally lazy so they don't fire during active conversation
+  // (lastActivityRef is bumped every send + every spoken sentence).
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (endingSession) return;
+      if (submitting) return;
+      if (voice.state.speaking) return;
+      const now = Date.now();
+      // Idle: silent for 5 minutes.
+      if (
+        !idleNudgeSentRef.current &&
+        now - lastActivityRef.current > IDLE_CHECK_IN_MS
+      ) {
+        idleNudgeSentRef.current = true;
+        void submitTurn(
+          "[The student has been silent for several minutes. Check in gently — ask if they want to keep going, switch topics, or wrap up. One short, warm sentence.]"
+        );
+      }
+      // 1-hour: total elapsed > 1h.
+      if (
+        !hourNudgeSentRef.current &&
+        now - sessionStartRef.current > ONE_HOUR_MS
+      ) {
+        hourNudgeSentRef.current = true;
+        void submitTurn(
+          "[The session has been running for over an hour. Briefly suggest wrapping up with a recap, but offer to keep going if they want. One or two sentences.]"
+        );
+      }
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [endingSession, submitTurn, submitting, voice.state.speaking]);
 
   // ----- barge-in: stop speech + start recording -----
   const startVoiceCapture = useCallback(async () => {
@@ -372,6 +646,17 @@ export function TutorSessionRunner({
             <span className="hidden rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1 text-[11px] font-medium tabular-nums text-zinc-600 sm:inline">
               {formatDuration(seconds)}
             </span>
+            {uploads.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setShowMaterialsDrawer(true)}
+                className="hidden items-center gap-1 rounded-full border border-violet-200 bg-white/80 px-2.5 py-1 text-[11px] font-medium text-violet-800 hover:bg-violet-50 sm:inline-flex"
+                title="View attached reference materials"
+              >
+                <span aria-hidden>📎</span>
+                {uploads.length} material{uploads.length === 1 ? "" : "s"}
+              </button>
+            ) : null}
             <SpeedPill rate={playbackRate} onChange={updatePlaybackRate} />
             <button
               type="button"
@@ -397,8 +682,11 @@ export function TutorSessionRunner({
             ref={scrollRef}
             className="flex-1 space-y-3 overflow-y-auto px-4 py-5 sm:px-6 sm:py-7"
           >
-            {(initial.referenceSummary || (initial.uploads ?? []).length > 0) ? (
-              <UploadsRibbon uploads={initial.uploads ?? []} />
+            {(initial.referenceSummary || uploads.length > 0) ? (
+              <UploadsRibbon
+                uploads={uploads}
+                onClick={() => setShowMaterialsDrawer(true)}
+              />
             ) : null}
             {messages.length === 0 ? (
               <p className="text-center text-sm text-zinc-400">
@@ -406,7 +694,12 @@ export function TutorSessionRunner({
               </p>
             ) : null}
             {messages.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+              <MessageBubble
+                key={m.id}
+                message={m}
+                onAddToNotes={() => addMessageToNotes(m)}
+                addedRecently={addedNoteIds.has(m.id)}
+              />
             ))}
             {recordingHint ? (
               <p className="text-center text-[11px] font-medium text-violet-700">
@@ -435,6 +728,50 @@ export function TutorSessionRunner({
                   <line x1="12" y1="19" x2="12" y2="23" />
                   <line x1="8" y1="23" x2="16" y2="23" />
                 </svg>
+              </button>
+              <input
+                ref={midUploadInputRef}
+                type="file"
+                accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.txt,.md"
+                multiple
+                className="sr-only"
+                onChange={(e) => void handleUploadFiles(e.target.files)}
+                disabled={uploading}
+              />
+              <button
+                type="button"
+                onClick={() => midUploadInputRef.current?.click()}
+                disabled={uploading || submitting}
+                aria-label="Attach reference material"
+                title="Attach reference material"
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50 disabled:opacity-50"
+              >
+                {uploading ? (
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-5 w-5 animate-spin"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    aria-hidden
+                  >
+                    <circle cx="12" cy="12" r="9" opacity="0.25" />
+                    <path d="M21 12a9 9 0 0 1-9 9" strokeLinecap="round" />
+                  </svg>
+                ) : (
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-5 w-5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 1 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 1 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                )}
               </button>
               <textarea
                 value={composer}
@@ -486,6 +823,13 @@ export function TutorSessionRunner({
           </div>
         </div>
       </div>
+
+      {showMaterialsDrawer ? (
+        <MaterialsDrawer
+          uploads={uploads}
+          onClose={() => setShowMaterialsDrawer(false)}
+        />
+      ) : null}
     </main>
   );
 }
@@ -494,34 +838,87 @@ export function TutorSessionRunner({
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function MessageBubble({ message }: { message: LocalMessage }) {
+function MessageBubble({
+  message,
+  onAddToNotes,
+  addedRecently,
+}: {
+  message: LocalMessage;
+  onAddToNotes: () => void;
+  addedRecently: boolean;
+}) {
   const isUser = message.role === "user";
   // Strip [bracket-style] instruction-only opener turns from display
-  // (the synthetic greeting trigger). Rose's reply IS shown.
+  // (the synthetic greeting / nudge triggers). Rose's reply IS shown.
   const display =
     isUser && message.content.trim().startsWith("[")
       ? "(starting your session…)"
       : message.content;
+  const canAddToNotes =
+    !isUser && !message.streaming && message.content.trim().length > 12;
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed shadow-sm ring-1 ${
-          isUser
-            ? "rounded-br-md bg-violet-600 text-white ring-violet-700/20"
-            : "rounded-bl-md bg-white text-zinc-800 ring-zinc-200/70"
-        }`}
-      >
-        {!isUser ? (
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-700">
-            Rose
-          </p>
-        ) : null}
-        <p className="whitespace-pre-wrap">
-          {display}
-          {message.streaming ? (
-            <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse rounded-sm bg-zinc-400 align-middle" />
+    <div
+      className={`group flex ${isUser ? "justify-end" : "justify-start"}`}
+    >
+      <div className="max-w-[85%]">
+        <div
+          className={`rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed shadow-sm ring-1 ${
+            isUser
+              ? "rounded-br-md bg-violet-600 text-white ring-violet-700/20"
+              : "rounded-bl-md bg-white text-zinc-800 ring-zinc-200/70"
+          }`}
+        >
+          {!isUser ? (
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-700">
+              Rose
+            </p>
           ) : null}
-        </p>
+          <p className="whitespace-pre-wrap">
+            {display}
+            {message.streaming ? (
+              <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse rounded-sm bg-zinc-400 align-middle" />
+            ) : null}
+          </p>
+
+          {message.image ? (
+            <a
+              href={message.image.sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 block overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50"
+              title={`Source: ${message.image.attribution}`}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={message.image.thumbUrl || message.image.url}
+                alt=""
+                loading="lazy"
+                className="h-auto w-full"
+              />
+              <p className="px-2 py-1 text-[10px] text-zinc-500">
+                {message.image.attribution}
+              </p>
+            </a>
+          ) : null}
+        </div>
+
+        {canAddToNotes ? (
+          <div className="mt-1.5 flex justify-start">
+            <button
+              type="button"
+              onClick={onAddToNotes}
+              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition ${
+                addedRecently
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-zinc-200 bg-white/80 text-zinc-500 opacity-0 hover:border-violet-300 hover:text-violet-700 group-hover:opacity-100"
+              }`}
+              title="Add to notes"
+            >
+              <span aria-hidden>{addedRecently ? "✓" : "+"}</span>
+              {addedRecently ? "Added" : "Add to notes"}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -529,16 +926,23 @@ function MessageBubble({ message }: { message: LocalMessage }) {
 
 function UploadsRibbon({
   uploads,
+  onClick,
 }: {
   uploads: { id: string; fileName: string; fileKind: string }[];
+  onClick: () => void;
 }) {
   if (uploads.length === 0) return null;
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-2xl border border-violet-100 bg-violet-50/60 px-3 py-2 text-[11px] text-violet-900">
+    <button
+      type="button"
+      onClick={onClick}
+      className="mb-2 flex w-full flex-wrap items-center gap-1.5 rounded-2xl border border-violet-100 bg-violet-50/60 px-3 py-2 text-left text-[11px] text-violet-900 transition hover:bg-violet-100/60"
+      title="View attached reference materials"
+    >
       <span className="font-semibold uppercase tracking-wider text-violet-700">
         📎 Attached:
       </span>
-      {uploads.map((u) => (
+      {uploads.slice(0, 4).map((u) => (
         <span
           key={u.id}
           className="rounded-full border border-violet-200 bg-white px-2 py-0.5 text-violet-900"
@@ -547,6 +951,103 @@ function UploadsRibbon({
           {u.fileName}
         </span>
       ))}
+      {uploads.length > 4 ? (
+        <span className="text-violet-700">+{uploads.length - 4} more</span>
+      ) : null}
+    </button>
+  );
+}
+
+function MaterialsDrawer({
+  uploads,
+  onClose,
+}: {
+  uploads: TutorSessionUpload[];
+  onClose: () => void;
+}) {
+  // Trap-and-close drawer. Renders a backdrop + a right-aligned
+  // panel listing each upload with its AI-generated summary so the
+  // student remembers what Rose has in context.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div
+        className="flex-1 bg-zinc-950/40 backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden
+      />
+      <aside className="flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-4">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-violet-700">
+              Reference Materials
+            </p>
+            <h2 className="text-base font-semibold text-zinc-900">
+              What Rose can see
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-full p-1 text-zinc-500 hover:bg-zinc-100"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2.2}
+              strokeLinecap="round"
+              aria-hidden
+            >
+              <path d="M6 6l12 12M18 6l-12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {uploads.length === 0 ? (
+            <p className="text-sm text-zinc-500">
+              No materials attached. Drop a file from the paperclip
+              button below the conversation to give Rose more context.
+            </p>
+          ) : (
+            <ul className="space-y-3">
+              {uploads.map((u) => (
+                <li
+                  key={u.id}
+                  className="rounded-2xl border border-zinc-200 bg-zinc-50 p-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <span aria-hidden>
+                      {u.fileKind === "pdf"
+                        ? "📄"
+                        : u.fileKind === "image"
+                          ? "🖼️"
+                          : "📝"}
+                    </span>
+                    <p className="truncate text-sm font-semibold text-zinc-900">
+                      {u.fileName}
+                    </p>
+                  </div>
+                  {u.summary ? (
+                    <p className="mt-1.5 text-xs leading-relaxed text-zinc-600">
+                      {u.summary}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }

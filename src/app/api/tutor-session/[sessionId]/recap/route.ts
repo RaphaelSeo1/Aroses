@@ -57,6 +57,64 @@ export async function GET(_req: Request, ctx: Params) {
   });
 }
 
+/**
+ * PUT /api/tutor-session/[sessionId]/recap
+ *   Saves manual edits to the recap markdown. Status remains
+ *   "ready" — the edit doesn't re-trigger generation. Body:
+ *     { recapMarkdown: string }
+ */
+export async function PUT(request: Request, ctx: Params) {
+  const { sessionId } = await ctx.params;
+  if (!UUID_RE.test(sessionId)) {
+    return NextResponse.json({ error: "Invalid session id" }, { status: 400 });
+  }
+  let body: { recapMarkdown?: unknown };
+  try {
+    body = (await request.json()) as { recapMarkdown?: unknown };
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  if (
+    typeof body.recapMarkdown !== "string" ||
+    body.recapMarkdown.length > 200_000
+  ) {
+    return NextResponse.json(
+      { error: "Missing or oversized recapMarkdown." },
+      { status: 400 }
+    );
+  }
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  }
+
+  const { data: row } = await supabase
+    .from("tutor_sessions")
+    .select("id, user_id")
+    .eq("id", sessionId)
+    .maybeSingle();
+  if (!row || row.user_id !== user.id) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const { error } = await supabase
+    .from("tutor_sessions")
+    .update({
+      recap_markdown: body.recapMarkdown,
+      recap_status: "ready",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", sessionId)
+    .eq("user_id", user.id);
+  if (error) {
+    return NextResponse.json({ error: "Save failed" }, { status: 500 });
+  }
+  return NextResponse.json({ ok: true });
+}
+
 export async function POST(_req: Request, ctx: Params) {
   const { sessionId } = await ctx.params;
   if (!UUID_RE.test(sessionId)) {

@@ -18,14 +18,14 @@ import type {
  * document via LessonRichContent.
  *
  * Top-of-page actions:
- *   - Download as markdown
- *   - Copy to clipboard
- *   - Regenerate (when status='failed')
- *   - Delete session
- *
- * PDF export + share link are intentionally deferred — they need
- * either a server-side renderer or a public read view, both out of
- * scope for this MVP commit.
+ *   - Edit          → switch to a textarea, save back via PUT /recap
+ *   - Copy          → markdown to clipboard
+ *   - Download .md  → save markdown as a file
+ *   - Print / PDF   → window.print() — the recap stylesheet is print-clean
+ *   - Share         → toggle public read-only link (/share/session/[token])
+ *   - Regenerate    → POST /recap (used when status='failed' or to retry)
+ *   - To course     → convert the recap into a structured Aroses course
+ *   - Delete        → hard-delete the session + uploads
  */
 
 type Props = {
@@ -47,7 +47,46 @@ export function TutorRecapView({ sessionId, initial }: Props) {
   const [status, setStatus] = useState<TutorSessionRecapStatus>(initial.recapStatus);
   const [markdown, setMarkdown] = useState<string | null>(initial.recapMarkdown);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const [linkCopyState, setLinkCopyState] = useState<"idle" | "copied">("idle");
   const [regenerating, setRegenerating] = useState(false);
+
+  // Edit mode — when active, replace the rendered article with a
+  // textarea. Save → PUT /recap, then back to rendered.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>(initial.recapMarkdown ?? "");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Share toggle — null = off / loading; string = current public token.
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [shareLoading, setShareLoading] = useState(true);
+
+  // To-course CTA state.
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState<string | null>(null);
+
+  // On mount, pull the current share state so the toggle reflects
+  // reality. (We don't include it in the initial server fetch to
+  // keep that payload narrow.)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/tutor-session/${sessionId}/share`);
+        if (!res.ok) return;
+        const body = (await res.json()) as { shareToken: string | null };
+        if (cancelled) return;
+        setShareToken(body.shareToken);
+      } catch (e) {
+        console.error("[TutorRecapView share GET]", e);
+      } finally {
+        if (!cancelled) setShareLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
 
   // Poll while the recap is still cooking.
   useEffect(() => {
@@ -122,6 +161,108 @@ export function TutorRecapView({ sessionId, initial }: Props) {
     }
   }, [regenerating, sessionId]);
 
+  // Edit / save
+  const beginEdit = useCallback(() => {
+    setDraft(markdown ?? "");
+    setEditing(true);
+    setSaveError(null);
+  }, [markdown]);
+
+  const cancelEdit = useCallback(() => {
+    setEditing(false);
+    setSaveError(null);
+    setDraft(markdown ?? "");
+  }, [markdown]);
+
+  const saveEdit = useCallback(async () => {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await fetch(`/api/tutor-session/${sessionId}/recap`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recapMarkdown: draft }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      setMarkdown(draft);
+      setEditing(false);
+    } catch (e) {
+      console.error("[TutorRecapView saveEdit]", e);
+      setSaveError("Couldn't save edits. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }, [draft, saving, sessionId]);
+
+  // Share toggle
+  const toggleShare = useCallback(async () => {
+    const next = !shareToken;
+    try {
+      const res = await fetch(`/api/tutor-session/${sessionId}/share`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!res.ok) throw new Error(`Share toggle failed (${res.status})`);
+      const body = (await res.json()) as { shareToken: string | null };
+      setShareToken(body.shareToken);
+    } catch (e) {
+      console.error("[TutorRecapView toggleShare]", e);
+    }
+  }, [sessionId, shareToken]);
+
+  const copyShareLink = useCallback(async () => {
+    if (!shareToken) return;
+    const url = `${window.location.origin}/share/session/${shareToken}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setLinkCopyState("copied");
+      window.setTimeout(() => setLinkCopyState("idle"), 1600);
+    } catch (e) {
+      console.error("[TutorRecapView copyShareLink]", e);
+    }
+  }, [shareToken]);
+
+  // PDF export — uses the print dialog so users can pick their
+  // preferred print path (Save as PDF on macOS / Win / iOS / Android).
+  // The article's existing rounded-card chrome looks fine in print
+  // since the surrounding gradient page background hides cleanly.
+  const printPdf = useCallback(() => {
+    if (!markdown) return;
+    window.print();
+  }, [markdown]);
+
+  // To course
+  const turnIntoCourse = useCallback(async () => {
+    if (converting) return;
+    setConverting(true);
+    setConvertError(null);
+    try {
+      const res = await fetch(
+        `/api/tutor-session/${sessionId}/to-course`,
+        { method: "POST" }
+      );
+      const body = (await res.json().catch(() => ({}))) as {
+        courseId?: string;
+        materialId?: string;
+        error?: string;
+      };
+      if (!res.ok || !body.courseId) {
+        throw new Error(body.error ?? `Convert failed (${res.status})`);
+      }
+      router.push(`/dashboard?course=${body.courseId}`);
+    } catch (e) {
+      console.error("[TutorRecapView turnIntoCourse]", e);
+      setConvertError(
+        e instanceof Error
+          ? e.message
+          : "Couldn't turn this into a course. Try again."
+      );
+      setConverting(false);
+    }
+  }, [converting, router, sessionId]);
+
   const deleteSession = useCallback(async () => {
     const ok = window.confirm("Delete this session and its recap?");
     if (!ok) return;
@@ -151,20 +292,29 @@ export function TutorRecapView({ sessionId, initial }: Props) {
     return parts.join(" · ");
   }, [initial.durationSeconds, initial.endedAt, initial.modeTag, initial.startedAt]);
 
+  const shareEnabled = Boolean(shareToken);
+
   return (
-    <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-      <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
-        {/* Toolbar */}
-        <div className="mb-6 flex items-center justify-between gap-2">
+    <main className="min-h-[calc(100vh-4rem)] bg-app-gradient print:bg-white">
+      <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14 print:py-0">
+        {/* Toolbar — hidden in print */}
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-2 print:hidden">
           <Link
             href="/sessions"
             className="text-xs font-medium text-zinc-500 hover:text-violet-700"
           >
             ← All sessions
           </Link>
-          <div className="flex items-center gap-1.5">
-            {markdown ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {markdown && !editing ? (
               <>
+                <button
+                  type="button"
+                  onClick={beginEdit}
+                  className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50"
+                >
+                  Edit
+                </button>
                 <button
                   type="button"
                   onClick={copyMarkdown}
@@ -179,9 +329,47 @@ export function TutorRecapView({ sessionId, initial }: Props) {
                 >
                   Download .md
                 </button>
+                <button
+                  type="button"
+                  onClick={printPdf}
+                  className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50"
+                  title="Open the print dialog — choose 'Save as PDF'"
+                >
+                  PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleShare}
+                  disabled={shareLoading}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
+                    shareEnabled
+                      ? "border border-violet-200 bg-violet-50 text-violet-800 hover:bg-violet-100"
+                      : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                  }`}
+                >
+                  {shareEnabled ? "Sharing: On" : "Share"}
+                </button>
+                {shareEnabled ? (
+                  <button
+                    type="button"
+                    onClick={copyShareLink}
+                    className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50"
+                  >
+                    {linkCopyState === "copied" ? "Link copied!" : "Copy link"}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={turnIntoCourse}
+                  disabled={converting}
+                  title="Build a structured course from this session"
+                  className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-800 transition hover:bg-rose-100 disabled:opacity-50"
+                >
+                  {converting ? "Building course…" : "Turn into course"}
+                </button>
               </>
             ) : null}
-            {status === "failed" || status === "ready" ? (
+            {!editing && (status === "failed" || status === "ready") ? (
               <button
                 type="button"
                 onClick={regenerate}
@@ -191,19 +379,76 @@ export function TutorRecapView({ sessionId, initial }: Props) {
                 {regenerating ? "Regenerating…" : "Regenerate"}
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={deleteSession}
-              className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100"
-            >
-              Delete
-            </button>
+            {!editing ? (
+              <button
+                type="button"
+                onClick={deleteSession}
+                className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100"
+              >
+                Delete
+              </button>
+            ) : null}
+            {editing ? (
+              <>
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveEdit}
+                  disabled={saving}
+                  className="rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-3 py-1.5 text-xs font-semibold text-white shadow transition hover:from-violet-700 hover:to-fuchsia-700 disabled:opacity-50"
+                >
+                  {saving ? "Saving…" : "Save"}
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
 
+        {convertError ? (
+          <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-800 print:hidden">
+            {convertError}
+          </div>
+        ) : null}
+        {saveError ? (
+          <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-800 print:hidden">
+            {saveError}
+          </div>
+        ) : null}
+
         {/* Document */}
-        <article className="rounded-3xl border border-white/60 bg-white/95 px-6 py-10 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md sm:px-12 sm:py-14">
-          {status === "generating" || (status === "idle" && !markdown) ? (
+        <article className="rounded-3xl border border-white/60 bg-white/95 px-6 py-10 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md sm:px-12 sm:py-14 print:rounded-none print:border-0 print:shadow-none print:ring-0">
+          {editing ? (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-700">
+                Editing recap · markdown
+              </p>
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                rows={28}
+                className="mt-3 w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 font-mono text-sm leading-relaxed text-zinc-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-200"
+                placeholder="Edit your recap in markdown…"
+              />
+              <p className="mt-2 text-[11px] text-zinc-500">
+                Supports the same markdown as Aroses lessons — headings,
+                lists, callouts, code blocks, LaTeX (
+                <code className="rounded bg-zinc-100 px-1 py-0.5">
+                  $\alpha$
+                </code>{" "}
+                or
+                <code className="rounded bg-zinc-100 px-1 py-0.5">
+                  $$ ... $$
+                </code>
+                ).
+              </p>
+            </div>
+          ) : status === "generating" || (status === "idle" && !markdown) ? (
             <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
               <svg
                 viewBox="0 0 24 24"

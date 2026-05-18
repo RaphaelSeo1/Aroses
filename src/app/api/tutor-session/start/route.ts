@@ -5,6 +5,7 @@ import {
   summarizeImageUpload,
   summarizePdfUpload,
 } from "@/lib/ai/tutor-session";
+import { extractPdfText } from "@/lib/pdf-text/extract";
 import type {
   TutorSessionModeTag,
   TutorSessionRecord,
@@ -62,26 +63,6 @@ function isModeTag(v: unknown): v is TutorSessionModeTag {
     v === "quiz_me" ||
     v === "exploring"
   );
-}
-
-async function extractPdfText(buf: Buffer): Promise<string> {
-  // pdf-parse is the same lib used by the course-generation ingest
-  // pipeline. Same fallback semantics — on failure we return an
-  // empty string and the file is still recorded with a marker
-  // summary so the student knows it was attached even if we couldn't
-  // read it.
-  try {
-    const mod = (await import("pdf-parse")) as
-      | { default?: (buf: Buffer) => Promise<{ text: string }> }
-      | ((buf: Buffer) => Promise<{ text: string }>);
-    const fn = typeof mod === "function" ? mod : mod.default;
-    if (!fn) return "";
-    const parsed = await fn(buf);
-    return parsed?.text ?? "";
-  } catch (e) {
-    console.error("[tutor-session/start pdf-parse]", e);
-    return "";
-  }
 }
 
 export async function POST(request: Request) {
