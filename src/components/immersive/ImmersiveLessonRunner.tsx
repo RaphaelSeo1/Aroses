@@ -463,10 +463,39 @@ export function ImmersiveLessonRunner({
     if (notesAppendedChunkRef.current === chunk.id) return;
     if (!notesPanelRef.current) return;
     const heading = chunk.concept;
-    const bullets = chunk.keyPoints.slice(0, 4);
-    if (bullets.length === 0) return;
+    const points = chunk.keyPoints.slice(0, 5);
+    if (points.length === 0) return;
     notesAppendedChunkRef.current = chunk.id;
-    notesPanelRef.current.appendBlock({ heading, bullets });
+
+    // Notion-style structured block:
+    //   - H2 heading (chunk.concept)
+    //   - short intro paragraph (chunk.explanation, truncated)
+    //   - bullet list with bold key-term lead-ins where possible
+    //   - callout takeaway (only if the chunk gave us an analogy)
+    const intro =
+      chunk.explanation && chunk.explanation.length > 0
+        ? chunk.explanation.length > 240
+          ? `${chunk.explanation.slice(0, 237).trim()}…`
+          : chunk.explanation
+        : undefined;
+    const keyTerms = chunk.keyPoints
+      .map((p) => p.split(/[—–:.]/)[0]?.trim())
+      .filter((s): s is string => !!s && s.length > 0 && s.length <= 40);
+    const bullets = points.map((text, i) => {
+      const bold = keyTerms[i];
+      return bold && text.toLowerCase().startsWith(bold.toLowerCase())
+        ? { text, bold }
+        : text;
+    });
+    notesPanelRef.current.appendBlock({
+      heading,
+      intro,
+      bullets,
+      callout:
+        chunk.analogy && chunk.analogy.length > 0
+          ? { emoji: "💡", text: chunk.analogy }
+          : undefined,
+    });
   }, [autoGenerateNotes, chunk, phase]);
 
   useEffect(() => {
@@ -1537,21 +1566,23 @@ export function ImmersiveLessonRunner({
             slide-in drawer below. */}
         <div className="hidden min-w-0 lg:block">
           <div className="sticky top-2">
-            <NotesPanel
-              materialId={materialId}
-              suggestions={noteSuggestions}
-              onConsumeSuggestion={(id) =>
-                setConsumedSuggestionIds((prev) => {
-                  const next = new Set(prev);
-                  next.add(id);
-                  return next;
-                })
-              }
-              autoGenerate={autoGenerateNotes}
-              onAutoGenerateChange={setAutoGenerateNotes}
-              editorRef={notesPanelRef}
-              className="h-[calc(100vh-340px)] min-h-[24rem]"
-            />
+                <NotesPanel
+                  materialId={materialId}
+                  lessonTitle={activeModule.title}
+                  courseTitle={course.title}
+                  suggestions={noteSuggestions}
+                  onConsumeSuggestion={(id) =>
+                    setConsumedSuggestionIds((prev) => {
+                      const next = new Set(prev);
+                      next.add(id);
+                      return next;
+                    })
+                  }
+                  autoGenerate={autoGenerateNotes}
+                  onAutoGenerateChange={setAutoGenerateNotes}
+                  editorRef={notesPanelRef}
+                  className="h-[calc(100vh-340px)] min-h-[24rem]"
+                />
           </div>
         </div>
       </div>
@@ -1589,21 +1620,23 @@ export function ImmersiveLessonRunner({
               </button>
             </div>
             <div className="flex-1 overflow-hidden p-3">
-              <NotesPanel
-                materialId={materialId}
-                suggestions={noteSuggestions}
-                onConsumeSuggestion={(id) =>
-                  setConsumedSuggestionIds((prev) => {
-                    const next = new Set(prev);
-                    next.add(id);
-                    return next;
-                  })
-                }
-                autoGenerate={autoGenerateNotes}
-                onAutoGenerateChange={setAutoGenerateNotes}
-                editorRef={notesPanelRef}
-                className="h-full"
-              />
+                  <NotesPanel
+                    materialId={materialId}
+                    lessonTitle={activeModule.title}
+                    courseTitle={course.title}
+                    suggestions={noteSuggestions}
+                    onConsumeSuggestion={(id) =>
+                      setConsumedSuggestionIds((prev) => {
+                        const next = new Set(prev);
+                        next.add(id);
+                        return next;
+                      })
+                    }
+                    autoGenerate={autoGenerateNotes}
+                    onAutoGenerateChange={setAutoGenerateNotes}
+                    editorRef={notesPanelRef}
+                    className="h-full"
+                  />
             </div>
           </div>
         </div>
