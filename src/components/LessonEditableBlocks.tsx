@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { EditableSection } from "@/components/EditableSection";
+import { LessonImage } from "@/components/LessonImage";
 import { LessonMarkdownEditor } from "@/components/LessonMarkdownEditor";
 import { LessonQuoteCaptureRegion } from "@/components/LessonQuoteCaptureRegion";
 import { LessonRichContent } from "@/components/LessonRichContent";
@@ -187,6 +188,14 @@ export function LessonEditableBlocks({
             </p>
             {titleEl}
           </div>
+          {/* Lazily-loaded licensed image from Wikimedia Commons.
+              Renders nothing when the classifier said this lesson
+              doesn't need one or no usable match was found. */}
+          <LessonImage
+            materialId={materialId}
+            moduleId={moduleId}
+            lessonIndex={lessonIndex}
+          />
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
               Lesson content
@@ -290,6 +299,12 @@ export function LessonEditableBlocks({
             </button>
           </div>
         }
+      />
+
+      <LessonImage
+        materialId={materialId}
+        moduleId={moduleId}
+        lessonIndex={lessonIndex}
       />
 
       <EditableSection

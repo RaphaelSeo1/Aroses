@@ -323,6 +323,12 @@ export type TurnOutput = {
   reply: string;
   advance: boolean;
   addToFocusedReview: boolean;
+  /**
+   * Set when Rose decides a visual would help (or the student asked
+   * for one). The route forwards this to the client which fetches
+   * the matching Wikimedia image. `null` means no image needed.
+   */
+  imageRequest: TurnImageRequest | null;
 };
 
 const INTENT_VALUES: MentoredIntent[] = [
@@ -445,13 +451,19 @@ ${input.studentUtterance.trim().slice(0, 2000)}
 Output format (STRICT):
 1. First, write your spoken reply as plain text. 1-4 sentences. Conversational tutor voice. No markdown, no "as an AI", no quotes around it.
 2. Then on a new line write exactly: ${TURN_META_SENTINEL}
-3. Then on a new line emit a JSON object with classification:
-{"intent":"answer_correct|answer_partial|answer_wrong|pace_slower|pace_faster|skip_concept|move_on|tangent_question|request_repeat|request_pause|request_clarify|other","advance":true|false,"addToFocusedReview":true|false}
+3. Then on a new line emit a JSON object with classification + optional image request:
+{"intent":"answer_correct|answer_partial|answer_wrong|pace_slower|pace_faster|skip_concept|move_on|tangent_question|request_repeat|request_pause|request_clarify|other","advance":true|false,"addToFocusedReview":true|false,"imageRequest":{"query":"<short noun phrase>","type":"diagram"|"photo"|"illustration"}|null}
+
+When to set imageRequest:
+- The student EXPLICITLY asked for a visual ("show me", "draw me", "picture of", "diagram of", "what does X look like") — set it.
+- A visual would genuinely improve comprehension RIGHT NOW (anatomy, processes, historical figures, geography, schematics, biology specimens). Set it sparingly and only when relevant — not on every turn.
+- Reference the image briefly in your spoken reply ("take a look at the diagram") if you're requesting one.
+Otherwise set imageRequest to null. Never request images for English grammar, vocab, abstract logic, math equations, or pure prose.
 
 Example:
 Nice work — you nailed the key idea there. Want to move on?
 ${TURN_META_SENTINEL}
-{"intent":"answer_correct","advance":true,"addToFocusedReview":false}
+{"intent":"answer_correct","advance":true,"addToFocusedReview":false,"imageRequest":null}
 
 Guidelines for classification + reply tone:
 - answer_correct → praise briefly and signal "advance": true.
@@ -470,10 +482,20 @@ Guidelines for classification + reply tone:
 Tone: real human tutor. Conversational. Never lecture-y. Teach from the source material naturally — rephrase, give examples, connect to things the student might already know. Do not read text verbatim. Pace yourself; this is not a race.`;
 }
 
+export type TurnImageRequest = {
+  query: string;
+  type: "diagram" | "photo" | "illustration";
+};
+
 function parseTurnMetaJson(
   raw: string,
   intentFallback: MentoredIntent = "other"
-): { intent: MentoredIntent; advance: boolean; addToFocusedReview: boolean } {
+): {
+  intent: MentoredIntent;
+  advance: boolean;
+  addToFocusedReview: boolean;
+  imageRequest: TurnImageRequest | null;
+} {
   // Tolerate stray prose around the JSON by extracting the first balanced
   // brace block. If parsing fails entirely, fall back to sensible defaults.
   const trimmed = stripJsonFence(raw).trim();
@@ -485,6 +507,19 @@ function parseTurnMetaJson(
     const intent: MentoredIntent = isIntent(parsed.intent)
       ? parsed.intent
       : intentFallback;
+    // Image request: trust only well-shaped objects.
+    let imageRequest: TurnImageRequest | null = null;
+    if (parsed.imageRequest && typeof parsed.imageRequest === "object") {
+      const ir = parsed.imageRequest as Record<string, unknown>;
+      const q = typeof ir.query === "string" ? ir.query.trim() : "";
+      const t =
+        ir.type === "diagram" || ir.type === "photo" || ir.type === "illustration"
+          ? ir.type
+          : "illustration";
+      if (q.length >= 3 && q.length <= 80) {
+        imageRequest = { query: q, type: t };
+      }
+    }
     return {
       intent,
       advance:
@@ -493,9 +528,15 @@ function parseTurnMetaJson(
         intent === "skip_concept" ||
         intent === "move_on",
       addToFocusedReview: parsed.addToFocusedReview === true,
+      imageRequest,
     };
   } catch {
-    return { intent: intentFallback, advance: false, addToFocusedReview: false };
+    return {
+      intent: intentFallback,
+      advance: false,
+      addToFocusedReview: false,
+      imageRequest: null,
+    };
   }
 }
 
@@ -538,7 +579,13 @@ export async function runMentoredTurn(input: TurnInput): Promise<TurnOutput> {
  */
 export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
   | { type: "text"; delta: string }
-  | { type: "meta"; intent: MentoredIntent; advance: boolean; addToFocusedReview: boolean },
+  | {
+      type: "meta";
+      intent: MentoredIntent;
+      advance: boolean;
+      addToFocusedReview: boolean;
+      imageRequest: TurnImageRequest | null;
+    },
   void,
   void
 > {
@@ -603,6 +650,7 @@ export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
       intent: "other",
       advance: false,
       addToFocusedReview: false,
+      imageRequest: null,
     };
     return;
   }
@@ -614,6 +662,7 @@ export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
     intent: meta.intent,
     advance: meta.advance,
     addToFocusedReview: meta.addToFocusedReview,
+    imageRequest: meta.imageRequest,
   };
 }
 
@@ -722,6 +771,117 @@ export function inferKnowledgeLevel(scorePct: number): KnowledgeLevel {
   if (scorePct >= 80) return "advanced";
   if (scorePct >= 50) return "intermediate";
   return "beginner";
+}
+
+// ---------------------------------------------------------------------------
+// 7. Lesson image classifier
+// ---------------------------------------------------------------------------
+
+/**
+ * Decides whether a given lesson would actually benefit from a
+ * visual, and — if so — what kind and what to search for. Used by
+ * the `/api/study-materials/.../lesson-image` route to lazily
+ * classify lessons on first render.
+ *
+ * Output:
+ *   { needsImage, searchQuery, imageType }
+ *
+ * Per spec, MANY lessons don't need images:
+ *   - English grammar / vocab / writing
+ *   - Abstract concepts without a clear visual representation
+ *   - Math equations (rendered by text already)
+ * The classifier is biased toward `needsImage: false` — we'd rather
+ * have a clean text-only lesson than a tangentially-related stock
+ * photo.
+ */
+
+export type LessonImageClassification = {
+  needsImage: boolean;
+  searchQuery: string;
+  imageType: "diagram" | "photo" | "illustration";
+};
+
+const LESSON_IMAGE_CLASSIFIER_SYSTEM = `You decide whether a lesson on a learning platform should have an accompanying image, and what to search for if so. Output ONLY a JSON object.
+
+Output shape EXACTLY:
+{"needsImage": boolean, "searchQuery": string, "imageType": "diagram"|"photo"|"illustration"}
+
+Rules:
+- Set needsImage to TRUE only when a visual genuinely improves comprehension. Examples: anatomy ("structure of the heart"), processes ("water cycle"), historical figures, geography, biology specimens, mechanical/electrical schematics.
+- Set needsImage to FALSE for: English grammar, vocabulary lists, abstract logic, programming syntax, math equations, pure prose / philosophy, anything that doesn't clearly map to a real-world picture.
+- searchQuery: a SHORT noun phrase (≤ 50 chars), no quotes, no punctuation, that you'd type into Wikipedia to find the most relevant educational image. Example: "human heart anatomy", "amazon rainforest", "World War II tanks".
+- imageType: "diagram" for processes/anatomy/schematics, "photo" for real-world objects/places/people, "illustration" for abstract concepts that have a conventional visual.
+- When needsImage is FALSE, set searchQuery to "" and imageType to "illustration" (placeholder values — they won't be used).
+
+Bias toward FALSE when uncertain. A clean text lesson is better than a tangentially-related image.`;
+
+export async function classifyLessonImage(input: {
+  lessonTitle: string;
+  lessonContent: string;
+  courseTitle: string;
+}): Promise<LessonImageClassification> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return { needsImage: false, searchQuery: "", imageType: "illustration" };
+  }
+
+  const content = input.lessonContent.trim().slice(0, 1500);
+  const user = `COURSE TITLE: ${input.courseTitle.trim().slice(0, 200)}
+LESSON TITLE: ${input.lessonTitle.trim().slice(0, 200)}
+LESSON BODY (truncated):
+"""
+${content}
+"""
+
+Classify now.`;
+
+  try {
+    const anthropic = new Anthropic({
+      apiKey,
+      timeout: 15_000,
+      maxRetries: 0,
+    });
+    const msg = await anthropic.messages.create({
+      model: FAST_MODEL,
+      max_tokens: 150,
+      temperature: 0.1,
+      system: LESSON_IMAGE_CLASSIFIER_SYSTEM,
+      messages: [{ role: "user", content: user }],
+    });
+
+    const block = msg.content.find((b) => b.type === "text");
+    if (!block || block.type !== "text") {
+      return { needsImage: false, searchQuery: "", imageType: "illustration" };
+    }
+    const raw = stripJsonFence(block.text).trim();
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start < 0 || end <= start) {
+      return { needsImage: false, searchQuery: "", imageType: "illustration" };
+    }
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as Record<
+      string,
+      unknown
+    >;
+    const needsImage = parsed.needsImage === true;
+    const searchQuery =
+      typeof parsed.searchQuery === "string"
+        ? parsed.searchQuery.trim().slice(0, 80)
+        : "";
+    const t =
+      parsed.imageType === "diagram"
+        ? "diagram"
+        : parsed.imageType === "photo"
+          ? "photo"
+          : "illustration";
+    if (!needsImage || !searchQuery) {
+      return { needsImage: false, searchQuery: "", imageType: t };
+    }
+    return { needsImage: true, searchQuery, imageType: t };
+  } catch (e) {
+    console.error("[classifyLessonImage]", e);
+    return { needsImage: false, searchQuery: "", imageType: "illustration" };
+  }
 }
 
 // ---------------------------------------------------------------------------

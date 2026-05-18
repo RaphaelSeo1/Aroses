@@ -150,6 +150,49 @@ export function ImmersiveLessonRunner({
   // changes don't trigger unnecessary work here.
   const [narrationText, setNarrationText] = useState<string>("");
 
+  // ---- on-demand image (§9) ----
+  // The current Mentored Learning image (set when Rose's turn meta
+  // included an imageRequest OR the student asked for one via a
+  // keyword phrase like "show me X"). Renders above the lesson
+  // cards; clears when the chunk advances.
+  const [mentoredImage, setMentoredImage] = useState<{
+    url: string;
+    thumbUrl: string;
+    sourceUrl: string;
+    attribution: string;
+    type: "diagram" | "photo" | "illustration";
+  } | null>(null);
+  const [mentoredImageLoading, setMentoredImageLoading] = useState(false);
+  const fetchMentoredImage = useCallback(
+    async (query: string, type: "diagram" | "photo" | "illustration") => {
+      if (!query || query.trim().length < 3) return;
+      setMentoredImageLoading(true);
+      try {
+        const res = await fetch("/api/mentored/image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ materialId, query, imageType: type }),
+        });
+        if (!res.ok) return;
+        const body = (await res.json()) as {
+          image: {
+            url: string;
+            thumbUrl: string;
+            sourceUrl: string;
+            attribution: string;
+            type: "diagram" | "photo" | "illustration";
+          } | null;
+        };
+        if (body.image) setMentoredImage(body.image);
+      } catch (e) {
+        console.error("[imm runner fetchMentoredImage]", e);
+      } finally {
+        setMentoredImageLoading(false);
+      }
+    },
+    [materialId]
+  );
+
   // ---- notes panel (§2) ----
   // The "seed" suggestion for the current chunk is derived from the
   // chunk's concept + first key point. We don't store the suggestion
@@ -466,6 +509,20 @@ export function ImmersiveLessonRunner({
     async (utterance: string) => {
       if (!chunk || !plan) return;
       const text = utterance.trim();
+
+      // §9 — Detect explicit image requests in the student's
+      // utterance and kick off the search BEFORE we wait on
+      // Rose's reply. Two paths can result in an image:
+      //   1. This client-side keyword match (fast, fires the
+      //      moment the student submits).
+      //   2. Rose's turn meta emitting an imageRequest (handled
+      //      below when the stream meta event arrives).
+      // Both paths POST to the same cached endpoint so a
+      // duplicate request just hits the cache.
+      const imgIntent = detectImageRequest(text);
+      if (imgIntent) {
+        void fetchMentoredImage(imgIntent.query, imgIntent.type);
+      }
       if (text.length < 2) return;
       setSubmitting(true);
       setTutorReply("");
@@ -621,6 +678,18 @@ export function ImmersiveLessonRunner({
             } else if (ev.type === "meta") {
               finalIntent = ev.intent;
               finalAdvance = ev.advance;
+              // §9 — Rose's turn included an explicit image request.
+              // Kick the search off in parallel with the rest of the
+              // response (we don't await — image arrives when ready).
+              const ir = (ev as { imageRequest?: { query?: string; type?: string } })
+                .imageRequest;
+              if (ir && typeof ir.query === "string") {
+                const t =
+                  ir.type === "diagram" || ir.type === "photo"
+                    ? ir.type
+                    : "illustration";
+                void fetchMentoredImage(ir.query, t);
+              }
             } else if (ev.type === "done") {
               const tail = pendingBuf.trim();
               if (tail.length >= 1) {
@@ -692,9 +761,12 @@ export function ImmersiveLessonRunner({
           setAttempts(0);
           setAnswerText("");
           // Clear walk-through highlight + tutor reply so the new
-          // chunk starts visually fresh.
+          // chunk starts visually fresh. Same for the on-demand
+          // image — each new chunk gets its own visual context.
           setNarrationText("");
           setTutorReply(null);
+          setMentoredImage(null);
+          setMentoredImageLoading(false);
 
           await persist({
             chunkIndex: nextIdx,
@@ -741,6 +813,7 @@ export function ImmersiveLessonRunner({
       attempts,
       chunk,
       chunkIdx,
+      fetchMentoredImage,
       interactionMode,
       interruptedContext,
       materialId,
@@ -1312,6 +1385,41 @@ export function ImmersiveLessonRunner({
       <div className="mt-2 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
         <div className="min-w-0">
 
+      {/* §9 — On-demand image area. Renders when Rose has decided a
+          visual would help OR the student explicitly asked for one
+          ("show me a diagram of..."). Stays visible until the
+          chunk advances. Loading skeleton matches the cloud aesthetic. */}
+      {mentoredImageLoading || mentoredImage ? (
+        <GlassPanel className="mt-6" tone="subtle">
+          {mentoredImage ? (
+            <figure className="overflow-hidden rounded-xl">
+              <a
+                href={mentoredImage.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Open original on Wikimedia Commons"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={mentoredImage.thumbUrl}
+                  alt=""
+                  className="block max-h-80 w-full object-contain bg-white"
+                />
+              </a>
+              <figcaption className="mt-2 px-1 text-[11px] text-zinc-500">
+                {mentoredImage.attribution}
+              </figcaption>
+            </figure>
+          ) : (
+            <div
+              className="h-44 animate-pulse rounded-xl bg-gradient-to-br from-zinc-100/80 to-zinc-50/60"
+              aria-busy="true"
+              aria-label="Rose is sketching this out…"
+            />
+          )}
+        </GlassPanel>
+      ) : null}
+
       {/* Concept + explanation */}
       <GlassPanel key={`exp-${chunk.id}`} className="mt-6" tone="default">
         <div className="flex items-start justify-between gap-3">
@@ -1537,6 +1645,51 @@ function ProgressHeader({
       </h1>
     </div>
   );
+}
+
+/**
+ * Detects when the student is explicitly asking for a visual.
+ *
+ * Returns `{ query, type }` if a request was recognized, `null`
+ * otherwise. Recognized phrases (case-insensitive):
+ *   - "show me ..."             → photo
+ *   - "show me a diagram of ..." → diagram
+ *   - "draw me ..."             → diagram
+ *   - "draw a ..."              → diagram
+ *   - "picture of ..."          → photo
+ *   - "diagram of ..."          → diagram
+ *   - "what does X look like"   → photo
+ *
+ * The extracted noun phrase is trimmed of stop words at the front
+ * ("a", "an", "the", "some") and capped at 60 chars to keep the
+ * Wikimedia query tight.
+ */
+function detectImageRequest(
+  text: string
+):
+  | { query: string; type: "diagram" | "photo" | "illustration" }
+  | null {
+  const lower = text.toLowerCase().trim();
+  if (lower.length < 6) return null;
+  const patterns: { re: RegExp; type: "diagram" | "photo" | "illustration" }[] = [
+    { re: /(?:show|draw)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?diagram\s+of\s+(.+?)[.?!]?$/i, type: "diagram" },
+    { re: /(?:show|draw)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?(?:picture|photo|image)\s+of\s+(.+?)[.?!]?$/i, type: "photo" },
+    { re: /(?:draw|sketch)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?(.+?)[.?!]?$/i, type: "diagram" },
+    { re: /(?:show|see)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?(.+?)[.?!]?$/i, type: "photo" },
+    { re: /what\s+does\s+(.+?)\s+look\s+like[.?!]?$/i, type: "photo" },
+    { re: /^(?:picture|photo|image|diagram)\s+of\s+(.+?)[.?!]?$/i, type: "photo" },
+  ];
+  for (const { re, type } of patterns) {
+    const m = lower.match(re);
+    if (m && m[1]) {
+      const q = m[1]
+        .replace(/^(?:a|an|the|some)\s+/, "")
+        .trim()
+        .slice(0, 60);
+      if (q.length >= 3) return { query: q, type };
+    }
+  }
+  return null;
 }
 
 /**

@@ -218,6 +218,7 @@ export async function POST(request: Request) {
               intent: evt.intent,
               advance: evt.advance,
               addToFocusedReview: evt.addToFocusedReview,
+              imageRequest: evt.imageRequest,
             });
           }
         }
