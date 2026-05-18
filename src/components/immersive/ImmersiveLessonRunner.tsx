@@ -1408,10 +1408,13 @@ export function ImmersiveLessonRunner({
       />
 
       {/* Side-by-side layout (§2): lesson + question on the left,
-          notes editor on the right. On <lg viewports the notes panel
-          drops out and becomes a slide-in drawer toggled from the
-          floating button below. */}
-      <div className="mt-2 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+          notes editor on the right.
+          True 50/50 split at xl (1280px+) — both columns are
+          `minmax(0, 1fr)` with a 32px gap so each panel matches the
+          full width the lesson column used to have when it was solo.
+          On <xl viewports the notes panel drops out and becomes a
+          slide-in drawer toggled from the floating button below. */}
+      <div className="mt-2 grid grid-cols-1 gap-6 xl:grid-cols-2 xl:gap-8">
         <div className="min-w-0">
 
       {/* §9 — On-demand image area. Renders when Rose has decided a
@@ -1564,7 +1567,7 @@ export function ImmersiveLessonRunner({
             calc(100vh - dock - header) so the panel itself can
             scroll independently. Hidden on <lg; replaced by a
             slide-in drawer below. */}
-        <div className="hidden min-w-0 lg:block">
+        <div className="hidden min-w-0 xl:block">
           <div className="sticky top-2">
                 <NotesPanel
                   materialId={materialId}
@@ -1595,13 +1598,13 @@ export function ImmersiveLessonRunner({
       <button
         type="button"
         onClick={() => setNotesDrawerOpen(true)}
-        className="fixed bottom-[140px] right-4 z-20 rounded-full border border-white/60 bg-white/85 px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-md backdrop-blur-md transition hover:bg-white lg:hidden"
+        className="fixed bottom-[140px] right-4 z-20 rounded-full border border-white/60 bg-white/85 px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-md backdrop-blur-md transition hover:bg-white xl:hidden"
         aria-label="Open notes"
       >
         ✎ Notes
       </button>
       {notesDrawerOpen ? (
-        <div className="fixed inset-0 z-30 flex lg:hidden">
+        <div className="fixed inset-0 z-30 flex xl:hidden">
           <button
             type="button"
             aria-label="Close notes"

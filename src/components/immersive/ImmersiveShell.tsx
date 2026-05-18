@@ -20,10 +20,14 @@ export function ImmersiveShell({
   children,
   bottomBar,
   /**
-   * When set, the main content area widens past the default max-w-3xl
-   * to accommodate a docked side panel (e.g. the §2 notes panel).
-   * `"wide"` ≈ max-w-6xl (1152px) so the lesson cards + notes column
-   * fit comfortably on a 1280px+ viewport without feeling cramped.
+   * Content area width.
+   *   "default" → max-w-3xl (768px). For chrome-only screens.
+   *   "wide"    → max-w-[84rem] (1344px). Used when the lesson view
+   *               docks the notes panel side-by-side and we want a
+   *               true 50/50 split where each panel keeps the same
+   *               visual width as the original solo lesson column
+   *               (~640px each, gap-8 = 32px). On viewports below
+   *               1280px the runner's grid collapses to stacked.
    */
   contentMaxWidth = "default",
 }: {
@@ -33,7 +37,7 @@ export function ImmersiveShell({
   contentMaxWidth?: "default" | "wide";
 }) {
   const widthClass =
-    contentMaxWidth === "wide" ? "max-w-6xl" : "max-w-3xl";
+    contentMaxWidth === "wide" ? "max-w-[84rem]" : "max-w-3xl";
   return (
     <div className="immersive-root fixed inset-0 flex flex-col overflow-hidden text-zinc-900">
       <CloudBackground />

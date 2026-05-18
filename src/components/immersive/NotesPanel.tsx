@@ -530,8 +530,11 @@ export function NotesPanel({
     <aside
       className={`tn-panel relative flex flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-[0_20px_50px_-25px_rgba(60,60,90,0.18)] backdrop-blur-md ${className ?? ""}`}
     >
-      {/* Compact status bar — out of the way but always visible. */}
-      <div className="flex items-center justify-between gap-2 border-b border-zinc-100 px-5 py-2.5">
+      {/* Compact status bar — out of the way but always visible.
+          Extra horizontal padding at xl so on the 50/50 desktop
+          layout the "Edited just now" stamp and the Auto-generate
+          toggle don't sit pinned against the panel edges. */}
+      <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-5 py-2.5 xl:px-7">
         <span
           className={`flex items-center gap-1.5 text-[11px] font-medium transition-opacity ${
             saving === "error"
@@ -691,10 +694,14 @@ export function NotesPanel({
         </div>
       </div>
 
-      {/* AI Suggestions — pinned to bottom, document-style card */}
+      {/* AI Suggestions — pinned to bottom. Spans the full panel
+          width (no max-w cap) so on the 50/50 desktop layout the
+          suggestion card has room to breathe and stays readable.
+          The document body above keeps the Notion 720px reading
+          column; only this section goes full-bleed. */}
       {suggestions.length > 0 ? (
-        <div className="border-t border-zinc-100 bg-zinc-50/60 px-5 py-3">
-          <div className="mx-auto w-full max-w-[720px]">
+        <div className="border-t border-zinc-100 bg-zinc-50/60 px-5 py-3 xl:px-7">
+          <div className="w-full">
             <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
               <span>✨</span> Rose suggests
             </p>
