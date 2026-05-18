@@ -206,6 +206,19 @@ export function ImmersiveLessonRunner({
   const notesPanelRef = useRef<NotesPanelHandle | null>(null);
   const notesAppendedChunkRef = useRef<string | null>(null);
 
+  // When the student toggles auto-generate OFF→ON we clear the
+  // "already appended for chunk X" guard so the current chunk gets
+  // re-emitted. Without this, deleting an auto-generated block and
+  // flipping the toggle off + on appears to do nothing (the effect
+  // sees the ref still says "appended", returns early). This wrapper
+  // is what we pass down to NotesPanel as `onAutoGenerateChange`.
+  const handleAutoGenerateChange = useCallback((next: boolean) => {
+    setAutoGenerateNotes((prev) => {
+      if (next && !prev) notesAppendedChunkRef.current = null;
+      return next;
+    });
+  }, []);
+
   // ---- session opening greeting ----
   // Plays once per mount, the moment the runner has a session loaded.
   // `greetingPlayed` gates the auto-speak-chunk effect so the chunk
@@ -783,6 +796,20 @@ export function ImmersiveLessonRunner({
                   : "partial";
         const attemptEval: "correct" | "partial" | "wrong" | null =
           historyEval === "skipped" ? null : historyEval;
+
+        // Safety net for "Rose asks a question then advances anyway".
+        // Claude sometimes flags advance:true on a turn that ends
+        // with a question to the student ("want to keep going?",
+        // "should we move on?", "got it?"). When that happens we
+        // suppress the advance so the student actually gets to
+        // answer — they say yes (next turn → advance) or no (next
+        // turn → stay + cover what they asked about). Heuristic is
+        // simple on purpose: trailing "?" is a strong, reliable
+        // signal that Rose is waiting on input.
+        const finalSpokenText = sentences.join(" ").trim();
+        if (finalAdvance && /\?\s*["')\]]*\s*$/.test(finalSpokenText)) {
+          finalAdvance = false;
+        }
 
         if (finalAdvance) {
           const nextIdx = chunkIdx + 1;
@@ -1582,7 +1609,7 @@ export function ImmersiveLessonRunner({
                     })
                   }
                   autoGenerate={autoGenerateNotes}
-                  onAutoGenerateChange={setAutoGenerateNotes}
+                  onAutoGenerateChange={handleAutoGenerateChange}
                   editorRef={notesPanelRef}
                   className="h-[calc(100vh-220px)] min-h-[34rem]"
                 />
@@ -1636,7 +1663,7 @@ export function ImmersiveLessonRunner({
                       })
                     }
                     autoGenerate={autoGenerateNotes}
-                    onAutoGenerateChange={setAutoGenerateNotes}
+                    onAutoGenerateChange={handleAutoGenerateChange}
                     editorRef={notesPanelRef}
                     className="h-full"
                   />
@@ -1729,19 +1756,23 @@ function detectImageRequest(
 }
 
 /**
- * Floating "thought-bubble" style overlay for the check question.
+ * Floating cloud-popup overlay for Rose's check question.
  *
- * Sticky-positioned at the top of the scroll area so it stays
- * visible as the student reads through the source content below.
- * Drifts in with a soft opacity + translateY animation when the
- * chunk changes (~400ms ease-out per spec). The student can:
+ * This is a TRUE floating popup, not an inline card — it's pinned
+ * to the bottom-right of the viewport with `position: fixed` so it
+ * never displaces the lesson content beneath it. The "Quick check"
+ * label is gone; the cloud just shows the question text + replay
+ * and dismiss controls. Style is a soft cloud: rounded-3xl,
+ * gradient background, blurred decorative blobs at the edges.
  *
- *   • Dismiss it with the × button (hides locally — answer state
- *     and submission via the dock continue to work).
- *   • Hit the replay button to have Rose speak the question again.
+ * Dismiss is purely visual — answer state and submission through
+ * the dock continue to work. A new chunk remounts the component
+ * (via `key={chunkId}` from the parent) so visibility resets to
+ * true automatically when a fresh question arrives.
  *
- * Resets to visible automatically when the chunk changes (new
- * question = new cloud).
+ * On screens narrower than sm we collapse to a centered bar above
+ * the dock instead of bottom-right so it doesn't compete with the
+ * mic button.
  */
 function QuestionCloud({
   chunkId,
@@ -1752,37 +1783,40 @@ function QuestionCloud({
   text: string;
   onRepeat: () => void;
 }) {
-  // Reset visibility every time a new chunk arrives — the previous
-  // chunk's cloud might have been dismissed, but a fresh question
-  // always deserves the spotlight. We do this purely via the
-  // `key={chunkId}` the parent passes, which remounts this
-  // component on chunk change so `visible` re-initializes to true
-  // without a setState-in-effect dance.
   const [visible, setVisible] = useState(true);
-
   if (!visible) return null;
 
   return (
     <div
       key={`q-cloud-${chunkId}`}
-      className="question-cloud sticky top-3 z-10 mt-4 transform-gpu"
+      className="question-cloud pointer-events-none fixed inset-x-3 bottom-[clamp(260px,30vh,320px)] z-20 flex justify-center sm:inset-x-auto sm:right-6 sm:bottom-[clamp(240px,28vh,320px)] sm:justify-end"
     >
-      <div className="relative overflow-hidden rounded-3xl border border-amber-200/70 bg-gradient-to-br from-amber-50/90 via-white/85 to-amber-100/85 px-5 py-4 shadow-[0_20px_50px_-25px_rgba(180,140,40,0.45)] ring-1 ring-amber-200/60 backdrop-blur-md sm:px-6 sm:py-5">
-        {/* Soft decorative cloud edges */}
+      <div className="pointer-events-auto relative w-full max-w-md overflow-visible rounded-[28px] border border-amber-200/70 bg-gradient-to-br from-amber-50/95 via-white/95 to-amber-100/95 px-5 py-4 shadow-[0_30px_60px_-20px_rgba(180,140,40,0.55)] ring-1 ring-amber-200/60 backdrop-blur-md sm:px-6 sm:py-5">
+        {/* Soft decorative cloud edges — make it feel like a thought
+            bubble drifting in. */}
         <div
           aria-hidden
-          className="pointer-events-none absolute -top-6 left-8 h-12 w-12 rounded-full bg-amber-200/40 blur-xl"
+          className="pointer-events-none absolute -left-4 -top-5 h-14 w-14 rounded-full bg-amber-200/55 blur-xl"
         />
         <div
           aria-hidden
-          className="pointer-events-none absolute -bottom-6 right-12 h-12 w-12 rounded-full bg-rose-200/40 blur-xl"
+          className="pointer-events-none absolute -right-3 -bottom-5 h-14 w-14 rounded-full bg-rose-200/45 blur-xl"
+        />
+        {/* Tail — the little nub that points down-right toward the
+            voice dock so the cloud reads as a speech bubble from Rose. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-2 right-10 h-4 w-4 rotate-45 rounded-sm bg-gradient-to-br from-amber-50 to-amber-100/80 ring-1 ring-amber-200/60"
         />
         <div className="relative flex items-start gap-3">
-          <div className="flex-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-700">
-              Quick check
-            </p>
-            <p className="mt-2 text-base font-medium leading-relaxed text-zinc-900">
+          <div
+            aria-hidden
+            className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/80 text-base shadow-sm ring-1 ring-amber-200/60"
+          >
+            💭
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[15px] font-medium leading-snug text-zinc-900">
               <TypewriterText
                 key={`q-text-${chunkId}`}
                 text={text}
@@ -1790,37 +1824,62 @@ function QuestionCloud({
               />
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1">
             <button
               type="button"
               onClick={onRepeat}
-              className="rounded-full border border-white/60 bg-white/70 px-2 py-1 text-[11px] font-medium text-zinc-700 transition hover:bg-white"
+              className="rounded-full border border-white/70 bg-white/80 p-1.5 text-zinc-700 transition hover:bg-white"
               title="Have Rose ask again"
               aria-label="Replay the question"
             >
-              ↻
+              <svg
+                viewBox="0 0 24 24"
+                className="h-3.5 w-3.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2.4}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M3 12a9 9 0 1 0 3.5-7.1" />
+                <path d="M3 4v6h6" />
+              </svg>
             </button>
             <button
               type="button"
               onClick={() => setVisible(false)}
-              className="rounded-full border border-white/60 bg-white/70 px-2 py-1 text-[11px] font-medium text-zinc-700 transition hover:bg-white"
-              title="Dismiss this question card"
-              aria-label="Dismiss the question card"
+              className="rounded-full border border-white/70 bg-white/80 p-1.5 text-zinc-700 transition hover:bg-white"
+              title="Dismiss"
+              aria-label="Dismiss the question"
             >
-              ×
+              <svg
+                viewBox="0 0 24 24"
+                className="h-3.5 w-3.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2.4}
+                strokeLinecap="round"
+                aria-hidden
+              >
+                <path d="M6 6l12 12M18 6l-12 12" />
+              </svg>
             </button>
           </div>
         </div>
       </div>
       <style jsx>{`
         .question-cloud {
-          animation: q-cloud-in 400ms ease-out both;
+          animation: q-cloud-in 420ms cubic-bezier(0.22, 0.9, 0.32, 1.2) both;
           will-change: transform, opacity;
         }
         @keyframes q-cloud-in {
           from {
             opacity: 0;
-            transform: translateY(10px) scale(0.985);
+            transform: translateY(20px) scale(0.92);
+          }
+          60% {
+            transform: translateY(-4px) scale(1.02);
           }
           to {
             opacity: 1;

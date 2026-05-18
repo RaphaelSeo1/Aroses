@@ -573,24 +573,30 @@ export function NotesPanel({
       {/* Document body — generous padding, max-width centered. */}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[720px] px-6 py-10 sm:px-10 lg:px-14 lg:py-14">
-          {/* Document header — emoji + title + subtitle */}
-          <header className="mb-8">
+          {/* Document chrome — emoji + course metadata.
+              The lesson title used to live here as a permanent H1
+              that the user couldn't delete. Now it's gone — users
+              own the document from line 1. The first node of the
+              editor body acts as the title (TipTap's Placeholder
+              extension prompts "Write your notes…" while empty),
+              so a user-typed first H1 becomes the de-facto title
+              and can be edited / deleted like any other block. */}
+          <header className="mb-6">
             <span
-              className="mb-3 block text-4xl leading-none select-none"
+              className="mb-2 block text-3xl leading-none select-none"
               aria-hidden
             >
               {docEmoji}
             </span>
-            <h1 className="tn-doc-title text-[36px] font-bold leading-tight tracking-tight text-zinc-900 sm:text-[40px]">
-              {lessonTitle || "Untitled lesson"}
-            </h1>
-            <p className="mt-2 text-[13px] text-zinc-400">
-              {courseTitle} ·{" "}
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">
+              {courseTitle || lessonTitle || "Notes"}
+            </p>
+            <p className="mt-0.5 text-[12px] text-zinc-400">
               {lastSavedAt
                 ? `Edited ${formatRelativeTime(lastSavedAt)}`
                 : "Not saved yet"}
             </p>
-            <div className="mt-6 h-px w-full bg-zinc-100" />
+            <div className="mt-5 h-px w-full bg-zinc-100" />
           </header>
 
           {/* Editor */}
