@@ -226,6 +226,16 @@ export function ImmersiveLessonRunner({
   const [greetingPlayed, setGreetingPlayed] = useState(false);
   const greetingFiredRef = useRef(false);
 
+  // ---- question popup (the centered "Rose asks" modal) ----
+  // We track which chunk id the popup has been dismissed for so it
+  // stays hidden until the next chunk arrives. We also auto-hide it
+  // the moment the student starts recording — that's the strongest
+  // signal that they've engaged with the question. The popup re-opens
+  // automatically on every new chunkId via the derived `open` below.
+  const [questionPopupDismissedFor, setQuestionPopupDismissedFor] = useState<
+    string | null
+  >(null);
+
 
   // ----- load session -----
   const loadSession = useCallback(async () => {
@@ -1543,18 +1553,24 @@ export function ImmersiveLessonRunner({
         );
       })()}
 
-      {/* Check question — rendered as a sticky floating cloud above
-          the lesson content rather than a plain stacked card. It
-          drifts in with a soft float-up animation, stays visible at
-          the top of the viewport as the student scrolls through the
-          source text, and can be dismissed if they want it out of
-          the way. Replays use Rose's voice; dismiss is purely
-          visual (the question stays in the chunk state and can be
-          submitted via the dock as usual). */}
+      {/* Check question — appears as a centered ad-style modal the
+          moment Rose's question lands. The dim backdrop is
+          click-through (pointer-events-none) so the student can
+          still scroll the lesson, read the source transcript, or
+          jot notes in the side panel while the question is up.
+          Auto-hides the moment the student starts recording, or
+          after they submit an attempt, or on manual dismiss. */}
       <QuestionCloud
         key={`q-cloud-${chunk.id}`}
         chunkId={chunk.id}
         text={chunk.checkQuestion}
+        open={
+          questionPopupDismissedFor !== chunk.id &&
+          attempts === 0 &&
+          !voice.state.recording &&
+          !voice.state.autoCapturing
+        }
+        onDismiss={() => setQuestionPopupDismissedFor(chunk.id)}
         onRepeat={() =>
           void voice.speak(chunk.checkQuestion, {
             onPlay: () => {
@@ -1756,130 +1772,216 @@ function detectImageRequest(
 }
 
 /**
- * Floating cloud-popup overlay for Rose's check question.
+ * Centered ad-style question modal.
  *
- * This is a TRUE floating popup, not an inline card — it's pinned
- * to the bottom-right of the viewport with `position: fixed` so it
- * never displaces the lesson content beneath it. The "Quick check"
- * label is gone; the cloud just shows the question text + replay
- * and dismiss controls. Style is a soft cloud: rounded-3xl,
- * gradient background, blurred decorative blobs at the edges.
+ * UX goal: the moment Rose asks a question the screen dims and a
+ * cloud pops up smack in the middle so the student can't miss it.
+ * But the dim backdrop is `pointer-events-none` — the student can
+ * still scroll the lesson, write notes, and reference the source
+ * transcript / "From Your Course" panel behind the dim. The popup
+ * itself is the only thing that captures clicks.
  *
- * Dismiss is purely visual — answer state and submission through
- * the dock continue to work. A new chunk remounts the component
- * (via `key={chunkId}` from the parent) so visibility resets to
- * true automatically when a fresh question arrives.
+ * Lifecycle
+ *   - Visibility is fully controlled by the parent via `open`. The
+ *     parent flips it true on chunk change and false the moment the
+ *     student starts answering (text input non-empty, mic engaged,
+ *     or an attempt was submitted).
+ *   - A new chunkId remounts the component so the typewriter
+ *     animation re-plays from the start.
+ *   - Manual dismiss (× or click outside) calls `onDismiss` which
+ *     the parent uses to record "student saw it, hide it".
  *
- * On screens narrower than sm we collapse to a centered bar above
- * the dock instead of bottom-right so it doesn't compete with the
- * mic button.
+ * Backdrop policy
+ *   - Two-layer: a low-opacity tint covers the WHOLE viewport so
+ *     the page reads as "dimmed", but `pointer-events-none` means
+ *     it never blocks clicks. The notes panel + transcript stay
+ *     fully interactive.
+ *   - The popup card sits centered on top with `pointer-events-auto`
+ *     and a soft backdrop-blur ring so it looks like it's floating
+ *     above the page.
  */
 function QuestionCloud({
   chunkId,
   text,
+  open,
   onRepeat,
+  onDismiss,
 }: {
   chunkId: string;
   text: string;
+  open: boolean;
   onRepeat: () => void;
+  onDismiss: () => void;
 }) {
-  const [visible, setVisible] = useState(true);
-  if (!visible) return null;
+  // Escape to dismiss. Mounted only while open so the listener
+  // tears down cleanly when the popup goes away.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onDismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onDismiss]);
+
+  if (!open) return null;
 
   return (
     <div
       key={`q-cloud-${chunkId}`}
-      className="question-cloud pointer-events-none fixed inset-x-3 bottom-[clamp(260px,30vh,320px)] z-20 flex justify-center sm:inset-x-auto sm:right-6 sm:bottom-[clamp(240px,28vh,320px)] sm:justify-end"
+      className="question-cloud-root fixed inset-0 z-30"
+      role="dialog"
+      aria-modal="false"
+      aria-label="Rose's question"
     >
-      <div className="pointer-events-auto relative w-full max-w-md overflow-visible rounded-[28px] border border-amber-200/70 bg-gradient-to-br from-amber-50/95 via-white/95 to-amber-100/95 px-5 py-4 shadow-[0_30px_60px_-20px_rgba(180,140,40,0.55)] ring-1 ring-amber-200/60 backdrop-blur-md sm:px-6 sm:py-5">
-        {/* Soft decorative cloud edges — make it feel like a thought
-            bubble drifting in. */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -left-4 -top-5 h-14 w-14 rounded-full bg-amber-200/55 blur-xl"
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -right-3 -bottom-5 h-14 w-14 rounded-full bg-rose-200/45 blur-xl"
-        />
-        {/* Tail — the little nub that points down-right toward the
-            voice dock so the cloud reads as a speech bubble from Rose. */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -bottom-2 right-10 h-4 w-4 rotate-45 rounded-sm bg-gradient-to-br from-amber-50 to-amber-100/80 ring-1 ring-amber-200/60"
-        />
-        <div className="relative flex items-start gap-3">
+      {/* Dim layer — covers the whole viewport so the page reads as
+          "dimmed", but pointer-events-none means clicks pass right
+          through. Notes panel, transcript, and the voice dock all
+          stay fully interactive. Clicking the backdrop ALSO dismisses
+          the popup (handled by the transparent overlay below). */}
+      <div
+        aria-hidden
+        className="question-cloud-backdrop pointer-events-none absolute inset-0 bg-zinc-900/35 backdrop-blur-[2px]"
+      />
+      {/* Invisible click-to-dismiss layer. Sits BEHIND the card on
+          z-stack so clicks on the card don't fall through. We only
+          cover the left half on xl screens so the notes panel on the
+          right stays fully clickable too (the user can write notes
+          without dismissing the question). */}
+      <button
+        type="button"
+        aria-label="Dismiss question"
+        onClick={onDismiss}
+        className="absolute inset-y-0 left-0 right-0 cursor-default xl:right-1/2"
+      />
+
+      {/* The popup card. On xl screens we anchor it to the left half
+          so it sits over the lesson column and leaves the notes panel
+          on the right completely exposed. Below xl the notes panel
+          is a drawer, so the popup centers in the viewport. */}
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 py-8 sm:py-12 xl:right-1/2 xl:pr-6">
+      <div className="question-cloud-card pointer-events-auto relative w-full max-w-xl">
+        <div className="relative overflow-visible rounded-[32px] border border-amber-200/70 bg-gradient-to-br from-amber-50/98 via-white to-amber-100/95 px-7 py-7 shadow-[0_40px_80px_-20px_rgba(60,60,90,0.45)] ring-1 ring-amber-200/60 sm:px-9 sm:py-9">
+          {/* Decorative cloud blobs around the edges. */}
           <div
             aria-hidden
-            className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/80 text-base shadow-sm ring-1 ring-amber-200/60"
+            className="pointer-events-none absolute -left-6 -top-7 h-20 w-20 rounded-full bg-amber-200/55 blur-2xl"
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -right-6 -bottom-7 h-20 w-20 rounded-full bg-rose-200/45 blur-2xl"
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -right-3 top-1/3 h-10 w-10 rounded-full bg-violet-200/40 blur-xl"
+          />
+
+          {/* Close button — top-right inside the card, doesn't fight
+              the question text for attention. */}
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label="Dismiss the question"
+            className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/80 text-zinc-500 shadow-sm ring-1 ring-zinc-200 transition hover:text-zinc-900"
           >
-            💭
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-[15px] font-medium leading-snug text-zinc-900">
-              <TypewriterText
-                key={`q-text-${chunkId}`}
-                text={text}
-                wordIntervalMs={50}
-              />
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              onClick={onRepeat}
-              className="rounded-full border border-white/70 bg-white/80 p-1.5 text-zinc-700 transition hover:bg-white"
-              title="Have Rose ask again"
-              aria-label="Replay the question"
+            <svg
+              viewBox="0 0 24 24"
+              className="h-3.5 w-3.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2.4}
+              strokeLinecap="round"
+              aria-hidden
             >
-              <svg
-                viewBox="0 0 24 24"
-                className="h-3.5 w-3.5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2.4}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden
-              >
-                <path d="M3 12a9 9 0 1 0 3.5-7.1" />
-                <path d="M3 4v6h6" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              onClick={() => setVisible(false)}
-              className="rounded-full border border-white/70 bg-white/80 p-1.5 text-zinc-700 transition hover:bg-white"
-              title="Dismiss"
-              aria-label="Dismiss the question"
+              <path d="M6 6l12 12M18 6l-12 12" />
+            </svg>
+          </button>
+
+          <div className="relative flex items-start gap-4">
+            <div
+              aria-hidden
+              className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-[26px] shadow-sm ring-1 ring-amber-200/70"
             >
-              <svg
-                viewBox="0 0 24 24"
-                className="h-3.5 w-3.5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2.4}
-                strokeLinecap="round"
-                aria-hidden
-              >
-                <path d="M6 6l12 12M18 6l-12 12" />
-              </svg>
-            </button>
+              💭
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
+                Rose asks
+              </p>
+              <p className="mt-2 text-[20px] font-semibold leading-snug text-zinc-900 sm:text-[22px]">
+                <TypewriterText
+                  key={`q-text-${chunkId}`}
+                  text={text}
+                  wordIntervalMs={45}
+                />
+              </p>
+              <div className="mt-5 flex flex-wrap items-center gap-2 text-[12px] text-zinc-500">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1">
+                  <span aria-hidden>🎙️</span>
+                  Hold the mic or type your answer below
+                </span>
+                <button
+                  type="button"
+                  onClick={onRepeat}
+                  className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1 font-medium text-zinc-700 transition hover:bg-white"
+                  title="Have Rose ask again"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-3 w-3"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2.4}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="M3 12a9 9 0 1 0 3.5-7.1" />
+                    <path d="M3 4v6h6" />
+                  </svg>
+                  Replay
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
+      </div>
+
       <style jsx>{`
-        .question-cloud {
-          animation: q-cloud-in 420ms cubic-bezier(0.22, 0.9, 0.32, 1.2) both;
+        .question-cloud-root {
+          animation: q-root-in 220ms ease-out both;
+        }
+        .question-cloud-backdrop {
+          animation: q-bd-in 260ms ease-out both;
+        }
+        .question-cloud-card {
+          animation: q-card-in 480ms cubic-bezier(0.22, 0.9, 0.32, 1.25) both;
           will-change: transform, opacity;
         }
-        @keyframes q-cloud-in {
+        @keyframes q-root-in {
           from {
             opacity: 0;
-            transform: translateY(20px) scale(0.92);
+          }
+          to {
+            opacity: 1;
+          }
+        }
+        @keyframes q-bd-in {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+        @keyframes q-card-in {
+          from {
+            opacity: 0;
+            transform: translateY(24px) scale(0.9);
           }
           60% {
-            transform: translateY(-4px) scale(1.02);
+            transform: translateY(-6px) scale(1.02);
           }
           to {
             opacity: 1;
@@ -1887,7 +1989,9 @@ function QuestionCloud({
           }
         }
         @media (prefers-reduced-motion: reduce) {
-          .question-cloud {
+          .question-cloud-root,
+          .question-cloud-backdrop,
+          .question-cloud-card {
             animation: none;
           }
         }
