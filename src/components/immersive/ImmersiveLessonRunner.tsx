@@ -1584,7 +1584,7 @@ export function ImmersiveLessonRunner({
                   autoGenerate={autoGenerateNotes}
                   onAutoGenerateChange={setAutoGenerateNotes}
                   editorRef={notesPanelRef}
-                  className="h-[calc(100vh-340px)] min-h-[24rem]"
+                  className="h-[calc(100vh-220px)] min-h-[34rem]"
                 />
           </div>
         </div>
