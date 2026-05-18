@@ -7,6 +7,7 @@ import type {
   LevelQuizState,
   MentoredOnboardingPatch,
   MentoredOnboardingRecord,
+  MentoredPersonalization,
 } from "@/types/mentored";
 
 /**
@@ -36,6 +37,7 @@ function normalize(row: {
   level_quiz: unknown;
   path_choice: string;
   interaction_mode: string;
+  personalization?: unknown;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
@@ -52,11 +54,18 @@ function normalize(row: {
         : defaultLevelQuiz(),
     pathChoice: row.path_choice === "personalized" ? "personalized" : "original",
     interactionMode: row.interaction_mode === "text" ? "text" : "voice",
+    personalization:
+      row.personalization && typeof row.personalization === "object"
+        ? (row.personalization as MentoredPersonalization)
+        : {},
     completedAt: row.completed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
+
+const SELECT_COLS =
+  "id, user_id, material_id, goals, knowledge_level, level_quiz, path_choice, interaction_mode, personalization, completed_at, created_at, updated_at";
 
 export async function GET(_request: Request, ctx: Params) {
   const { materialId } = await ctx.params;
@@ -79,9 +88,7 @@ export async function GET(_request: Request, ctx: Params) {
 
   const { data, error } = await supabase
     .from("user_course_onboarding")
-    .select(
-      "id, user_id, material_id, goals, knowledge_level, level_quiz, path_choice, interaction_mode, completed_at, created_at, updated_at"
-    )
+    .select(SELECT_COLS)
     .eq("user_id", user.id)
     .eq("material_id", materialId)
     .maybeSingle();
@@ -146,6 +153,37 @@ export async function POST(request: Request, ctx: Params) {
   if (body.interactionMode === "voice" || body.interactionMode === "text") {
     update.interaction_mode = body.interactionMode;
   }
+  if (body.personalization && typeof body.personalization === "object") {
+    // Trust the shape from the client only after a soft validation —
+    // we don't want a free-form string field to leak in here.
+    const p = body.personalization;
+    const safe: MentoredPersonalization = {};
+    if (Array.isArray(p.knownTopics)) {
+      safe.knownTopics = p.knownTopics
+        .filter((s): s is string => typeof s === "string")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+        .slice(0, 12);
+    }
+    if (Array.isArray(p.focusAreas)) {
+      safe.focusAreas = p.focusAreas
+        .filter((s): s is string => typeof s === "string")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+        .slice(0, 12);
+    }
+    if (
+      p.experienceLevel === "beginner" ||
+      p.experienceLevel === "intermediate" ||
+      p.experienceLevel === "advanced"
+    ) {
+      safe.experienceLevel = p.experienceLevel;
+    }
+    if (typeof p.summary === "string") {
+      safe.summary = p.summary.trim().slice(0, 320);
+    }
+    update.personalization = safe;
+  }
   if (body.completedAt !== undefined) {
     update.completed_at = body.completedAt;
   }
@@ -153,9 +191,7 @@ export async function POST(request: Request, ctx: Params) {
   const { data, error } = await supabase
     .from("user_course_onboarding")
     .upsert(update, { onConflict: "user_id,material_id" })
-    .select(
-      "id, user_id, material_id, goals, knowledge_level, level_quiz, path_choice, interaction_mode, completed_at, created_at, updated_at"
-    )
+    .select(SELECT_COLS)
     .maybeSingle();
 
   if (error || !data) {

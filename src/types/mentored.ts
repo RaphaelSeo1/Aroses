@@ -56,6 +56,31 @@ export type LevelQuizState = {
   scorePct: number;
 };
 
+/**
+ * AI-extracted, structured view of the student's free-text onboarding
+ * answers. Used to personalize Rose's teaching in every turn:
+ *
+ *   - `knownTopics` → topics Rose can fast-forward through with a
+ *     quick recap rather than a from-zero explanation.
+ *   - `focusAreas`  → topics Rose should spend extra time on, with
+ *     more examples and deeper questions.
+ *   - `experienceLevel` → calibrates vocabulary complexity, depth,
+ *     and assumed prior knowledge. Can be updated mid-course when
+ *     the student says things like "this is too basic" or "slow
+ *     down, I don't know this stuff".
+ *   - `summary` → one-sentence natural-language summary the prompt
+ *     can paste in directly.
+ *
+ * An empty object (`{}`) means "not yet extracted" — the runner will
+ * lazily extract from `goals` on first turn.
+ */
+export type MentoredPersonalization = {
+  knownTopics?: string[];
+  focusAreas?: string[];
+  experienceLevel?: KnowledgeLevel;
+  summary?: string;
+};
+
 /** Full row shape (after the API normalizes snake_case → camelCase). */
 export type MentoredOnboardingRecord = {
   id: string;
@@ -66,6 +91,7 @@ export type MentoredOnboardingRecord = {
   levelQuiz: LevelQuizState;
   pathChoice: PathChoice;
   interactionMode: InteractionMode;
+  personalization: MentoredPersonalization;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -78,6 +104,7 @@ export type MentoredOnboardingPatch = Partial<{
   levelQuiz: LevelQuizState;
   pathChoice: PathChoice;
   interactionMode: InteractionMode;
+  personalization: MentoredPersonalization;
   completedAt: string | null;
 }>;
 

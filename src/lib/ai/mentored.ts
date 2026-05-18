@@ -15,6 +15,7 @@ import type {
   MentoredIntent,
   MentoredLessonChunk,
   MentoredLessonPlan,
+  MentoredPersonalization,
 } from "@/types/mentored";
 
 const MODEL = "claude-sonnet-4-6";
@@ -308,6 +309,13 @@ export type TurnInput = {
    * for a gentle check-in. `null` means no prior utterance yet.
    */
   secondsSinceStudentSpoke?: number | null;
+  /**
+   * AI-extracted personalization from the student's onboarding answers.
+   * Drives "skip basics they already know" / "lean into focus areas"
+   * branches of the turn prompt. Omit / empty object when not yet
+   * extracted — the prompt falls back to the bare `knowledgeLevel`.
+   */
+  personalization?: MentoredPersonalization;
 };
 
 export type TurnOutput = {
@@ -342,6 +350,34 @@ function isIntent(v: unknown): v is MentoredIntent {
 const TURN_META_SENTINEL = "---META---";
 
 function buildTurnPrompt(input: TurnInput): string {
+  // Personalization block — woven in BEFORE the chunk context so Rose
+  // reads it as the lens through which she should approach this turn.
+  // Empty / missing → block is skipped entirely (no noise in prompt).
+  const p = input.personalization;
+  const hasP =
+    p &&
+    (p.summary ||
+      (p.knownTopics?.length ?? 0) > 0 ||
+      (p.focusAreas?.length ?? 0) > 0 ||
+      p.experienceLevel);
+  const personalizationBlock = hasP
+    ? `
+
+STUDENT PROFILE (read this every turn — it shapes vocabulary, depth, and pacing):
+${p?.summary ? `- Summary: ${p.summary}` : ""}
+${p?.experienceLevel ? `- Experience level: ${p.experienceLevel}` : ""}
+${
+  p?.knownTopics && p.knownTopics.length > 0
+    ? `- Topics they say they already know (FAST-FORWARD with a quick recap; don't re-explain from zero): ${p.knownTopics.join(", ")}`
+    : ""
+}
+${
+  p?.focusAreas && p.focusAreas.length > 0
+    ? `- Topics they want EXTRA depth on (slow down, give more examples, deeper questions): ${p.focusAreas.join(", ")}`
+    : ""
+}`.replace(/\n\n+/g, "\n").trim()
+    : "";
+
   const interruptedBlock =
     input.interruptedAfter && input.interruptedAfter.trim().length > 0
       ? `
@@ -400,7 +436,7 @@ CHECK QUESTION YOU JUST ASKED: ${input.chunk.checkQuestion}
 REFERENCE ANSWER (internal — never read this aloud verbatim): ${input.chunk.referenceAnswer}
 KEY POINTS THE ANSWER SHOULD HIT: ${input.chunk.keyPoints.join("; ")}
 ATTEMPT NUMBER FOR THIS CHUNK: ${input.attempts + 1}
-STUDENT LEVEL: ${input.knowledgeLevel}${interruptedBlock}${pacingBlock}
+STUDENT LEVEL: ${input.knowledgeLevel}${personalizationBlock ? `\n\n${personalizationBlock}` : ""}${interruptedBlock}${pacingBlock}
 
 STUDENT JUST SAID: """
 ${input.studentUtterance.trim().slice(0, 2000)}
@@ -686,4 +722,123 @@ export function inferKnowledgeLevel(scorePct: number): KnowledgeLevel {
   if (scorePct >= 80) return "advanced";
   if (scorePct >= 50) return "intermediate";
   return "beginner";
+}
+
+// ---------------------------------------------------------------------------
+// 6. Personalization extraction from free-text onboarding answers
+// ---------------------------------------------------------------------------
+
+const PERSONALIZATION_SYSTEM = `You extract STRUCTURED personalization signals from a student's free-text onboarding answers. You read short answers about their motivation, prior familiarity, and what they want the tutor to focus on, and emit a JSON object that drives an AI tutor's pacing and depth.
+
+Hard requirements:
+- Output ONLY a JSON object. No prose, no markdown fences, no preamble.
+- Shape EXACTLY: {"knownTopics": string[], "focusAreas": string[], "experienceLevel": "beginner"|"intermediate"|"advanced", "summary": string}
+- knownTopics: up to 6 short noun-phrase topics the student says they ALREADY understand or have prior exposure to. Empty array when nothing was indicated. Lowercase. Examples: ["basic calculus", "python syntax"].
+- focusAreas: up to 6 short noun-phrase topics they want the tutor to spend extra time on. Empty array when not indicated. Lowercase.
+- experienceLevel: best guess from the answers. Default to "beginner" when unclear. "intermediate" when they mention some prior exposure / coursework / partial fluency. "advanced" only when they say things like "I work in this field" / "I've taught this before" / "PhD-level".
+- summary: ONE sentence (≤ 200 chars), natural-language, used as direct prompt-paste-in. Always start with "Student" and describe their goal + experience in plain English, e.g. "Student is studying for a final exam in two weeks and feels shaky on integration techniques." Never use markdown.
+
+Be conservative — do not invent topics they didn't mention.`;
+
+export type PersonalizationInput = {
+  goals: GoalsAnswer[];
+  /** Quiz-derived level acts as a prior — used when the free-text
+   *  answers don't clearly indicate experience. */
+  quizLevel?: KnowledgeLevel;
+};
+
+/**
+ * Extracts structured personalization from the goals/background
+ * free-text answers. Returns an empty object on failure (caller
+ * should treat as "no personalization yet" and fall back to the
+ * quiz-derived knowledge level).
+ *
+ * Uses the fast Haiku model — extraction needs to run in ~1s on
+ * first turn so it doesn't add latency to Rose's first reply.
+ */
+export async function extractPersonalization(
+  input: PersonalizationInput
+): Promise<MentoredPersonalization> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+
+  // No goals to extract from — bail with an experienceLevel hint
+  // from the quiz so the prompt isn't totally blind.
+  const usable = input.goals.filter(
+    (g) => g.answer && g.answer.trim().length > 0
+  );
+  if (usable.length === 0) {
+    return input.quizLevel
+      ? { experienceLevel: input.quizLevel }
+      : {};
+  }
+
+  const answersBlock = usable
+    .map(
+      (g, i) =>
+        `${i + 1}. Q: ${g.question.trim().slice(0, 200)}\n   A: ${g.answer.trim().slice(0, 500)}`
+    )
+    .join("\n");
+
+  const quizHint = input.quizLevel
+    ? `\n\nQuiz-derived knowledge level (prior): ${input.quizLevel}`
+    : "";
+
+  const user = `STUDENT ONBOARDING ANSWERS:\n${answersBlock}${quizHint}\n\nExtract personalization now.`;
+
+  const anthropic = new Anthropic({ apiKey, timeout: 20_000, maxRetries: 0 });
+  const msg = await anthropic.messages.create({
+    model: FAST_MODEL,
+    max_tokens: 400,
+    temperature: 0.2,
+    system: PERSONALIZATION_SYSTEM,
+    messages: [{ role: "user", content: user }],
+  });
+
+  const block = msg.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") {
+    return input.quizLevel ? { experienceLevel: input.quizLevel } : {};
+  }
+  const raw = stripJsonFence(block.text).trim();
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    return input.quizLevel ? { experienceLevel: input.quizLevel } : {};
+  }
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as Record<
+      string,
+      unknown
+    >;
+    const out: MentoredPersonalization = {};
+    if (Array.isArray(parsed.knownTopics)) {
+      out.knownTopics = parsed.knownTopics
+        .filter((s): s is string => typeof s === "string")
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s.length > 0)
+        .slice(0, 6);
+    }
+    if (Array.isArray(parsed.focusAreas)) {
+      out.focusAreas = parsed.focusAreas
+        .filter((s): s is string => typeof s === "string")
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s.length > 0)
+        .slice(0, 6);
+    }
+    if (
+      parsed.experienceLevel === "beginner" ||
+      parsed.experienceLevel === "intermediate" ||
+      parsed.experienceLevel === "advanced"
+    ) {
+      out.experienceLevel = parsed.experienceLevel;
+    } else if (input.quizLevel) {
+      out.experienceLevel = input.quizLevel;
+    }
+    if (typeof parsed.summary === "string") {
+      out.summary = parsed.summary.trim().slice(0, 280);
+    }
+    return out;
+  } catch {
+    return input.quizLevel ? { experienceLevel: input.quizLevel } : {};
+  }
 }

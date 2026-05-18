@@ -10,6 +10,7 @@ import type {
   KnowledgeLevel,
   LevelQuizState,
   MentoredOnboardingRecord,
+  MentoredPersonalization,
 } from "@/types/mentored";
 
 /**
@@ -112,7 +113,7 @@ export default async function LearnPage({ params, searchParams }: Props) {
   const { data: onboardingRow } = await supabase
     .from("user_course_onboarding")
     .select(
-      "id, user_id, material_id, goals, knowledge_level, level_quiz, path_choice, interaction_mode, completed_at, created_at, updated_at"
+      "id, user_id, material_id, goals, knowledge_level, level_quiz, path_choice, interaction_mode, personalization, completed_at, created_at, updated_at"
     )
     .eq("user_id", user.id)
     .eq("material_id", materialId)
@@ -139,6 +140,11 @@ export default async function LearnPage({ params, searchParams }: Props) {
             : "original",
         interactionMode:
           onboardingRow.interaction_mode === "text" ? "text" : "voice",
+        personalization:
+          onboardingRow.personalization &&
+          typeof onboardingRow.personalization === "object"
+            ? (onboardingRow.personalization as MentoredPersonalization)
+            : {},
         completedAt: (onboardingRow.completed_at as string | null) ?? null,
         createdAt: onboardingRow.created_at as string,
         updatedAt: onboardingRow.updated_at as string,

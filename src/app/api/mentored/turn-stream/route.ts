@@ -1,9 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
-import { runMentoredTurnStream } from "@/lib/ai/mentored";
+import {
+  extractPersonalization,
+  runMentoredTurnStream,
+} from "@/lib/ai/mentored";
 import type {
+  GoalsAnswer,
   KnowledgeLevel,
   MentoredLessonChunk,
+  MentoredPersonalization,
   MentoredTurnRequest,
 } from "@/types/mentored";
 
@@ -129,6 +134,56 @@ export async function POST(request: Request) {
   const moduleId = body.moduleId;
   const chunk = body.chunk;
 
+  // ---- personalization: read once, lazily extract on first turn ----
+  // Reading + (maybe) extracting BEFORE we open the stream so the
+  // prompt has the personalization signals from the very first token.
+  // Worst case (extraction needed): ~600-800ms added to first turn.
+  // After that the row is cached on subsequent turns.
+  let personalization: MentoredPersonalization = {};
+  let shouldPersistPersonalization = false;
+  try {
+    const { data: onboardingRow } = await supabase
+      .from("user_course_onboarding")
+      .select("goals, knowledge_level, personalization")
+      .eq("user_id", userId)
+      .eq("material_id", materialId)
+      .maybeSingle();
+    const existing =
+      onboardingRow?.personalization &&
+      typeof onboardingRow.personalization === "object"
+        ? (onboardingRow.personalization as MentoredPersonalization)
+        : {};
+    const isEmpty =
+      !existing.summary &&
+      !(existing.knownTopics?.length) &&
+      !(existing.focusAreas?.length) &&
+      !existing.experienceLevel;
+    if (!isEmpty) {
+      personalization = existing;
+    } else if (
+      onboardingRow?.goals &&
+      Array.isArray(onboardingRow.goals) &&
+      onboardingRow.goals.length > 0
+    ) {
+      // Lazy extract — fire it, but bound the wait. If the extraction
+      // hits its own timeout, we proceed without personalization
+      // rather than blocking Rose's reply.
+      try {
+        personalization = await extractPersonalization({
+          goals: onboardingRow.goals as GoalsAnswer[],
+          quizLevel: isLevel(onboardingRow.knowledge_level)
+            ? (onboardingRow.knowledge_level as KnowledgeLevel)
+            : undefined,
+        });
+        shouldPersistPersonalization = true;
+      } catch (e) {
+        console.error("[mentored/turn-stream personalization-extract]", e);
+      }
+    }
+  } catch (e) {
+    console.error("[mentored/turn-stream personalization-read]", e);
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -143,6 +198,7 @@ export async function POST(request: Request) {
       let addToFocusedReview = false;
 
       try {
+        let finalIntent: string | undefined;
         for await (const evt of runMentoredTurnStream({
           chunk,
           attempts: body.attempts,
@@ -151,16 +207,64 @@ export async function POST(request: Request) {
           interruptedAfter,
           secondsSinceLastCheck,
           secondsSinceStudentSpoke,
+          personalization,
         })) {
           if (evt.type === "text") {
             send("text", { delta: evt.delta });
           } else if (evt.type === "meta") {
             addToFocusedReview = evt.addToFocusedReview;
+            finalIntent = evt.intent;
             send("meta", {
               intent: evt.intent,
               advance: evt.advance,
               addToFocusedReview: evt.addToFocusedReview,
             });
+          }
+        }
+
+        // Mid-course pacing self-tuning. When the student explicitly
+        // asks Rose to slow down OR speed up via natural language
+        // ("this is too basic", "slow down"), nudge their stored
+        // experienceLevel one notch in that direction so subsequent
+        // turns inherit the calibration. We only ever nudge by 1
+        // level per turn (no jumping beginner → advanced in one go)
+        // and only when there's actually a stored level to adjust.
+        if (
+          (finalIntent === "pace_slower" || finalIntent === "pace_faster") &&
+          personalization.experienceLevel
+        ) {
+          const order: KnowledgeLevel[] = [
+            "beginner",
+            "intermediate",
+            "advanced",
+          ];
+          const i = order.indexOf(personalization.experienceLevel);
+          const nextIdx =
+            finalIntent === "pace_faster"
+              ? Math.min(order.length - 1, i + 1)
+              : Math.max(0, i - 1);
+          if (nextIdx !== i) {
+            personalization = {
+              ...personalization,
+              experienceLevel: order[nextIdx],
+            };
+            shouldPersistPersonalization = true;
+          }
+        }
+
+        if (shouldPersistPersonalization) {
+          try {
+            await supabase
+              .from("user_course_onboarding")
+              .update({
+                personalization,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("user_id", userId)
+              .eq("material_id", materialId);
+          } catch (e) {
+            // Non-fatal — next turn re-extracts.
+            console.error("[mentored/turn-stream personalization-save]", e);
           }
         }
 
