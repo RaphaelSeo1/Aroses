@@ -84,6 +84,79 @@ export function DashboardHomeContent({
             </div>
           </div>
 
+              {/* Start something new — two equal entry points: courses
+                  (structured upload-driven learning) and Tutor Sessions
+                  (open conversational tutoring). Sits between the hero
+                  card and "Continue studying" so it's the first action
+                  surface returning students see. */}
+              <section className="mt-8">
+                <header className="mb-3 flex items-baseline justify-between">
+                  <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+                    Start something new
+                  </h2>
+                </header>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Link
+                    href="/dashboard/courses/new"
+                    className="group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-rose-50/60 via-white to-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-rose-200 hover:shadow-md dark:border-zinc-800 dark:from-rose-950/30 dark:via-zinc-950 dark:to-zinc-950 dark:hover:border-rose-800"
+                  >
+                    <div className="pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-rose-200/40 blur-2xl transition group-hover:bg-rose-200/60 dark:bg-rose-900/30" aria-hidden />
+                    <div className="relative">
+                      <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100 text-rose-700 ring-1 ring-rose-200/70 dark:bg-rose-950/60 dark:text-rose-300 dark:ring-rose-900/50">
+                        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                        </svg>
+                      </span>
+                      <h3 className="mt-3 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                        Create a course
+                      </h3>
+                      <p className="mt-1.5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                        Upload your study material and I&apos;ll build a structured
+                        course you can work through lesson by lesson with Rose.
+                      </p>
+                    </div>
+                    <div className="relative mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-rose-700 transition group-hover:gap-2 dark:text-rose-300">
+                      Upload material
+                      <span aria-hidden>→</span>
+                    </div>
+                  </Link>
+
+                  <Link
+                    href="/tutor-session"
+                    className="group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-violet-50/70 via-white to-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:border-zinc-800 dark:from-violet-950/30 dark:via-zinc-950 dark:to-zinc-950 dark:hover:border-violet-800"
+                  >
+                    <div className="pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-violet-200/50 blur-2xl transition group-hover:bg-violet-200/70 dark:bg-violet-900/30" aria-hidden />
+                    <div className="relative">
+                      <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-700 ring-1 ring-violet-200/70 dark:bg-violet-950/60 dark:text-violet-300 dark:ring-violet-900/50">
+                        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+                        </svg>
+                      </span>
+                      <h3 className="mt-3 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                        Start a tutor session
+                      </h3>
+                      <p className="mt-1.5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                        Got a topic, problem, or concept you need help with right
+                        now? Jump into a one-on-one conversation with Rose.
+                      </p>
+                    </div>
+                    <div className="relative mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-violet-700 transition group-hover:gap-2 dark:text-violet-300">
+                      Start session
+                      <span aria-hidden>→</span>
+                    </div>
+                  </Link>
+                </div>
+                <div className="mt-2 flex justify-end">
+                  <Link
+                    href="/sessions"
+                    className="text-xs font-medium text-zinc-500 underline-offset-2 hover:text-violet-700 hover:underline dark:text-zinc-500 dark:hover:text-violet-300"
+                  >
+                    Past tutor sessions →
+                  </Link>
+                </div>
+              </section>
+
               <ContinueStudyingCarousel entries={progress.recentPractice} />
 
           {empty ? (

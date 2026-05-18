@@ -44,6 +44,7 @@ export async function POST(request: Request) {
   const b = body as {
     text?: unknown;
     materialId?: unknown;
+    sessionId?: unknown;
     courseId?: unknown;
     stream?: unknown;
     previousText?: unknown;
@@ -68,25 +69,49 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "text too long" }, { status: 400 });
   }
 
-  if (typeof b.materialId !== "string" || !isUuid(b.materialId)) {
-    return NextResponse.json({ error: "Invalid materialId" }, { status: 400 });
-  }
+  // Two auth paths: study material (course / Mentored Learning) OR
+  // tutor session. Exactly one must be valid. Tutor sessions skip
+  // the canReadStudyMaterial check (they aren't tied to a material)
+  // and never use a per-course cloned voice.
+  const sessionIdRaw =
+    typeof b.sessionId === "string" && isUuid(b.sessionId) ? b.sessionId : "";
+  const materialIdRaw =
+    typeof b.materialId === "string" && isUuid(b.materialId) ? b.materialId : "";
 
-  const courseId =
-    typeof b.courseId === "string" && isUuid(b.courseId) ? b.courseId : undefined;
-
-  const readable = await canReadStudyMaterial(supabase, b.materialId);
-  if (!readable) {
-    return NextResponse.json({ error: "Material not found" }, { status: 404 });
-  }
-
-  const gate = await getVoiceTutorGate({
-    userId: user.id,
-    materialId: b.materialId,
-    courseId,
-  });
-  if (!gate.allowed) {
-    return NextResponse.json({ error: gate.reason }, { status: 403 });
+  let courseId: string | undefined;
+  if (sessionIdRaw) {
+    const { data: sessionRow } = await supabase
+      .from("tutor_sessions")
+      .select("user_id")
+      .eq("id", sessionIdRaw)
+      .maybeSingle();
+    if (!sessionRow || sessionRow.user_id !== user.id) {
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    }
+    // No course-cloned voice for tutor sessions.
+    courseId = undefined;
+  } else if (materialIdRaw) {
+    courseId =
+      typeof b.courseId === "string" && isUuid(b.courseId)
+        ? b.courseId
+        : undefined;
+    const readable = await canReadStudyMaterial(supabase, materialIdRaw);
+    if (!readable) {
+      return NextResponse.json({ error: "Material not found" }, { status: 404 });
+    }
+    const gate = await getVoiceTutorGate({
+      userId: user.id,
+      materialId: materialIdRaw,
+      courseId,
+    });
+    if (!gate.allowed) {
+      return NextResponse.json({ error: gate.reason }, { status: 403 });
+    }
+  } else {
+    return NextResponse.json(
+      { error: "Missing materialId or sessionId" },
+      { status: 400 }
+    );
   }
 
   let resolvedVoiceId: string;

@@ -50,7 +50,18 @@ const TTS_VOICE_ID =
   process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID || "Rachel";
 
 export function useMentoredVoice(opts: {
-  materialId: string;
+  /**
+   * Identifier passed to the TTS + transcribe routes for access
+   * control. Standard course / Mentored Learning use cases pass the
+   * study material UUID; Tutor Sessions pass their session id.
+   *
+   * Pass either `materialId` or `sessionId` — not both. When
+   * `sessionId` is set it's sent under the `sessionId` key in the
+   * request body / form-data so the server can pick the right
+   * access-check path.
+   */
+  materialId?: string;
+  sessionId?: string;
   /** 0.5 .. 2.0 — adjusts both TTS pitch and recorded playback */
   playbackRate?: number;
   /**
@@ -236,14 +247,16 @@ export function useMentoredVoice(opts: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text,
-          materialId: opts.materialId,
+          ...(opts.sessionId
+            ? { sessionId: opts.sessionId }
+            : { materialId: opts.materialId }),
           voiceId: TTS_VOICE_ID,
           stream: true,
           ...(previousText ? { previousText: previousText.slice(-1500) } : {}),
         }),
         signal,
       }),
-    [opts.materialId]
+    [opts.materialId, opts.sessionId]
   );
 
   /**
@@ -764,7 +777,11 @@ export function useMentoredVoice(opts: {
                 type: blob.type || "audio/webm",
               });
         form.set("file", file, filename);
-        form.set("materialId", opts.materialId);
+        if (opts.sessionId) {
+          form.set("sessionId", opts.sessionId);
+        } else if (opts.materialId) {
+          form.set("materialId", opts.materialId);
+        }
         const res = await fetch("/api/voice-tutor/transcribe", {
           method: "POST",
           body: form,
@@ -790,7 +807,7 @@ export function useMentoredVoice(opts: {
         setState((s) => ({ ...s, transcribing: false }));
       }
     },
-    [opts.materialId]
+    [opts.materialId, opts.sessionId]
   );
 
   // Cleanup on unmount.

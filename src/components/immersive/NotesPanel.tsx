@@ -133,6 +133,7 @@ function docToPlainText(doc: unknown): string {
 
 export function NotesPanel({
   materialId,
+  notesEndpoint,
   lessonTitle,
   courseTitle,
   suggestions,
@@ -142,10 +143,22 @@ export function NotesPanel({
   className,
   editorRef,
 }: {
-  materialId: string;
-  /** Document title (current module / lesson). */
+  /**
+   * Mentored Learning path — when set, the panel reads/writes
+   * `/api/mentored/notes/[materialId]`. Mutually exclusive with
+   * `notesEndpoint`.
+   */
+  materialId?: string;
+  /**
+   * Tutor Session path (or any future host) — explicit endpoint base
+   * for GET (returns `{ notes: {...} }`) and PUT (accepts
+   * `{ contentJson, contentText }`). When set, takes precedence over
+   * `materialId`.
+   */
+  notesEndpoint?: string;
+  /** Document title (current module / lesson / session). */
   lessonTitle: string;
-  /** Course title shown under the document title. */
+  /** Course / session-scope title shown under the document title. */
   courseTitle: string;
   suggestions: NoteSuggestion[];
   /** Called when the student adds a suggestion (used to dismiss it). */
@@ -156,6 +169,7 @@ export function NotesPanel({
   /** Optional imperative handle so the parent can append notes. */
   editorRef?: React.RefObject<NotesPanelHandle | null>;
 }) {
+  const endpoint = notesEndpoint ?? `/api/mentored/notes/${materialId}`;
   const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "error">(
     "idle"
   );
@@ -338,7 +352,7 @@ export function NotesPanel({
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`/api/mentored/notes/${materialId}`);
+        const res = await fetch(endpoint);
         if (!res.ok) return;
         const body = (await res.json()) as {
           notes?: {
@@ -368,7 +382,7 @@ export function NotesPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editor, materialId]);
+  }, [editor, endpoint]);
 
   const saveNow = useCallback(async () => {
     if (!editor || editor.isDestroyed) return;
@@ -377,7 +391,7 @@ export function NotesPanel({
     setSaving("saving");
     const attempt = async (): Promise<boolean> => {
       try {
-        const res = await fetch(`/api/mentored/notes/${materialId}`, {
+        const res = await fetch(endpoint, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ contentJson: json, contentText: text }),
@@ -402,7 +416,7 @@ export function NotesPanel({
     } else {
       setSaving("error");
     }
-  }, [editor, materialId]);
+  }, [editor, endpoint]);
 
   // Autosave: debounce 1500ms after the last update event.
   useEffect(() => {
@@ -430,7 +444,7 @@ export function NotesPanel({
       const json = editor.getJSON();
       const text = docToPlainText(json);
       try {
-        await fetch(`/api/mentored/notes/${materialId}`, {
+        await fetch(endpoint, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -443,7 +457,7 @@ export function NotesPanel({
         console.error("[NotesPanel autoGenerate toggle]", e);
       }
     },
-    [editor, materialId, onAutoGenerateChange]
+    [editor, endpoint, onAutoGenerateChange]
   );
 
   const insertSuggestion = useCallback(
