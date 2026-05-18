@@ -289,6 +289,25 @@ export type TurnInput = {
   attempts: number;
   studentUtterance: string;
   knowledgeLevel: KnowledgeLevel;
+  /**
+   * The text Rose had already spoken (and the student heard) when the
+   * student barged in. Drives the "acknowledge interruption + offer to
+   * resume" branch in the prompt. Omit / empty string when there was
+   * no interruption.
+   */
+  interruptedAfter?: string;
+  /**
+   * Seconds since the last check question Rose asked in this session.
+   * Used for smart pacing — Rose holds off on a new check if < 30s,
+   * starts gently considering one after 90s of monologue. `null`
+   * means no prior check in this session.
+   */
+  secondsSinceLastCheck?: number | null;
+  /**
+   * Seconds since the student last spoke. Long silences are a trigger
+   * for a gentle check-in. `null` means no prior utterance yet.
+   */
+  secondsSinceStudentSpoke?: number | null;
 };
 
 export type TurnOutput = {
@@ -323,6 +342,55 @@ function isIntent(v: unknown): v is MentoredIntent {
 const TURN_META_SENTINEL = "---META---";
 
 function buildTurnPrompt(input: TurnInput): string {
+  const interruptedBlock =
+    input.interruptedAfter && input.interruptedAfter.trim().length > 0
+      ? `
+
+INTERRUPTION CONTEXT: The student cut you off MID-SENTENCE. Below is exactly what you had already said out loud and they heard. Your reply MUST:
+1. Briefly acknowledge the interruption (e.g. "yeah, go ahead", "of course", "sure thing") — do NOT scold, do NOT ignore it.
+2. Address what they just said.
+3. END with a short offer to resume from where you left off — e.g. "want me to pick back up from where I was?" or "ready to keep going from there?". DO NOT silently restart the explanation from scratch.
+
+WHAT YOU HAD ALREADY SAID (verbatim, do not re-read):
+"""
+${input.interruptedAfter.trim().slice(0, 800)}
+"""`
+      : "";
+
+  // Smart-pacing signals. These get woven into the timing guidance
+  // section so Rose can decide WHEN to ask a check question instead
+  // of asking on every turn.
+  const pacingLines: string[] = [];
+  if (
+    typeof input.secondsSinceLastCheck === "number" &&
+    Number.isFinite(input.secondsSinceLastCheck)
+  ) {
+    pacingLines.push(
+      `- Seconds since your LAST check question: ${Math.round(input.secondsSinceLastCheck)}s`
+    );
+  }
+  if (
+    typeof input.secondsSinceStudentSpoke === "number" &&
+    Number.isFinite(input.secondsSinceStudentSpoke)
+  ) {
+    pacingLines.push(
+      `- Seconds since the student LAST spoke: ${Math.round(input.secondsSinceStudentSpoke)}s`
+    );
+  }
+  const pacingBlock = pacingLines.length
+    ? `
+
+PACING SIGNALS (use to decide if a check question is appropriate this turn):
+${pacingLines.join("\n")}
+
+Smart-timing rules:
+- DO NOT ask a check question if the previous check was less than ~30 seconds ago. Just keep teaching.
+- DO consider a check question if it's been ~90+ seconds of you talking with no check-in.
+- DO consider a gentle check-in ("you still with me?") if the student has been silent ~60+ seconds AND you're mid-explanation.
+- DON'T interrupt their flow if they're asking their own questions or just answered correctly.
+- Major-concept transitions are a natural place for a check — verify before building further.`
+    : "";
+
   return `You are an AI tutor mid-lesson. The student is on this CHUNK:
 
 CONCEPT: ${input.chunk.concept}
@@ -332,7 +400,7 @@ CHECK QUESTION YOU JUST ASKED: ${input.chunk.checkQuestion}
 REFERENCE ANSWER (internal — never read this aloud verbatim): ${input.chunk.referenceAnswer}
 KEY POINTS THE ANSWER SHOULD HIT: ${input.chunk.keyPoints.join("; ")}
 ATTEMPT NUMBER FOR THIS CHUNK: ${input.attempts + 1}
-STUDENT LEVEL: ${input.knowledgeLevel}
+STUDENT LEVEL: ${input.knowledgeLevel}${interruptedBlock}${pacingBlock}
 
 STUDENT JUST SAID: """
 ${input.studentUtterance.trim().slice(0, 2000)}
@@ -363,7 +431,7 @@ Guidelines for classification + reply tone:
 - request_pause → acknowledge and offer to resume. "advance": false.
 - other → infer best interpretation; default "advance": false.
 
-Tone: real human tutor. Conversational. Never lecture-y.`;
+Tone: real human tutor. Conversational. Never lecture-y. Teach from the source material naturally — rephrase, give examples, connect to things the student might already know. Do not read text verbatim. Pace yourself; this is not a race.`;
 }
 
 function parseTurnMetaJson(
@@ -543,7 +611,12 @@ Hard constraints:
 - No markdown, no quotes around the output.
 - Use the course title verbatim if it fits naturally.
 - Vary phrasing — do not start with the same opener every time.
-- Never invent a "last lesson" if one wasn't given. If returning with no last lesson, just welcome them back without referencing a specific section.`;
+- Never invent a "last lesson" if one wasn't given. If returning with no last lesson, just welcome them back without referencing a specific section.
+
+CRITICAL — match the SCENARIO exactly. The phrasing rule is non-negotiable:
+- "first_time" scenario → the student has NEVER opened this course before. DO NOT use "welcome back", "good to see you again", "let's continue", "pick up where we left off", or any phrasing that implies a prior session. Acceptable openers: "Welcome to…", "Hey, welcome!", "Glad you're here", "Alright, ready to dive in?", "First time here? Cool…".
+- "returning" scenario → the student HAS worked on this course before. Acceptable openers: "Welcome back", "Hey, good to see you again", "You're back!", "Picking up where we left off…".
+- "all_complete" scenario → the student has finished the whole course. Acknowledge completion warmly. Do NOT reference an unfinished lesson.`;
 
 /**
  * Generates the spoken greeting the AI tutor plays the moment the

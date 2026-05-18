@@ -212,6 +212,27 @@ export type MentoredTurnRequest = {
   attempts: number;
   studentUtterance: string;
   knowledgeLevel: KnowledgeLevel;
+  /**
+   * When the student barged in mid-utterance, this is the text Rose had
+   * already spoken aloud (and the student actually heard) up to the
+   * cut. The turn prompt uses this so Rose can acknowledge the
+   * interruption and offer to resume rather than restarting cold.
+   */
+  interruptedAfter?: string;
+  /**
+   * Seconds since Rose last asked a check question in this session.
+   * Drives smart question-timing in the turn prompt — Rose holds off
+   * on a new check if it's been less than ~30s, and is more likely
+   * to ask after ~90s of monologue. Pass `null` if there's been no
+   * prior check this session.
+   */
+  secondsSinceLastCheck?: number | null;
+  /**
+   * Seconds since the student last said anything. Long silences are
+   * a signal Rose may want to gently check in. Pass `null` when no
+   * prior utterance exists yet.
+   */
+  secondsSinceStudentSpoke?: number | null;
 };
 
 export type MentoredTurnResponse = {

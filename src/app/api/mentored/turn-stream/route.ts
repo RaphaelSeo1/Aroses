@@ -89,6 +89,31 @@ export async function POST(request: Request) {
   const level: KnowledgeLevel = isLevel(body.knowledgeLevel)
     ? body.knowledgeLevel
     : "beginner";
+  // Optional context: when the student barged in mid-utterance, this
+  // is the text Rose had already spoken out loud (and the student
+  // actually heard). The turn prompt uses it so Rose can acknowledge
+  // the interruption and offer to resume from there rather than
+  // restarting her explanation cold.
+  const interruptedAfter =
+    typeof body.interruptedAfter === "string" &&
+    body.interruptedAfter.trim().length > 0
+      ? body.interruptedAfter.trim().slice(0, 800)
+      : undefined;
+  // Pacing signals for smart question timing. Both are nullable —
+  // null means "no prior signal yet this session". We clamp negative
+  // values to undefined in case the client's clock drifted.
+  const secondsSinceLastCheck =
+    typeof body.secondsSinceLastCheck === "number" &&
+    Number.isFinite(body.secondsSinceLastCheck) &&
+    body.secondsSinceLastCheck >= 0
+      ? body.secondsSinceLastCheck
+      : null;
+  const secondsSinceStudentSpoke =
+    typeof body.secondsSinceStudentSpoke === "number" &&
+    Number.isFinite(body.secondsSinceStudentSpoke) &&
+    body.secondsSinceStudentSpoke >= 0
+      ? body.secondsSinceStudentSpoke
+      : null;
 
   const supabase = await createClient();
   const {
@@ -123,6 +148,9 @@ export async function POST(request: Request) {
           attempts: body.attempts,
           studentUtterance: body.studentUtterance,
           knowledgeLevel: level,
+          interruptedAfter,
+          secondsSinceLastCheck,
+          secondsSinceStudentSpoke,
         })) {
           if (evt.type === "text") {
             send("text", { delta: evt.delta });

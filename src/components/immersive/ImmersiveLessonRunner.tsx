@@ -87,12 +87,54 @@ export function ImmersiveLessonRunner({
   // reference, so we use a ref the hook reads at fire time. Set below.
   const onBargeInRef = useRef<() => void>(() => {});
 
+  // ---- playback speed (Rose's voice) — declared up here so it can
+  //      be passed into `useMentoredVoice` below.
+  const [playbackRate, setPlaybackRate] = useState<number>(() => {
+    if (typeof window === "undefined") return 1;
+    const raw = window.localStorage.getItem("rose:playbackRate");
+    const n = raw ? Number.parseFloat(raw) : NaN;
+    if (!Number.isFinite(n)) return 1;
+    return Math.min(1.5, Math.max(0.5, n));
+  });
+  const updatePlaybackRate = useCallback((next: number) => {
+    const clamped = Math.min(1.5, Math.max(0.5, next));
+    setPlaybackRate(clamped);
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem("rose:playbackRate", String(clamped));
+      } catch {
+        /* localStorage disabled — preference just won't persist */
+      }
+    }
+  }, []);
+
   const voice = useMentoredVoice({
     materialId,
     onBargeIn: () => onBargeInRef.current(),
+    playbackRate,
   });
   const lastSpokenChunkIdRef = useRef<string | null>(null);
   const recordPromiseRef = useRef<Promise<Blob | null> | null>(null);
+
+  // ---- interruption tracking ----
+  // The most recent text Rose has ACTUALLY spoken aloud (and the
+  // student has heard) up to this instant. Updated as each streamed
+  // sentence's audio starts playing. When the student barges in, we
+  // snapshot this and pass it to the next turn so Rose knows where
+  // she was cut off and can resume contextually instead of starting
+  // her explanation over.
+  const lastSpokenRef = useRef<string>("");
+  const [interruptedContext, setInterruptedContext] = useState<string | null>(
+    null
+  );
+
+  // ---- smart question timing (§4) ----
+  // Timestamps drive the pacing signals we pass into Rose's turn
+  // prompt so she can decide whether a check question is appropriate
+  // this turn. Both are refs (not state) — the only consumer is the
+  // submit handler, no render needs to react to them.
+  const lastCheckAtRef = useRef<number | null>(null);
+  const lastStudentSpokeAtRef = useRef<number | null>(null);
 
   // ---- session opening greeting ----
   // Plays once per mount, the moment the runner has a session loaded.
@@ -100,6 +142,7 @@ export function ImmersiveLessonRunner({
   // doesn't talk over the welcome line.
   const [greetingPlayed, setGreetingPlayed] = useState(false);
   const greetingFiredRef = useRef(false);
+
 
   // ----- load session -----
   const loadSession = useCallback(async () => {
@@ -225,17 +268,26 @@ export function ImmersiveLessonRunner({
     if (!ready) return;
     greetingFiredRef.current = true;
 
+    // True first-time signal: either no session row exists OR the
+    // session row is brand new (no history entries AND chunk index
+    // still at 0). We deliberately do NOT treat `moduleIdx > 0` as
+    // "returning" — the resume-target helper can land a student in
+    // module 2 from outside (e.g. deep-link) without them having
+    // actually completed module 1. The canonical signal is the
+    // `history` array, which only gets appended when the student
+    // finishes a chunk.
     const history = session?.history ?? [];
     const touchedModuleIds = new Set(history.map((h) => h.moduleId));
     const allComplete =
       moduleCount > 0 && touchedModuleIds.size >= moduleCount;
-    const hasProgress =
-      history.length > 0 || moduleIdx > 0 || chunkIdx > 0;
+    const isFirstTime =
+      session === null ||
+      (history.length === 0 && (session.chunkIndex ?? 0) === 0);
     const scenario: "first_time" | "returning" | "all_complete" = allComplete
       ? "all_complete"
-      : hasProgress
-        ? "returning"
-        : "first_time";
+      : isFirstTime
+        ? "first_time"
+        : "returning";
 
     // Pull the most natural "last lesson title". Prefer the lesson
     // mapped to the most recent history chunk; fall back to the
@@ -286,7 +338,10 @@ export function ImmersiveLessonRunner({
         // so the text never appears before she speaks.
         try {
           await voice.speak(text, {
-            onPlay: () => setTutorReply(text),
+            onPlay: () => {
+              setTutorReply(text);
+              lastSpokenRef.current = text;
+            },
           });
         } catch (e) {
           console.error("[imm runner greeting speak]", e);
@@ -297,6 +352,7 @@ export function ImmersiveLessonRunner({
       } else {
         // Text-only mode: no audio to wait for.
         setTutorReply(text);
+        lastSpokenRef.current = text;
       }
       setGreetingPlayed(true);
     })();
@@ -317,7 +373,17 @@ export function ImmersiveLessonRunner({
     if (lastSpokenChunkIdRef.current === chunk.id) return;
     lastSpokenChunkIdRef.current = chunk.id;
     const text = `${chunk.explanation}\n\n${chunk.checkQuestion}`;
-    void voice.speak(text);
+    // Track what Rose said for this chunk so barge-in can pass it
+    // back as `interruptedAfter` and Rose can resume from there.
+    // Also stamp the "last check question asked" timestamp for §4
+    // smart pacing — chunk auto-speak always ends with a check
+    // question, so playback start is the right moment to mark it.
+    void voice.speak(text, {
+      onPlay: () => {
+        lastSpokenRef.current = text;
+        lastCheckAtRef.current = Date.now();
+      },
+    });
   }, [chunk, interactionMode, phase, voice, greetingPlayed]);
 
   // ----- submit (streaming turn → sentence-streamed TTS) -----
@@ -337,6 +403,26 @@ export function ImmersiveLessonRunner({
       if (text.length < 2) return;
       setSubmitting(true);
       setTutorReply("");
+      // Snapshot + clear any pending interruption context so it only
+      // applies to THIS turn (the one responding to the barge-in).
+      const interruptedAfter = interruptedContext;
+      if (interruptedAfter !== null) setInterruptedContext(null);
+
+      // Compute pacing deltas for the smart question-timing prompt.
+      // The student is submitting NOW so we update the "spoke at"
+      // timestamp right away — but the value we send was sampled
+      // BEFORE this update so the prompt sees the actual silence.
+      const now = Date.now();
+      const secondsSinceLastCheck =
+        lastCheckAtRef.current != null
+          ? (now - lastCheckAtRef.current) / 1000
+          : null;
+      const secondsSinceStudentSpoke =
+        lastStudentSpokeAtRef.current != null
+          ? (now - lastStudentSpokeAtRef.current) / 1000
+          : null;
+      lastStudentSpokeAtRef.current = now;
+
       try {
         const res = await fetch("/api/mentored/turn-stream", {
           method: "POST",
@@ -348,6 +434,13 @@ export function ImmersiveLessonRunner({
             attempts,
             studentUtterance: text,
             knowledgeLevel: onboarding.knowledgeLevel,
+            // Optional: when the student cut Rose off mid-sentence,
+            // this is what she had already said out loud. The
+            // turn-stream / Claude prompt uses it to acknowledge
+            // the interruption and offer to resume from there.
+            interruptedAfter: interruptedAfter ?? undefined,
+            secondsSinceLastCheck,
+            secondsSinceStudentSpoke,
           }),
         });
         if (!res.ok || !res.body) {
@@ -494,7 +587,12 @@ export function ImmersiveLessonRunner({
             onSentencePlaying: (_text, index) => {
               if (index < revealedUpTo) return;
               revealedUpTo = index + 1;
-              setTutorReply(sentences.slice(0, revealedUpTo).join(" "));
+              const spoken = sentences.slice(0, revealedUpTo).join(" ");
+              setTutorReply(spoken);
+              // Keep the "what Rose has said out loud" snapshot
+              // current — used as `interruptedAfter` if the student
+              // barges in next.
+              lastSpokenRef.current = spoken;
             },
           });
         } else {
@@ -569,6 +667,7 @@ export function ImmersiveLessonRunner({
       chunk,
       chunkIdx,
       interactionMode,
+      interruptedContext,
       materialId,
       onboarding.knowledgeLevel,
       persist,
@@ -679,16 +778,39 @@ export function ImmersiveLessonRunner({
   // start a silence-endpointed capture so they can speak their full
   // interruption without ever pressing a button, then send it through the
   // same submitAnswer pipeline as any other voice answer.
+  //
+  // On fire we ALSO snapshot whatever Rose had already spoken out loud
+  // (`lastSpokenRef.current`) so the next turn prompt can include it as
+  // `interruptedAfter` — Rose then knows where she was cut off and can
+  // acknowledge the interruption + offer to resume instead of restarting
+  // the explanation cold.
   const handleBargeIn = useCallback(async () => {
     try {
+      const spokenSoFar = lastSpokenRef.current.trim();
+      if (spokenSoFar.length >= 8) {
+        // Only mark as an "interruption" if Rose had said something
+        // meaningful first. Otherwise the barge was just the student
+        // speaking up before Rose started — no resume context needed.
+        setInterruptedContext(spokenSoFar);
+      }
       const blob = await voice.recordUntilSilence();
-      if (!blob) return;
+      if (!blob) {
+        // No utterance captured — clear the interruption context so
+        // the next genuine answer doesn't carry over stale "you cut
+        // me off" framing.
+        setInterruptedContext(null);
+        return;
+      }
       const text = await voice.transcribe(blob);
-      if (!text) return;
+      if (!text) {
+        setInterruptedContext(null);
+        return;
+      }
       setAnswerText(text);
       void submitAnswer(text);
     } catch (e) {
       console.error("[imm runner handleBargeIn]", e);
+      setInterruptedContext(null);
     }
   }, [submitAnswer, voice]);
 
@@ -766,6 +888,13 @@ export function ImmersiveLessonRunner({
   // so the choice is discoverable without a glance to the top-right.
   const topBar = (
     <div className="flex items-center gap-2">
+      <SpeedControl
+        rate={playbackRate}
+        onChange={updatePlaybackRate}
+        // Hide when the student is in text-only mode — speed only
+        // affects Rose's voice and would be confusing otherwise.
+        hidden={interactionMode !== "voice"}
+      />
       <button
         type="button"
         onClick={() =>
@@ -1239,6 +1368,51 @@ function ProgressHeader({
         {moduleTitle}
       </h1>
     </div>
+  );
+}
+
+/**
+ * Compact speed-rate selector for Rose's voice. Cycles through 0.75x ↔
+ * 1x ↔ 1.25x ↔ 1.5x ↔ 0.5x on click, with the active rate shown on
+ * the button face. Persists to localStorage via the parent. Changes
+ * affect the NEXT sentence so we never re-pitch mid-utterance.
+ */
+function SpeedControl({
+  rate,
+  onChange,
+  hidden,
+}: {
+  rate: number;
+  onChange: (next: number) => void;
+  hidden?: boolean;
+}) {
+  if (hidden) return null;
+  const STEPS = [0.75, 1, 1.25, 1.5, 0.5] as const;
+  // Find the closest step to the current rate, then advance.
+  const advance = () => {
+    let bestIdx = 0;
+    let bestDelta = Infinity;
+    for (let i = 0; i < STEPS.length; i += 1) {
+      const d = Math.abs(STEPS[i] - rate);
+      if (d < bestDelta) {
+        bestDelta = d;
+        bestIdx = i;
+      }
+    }
+    onChange(STEPS[(bestIdx + 1) % STEPS.length]);
+  };
+  // Show the rate with a single trailing "x", trim trailing zero (1.0x → 1x).
+  const label = `${Number.isInteger(rate) ? rate.toFixed(0) : rate.toFixed(2).replace(/0$/, "")}x`;
+  return (
+    <button
+      type="button"
+      onClick={advance}
+      className="rounded-full border border-white/50 bg-white/45 px-3 py-1.5 text-xs font-medium tabular-nums text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/60"
+      title={`Voice speed: ${label}. Click to cycle.`}
+      aria-label={`Voice speed ${label}, click to change`}
+    >
+      {label}
+    </button>
   );
 }
 
