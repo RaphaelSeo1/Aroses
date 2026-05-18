@@ -1,10 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatedWaveform } from "@/components/immersive/AnimatedWaveform";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { ImmersiveShell } from "@/components/immersive/ImmersiveShell";
 import { LessonPlanLoading } from "@/components/immersive/LessonPlanLoading";
+import {
+  NotesPanel,
+  type NoteSuggestion,
+  type NotesPanelHandle,
+} from "@/components/immersive/NotesPanel";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
 import type { CourseModule, CoursePayload } from "@/types/course";
@@ -144,6 +149,19 @@ export function ImmersiveLessonRunner({
   // re-renders when it changes; the panel is memo'd so other state
   // changes don't trigger unnecessary work here.
   const [narrationText, setNarrationText] = useState<string>("");
+
+  // ---- notes panel (§2) ----
+  // The "seed" suggestion for the current chunk is derived from the
+  // chunk's concept + first key point. We don't store the suggestion
+  // in state — it's a pure function of the chunk + which ids the
+  // student has already consumed/dismissed.
+  const [consumedSuggestionIds, setConsumedSuggestionIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const [autoGenerateNotes, setAutoGenerateNotes] = useState(false);
+  const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
+  const notesPanelRef = useRef<NotesPanelHandle | null>(null);
+  const notesAppendedChunkRef = useRef<string | null>(null);
 
   // ---- session opening greeting ----
   // Plays once per mount, the moment the runner has a session loaded.
@@ -374,6 +392,40 @@ export function ImmersiveLessonRunner({
   // Held back until the greeting is done so the tutor doesn't talk over
   // itself. Once the greeting finishes (or text mode skips it), this
   // takes over and speaks the chunk's explanation + check question.
+  // ---- notes suggestion (§2) — pure derivation, no setState in effect.
+  // The seed is `null` when there's no useful text to suggest, OR
+  // when the student has already consumed it.
+  const noteSuggestions = useMemo<NoteSuggestion[]>(() => {
+    if (!chunk || phase !== "teaching") return [];
+    const heading = chunk.concept;
+    const firstKeyPoint = chunk.keyPoints[0]?.trim();
+    const text =
+      firstKeyPoint && firstKeyPoint.length > 0
+        ? firstKeyPoint
+        : chunk.explanation.split(/(?<=[.!?])\s+/)[0]?.trim() ?? "";
+    if (!text) return [];
+    const id = `s-${chunk.id}`;
+    if (consumedSuggestionIds.has(id)) return [];
+    return [{ id, heading, text }];
+  }, [chunk, phase, consumedSuggestionIds]);
+
+  // Auto-generate side-effect: ref-write, not setState, so this
+  // doesn't trip the set-state-in-effect rule. Guarded by
+  // `notesAppendedChunkRef` so a chunk is appended at most once
+  // even across renders.
+  useEffect(() => {
+    if (!chunk) return;
+    if (phase !== "teaching") return;
+    if (!autoGenerateNotes) return;
+    if (notesAppendedChunkRef.current === chunk.id) return;
+    if (!notesPanelRef.current) return;
+    const heading = chunk.concept;
+    const bullets = chunk.keyPoints.slice(0, 4);
+    if (bullets.length === 0) return;
+    notesAppendedChunkRef.current = chunk.id;
+    notesPanelRef.current.appendBlock({ heading, bullets });
+  }, [autoGenerateNotes, chunk, phase]);
+
   useEffect(() => {
     if (phase !== "teaching") return;
     if (!chunk) return;
@@ -1199,6 +1251,7 @@ export function ImmersiveLessonRunner({
   return (
     <ImmersiveShell
       topBar={topBar}
+      contentMaxWidth="wide"
       bottomBar={
         <div className="immersive-dock border-t border-white/70 bg-white/85 shadow-[0_-12px_28px_-18px_rgba(60,60,90,0.20)] backdrop-blur-md">
           <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pt-3">
@@ -1252,8 +1305,15 @@ export function ImmersiveLessonRunner({
         moduleTitle={activeModule.title}
       />
 
+      {/* Side-by-side layout (§2): lesson + question on the left,
+          notes editor on the right. On <lg viewports the notes panel
+          drops out and becomes a slide-in drawer toggled from the
+          floating button below. */}
+      <div className="mt-2 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+        <div className="min-w-0">
+
       {/* Concept + explanation */}
-      <GlassPanel key={`exp-${chunk.id}`} className="mt-8" tone="default">
+      <GlassPanel key={`exp-${chunk.id}`} className="mt-6" tone="default">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
@@ -1358,6 +1418,87 @@ export function ImmersiveLessonRunner({
           You&apos;re on attempt {attempts + 1}. We can come back to this one —
           try once more or just say &quot;move on&quot;.
         </p>
+      ) : null}
+        </div>
+
+        {/* Right column — notes panel. Sticky inside the scroll
+            container so the editor stays visible as the student
+            scrolls the lesson cards on the left. Capped to
+            calc(100vh - dock - header) so the panel itself can
+            scroll independently. Hidden on <lg; replaced by a
+            slide-in drawer below. */}
+        <div className="hidden min-w-0 lg:block">
+          <div className="sticky top-2">
+            <NotesPanel
+              materialId={materialId}
+              suggestions={noteSuggestions}
+              onConsumeSuggestion={(id) =>
+                setConsumedSuggestionIds((prev) => {
+                  const next = new Set(prev);
+                  next.add(id);
+                  return next;
+                })
+              }
+              autoGenerate={autoGenerateNotes}
+              onAutoGenerateChange={setAutoGenerateNotes}
+              editorRef={notesPanelRef}
+              className="h-[calc(100vh-340px)] min-h-[24rem]"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile / narrow-screen drawer — toggled by the floating
+          button. Slides in from the right with a fade overlay so
+          students on phones still get notes without losing the
+          lesson focus. Uses fixed positioning + a high z-index so
+          it sits above the dock but below ExitConfirm (z-30). */}
+      <button
+        type="button"
+        onClick={() => setNotesDrawerOpen(true)}
+        className="fixed bottom-[140px] right-4 z-20 rounded-full border border-white/60 bg-white/85 px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-md backdrop-blur-md transition hover:bg-white lg:hidden"
+        aria-label="Open notes"
+      >
+        ✎ Notes
+      </button>
+      {notesDrawerOpen ? (
+        <div className="fixed inset-0 z-30 flex lg:hidden">
+          <button
+            type="button"
+            aria-label="Close notes"
+            onClick={() => setNotesDrawerOpen(false)}
+            className="flex-1 bg-black/30 backdrop-blur-sm"
+          />
+          <div className="flex h-full w-full max-w-md flex-col bg-white/90 shadow-2xl backdrop-blur-xl">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
+              <h2 className="text-sm font-semibold">Your notes</h2>
+              <button
+                type="button"
+                onClick={() => setNotesDrawerOpen(false)}
+                className="rounded-full border border-zinc-200 px-3 py-1 text-xs"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden p-3">
+              <NotesPanel
+                materialId={materialId}
+                suggestions={noteSuggestions}
+                onConsumeSuggestion={(id) =>
+                  setConsumedSuggestionIds((prev) => {
+                    const next = new Set(prev);
+                    next.add(id);
+                    return next;
+                  })
+                }
+                autoGenerate={autoGenerateNotes}
+                onAutoGenerateChange={setAutoGenerateNotes}
+                editorRef={notesPanelRef}
+                className="h-full"
+              />
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {showExitMenu ? (

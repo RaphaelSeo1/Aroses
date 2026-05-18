@@ -19,11 +19,21 @@ export function ImmersiveShell({
   topBar,
   children,
   bottomBar,
+  /**
+   * When set, the main content area widens past the default max-w-3xl
+   * to accommodate a docked side panel (e.g. the §2 notes panel).
+   * `"wide"` ≈ max-w-6xl (1152px) so the lesson cards + notes column
+   * fit comfortably on a 1280px+ viewport without feeling cramped.
+   */
+  contentMaxWidth = "default",
 }: {
   topBar?: ReactNode;
   children: ReactNode;
   bottomBar?: ReactNode;
+  contentMaxWidth?: "default" | "wide";
 }) {
+  const widthClass =
+    contentMaxWidth === "wide" ? "max-w-6xl" : "max-w-3xl";
   return (
     <div className="immersive-root fixed inset-0 flex flex-col overflow-hidden text-zinc-900">
       <CloudBackground />
@@ -40,7 +50,7 @@ export function ImmersiveShell({
           scroll container (not via a spacer in `children`) so callers
           don't need to know about the dock height. */}
       <main className="immersive-main relative z-0 flex flex-1 flex-col items-center overflow-y-auto px-4 pb-[clamp(200px,26vh,300px)] pt-20 sm:px-6 sm:pt-24">
-        <div className="immersive-fade-in w-full max-w-3xl">{children}</div>
+        <div className={`immersive-fade-in w-full ${widthClass}`}>{children}</div>
       </main>
 
       {bottomBar ? (
