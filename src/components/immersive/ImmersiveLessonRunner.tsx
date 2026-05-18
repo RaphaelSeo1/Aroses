@@ -280,13 +280,23 @@ export function ImmersiveLessonRunner({
                 : `Welcome back. Ready to keep going?`;
       }
 
-      setTutorReply(text);
       if (interactionMode === "voice") {
+        // Sync the greeting's transcript reveal with audio playback —
+        // tutorReply only gets set once Rose's voice actually starts,
+        // so the text never appears before she speaks.
         try {
-          await voice.speak(text);
+          await voice.speak(text, {
+            onPlay: () => setTutorReply(text),
+          });
         } catch (e) {
           console.error("[imm runner greeting speak]", e);
+          // Failsafe — make sure the greeting appears even if the
+          // speak() call threw before `onPlay` could fire.
+          setTutorReply((prev) => prev ?? text);
         }
+      } else {
+        // Text-only mode: no audio to wait for.
+        setTutorReply(text);
       }
       setGreetingPlayed(true);
     })();
@@ -414,9 +424,12 @@ export function ImmersiveLessonRunner({
 
         // Sentence splitter: yields complete sentences as they appear in
         // the text stream. Final tail (no trailing terminator) is flushed
-        // on `done`. Drives both setTutorReply (cumulative) and voice TTS.
-        let fullReply = "";
+        // on `done`. We also keep an ordered `sentences` array — this is
+        // the source of truth for transcript reveal, which happens only
+        // when each sentence's audio actually starts playing (voice
+        // mode) so the text never races ahead of Rose's voice.
         let pendingBuf = "";
+        const sentences: string[] = [];
 
         const sentenceStream = (async function* (): AsyncGenerator<
           string,
@@ -426,8 +439,11 @@ export function ImmersiveLessonRunner({
           for await (const ev of eachSseEvent()) {
             if (ev.type === "text") {
               pendingBuf += ev.delta;
-              fullReply += ev.delta;
-              setTutorReply(fullReply);
+              if (interactionMode !== "voice") {
+                // Text-only mode: no audio to sync against, reveal
+                // tokens as they arrive (original behavior).
+                setTutorReply((prev) => (prev ?? "") + ev.delta);
+              }
               // Flush complete sentences (ending in . ! ? or newline).
               // We require a terminator + whitespace OR end-of-buffer so
               // we don't cut mid-decimal ("3.14") in pathological cases.
@@ -437,6 +453,7 @@ export function ImmersiveLessonRunner({
               while ((m = re.exec(pendingBuf)) !== null) {
                 const sentence = m[1].trim();
                 if (sentence.length >= 3) {
+                  sentences.push(sentence);
                   yield sentence;
                 }
                 lastIdx = re.lastIndex;
@@ -447,7 +464,10 @@ export function ImmersiveLessonRunner({
               finalAdvance = ev.advance;
             } else if (ev.type === "done") {
               const tail = pendingBuf.trim();
-              if (tail.length >= 1) yield tail;
+              if (tail.length >= 1) {
+                sentences.push(tail);
+                yield tail;
+              }
               pendingBuf = "";
               return;
             } else if (ev.type === "error") {
@@ -457,7 +477,26 @@ export function ImmersiveLessonRunner({
         })();
 
         if (interactionMode === "voice") {
-          await voice.speakSentenceStream(sentenceStream);
+          // Gate transcript reveal on audio playback — each sentence
+          // appears in the transcript card the moment its audio chunk
+          // actually starts playing, NOT when Claude emits the tokens.
+          // If a sentence's audio fetch / playback fails, the hook
+          // still fires `onSentencePlaying` with `failed: true` so the
+          // text is revealed anyway (no silent + no-caption state).
+          //
+          // If the user barges in mid-reply, sentences after the abort
+          // point will NEVER fire their reveal callback — that's
+          // intentional. We don't backfill the rest of the text on
+          // abort; the partially-revealed transcript is what the
+          // student actually heard, which is what they should see.
+          let revealedUpTo = 0;
+          await voice.speakSentenceStream(sentenceStream, {
+            onSentencePlaying: (_text, index) => {
+              if (index < revealedUpTo) return;
+              revealedUpTo = index + 1;
+              setTutorReply(sentences.slice(0, revealedUpTo).join(" "));
+            },
+          });
         } else {
           // Drain the stream so meta/done events still execute.
           for await (const _ of sentenceStream) {
@@ -759,9 +798,15 @@ export function ImmersiveLessonRunner({
   // hold-M shortcut is available without having to read docs. Voice
   // errors (e.g. empty transcription) take priority so silent failures
   // can't happen. The "Thinking…" state covers the window between
-  // submit and the first audible sentence from the streaming turn.
+  // submit and the first audible sentence from the streaming turn —
+  // now keyed on `tutorReply` being empty rather than `voice.state.
+  // speaking`, because `speaking` flips to true the moment we kick off
+  // the TTS request (well before the first audio chunk actually
+  // plays). With audio-gated transcript reveal, tutorReply stays
+  // empty until Rose's voice actually starts, which is exactly the
+  // "thinking" window we want to surface.
   const thinkingNow =
-    submitting && !voice.state.speaking && !voice.state.transcribing;
+    submitting && !tutorReply && !voice.state.transcribing;
   const liveHint =
     voiceNotice ??
     (voice.state.transcribing

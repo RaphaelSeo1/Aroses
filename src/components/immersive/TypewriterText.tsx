@@ -5,10 +5,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 /**
  * Reveals a block of text word-by-word with a soft fade-in.
  *
- * Each word is rendered as an inline span. When the source text changes we
- * reset progress and walk through the word list on an interval. The default
- * cadence is fast enough to feel like the words are materializing as the AI
- * voice speaks them — but it's purely visual; no real audio sync.
+ * Each word is rendered as an inline span. When the source text grows by
+ * APPENDING (the new text starts with the previously-shown text), the
+ * already-revealed words stay put and only the new suffix animates in.
+ * When the text changes completely (different content), the component
+ * resets and walks through the new word list on an interval.
+ *
+ * This append-aware behavior lets the streamed Mentored transcript add
+ * sentence after sentence — synced to audio playback — without the prior
+ * text re-animating from the start every time.
  *
  *   - `text`           the string to reveal
  *   - `wordIntervalMs` ms between successive words (default 65ms)
@@ -37,10 +42,22 @@ export function TypewriterText({
 
   const [count, setCount] = useState(instant ? tokens.length : 0);
   const completedRef = useRef(false);
+  // We track the previous text + previously-revealed count via refs
+  // so the effect can decide whether this update is an APPEND (extend
+  // the existing animation, carry over progress) or a REPLACE (reset
+  // and re-animate from word 0). Using refs avoids putting `count` in
+  // the effect deps, which would restart the interval on every tick.
+  const prevTextRef = useRef<string>("");
+  const revealedRef = useRef<number>(instant ? tokens.length : 0);
 
   useEffect(() => {
+    const prev = prevTextRef.current;
+    const isAppend = text.length > prev.length && text.startsWith(prev);
+    prevTextRef.current = text;
+
     completedRef.current = false;
     if (instant) {
+      revealedRef.current = tokens.length;
       setCount(tokens.length);
       if (tokens.length > 0) {
         completedRef.current = true;
@@ -48,12 +65,29 @@ export function TypewriterText({
       }
       return;
     }
-    setCount(0);
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) {
+      revealedRef.current = 0;
+      setCount(0);
+      return;
+    }
 
-    let i = 0;
+    // On a true reset (different content, not an append), start over.
+    // On an append, keep the already-revealed words.
+    let i = isAppend ? Math.min(revealedRef.current, tokens.length) : 0;
+    revealedRef.current = i;
+    setCount(i);
+
+    if (i >= tokens.length) {
+      // Already fully revealed (rare — e.g. fast subsequent updates).
+      if (!completedRef.current) {
+        completedRef.current = true;
+        onComplete?.();
+      }
+      return;
+    }
     const id = window.setInterval(() => {
       i += 1;
+      revealedRef.current = i;
       setCount(i);
       if (i >= tokens.length) {
         window.clearInterval(id);
@@ -70,7 +104,7 @@ export function TypewriterText({
     // We intentionally exclude `onComplete` from deps — restarting the
     // typewriter every time the parent rerenders would be jarring.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tokens, wordIntervalMs, instant]);
+  }, [tokens, text, wordIntervalMs, instant]);
 
   return (
     <span className={className}>

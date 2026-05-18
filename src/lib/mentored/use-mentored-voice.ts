@@ -246,8 +246,26 @@ export function useMentoredVoice(opts: {
     [opts.materialId]
   );
 
+  /**
+   * Speak `text` through ElevenLabs.
+   *
+   * `speakOpts.onPlay` fires the exact moment audio playback begins
+   * (not when the request was sent). Callers that want to gate
+   * transcript reveal on audio playback should pass this and only
+   * call `setTutorReply` from inside it — that's what keeps the
+   * captioning in sync with Rose's voice instead of racing ahead of
+   * it.
+   *
+   * If the TTS request fails before any audio can play, `onPlay` is
+   * fired anyway with `failed: true` so the transcript still appears
+   * (per spec: "never leave the user staring at silence with no
+   * feedback").
+   */
   const speak = useCallback(
-    async (text: string): Promise<void> => {
+    async (
+      text: string,
+      speakOpts?: { onPlay?: (info: { failed: boolean }) => void }
+    ): Promise<void> => {
       if (!text.trim()) return;
       cancelSpeak();
       const ac = new AbortController();
@@ -257,9 +275,20 @@ export function useMentoredVoice(opts: {
       // permission shouldn't block playback. If the user denies permission
       // this becomes a no-op and speech still plays.
       void startBargeMonitor();
+      let revealed = false;
+      const fireReveal = (failed: boolean) => {
+        if (revealed) return;
+        revealed = true;
+        try {
+          speakOpts?.onPlay?.({ failed });
+        } catch {
+          /* ignore */
+        }
+      };
       try {
         const res = await ttsFetch(text, undefined, ac.signal);
         if (!res.ok) {
+          fireReveal(true);
           let msg = `TTS failed (${res.status})`;
           try {
             const body = (await res.json()) as { error?: string };
@@ -273,9 +302,14 @@ export function useMentoredVoice(opts: {
           signal: ac.signal,
           playbackRate,
           audioRef,
+          onFirstPlay: () => fireReveal(false),
         });
       } catch (e) {
         if (ac.signal.aborted) return;
+        // Make sure the caller still gets the reveal even on
+        // unexpected playback failure — better silent text than no
+        // text at all.
+        fireReveal(true);
         const message = e instanceof Error ? e.message : "Speak failed";
         setState((s) => ({ ...s, error: message }));
       } finally {
@@ -303,8 +337,31 @@ export function useMentoredVoice(opts: {
    * The caller controls the iterator; closing it (return/break) ends
    * playback once the in-flight sentences are done.
    */
+  /**
+   * Speak a stream of sentences. The optional `onSentencePlaying`
+   * callback fires the moment each sentence's audio actually starts
+   * playing (NOT when its TTS request was kicked off). Use this to
+   * sync transcript text reveal with the spoken audio so the text
+   * never races ahead of the voice. If a sentence's audio fails or
+   * is aborted, `onSentencePlaying` is still called with
+   * `failed: true` so the caller can fall back to revealing the
+   * text rather than leaving it permanently hidden.
+   *
+   * Sentence indices match the position in the input iterable
+   * (first yielded sentence is `index: 0`). Empty strings are
+   * skipped and do NOT advance the index.
+   */
   const speakSentenceStream = useCallback(
-    async (sentences: AsyncIterable<string>): Promise<void> => {
+    async (
+      sentences: AsyncIterable<string>,
+      streamOpts?: {
+        onSentencePlaying?: (
+          text: string,
+          index: number,
+          info: { failed: boolean }
+        ) => void;
+      }
+    ): Promise<void> => {
       cancelSpeak();
       const ac = new AbortController();
       speakAbortRef.current = ac;
@@ -317,7 +374,15 @@ export function useMentoredVoice(opts: {
       // sentence N+1 runs in parallel with sentence N's playback so we
       // don't restart latency from zero between sentences.
       let priorPlayback: Promise<void> = Promise.resolve();
+      let nextIndex = 0;
       const failures: unknown[] = [];
+      const fireReveal = (text: string, index: number, failed: boolean) => {
+        try {
+          streamOpts?.onSentencePlaying?.(text, index, { failed });
+        } catch {
+          /* swallow caller errors so they can't break playback */
+        }
+      };
 
       try {
         for await (const raw of sentences) {
@@ -325,26 +390,43 @@ export function useMentoredVoice(opts: {
           const sentence = raw.trim();
           if (!sentence) continue;
 
+          const sentenceIndex = nextIndex++;
           const previousForThis = previousText;
           previousText = `${previousText} ${sentence}`.trim();
           const fetchPromise = ttsFetch(sentence, previousForThis, ac.signal);
 
           // Chain this sentence's playback onto the prior one. We don't
           // throw mid-stream so a single failed sentence doesn't kill
-          // the rest of the reply.
+          // the rest of the reply. We track whether the reveal callback
+          // has been fired so we never reveal the same sentence twice.
           priorPlayback = priorPlayback
             .catch(() => undefined)
             .then(async () => {
-              if (ac.signal.aborted) return;
+              if (ac.signal.aborted) {
+                // Aborted mid-stream — don't reveal text we never
+                // played. The caller (transcript) will see the
+                // interruption and stop appending.
+                return;
+              }
+              let revealed = false;
+              const reveal = (failed: boolean) => {
+                if (revealed) return;
+                revealed = true;
+                fireReveal(sentence, sentenceIndex, failed);
+              };
               let res: Response;
               try {
                 res = await fetchPromise;
               } catch (e) {
                 failures.push(e);
+                reveal(true);
                 return;
               }
               if (!res.ok || ac.signal.aborted) {
-                failures.push(new Error(`TTS failed (${res.status})`));
+                if (!res.ok) {
+                  failures.push(new Error(`TTS failed (${res.status})`));
+                  reveal(true);
+                }
                 try {
                   await res.body?.cancel();
                 } catch {
@@ -357,9 +439,15 @@ export function useMentoredVoice(opts: {
                   signal: ac.signal,
                   playbackRate,
                   audioRef,
+                  onFirstPlay: () => reveal(false),
                 });
+                // If for some reason `onFirstPlay` never fired (edge
+                // case: stream ended with 0 bytes), still reveal so
+                // text isn't lost.
+                reveal(false);
               } catch (e) {
                 failures.push(e);
+                reveal(true);
               }
             });
         }
