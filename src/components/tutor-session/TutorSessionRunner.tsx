@@ -675,7 +675,12 @@ export function TutorSessionRunner({
         ) : null}
       </div>
 
-      <div className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-3 py-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] lg:px-6">
+      {/* True 50/50 split at xl (1280px+) — same treatment as the
+          Mentored Learning page. Both columns are minmax(0, 1fr) so
+          the conversation feed and the notes panel match width
+          exactly. Below xl the notes panel hides and the chat takes
+          the full width (notes are reachable later from the recap). */}
+      <div className="mx-auto grid w-full max-w-[84rem] flex-1 grid-cols-1 gap-4 px-3 py-4 xl:grid-cols-2 xl:gap-8 xl:px-6">
         {/* Left — conversation */}
         <div className="flex min-h-[60vh] min-w-0 flex-col rounded-3xl border border-white/60 bg-white/85 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md">
           <div
@@ -803,7 +808,7 @@ export function TutorSessionRunner({
         </div>
 
         {/* Right — notes panel */}
-        <div className="hidden min-w-0 lg:block">
+        <div className="hidden min-w-0 xl:block">
           <div className="sticky top-4">
             <NotesPanel
               notesEndpoint={`/api/tutor-session/${initial.id}/notes`}
@@ -818,7 +823,7 @@ export function TutorSessionRunner({
               autoGenerate={false}
               onAutoGenerateChange={() => {}}
               editorRef={notesPanelRef}
-              className="h-[calc(100vh-280px)] min-h-[24rem]"
+              className="h-[calc(100vh-200px)] min-h-[34rem]"
             />
           </div>
         </div>
