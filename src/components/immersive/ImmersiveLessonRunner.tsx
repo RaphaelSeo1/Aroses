@@ -227,14 +227,35 @@ export function ImmersiveLessonRunner({
   const greetingFiredRef = useRef(false);
 
   // ---- question popup (the centered "Rose asks" modal) ----
-  // We track which chunk id the popup has been dismissed for so it
-  // stays hidden until the next chunk arrives. We also auto-hide it
-  // the moment the student starts recording — that's the strongest
-  // signal that they've engaged with the question. The popup re-opens
-  // automatically on every new chunkId via the derived `open` below.
+  //
+  // Three independent states drive the popup lifecycle:
+  //
+  //   • `questionAudioStartedFor` — set to the chunk id at the
+  //     instant Rose actually begins speaking the check question
+  //     aloud. The popup waits for THIS, not for chunk arrival,
+  //     so the question lands on screen synchronously with Rose's
+  //     voice instead of jumping up while she's still explaining.
+  //
+  //   • `questionPopupDismissedFor` — chunk id whose popup the
+  //     student × dismissed. Stays hidden until the next chunk.
+  //
+  //   • `questionPopupMinimized` — when true the popup is rendered
+  //     as a chip in the top-right corner (with no backdrop dim)
+  //     instead of the full centered modal. Lets the student step
+  //     away to read notes / source transcript without losing the
+  //     question entirely; tapping the chip re-expands.
+  //
+  // All three reset to "fresh" when the chunk id changes (open is
+  // keyed off chunk.id, the audio-started ref clears in the speak
+  // effect's setup, dismissed/minimized reset in a cleanup effect
+  // below).
+  const [questionAudioStartedFor, setQuestionAudioStartedFor] = useState<
+    string | null
+  >(null);
   const [questionPopupDismissedFor, setQuestionPopupDismissedFor] = useState<
     string | null
   >(null);
+  const [questionPopupMinimized, setQuestionPopupMinimized] = useState(false);
 
 
   // ----- load session -----
@@ -528,23 +549,45 @@ export function ImmersiveLessonRunner({
     if (!greetingPlayed) return;
     if (lastSpokenChunkIdRef.current === chunk.id) return;
     lastSpokenChunkIdRef.current = chunk.id;
-    const text = `${chunk.explanation}\n\n${chunk.checkQuestion}`;
+
+    // Reset the per-chunk popup state for the new chunk. The popup
+    // is gated on `questionAudioStartedFor === chunk.id`, so until
+    // the explanation finishes streaming below it stays closed.
+    setQuestionAudioStartedFor(null);
+    setQuestionPopupMinimized(false);
+
+    const explanation = chunk.explanation;
+    const checkQuestion = chunk.checkQuestion;
+    const captured = chunk.id;
+    const text = `${explanation}\n\n${checkQuestion}`;
+
+    // Speak the explanation first, then — after it finishes —
+    // flip the popup state and speak the question. This makes the
+    // popup arrival sync with Rose's voice instead of jumping up
+    // at the very start of the chunk while she's still explaining.
     // Track what Rose said for this chunk so barge-in can pass it
     // back as `interruptedAfter` and Rose can resume from there.
-    // Also stamp the "last check question asked" timestamp for §4
-    // smart pacing — chunk auto-speak always ends with a check
-    // question, so playback start is the right moment to mark it.
-    void voice.speak(text, {
-      onPlay: () => {
-        lastSpokenRef.current = text;
-        lastCheckAtRef.current = Date.now();
-        // Walk-through highlight feed: use just the explanation
-        // half (not the trailing check question) so the source
-        // panel highlights the part of the lesson Rose's
-        // explanation is paraphrasing, not the question itself.
-        setNarrationText(chunk.explanation);
-      },
-    });
+    // Stamp the "last check question asked" timestamp on the
+    // question's onPlay (it's the actual check moment).
+    void (async () => {
+      await voice.speak(explanation, {
+        onPlay: () => {
+          lastSpokenRef.current = explanation;
+          setNarrationText(explanation);
+        },
+      });
+      // Bail if the chunk advanced (or anything else) while we
+      // were speaking — don't pop a stale popup over a new chunk.
+      if (lastSpokenChunkIdRef.current !== captured) return;
+      // Show the popup the instant the question audio starts.
+      await voice.speak(checkQuestion, {
+        onPlay: () => {
+          lastSpokenRef.current = text;
+          lastCheckAtRef.current = Date.now();
+          setQuestionAudioStartedFor(captured);
+        },
+      });
+    })();
   }, [chunk, interactionMode, phase, voice, greetingPlayed]);
 
   // ----- submit (streaming turn → sentence-streamed TTS) -----
@@ -1554,22 +1597,25 @@ export function ImmersiveLessonRunner({
       })()}
 
       {/* Check question — appears as a centered ad-style modal the
-          moment Rose's question lands. The dim backdrop is
-          click-through (pointer-events-none) so the student can
-          still scroll the lesson, read the source transcript, or
-          jot notes in the side panel while the question is up.
-          Auto-hides the moment the student starts recording, or
-          after they submit an attempt, or on manual dismiss. */}
+          MOMENT Rose's voice starts speaking the question (not when
+          the chunk arrives). Dim backdrop is click-through so the
+          student can scroll the lesson or jot notes through the dim.
+          The student can also Minimize the popup to a chip in the
+          top-right corner to fully reclaim the page; tap the chip to
+          expand back to center. Auto-hides after submission or on ×
+          dismiss. */}
       <QuestionCloud
         key={`q-cloud-${chunk.id}`}
         chunkId={chunk.id}
         text={chunk.checkQuestion}
         open={
+          questionAudioStartedFor === chunk.id &&
           questionPopupDismissedFor !== chunk.id &&
-          attempts === 0 &&
-          !voice.state.recording &&
-          !voice.state.autoCapturing
+          attempts === 0
         }
+        minimized={questionPopupMinimized}
+        onMinimize={() => setQuestionPopupMinimized(true)}
+        onExpand={() => setQuestionPopupMinimized(false)}
         onDismiss={() => setQuestionPopupDismissedFor(chunk.id)}
         onRepeat={() =>
           void voice.speak(chunk.checkQuestion, {
@@ -1772,60 +1818,142 @@ function detectImageRequest(
 }
 
 /**
- * Centered ad-style question modal.
+ * Centered ad-style question modal — with a minimize-to-chip mode.
  *
- * UX goal: the moment Rose asks a question the screen dims and a
- * cloud pops up smack in the middle so the student can't miss it.
- * But the dim backdrop is `pointer-events-none` — the student can
- * still scroll the lesson, write notes, and reference the source
- * transcript / "From Your Course" panel behind the dim. The popup
- * itself is the only thing that captures clicks.
+ * UX goal: the moment Rose's voice ACTUALLY says the question, the
+ * screen dims and a cloud pops up smack in the middle of the viewport
+ * so the student can't miss it. The dim backdrop is
+ * `pointer-events-none` so the page underneath stays scrollable
+ * through the dim — but the centered card naturally covers the notes
+ * panel on a wide layout. That's where the minimize button comes in:
+ * tapping "Minimize" shrinks the popup to a small chip in the
+ * top-right corner of the viewport, lifts the dim, and lets the
+ * student freely write notes / reread the source / cross-reference
+ * the course material. Tapping the chip "Expand" re-inflates the
+ * popup to center.
  *
  * Lifecycle
- *   - Visibility is fully controlled by the parent via `open`. The
- *     parent flips it true on chunk change and false the moment the
- *     student starts answering (text input non-empty, mic engaged,
- *     or an attempt was submitted).
+ *   - Parent controls `open` (when Rose's audio for the question
+ *     starts) and `minimized` (toggled by chip/Minimize button).
  *   - A new chunkId remounts the component so the typewriter
- *     animation re-plays from the start.
- *   - Manual dismiss (× or click outside) calls `onDismiss` which
- *     the parent uses to record "student saw it, hide it".
- *
- * Backdrop policy
- *   - Two-layer: a low-opacity tint covers the WHOLE viewport so
- *     the page reads as "dimmed", but `pointer-events-none` means
- *     it never blocks clicks. The notes panel + transcript stay
- *     fully interactive.
- *   - The popup card sits centered on top with `pointer-events-auto`
- *     and a soft backdrop-blur ring so it looks like it's floating
- *     above the page.
+ *     animation and entrance animation re-play.
+ *   - `onDismiss` fully hides the popup until the next chunk;
+ *     `onMinimize` / `onExpand` just toggle the chip/center modes.
  */
 function QuestionCloud({
   chunkId,
   text,
   open,
+  minimized,
+  onMinimize,
+  onExpand,
   onRepeat,
   onDismiss,
 }: {
   chunkId: string;
   text: string;
   open: boolean;
+  minimized: boolean;
+  onMinimize: () => void;
+  onExpand: () => void;
   onRepeat: () => void;
   onDismiss: () => void;
 }) {
-  // Escape to dismiss. Mounted only while open so the listener
+  // Escape behaviour: from expanded → minimize; from minimized →
+  // dismiss. That mirrors how desktop chat windows behave (esc
+  // collapses then closes). Mounted only while open so the listener
   // tears down cleanly when the popup goes away.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onDismiss();
+      if (e.key !== "Escape") return;
+      if (minimized) onDismiss();
+      else onMinimize();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onDismiss]);
+  }, [open, minimized, onDismiss, onMinimize]);
 
   if (!open) return null;
 
+  // ───────────── MINIMIZED MODE — top-right chip ─────────────
+  // No backdrop, no dim, no blocked clicks. The page is fully usable
+  // and the chip is just a button hovering in the corner so the
+  // student can find their way back to the question.
+  if (minimized) {
+    return (
+      <div
+        key={`q-chip-${chunkId}`}
+        className="question-cloud-chip fixed right-4 top-[88px] z-30 sm:right-6"
+      >
+        <button
+          type="button"
+          onClick={onExpand}
+          aria-label="Expand Rose's question"
+          className="q-chip-btn group relative inline-flex max-w-[280px] items-center gap-2.5 rounded-full border border-amber-200/80 bg-gradient-to-br from-amber-50 via-white to-amber-100/90 px-3.5 py-2 shadow-[0_18px_36px_-12px_rgba(180,140,40,0.35)] ring-1 ring-amber-200/50 transition hover:from-amber-100 hover:to-amber-200/90 sm:max-w-[340px] sm:px-4"
+        >
+          <span
+            aria-hidden
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-base shadow-sm ring-1 ring-amber-200/70"
+          >
+            💭
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col items-start text-left">
+            <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-700">
+              Rose asks
+            </span>
+            <span className="truncate text-[12px] font-medium text-zinc-800">
+              {text}
+            </span>
+          </span>
+          <span
+            aria-hidden
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/80 text-zinc-600 shadow-sm ring-1 ring-zinc-200 transition group-hover:text-zinc-900"
+            title="Expand"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-3 w-3"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2.4}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M4 10V4h6" />
+              <path d="M20 14v6h-6" />
+              <path d="M4 4l7 7" />
+              <path d="M20 20l-7-7" />
+            </svg>
+          </span>
+        </button>
+        <style jsx>{`
+          .q-chip-btn {
+            animation: q-chip-in 320ms cubic-bezier(0.22, 0.9, 0.32, 1.2) both;
+            will-change: transform, opacity;
+          }
+          @keyframes q-chip-in {
+            from {
+              opacity: 0;
+              transform: translate(20px, -10px) scale(0.85);
+            }
+            to {
+              opacity: 1;
+              transform: translate(0, 0) scale(1);
+            }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .q-chip-btn {
+              animation: none;
+            }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  // ───────────── EXPANDED MODE — centered modal ─────────────
   return (
     <div
       key={`q-cloud-${chunkId}`}
@@ -1835,117 +1963,156 @@ function QuestionCloud({
       aria-label="Rose's question"
     >
       {/* Dim layer — covers the whole viewport so the page reads as
-          "dimmed", but pointer-events-none means clicks pass right
-          through. Notes panel, transcript, and the voice dock all
-          stay fully interactive. Clicking the backdrop ALSO dismisses
-          the popup (handled by the transparent overlay below). */}
+          "dimmed", but pointer-events-none means clicks pass through. */}
       <div
         aria-hidden
         className="question-cloud-backdrop pointer-events-none absolute inset-0 bg-zinc-900/35 backdrop-blur-[2px]"
       />
-      {/* Invisible click-to-dismiss layer. Sits BEHIND the card on
-          z-stack so clicks on the card don't fall through. We only
-          cover the left half on xl screens so the notes panel on the
-          right stays fully clickable too (the user can write notes
-          without dismissing the question). */}
+      {/* Click-to-minimize layer — covers the full viewport. Clicking
+          the dimmed area outside the card minimizes (not dismisses)
+          the popup. That's the cheaper gesture for "I want to look
+          at the notes for a second". The × button is the kill switch. */}
       <button
         type="button"
-        aria-label="Dismiss question"
-        onClick={onDismiss}
-        className="absolute inset-y-0 left-0 right-0 cursor-default xl:right-1/2"
+        aria-label="Minimize question"
+        onClick={onMinimize}
+        className="absolute inset-0 cursor-default"
       />
 
-      {/* The popup card. On xl screens we anchor it to the left half
-          so it sits over the lesson column and leaves the notes panel
-          on the right completely exposed. Below xl the notes panel
-          is a drawer, so the popup centers in the viewport. */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 py-8 sm:py-12 xl:right-1/2 xl:pr-6">
-      <div className="question-cloud-card pointer-events-auto relative w-full max-w-xl">
-        <div className="relative overflow-visible rounded-[32px] border border-amber-200/70 bg-gradient-to-br from-amber-50/98 via-white to-amber-100/95 px-7 py-7 shadow-[0_40px_80px_-20px_rgba(60,60,90,0.45)] ring-1 ring-amber-200/60 sm:px-9 sm:py-9">
-          {/* Decorative cloud blobs around the edges. */}
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -left-6 -top-7 h-20 w-20 rounded-full bg-amber-200/55 blur-2xl"
-          />
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -right-6 -bottom-7 h-20 w-20 rounded-full bg-rose-200/45 blur-2xl"
-          />
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -right-3 top-1/3 h-10 w-10 rounded-full bg-violet-200/40 blur-xl"
-          />
-
-          {/* Close button — top-right inside the card, doesn't fight
-              the question text for attention. */}
-          <button
-            type="button"
-            onClick={onDismiss}
-            aria-label="Dismiss the question"
-            className="absolute right-4 top-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/80 text-zinc-500 shadow-sm ring-1 ring-zinc-200 transition hover:text-zinc-900"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              className="h-3.5 w-3.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2.4}
-              strokeLinecap="round"
-              aria-hidden
-            >
-              <path d="M6 6l12 12M18 6l-12 12" />
-            </svg>
-          </button>
-
-          <div className="relative flex items-start gap-4">
+      {/* The popup card. Smack in the middle of the viewport. */}
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 py-8 sm:py-12">
+        <div className="question-cloud-card pointer-events-auto relative w-full max-w-xl">
+          <div className="relative overflow-visible rounded-[32px] border border-amber-200/70 bg-gradient-to-br from-amber-50/98 via-white to-amber-100/95 px-7 py-7 shadow-[0_40px_80px_-20px_rgba(60,60,90,0.45)] ring-1 ring-amber-200/60 sm:px-9 sm:py-9">
             <div
               aria-hidden
-              className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-[26px] shadow-sm ring-1 ring-amber-200/70"
-            >
-              💭
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
-                Rose asks
-              </p>
-              <p className="mt-2 text-[20px] font-semibold leading-snug text-zinc-900 sm:text-[22px]">
-                <TypewriterText
-                  key={`q-text-${chunkId}`}
-                  text={text}
-                  wordIntervalMs={45}
-                />
-              </p>
-              <div className="mt-5 flex flex-wrap items-center gap-2 text-[12px] text-zinc-500">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1">
-                  <span aria-hidden>🎙️</span>
-                  Hold the mic or type your answer below
-                </span>
-                <button
-                  type="button"
-                  onClick={onRepeat}
-                  className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1 font-medium text-zinc-700 transition hover:bg-white"
-                  title="Have Rose ask again"
+              className="pointer-events-none absolute -left-6 -top-7 h-20 w-20 rounded-full bg-amber-200/55 blur-2xl"
+            />
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -right-6 -bottom-7 h-20 w-20 rounded-full bg-rose-200/45 blur-2xl"
+            />
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -right-3 top-1/3 h-10 w-10 rounded-full bg-violet-200/40 blur-xl"
+            />
+
+            {/* Top-right cluster: minimize + close. Minimize sits to
+                the LEFT of close so the destructive action is always
+                on the outside. */}
+            <div className="absolute right-4 top-4 z-10 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onMinimize}
+                aria-label="Minimize question"
+                title="Minimize to corner"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/80 text-zinc-500 shadow-sm ring-1 ring-zinc-200 transition hover:text-zinc-900"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2.4}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="h-3 w-3"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={2.4}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden
+                  <path d="M5 19h14" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={onDismiss}
+                aria-label="Dismiss the question"
+                title="Dismiss"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/80 text-zinc-500 shadow-sm ring-1 ring-zinc-200 transition hover:text-zinc-900"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2.4}
+                  strokeLinecap="round"
+                  aria-hidden
+                >
+                  <path d="M6 6l12 12M18 6l-12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="relative flex items-start gap-4">
+              <div
+                aria-hidden
+                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-[26px] shadow-sm ring-1 ring-amber-200/70"
+              >
+                💭
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
+                  Rose asks
+                </p>
+                <p className="mt-2 pr-16 text-[20px] font-semibold leading-snug text-zinc-900 sm:text-[22px]">
+                  <TypewriterText
+                    key={`q-text-${chunkId}`}
+                    text={text}
+                    wordIntervalMs={45}
+                  />
+                </p>
+                <div className="mt-5 flex flex-wrap items-center gap-2 text-[12px] text-zinc-500">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1">
+                    <span aria-hidden>🎙️</span>
+                    Hold the mic or type your answer below
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onRepeat}
+                    className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1 font-medium text-zinc-700 transition hover:bg-white"
+                    title="Have Rose ask again"
                   >
-                    <path d="M3 12a9 9 0 1 0 3.5-7.1" />
-                    <path d="M3 4v6h6" />
-                  </svg>
-                  Replay
-                </button>
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-3 w-3"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2.4}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden
+                    >
+                      <path d="M3 12a9 9 0 1 0 3.5-7.1" />
+                      <path d="M3 4v6h6" />
+                    </svg>
+                    Replay
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onMinimize}
+                    className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1 font-medium text-zinc-700 transition hover:bg-white"
+                    title="Minimize so I can check the notes"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-3 w-3"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2.4}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden
+                    >
+                      <path d="M14 4h6v6" />
+                      <path d="M10 20H4v-6" />
+                      <path d="M20 4l-7 7" />
+                      <path d="M4 20l7-7" />
+                    </svg>
+                    Check notes
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
       </div>
 
       <style jsx>{`
