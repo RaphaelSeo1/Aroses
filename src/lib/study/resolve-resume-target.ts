@@ -29,8 +29,28 @@ export async function resolveResumeTarget(
   courseId: string,
   userId: string
 ): Promise<ResumeTarget | null> {
-  // 1a. Latest module completion — the strongest signal because it
-  //     carries both material AND module.
+  // 1a. Most recent Mentored Learning session — gives us BOTH the
+  //     material and the exact module the student was on, even if
+  //     they exited mid-module without completing it. This is the
+  //     strongest signal because we always update `last_seen_at`
+  //     on every Mentored turn, while module_completion only fires
+  //     when a module is fully finished. Without this branch, a
+  //     student who exits mid-module gets bounced back to module 1
+  //     of the course on return (the bug we're fixing here).
+  const { data: lastMentored } = await supabase
+    .from("user_mentored_sessions")
+    .select(
+      "material_id, module_id, last_seen_at, study_materials!inner(course_id)"
+    )
+    .eq("user_id", userId)
+    .eq("study_materials.course_id", courseId)
+    .order("last_seen_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  // 1b. Latest module completion — the strongest "I finished this"
+  //     signal. Carries both material AND module, but only fires
+  //     when the student actually reaches the end of a module.
   const { data: lastComp } = await supabase
     .from("module_completion")
     .select("material_id, module_id, completed_at, study_materials!inner(course_id)")
@@ -40,7 +60,7 @@ export async function resolveResumeTarget(
     .limit(1)
     .maybeSingle();
 
-  // 1b. Latest quiz attempt — used as a fallback "this user touched
+  // 1c. Latest quiz attempt — used as a fallback "this user touched
   //     this course" signal. We only get material_id from this table
   //     (no module_id column), so module resolution falls back to the
   //     first available module of that material.
@@ -53,6 +73,9 @@ export async function resolveResumeTarget(
     .limit(1)
     .maybeSingle();
 
+  const mentoredAt = lastMentored?.last_seen_at
+    ? new Date(lastMentored.last_seen_at as string).getTime()
+    : 0;
   const compAt = lastComp?.completed_at
     ? new Date(lastComp.completed_at as string).getTime()
     : 0;
@@ -60,8 +83,22 @@ export async function resolveResumeTarget(
     ? new Date(lastAttempt.answered_at as string).getTime()
     : 0;
 
-  // Module completion wins ties because it pinpoints the exact module.
-  if (compAt && compAt >= attemptAt && lastComp) {
+  // Whichever signal is freshest wins. Mentored sessions tend to be
+  // freshest because last_seen_at updates on every turn — that's
+  // exactly the "drop me back where I left off" semantic we want.
+  const freshest = Math.max(mentoredAt, compAt, attemptAt);
+
+  if (freshest > 0 && freshest === mentoredAt && lastMentored) {
+    return {
+      materialId: lastMentored.material_id as string,
+      moduleId:
+        typeof lastMentored.module_id === "number"
+          ? lastMentored.module_id
+          : null,
+    };
+  }
+
+  if (freshest > 0 && freshest === compAt && lastComp) {
     return {
       materialId: lastComp.material_id as string,
       moduleId:
@@ -69,7 +106,12 @@ export async function resolveResumeTarget(
     };
   }
 
-  if (attemptAt && lastAttempt && typeof lastAttempt.material_id === "string") {
+  if (
+    freshest > 0 &&
+    freshest === attemptAt &&
+    lastAttempt &&
+    typeof lastAttempt.material_id === "string"
+  ) {
     // We know which material was being practised but not which module —
     // load its outline and return module 1 (better than bouncing the
     // user to a different material entirely).

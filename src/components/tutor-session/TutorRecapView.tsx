@@ -1,9 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LessonRichContent } from "@/components/LessonRichContent";
+import {
+  TutorRecapEditor,
+  type TutorRecapEditorHandle,
+} from "@/components/tutor-session/TutorRecapEditor";
 import type {
   TutorSessionModeTag,
   TutorSessionRecapStatus,
@@ -50,16 +54,23 @@ export function TutorRecapView({ sessionId, initial }: Props) {
   const [linkCopyState, setLinkCopyState] = useState<"idle" | "copied">("idle");
   const [regenerating, setRegenerating] = useState(false);
 
-  // Edit mode — when active, replace the rendered article with a
-  // textarea. Save → PUT /recap, then back to rendered.
+  // Edit mode — when active, swap the rendered article for a
+  // TipTap-backed rich editor. The editor's content is uncontrolled;
+  // the parent only reads its markdown via the editor ref at Save time
+  // so we don't re-render the entire document tree per keystroke.
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<string>(initial.recapMarkdown ?? "");
+  const editorRef = useRef<TutorRecapEditorHandle | null>(null);
+  const [editorSeed, setEditorSeed] = useState<string>(
+    initial.recapMarkdown ?? ""
+  );
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   // Share toggle — null = off / loading; string = current public token.
   const [shareToken, setShareToken] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(true);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [shareToggling, setShareToggling] = useState(false);
 
   // To-course CTA state.
   const [converting, setConverting] = useState(false);
@@ -163,7 +174,7 @@ export function TutorRecapView({ sessionId, initial }: Props) {
 
   // Edit / save
   const beginEdit = useCallback(() => {
-    setDraft(markdown ?? "");
+    setEditorSeed(markdown ?? "");
     setEditing(true);
     setSaveError(null);
   }, [markdown]);
@@ -171,21 +182,21 @@ export function TutorRecapView({ sessionId, initial }: Props) {
   const cancelEdit = useCallback(() => {
     setEditing(false);
     setSaveError(null);
-    setDraft(markdown ?? "");
-  }, [markdown]);
+  }, []);
 
   const saveEdit = useCallback(async () => {
     if (saving) return;
+    const next = editorRef.current?.getMarkdown() ?? "";
     setSaving(true);
     setSaveError(null);
     try {
       const res = await fetch(`/api/tutor-session/${sessionId}/recap`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recapMarkdown: draft }),
+        body: JSON.stringify({ recapMarkdown: next }),
       });
       if (!res.ok) throw new Error(`Save failed (${res.status})`);
-      setMarkdown(draft);
+      setMarkdown(next);
       setEditing(false);
     } catch (e) {
       console.error("[TutorRecapView saveEdit]", e);
@@ -193,24 +204,55 @@ export function TutorRecapView({ sessionId, initial }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [draft, saving, sessionId]);
+  }, [saving, sessionId]);
 
   // Share toggle
   const toggleShare = useCallback(async () => {
+    if (shareToggling) return;
     const next = !shareToken;
+    setShareToggling(true);
+    setShareError(null);
     try {
       const res = await fetch(`/api/tutor-session/${sessionId}/share`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: next }),
       });
-      if (!res.ok) throw new Error(`Share toggle failed (${res.status})`);
-      const body = (await res.json()) as { shareToken: string | null };
-      setShareToken(body.shareToken);
+      const body = (await res
+        .json()
+        .catch(() => ({}))) as {
+        shareToken?: string | null;
+        error?: string;
+      };
+      if (!res.ok) {
+        throw new Error(
+          body.error ?? `Share toggle failed (${res.status})`
+        );
+      }
+      setShareToken(body.shareToken ?? null);
+      if (next && body.shareToken) {
+        // Auto-copy the freshly-minted link so the user doesn't have
+        // to find the "Copy link" button after enabling.
+        try {
+          const url = `${window.location.origin}/share/session/${body.shareToken}`;
+          await navigator.clipboard.writeText(url);
+          setLinkCopyState("copied");
+          window.setTimeout(() => setLinkCopyState("idle"), 1600);
+        } catch {
+          /* clipboard might be denied — the Copy link button still works */
+        }
+      }
     } catch (e) {
       console.error("[TutorRecapView toggleShare]", e);
+      setShareError(
+        e instanceof Error
+          ? e.message
+          : "Couldn't toggle sharing. Try again."
+      );
+    } finally {
+      setShareToggling(false);
     }
-  }, [sessionId, shareToken]);
+  }, [sessionId, shareToggling, shareToken]);
 
   const copyShareLink = useCallback(async () => {
     if (!shareToken) return;
@@ -221,6 +263,9 @@ export function TutorRecapView({ sessionId, initial }: Props) {
       window.setTimeout(() => setLinkCopyState("idle"), 1600);
     } catch (e) {
       console.error("[TutorRecapView copyShareLink]", e);
+      setShareError(
+        "Couldn't copy link — your browser blocked clipboard access."
+      );
     }
   }, [shareToken]);
 
@@ -340,14 +385,25 @@ export function TutorRecapView({ sessionId, initial }: Props) {
                 <button
                   type="button"
                   onClick={toggleShare}
-                  disabled={shareLoading}
+                  disabled={shareLoading || shareToggling}
                   className={`rounded-full px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
                     shareEnabled
                       ? "border border-violet-200 bg-violet-50 text-violet-800 hover:bg-violet-100"
                       : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
                   }`}
+                  title={
+                    shareEnabled
+                      ? "Stop sharing — link will stop working"
+                      : "Generate a public read-only link"
+                  }
                 >
-                  {shareEnabled ? "Sharing: On" : "Share"}
+                  {shareToggling
+                    ? shareEnabled
+                      ? "Stopping…"
+                      : "Generating link…"
+                    : shareEnabled
+                      ? "Sharing: On"
+                      : "Share"}
                 </button>
                 {shareEnabled ? (
                   <button
@@ -420,32 +476,30 @@ export function TutorRecapView({ sessionId, initial }: Props) {
             {saveError}
           </div>
         ) : null}
+        {shareError ? (
+          <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-800 print:hidden">
+            {shareError}
+          </div>
+        ) : null}
 
         {/* Document */}
         <article className="rounded-3xl border border-white/60 bg-white/95 px-6 py-10 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md sm:px-12 sm:py-14 print:rounded-none print:border-0 print:shadow-none print:ring-0">
           {editing ? (
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-700">
-                Editing recap · markdown
+                Editing recap
               </p>
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                rows={28}
-                className="mt-3 w-full resize-y rounded-2xl border border-zinc-200 bg-white px-4 py-3 font-mono text-sm leading-relaxed text-zinc-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-200"
-                placeholder="Edit your recap in markdown…"
-              />
+              <div className="mt-3 rounded-2xl border border-zinc-200 bg-white p-5 shadow-inner">
+                <TutorRecapEditor
+                  key={editorSeed}
+                  initialMarkdown={editorSeed}
+                  editorRef={editorRef}
+                />
+              </div>
               <p className="mt-2 text-[11px] text-zinc-500">
-                Supports the same markdown as Aroses lessons — headings,
-                lists, callouts, code blocks, LaTeX (
-                <code className="rounded bg-zinc-100 px-1 py-0.5">
-                  $\alpha$
-                </code>{" "}
-                or
-                <code className="rounded bg-zinc-100 px-1 py-0.5">
-                  $$ ... $$
-                </code>
-                ).
+                Type like a normal doc — bold, italics, headings, lists,
+                quotes, and checkboxes all just work. Saving keeps the same
+                shareable format under the hood.
               </p>
             </div>
           ) : status === "generating" || (status === "idle" && !markdown) ? (

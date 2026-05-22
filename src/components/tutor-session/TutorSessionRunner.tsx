@@ -115,11 +115,37 @@ export function TutorSessionRunner({
       }
     }
   }, []);
+  // Voice capture mode — mirrors the Mentored Learning runner:
+  //   "push"  hold M (or the mic button) to talk
+  //   "live"  Rose auto-listens after her own utterance; barge-in
+  //           enabled so the student can talk over her
+  // Persisted so the student's preference survives across sessions.
+  const [voiceMode, setVoiceMode] = useState<"push" | "live">(() => {
+    if (typeof window === "undefined") return "push";
+    const raw = window.localStorage.getItem("rose:voiceMode");
+    return raw === "live" ? "live" : "push";
+  });
+  const updateVoiceMode = useCallback((next: "push" | "live") => {
+    setVoiceMode(next);
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem("rose:voiceMode", next);
+      } catch {
+        /* ignore — preference just won't persist */
+      }
+    }
+  }, []);
+
   const onBargeInRef = useRef<() => void>(() => {});
   const voice = useMentoredVoice({
     sessionId: initial.id,
     playbackRate,
     onBargeIn: () => onBargeInRef.current(),
+    // Barge-in only makes sense in live mode. In push-to-talk we
+    // want the mic silent until the student explicitly hits M /
+    // mouse-down on the mic button — otherwise room noise or the
+    // speaker bleed triggers Rose to "hear" nothing and respond.
+    bargeInEnabled: voiceMode === "live",
   });
 
   // ----- notes panel handle ("+ Add to notes" buttons use this) -----
@@ -553,19 +579,134 @@ export function TutorSessionRunner({
     return () => window.clearInterval(interval);
   }, [endingSession, submitTurn, submitting, voice.state.speaking]);
 
-  // ----- barge-in: stop speech + start recording -----
-  const startVoiceCapture = useCallback(async () => {
+  // ----- LIVE mode: tap mic OR barge-in → record till silence -----
+  // Used when voiceMode === "live". Stops Rose if she's speaking,
+  // captures until the student goes silent, transcribes, submits.
+  const startLiveCapture = useCallback(async () => {
     voice.cancelSpeak();
     const blob = await voice.recordUntilSilence();
     if (!blob) return;
     const text = await voice.transcribe(blob);
     if (text) void submitTurn(text);
   }, [submitTurn, voice]);
+
+  // ----- PUSH mode: hold-to-talk (mic button mousedown/up or M key) -----
+  // Used when voiceMode === "push". The student presses-and-holds;
+  // we record without silence detection, stop on release, transcribe
+  // & submit. Cancels any ongoing speech.
+  const recordPromiseRef = useRef<Promise<Blob | null> | null>(null);
+  const pushStartVoiceAnswer = useCallback(async () => {
+    if (submitting) return;
+    if (voice.state.recording) return;
+    voice.cancelSpeak();
+    recordPromiseRef.current = voice.startRecording();
+  }, [submitting, voice]);
+  const pushFinishVoiceAnswer = useCallback(async () => {
+    const promise = recordPromiseRef.current;
+    if (!promise) return;
+    recordPromiseRef.current = null;
+    await voice.stopRecording();
+    const blob = await promise;
+    if (!blob) return;
+    const text = await voice.transcribe(blob);
+    if (text) void submitTurn(text);
+  }, [submitTurn, voice]);
+
+  // Single mic-button handler — branches on voiceMode. Live = tap to
+  // record-till-silence. Push = used as a fallback "tap to start" but
+  // the natural gesture in push mode is hold-down on the button (see
+  // mousedown/up handlers in the JSX below) or hold-M on the keyboard.
+  const onMicTap = useCallback(() => {
+    if (voiceMode === "live") {
+      void startLiveCapture();
+    } else {
+      void startLiveCapture(); // tap still works as a fallback
+    }
+  }, [startLiveCapture, voiceMode]);
+
+  // Barge-in callback — only fires when bargeInEnabled (i.e. live
+  // mode). Routes straight to the live capture path.
   useEffect(() => {
     onBargeInRef.current = () => {
-      void startVoiceCapture();
+      if (voiceMode !== "live") return;
+      void startLiveCapture();
     };
-  }, [startVoiceCapture]);
+  }, [startLiveCapture, voiceMode]);
+
+  // ----- hold M to talk (push mode only) -----
+  const mDownRef = useRef(false);
+  useEffect(() => {
+    if (voiceMode !== "push") return;
+    const isTextTarget = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el.isContentEditable
+      );
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "m" && e.key !== "M") return;
+      if (e.repeat) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTextTarget(e.target)) return;
+      e.preventDefault();
+      if (mDownRef.current) return;
+      mDownRef.current = true;
+      void pushStartVoiceAnswer();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== "m" && e.key !== "M") return;
+      if (!mDownRef.current) return;
+      mDownRef.current = false;
+      void pushFinishVoiceAnswer();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [pushFinishVoiceAnswer, pushStartVoiceAnswer, voiceMode]);
+
+  // ----- live mode: auto-listen after Rose finishes -----
+  const liveCycleGuardRef = useRef(false);
+  useEffect(() => {
+    if (voiceMode !== "live") return;
+    if (voice.state.speaking) return;
+    if (voice.state.recording) return;
+    if (voice.state.transcribing) return;
+    if (submitting) return;
+    if (liveCycleGuardRef.current) return;
+    // Don't auto-listen until Rose has had a chance to greet at
+    // least once — otherwise we kick the mic open before greetedRef
+    // even runs.
+    if (messagesRef.current.length === 0) return;
+    liveCycleGuardRef.current = true;
+    (async () => {
+      try {
+        const blob = await voice.recordUntilSilence();
+        if (!blob) return;
+        const text = await voice.transcribe(blob);
+        if (!text) return;
+        void submitTurn(text);
+      } catch (e) {
+        console.error("[TutorSessionRunner live mode]", e);
+      } finally {
+        liveCycleGuardRef.current = false;
+      }
+    })();
+  }, [
+    submitting,
+    voice,
+    voice.state.recording,
+    voice.state.speaking,
+    voice.state.transcribing,
+    voiceMode,
+    submitTurn,
+  ]);
 
   // ----- opening greeting (once, if transcript empty) -----
   //
@@ -715,12 +856,97 @@ export function TutorSessionRunner({
 
           {/* Voice dock */}
           <div className="border-t border-white/50 bg-white/70 px-3 py-3 sm:px-5">
+            {/* Voice-mode toggle — push (hold M / mic) vs live (auto-listen). */}
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div
+                className="inline-flex items-stretch rounded-2xl border border-zinc-200 bg-white p-0.5 text-[11px] font-medium text-zinc-700 shadow-sm"
+                role="group"
+                aria-label="Voice mic mode"
+              >
+                <button
+                  type="button"
+                  onClick={() => updateVoiceMode("push")}
+                  aria-pressed={voiceMode === "push"}
+                  className={
+                    voiceMode === "push"
+                      ? "rounded-xl bg-zinc-900 px-3 py-1 text-white shadow-sm"
+                      : "rounded-xl px-3 py-1 text-zinc-700 hover:bg-zinc-50"
+                  }
+                  title="Hold M (or the mic button) to talk"
+                >
+                  Hold&nbsp;M
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateVoiceMode("live")}
+                  aria-pressed={voiceMode === "live"}
+                  className={
+                    voiceMode === "live"
+                      ? "rounded-xl bg-zinc-900 px-3 py-1 text-white shadow-sm"
+                      : "rounded-xl px-3 py-1 text-zinc-700 hover:bg-zinc-50"
+                  }
+                  title="Rose listens automatically after she finishes speaking"
+                >
+                  Live
+                </button>
+              </div>
+              <span className="text-[10px] uppercase tracking-[0.14em] text-zinc-400">
+                {voiceMode === "live"
+                  ? "Auto-listen on · barge-in to interrupt"
+                  : "Hold M or press &amp; hold the mic"}
+              </span>
+            </div>
             <div className="flex items-end gap-2">
               <button
                 type="button"
-                onClick={() => void startVoiceCapture()}
-                disabled={submitting || voice.state.recording || voice.state.transcribing}
-                aria-label="Hold to speak"
+                onClick={voiceMode === "live" ? onMicTap : undefined}
+                onMouseDown={
+                  voiceMode === "push"
+                    ? (e) => {
+                        e.preventDefault();
+                        void pushStartVoiceAnswer();
+                      }
+                    : undefined
+                }
+                onMouseUp={
+                  voiceMode === "push"
+                    ? () => void pushFinishVoiceAnswer()
+                    : undefined
+                }
+                onMouseLeave={
+                  voiceMode === "push"
+                    ? () => {
+                        if (voice.state.recording) {
+                          void pushFinishVoiceAnswer();
+                        }
+                      }
+                    : undefined
+                }
+                onTouchStart={
+                  voiceMode === "push"
+                    ? (e) => {
+                        e.preventDefault();
+                        void pushStartVoiceAnswer();
+                      }
+                    : undefined
+                }
+                onTouchEnd={
+                  voiceMode === "push"
+                    ? (e) => {
+                        e.preventDefault();
+                        void pushFinishVoiceAnswer();
+                      }
+                    : undefined
+                }
+                disabled={submitting || voice.state.transcribing}
+                aria-label={
+                  voiceMode === "push" ? "Hold to speak" : "Tap to speak"
+                }
+                title={
+                  voiceMode === "push"
+                    ? "Hold (or press M) to speak"
+                    : "Tap to speak — Rose listens until you go quiet"
+                }
                 className={`relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border shadow-sm transition ${
                   voice.state.recording
                     ? "border-rose-400 bg-rose-100 text-rose-700"

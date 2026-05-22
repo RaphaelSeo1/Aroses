@@ -117,6 +117,12 @@ export function ImmersiveLessonRunner({
     materialId,
     onBargeIn: () => onBargeInRef.current(),
     playbackRate,
+    // Barge-in (VAD on the mic while Rose is speaking) is ONLY safe
+    // in live mode. In push-to-talk mode the student presses M to
+    // talk — leaving the mic always-on monitor running causes Rose
+    // to "hear" room noise / her own playback bleed and respond to
+    // nothing. Gate the entire monitor on voice mode.
+    bargeInEnabled: voiceMode === "live",
   });
   const lastSpokenChunkIdRef = useRef<string | null>(null);
   const recordPromiseRef = useRef<Promise<Blob | null> | null>(null);
@@ -551,8 +557,8 @@ export function ImmersiveLessonRunner({
     lastSpokenChunkIdRef.current = chunk.id;
 
     // Reset the per-chunk popup state for the new chunk. The popup
-    // is gated on `questionAudioStartedFor === chunk.id`, so until
-    // the explanation finishes streaming below it stays closed.
+    // opens via a scheduled timer below, the moment Rose's voice
+    // actually transitions from the explanation into the question.
     setQuestionAudioStartedFor(null);
     setQuestionPopupMinimized(false);
 
@@ -561,34 +567,45 @@ export function ImmersiveLessonRunner({
     const captured = chunk.id;
     const text = `${explanation}\n\n${checkQuestion}`;
 
-    // Speak the explanation first, then — after it finishes —
-    // flip the popup state and speak the question. This makes the
-    // popup arrival sync with Rose's voice instead of jumping up
-    // at the very start of the chunk while she's still explaining.
-    // Track what Rose said for this chunk so barge-in can pass it
-    // back as `interruptedAfter` and Rose can resume from there.
-    // Stamp the "last check question asked" timestamp on the
-    // question's onPlay (it's the actual check moment).
-    void (async () => {
-      await voice.speak(explanation, {
-        onPlay: () => {
-          lastSpokenRef.current = explanation;
-          setNarrationText(explanation);
-        },
-      });
-      // Bail if the chunk advanced (or anything else) while we
-      // were speaking — don't pop a stale popup over a new chunk.
-      if (lastSpokenChunkIdRef.current !== captured) return;
-      // Show the popup the instant the question audio starts.
-      await voice.speak(checkQuestion, {
-        onPlay: () => {
-          lastSpokenRef.current = text;
+    // Speak the WHOLE thing as one TTS call (no audible pause
+    // between explanation and question), but estimate the moment
+    // Rose's voice transitions into the question based on
+    // explanation word count and open the popup at THAT instant.
+    //
+    // Empirically ElevenLabs Rachel at 1.0x is ~165 wpm ≈ 360 ms
+    // per word. We tune by playbackRate so the estimate stays
+    // accurate at 0.75x / 1.25x / etc.
+    const explanationWords = explanation.trim().split(/\s+/).length;
+    const baseMsPerWord = 360; // wpm ≈ 165 at 1x
+    const estimatedExplanationMs = Math.max(
+      0,
+      (explanationWords * baseMsPerWord) / Math.max(0.25, playbackRate)
+    );
+
+    let popupTimer: ReturnType<typeof setTimeout> | null = null;
+    void voice.speak(text, {
+      onPlay: () => {
+        lastSpokenRef.current = text;
+        setNarrationText(explanation);
+        // Schedule the popup to open when Rose finishes the
+        // explanation and starts the question. The timer is
+        // guarded against stale chunks (the cleanup below clears
+        // it if the user advances early).
+        popupTimer = setTimeout(() => {
+          if (lastSpokenChunkIdRef.current !== captured) return;
           lastCheckAtRef.current = Date.now();
           setQuestionAudioStartedFor(captured);
-        },
-      });
-    })();
-  }, [chunk, interactionMode, phase, voice, greetingPlayed]);
+        }, estimatedExplanationMs);
+      },
+    });
+
+    return () => {
+      if (popupTimer != null) {
+        clearTimeout(popupTimer);
+        popupTimer = null;
+      }
+    };
+  }, [chunk, interactionMode, phase, voice, greetingPlayed, playbackRate]);
 
   // ----- submit (streaming turn → sentence-streamed TTS) -----
   //
@@ -2053,11 +2070,7 @@ function QuestionCloud({
                   Rose asks
                 </p>
                 <p className="mt-2 pr-16 text-[20px] font-semibold leading-snug text-zinc-900 sm:text-[22px]">
-                  <TypewriterText
-                    key={`q-text-${chunkId}`}
-                    text={text}
-                    wordIntervalMs={45}
-                  />
+                  {text}
                 </p>
                 <div className="mt-5 flex flex-wrap items-center gap-2 text-[12px] text-zinc-500">
                   <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1">
