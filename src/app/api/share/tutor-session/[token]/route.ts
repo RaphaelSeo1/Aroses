@@ -45,7 +45,22 @@ export async function GET(_req: Request, ctx: Params) {
     )
     .eq("share_token", token)
     .maybeSingle();
-  if (error || !data) {
+  if (error) {
+    const missingCol =
+      error.code === "42703" ||
+      (error.message ?? "").includes("share_token");
+    if (missingCol) {
+      return NextResponse.json(
+        {
+          error:
+            "Sharing is not enabled on this database yet. Apply migration 037_tutor_session_share.sql in Supabase.",
+        },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  if (!data) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   if (data.recap_status !== "ready" || !data.recap_markdown) {

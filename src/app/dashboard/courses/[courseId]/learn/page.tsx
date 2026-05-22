@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { ImmersiveLearnClient } from "@/components/immersive/ImmersiveLearnClient";
+import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
@@ -63,6 +64,16 @@ export default async function LearnPage({ params, searchParams }: Props) {
   if (typeof materialParam === "string" && UUID_RE.test(materialParam)) {
     materialId = materialParam;
     moduleIdToOpen = moduleIdFromUrl ?? null;
+    // URL often has `material=` but omits `module=` (e.g. home-page
+    // "Open"). Without this we always fell back to module 1 even when
+    // the student had a mentored session mid-course.
+    if (moduleIdToOpen == null) {
+      moduleIdToOpen = await resolveMentoredModuleForMaterial(
+        supabase,
+        user.id,
+        materialId
+      );
+    }
   } else {
     const target = await resolveResumeTarget(supabase, courseRow.id, user.id);
     if (target) {

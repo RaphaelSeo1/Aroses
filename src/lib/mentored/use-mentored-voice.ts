@@ -79,6 +79,14 @@ export function useMentoredVoice(opts: {
   bargeInEnabled?: boolean;
 }) {
   const playbackRate = opts.playbackRate ?? 1;
+  /** Live ref so mid-utterance speed changes apply to the next sentence/chunk. */
+  const playbackRateRef = useRef(playbackRate);
+  useEffect(() => {
+    playbackRateRef.current = playbackRate;
+    if (audioRef.current) {
+      audioRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate]);
   const bargeInEnabled = opts.bargeInEnabled !== false;
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -313,7 +321,7 @@ export function useMentoredVoice(opts: {
         }
         await playMpegFromResponse(res, {
           signal: ac.signal,
-          playbackRate,
+          playbackRate: playbackRateRef.current,
           audioRef,
           onFirstPlay: () => fireReveal(false),
         });
@@ -333,7 +341,7 @@ export function useMentoredVoice(opts: {
         setState((s) => ({ ...s, speaking: false }));
       }
     },
-    [cancelSpeak, playbackRate, startBargeMonitor, stopBargeMonitor, ttsFetch]
+    [cancelSpeak, startBargeMonitor, stopBargeMonitor, ttsFetch]
   );
 
   /**
@@ -450,7 +458,7 @@ export function useMentoredVoice(opts: {
               try {
                 await playMpegFromResponse(res, {
                   signal: ac.signal,
-                  playbackRate,
+                  playbackRate: playbackRateRef.current,
                   audioRef,
                   onFirstPlay: () => reveal(false),
                 });
@@ -480,7 +488,7 @@ export function useMentoredVoice(opts: {
         setState((s) => ({ ...s, speaking: false }));
       }
     },
-    [cancelSpeak, playbackRate, startBargeMonitor, stopBargeMonitor, ttsFetch]
+    [cancelSpeak, startBargeMonitor, stopBargeMonitor, ttsFetch]
   );
 
   // ----- record -----

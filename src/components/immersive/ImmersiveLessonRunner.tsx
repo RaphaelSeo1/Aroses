@@ -231,6 +231,8 @@ export function ImmersiveLessonRunner({
   // doesn't talk over the welcome line.
   const [greetingPlayed, setGreetingPlayed] = useState(false);
   const greetingFiredRef = useRef(false);
+  /** Returning students must tap Continue before Rose starts the lesson. */
+  const [awaitingContinue, setAwaitingContinue] = useState(false);
 
   // ---- question popup (the centered "Rose asks" modal) ----
   //
@@ -452,10 +454,15 @@ export function ImmersiveLessonRunner({
                 : `Welcome back. Ready to keep going?`;
       }
 
+      const needsAcknowledgement =
+        phase !== "welcome-back" &&
+        (scenario === "returning" || scenario === "all_complete");
+
+      if (needsAcknowledgement) {
+        setAwaitingContinue(true);
+      }
+
       if (interactionMode === "voice") {
-        // Sync the greeting's transcript reveal with audio playback —
-        // tutorReply only gets set once Rose's voice actually starts,
-        // so the text never appears before she speaks.
         try {
           await voice.speak(text, {
             onPlay: () => {
@@ -465,16 +472,22 @@ export function ImmersiveLessonRunner({
           });
         } catch (e) {
           console.error("[imm runner greeting speak]", e);
-          // Failsafe — make sure the greeting appears even if the
-          // speak() call threw before `onPlay` could fire.
           setTutorReply((prev) => prev ?? text);
         }
       } else {
-        // Text-only mode: no audio to wait for.
         setTutorReply(text);
         lastSpokenRef.current = text;
       }
-      setGreetingPlayed(true);
+
+      // Welcome-back: Resume button arms chunk speech. Returning:
+      // Continue button. First-time / all-complete: auto-start lesson.
+      if (phase === "welcome-back") {
+        /* keep greetingPlayed false until Resume */
+      } else if (needsAcknowledgement) {
+        /* keep greetingPlayed false until Continue */
+      } else {
+        setGreetingPlayed(true);
+      }
     })();
     // We deliberately exclude `voice` / `course` / module-derived deps —
     // this should fire EXACTLY once per mount based on initial readiness.
@@ -512,22 +525,19 @@ export function ImmersiveLessonRunner({
     if (!autoGenerateNotes) return;
     if (notesAppendedChunkRef.current === chunk.id) return;
     if (!notesPanelRef.current) return;
-    const heading = chunk.concept;
     const points = chunk.keyPoints.slice(0, 5);
     if (points.length === 0) return;
     notesAppendedChunkRef.current = chunk.id;
 
-    // Notion-style structured block:
-    //   - H2 heading (chunk.concept)
-    //   - short intro paragraph (chunk.explanation, truncated)
-    //   - bullet list with bold key-term lead-ins where possible
-    //   - callout takeaway (only if the chunk gave us an analogy)
+    // No forced H2 title — the student owns headings in the doc.
+    // We tuck the concept into the intro line and use bullets only.
     const intro =
-      chunk.explanation && chunk.explanation.length > 0
-        ? chunk.explanation.length > 240
-          ? `${chunk.explanation.slice(0, 237).trim()}…`
-          : chunk.explanation
-        : undefined;
+      chunk.concept +
+      (chunk.explanation && chunk.explanation.length > 0
+        ? chunk.explanation.length > 200
+          ? ` — ${chunk.explanation.slice(0, 197).trim()}…`
+          : ` — ${chunk.explanation}`
+        : "");
     const keyTerms = chunk.keyPoints
       .map((p) => p.split(/[—–:.]/)[0]?.trim())
       .filter((s): s is string => !!s && s.length > 0 && s.length <= 40);
@@ -538,7 +548,7 @@ export function ImmersiveLessonRunner({
         : text;
     });
     notesPanelRef.current.appendBlock({
-      heading,
+      skipHeading: true,
       intro,
       bullets,
       callout:
@@ -553,59 +563,53 @@ export function ImmersiveLessonRunner({
     if (!chunk) return;
     if (interactionMode !== "voice") return;
     if (!greetingPlayed) return;
+    if (awaitingContinue) return;
     if (lastSpokenChunkIdRef.current === chunk.id) return;
     lastSpokenChunkIdRef.current = chunk.id;
 
-    // Reset the per-chunk popup state for the new chunk. The popup
-    // opens via a scheduled timer below, the moment Rose's voice
-    // actually transitions from the explanation into the question.
     setQuestionAudioStartedFor(null);
     setQuestionPopupMinimized(false);
 
     const explanation = chunk.explanation;
     const checkQuestion = chunk.checkQuestion;
     const captured = chunk.id;
-    const text = `${explanation}\n\n${checkQuestion}`;
 
-    // Speak the WHOLE thing as one TTS call (no audible pause
-    // between explanation and question), but estimate the moment
-    // Rose's voice transitions into the question based on
-    // explanation word count and open the popup at THAT instant.
-    //
-    // Empirically ElevenLabs Rachel at 1.0x is ~165 wpm ≈ 360 ms
-    // per word. We tune by playbackRate so the estimate stays
-    // accurate at 0.75x / 1.25x / etc.
-    const explanationWords = explanation.trim().split(/\s+/).length;
-    const baseMsPerWord = 360; // wpm ≈ 165 at 1x
-    const estimatedExplanationMs = Math.max(
-      0,
-      (explanationWords * baseMsPerWord) / Math.max(0.25, playbackRate)
-    );
-
-    let popupTimer: ReturnType<typeof setTimeout> | null = null;
-    void voice.speak(text, {
-      onPlay: () => {
-        lastSpokenRef.current = text;
-        setNarrationText(explanation);
-        // Schedule the popup to open when Rose finishes the
-        // explanation and starts the question. The timer is
-        // guarded against stale chunks (the cleanup below clears
-        // it if the user advances early).
-        popupTimer = setTimeout(() => {
-          if (lastSpokenChunkIdRef.current !== captured) return;
+    void (async () => {
+      await voice.speak(explanation, {
+        onPlay: () => {
+          lastSpokenRef.current = explanation;
+          setNarrationText(explanation);
+        },
+      });
+      if (lastSpokenChunkIdRef.current !== captured) return;
+      await voice.speak(checkQuestion, {
+        onPlay: () => {
+          lastSpokenRef.current = `${explanation}\n\n${checkQuestion}`;
           lastCheckAtRef.current = Date.now();
           setQuestionAudioStartedFor(captured);
-        }, estimatedExplanationMs);
-      },
-    });
+        },
+      });
+    })();
+  }, [awaitingContinue, chunk, interactionMode, phase, voice, greetingPlayed]);
 
-    return () => {
-      if (popupTimer != null) {
-        clearTimeout(popupTimer);
-        popupTimer = null;
-      }
-    };
-  }, [chunk, interactionMode, phase, voice, greetingPlayed, playbackRate]);
+  // Text mode: show the check-question popup as soon as the chunk is
+  // active (no TTS onPlay hook to drive it).
+  useEffect(() => {
+    if (phase !== "teaching") return;
+    if (!chunk) return;
+    if (interactionMode !== "text") return;
+    if (!greetingPlayed) return;
+    if (awaitingContinue) return;
+    setQuestionAudioStartedFor(chunk.id);
+    setQuestionPopupMinimized(false);
+  }, [
+    awaitingContinue,
+    chunk,
+    chunk?.id,
+    greetingPlayed,
+    interactionMode,
+    phase,
+  ]);
 
   // ----- submit (streaming turn → sentence-streamed TTS) -----
   //
@@ -1136,7 +1140,14 @@ export function ImmersiveLessonRunner({
   ]);
 
   const resumeFromRecap = useCallback(() => {
+    setAwaitingContinue(false);
+    setGreetingPlayed(true);
     setPhase("loading-plan");
+  }, []);
+
+  const acknowledgeAndContinue = useCallback(() => {
+    setAwaitingContinue(false);
+    setGreetingPlayed(true);
   }, []);
 
   const goToNextModule = useCallback(async () => {
@@ -1503,6 +1514,31 @@ export function ImmersiveLessonRunner({
         moduleCount={moduleCount}
         moduleTitle={activeModule.title}
       />
+
+      {awaitingContinue ? (
+        <GlassPanel className="mt-6" tone="reply">
+          <p className="text-sm leading-relaxed text-zinc-800">
+            {tutorReply ??
+              "Welcome back — let me know when you are ready and we will pick up from here."}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={acknowledgeAndContinue}
+              className="rounded-full bg-fuchsia-500 px-5 py-2 text-sm font-semibold text-white shadow-md hover:bg-fuchsia-400"
+            >
+              Continue lesson
+            </button>
+            <button
+              type="button"
+              onClick={onSwitchToFree}
+              className="rounded-full border border-white/60 bg-white/60 px-5 py-2 text-sm font-medium text-zinc-700 hover:bg-white/80"
+            >
+              Just let me read
+            </button>
+          </div>
+        </GlassPanel>
+      ) : null}
 
       {/* Side-by-side layout (§2): lesson + question on the left,
           notes editor on the right.

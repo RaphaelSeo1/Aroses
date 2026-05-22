@@ -27,30 +27,22 @@ export default async function SessionsLibraryPage() {
     redirect("/login?next=/sessions");
   }
 
+  // Omit full recap_markdown — loading 100 long markdown blobs was
+  // slowing this page; previews load on the recap view instead.
   const { data } = await supabase
     .from("tutor_sessions")
     .select(
-      "id, title, topic, mode_tag, status, started_at, ended_at, duration_seconds, recap_status, recap_markdown"
+      "id, title, topic, mode_tag, status, started_at, ended_at, duration_seconds, recap_status"
     )
     .eq("user_id", user.id)
     .order("created_at", { ascending: false })
     .limit(100);
 
   const sessions: TutorSessionSummary[] = (data ?? []).map((r) => {
-    let recapPreview: string | null = null;
-    if (typeof r.recap_markdown === "string" && r.recap_markdown.length > 0) {
-      const lines = r.recap_markdown.split(/\r?\n/);
-      const startIdx = lines.findIndex(
-        (l, i) => i > 0 && l.trim() && !l.startsWith("#") && !l.startsWith(">")
-      );
-      const body =
-        startIdx >= 0 ? lines.slice(startIdx).join(" ") : r.recap_markdown;
-      recapPreview = body
-        .replace(/[#*`>_\-]/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 180);
-    }
+    const recapPreview: string | null =
+      typeof r.topic === "string" && r.topic.trim().length > 0
+        ? r.topic.trim().slice(0, 180)
+        : null;
     return {
       id: r.id,
       title: r.title,

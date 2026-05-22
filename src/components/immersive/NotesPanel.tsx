@@ -45,8 +45,10 @@ export type NoteSuggestion = {
 };
 
 export type AutoGenerateBlock = {
-  /** H2 heading — typically the chunk concept. */
-  heading: string;
+  /** H2 heading — typically the chunk concept. Omit when `skipHeading`. */
+  heading?: string;
+  /** When true, only intro/bullets/callout are inserted (no fixed title line). */
+  skipHeading?: boolean;
   /** Optional intro paragraph above the bullets. */
   intro?: string;
   /** Top-level bullets. Each can optionally have nested sub-bullets. */
@@ -258,15 +260,51 @@ export function NotesPanel({
   useEffect(() => {
     if (!editorRef) return;
     editorRef.current = {
-      appendBlock: ({ heading, intro, bullets, callout }) => {
+      appendBlock: ({ heading, intro, bullets, callout, skipHeading }) => {
         if (!editor) return;
+
+        const doc = editor.getJSON();
+        const nodes =
+          (
+            doc as {
+              content?: Array<{
+                type?: string;
+                content?: Array<{ text?: string }>;
+              }>;
+            }
+          ).content ?? [];
+
+        // Skip if this exact heading block was already appended (prevents
+        // duplicate stacks when auto-generate re-fires on the same chunk).
+        if (heading && !skipHeading) {
+          const already = nodes.some(
+            (n) =>
+              n.type === "heading" &&
+              n.content?.[0]?.text?.trim() === heading.trim()
+          );
+          if (already) return;
+        }
+
+        // skipHeading path: dedupe by intro fingerprint (same chunk re-mounted).
+        if (skipHeading && intro && intro.trim().length > 0) {
+          const fingerprint = intro.trim().slice(0, 96);
+          const already = nodes.some((n) => {
+            if (n.type !== "paragraph") return false;
+            const t = n.content?.[0]?.text?.trim() ?? "";
+            return t.startsWith(fingerprint) || fingerprint.startsWith(t.slice(0, 96));
+          });
+          if (already) return;
+        }
+
         const chain = editor.chain().focus("end");
 
-        chain.insertContent({
-          type: "heading",
-          attrs: { level: 2 },
-          content: [{ type: "text", text: heading }],
-        });
+        if (heading && !skipHeading) {
+          chain.insertContent({
+            type: "heading",
+            attrs: { level: 2 },
+            content: [{ type: "text", text: heading }],
+          });
+        }
 
         if (intro && intro.trim().length > 0) {
           chain.insertContent({

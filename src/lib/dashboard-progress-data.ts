@@ -37,6 +37,8 @@ export type DashboardProgressPayload = {
      * "Open" / "Jump back in" link target.
      */
     lastUsedMode: CourseMode;
+    /** Last Mentored Learning module for this material (if any). */
+    resumeModuleId: number | null;
   }[];
 };
 
@@ -317,7 +319,28 @@ export async function loadDashboardProgress(
     }
   }
 
-  const recentPractice = sortedRecent.slice(0, 8).map((r) => {
+  const recentSlice = sortedRecent.slice(0, 8);
+  const moduleByMaterialId = new Map<string, number>();
+  if (recentMaterialIdsForMode.length > 0) {
+    const { data: mentoredRows, error: mentoredErr } = await supabase
+      .from("user_mentored_sessions")
+      .select("material_id, module_id")
+      .eq("user_id", ownerUserId)
+      .in("material_id", recentMaterialIdsForMode);
+    if (mentoredErr) {
+      console.error("[dashboard-progress mentored sessions]", mentoredErr);
+    }
+    for (const row of mentoredRows ?? []) {
+      if (
+        typeof row.material_id === "string" &&
+        typeof row.module_id === "number"
+      ) {
+        moduleByMaterialId.set(row.material_id, row.module_id);
+      }
+    }
+  }
+
+  const recentPractice = recentSlice.map((r) => {
     const s = summaryByCourseId.get(r.courseId);
     // First-time entry → Mentored, per spec ("flagship experience").
     const lastUsedMode: CourseMode =
@@ -328,6 +351,7 @@ export async function loadDashboardProgress(
       modulesTotal: s?.modulesTotal ?? 0,
       isExploreLearner: Boolean(s?.isExploreLearner),
       lastUsedMode,
+      resumeModuleId: moduleByMaterialId.get(r.materialId) ?? null,
     };
   });
 

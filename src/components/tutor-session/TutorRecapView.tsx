@@ -84,12 +84,24 @@ export function TutorRecapView({ sessionId, initial }: Props) {
     (async () => {
       try {
         const res = await fetch(`/api/tutor-session/${sessionId}/share`);
-        if (!res.ok) return;
-        const body = (await res.json()) as { shareToken: string | null };
+        const body = (await res.json().catch(() => ({}))) as {
+          shareToken?: string | null;
+          error?: string;
+        };
         if (cancelled) return;
-        setShareToken(body.shareToken);
+        if (body.error) {
+          setShareError(body.error);
+          return;
+        }
+        if (!res.ok) return;
+        setShareToken(body.shareToken ?? null);
       } catch (e) {
         console.error("[TutorRecapView share GET]", e);
+        if (!cancelled) {
+          setShareError(
+            "Couldn't load share status. If this is a new install, apply migration 037_tutor_session_share.sql in Supabase."
+          );
+        }
       } finally {
         if (!cancelled) setShareLoading(false);
       }

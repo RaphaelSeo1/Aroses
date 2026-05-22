@@ -47,11 +47,28 @@ export async function GET(_req: Request, ctx: Params) {
   if (!user) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   }
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("tutor_sessions")
     .select("user_id, share_token")
     .eq("id", sessionId)
     .maybeSingle();
+  if (error) {
+    const missingCol =
+      error.code === "42703" ||
+      (error.message ?? "").includes("share_token");
+    if (missingCol) {
+      return NextResponse.json(
+        {
+          error:
+            "Sharing is not enabled on this database yet. Apply migration 037_tutor_session_share.sql in Supabase.",
+          shareToken: null,
+          shareUrl: null,
+        },
+        { status: 200 }
+      );
+    }
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   if (!data || data.user_id !== user.id) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -111,9 +128,16 @@ export async function POST(request: Request, ctx: Params) {
         break;
       }
       if (attempt === 3) {
+        const missingCol =
+          error.code === "42703" ||
+          (error.message ?? "").includes("share_token");
         return NextResponse.json(
-          { error: "Couldn't generate share link" },
-          { status: 500 }
+          {
+            error: missingCol
+              ? "Sharing is not enabled on this database yet. Apply migration 037_tutor_session_share.sql in Supabase."
+              : "Couldn't generate share link",
+          },
+          { status: missingCol ? 503 : 500 }
         );
       }
     }

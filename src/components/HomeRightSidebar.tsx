@@ -20,6 +20,7 @@ type RecentPractice = {
    * Exploration — at the lesson they left off on.
    */
   lastUsedMode: CourseMode;
+  resumeModuleId: number | null;
 };
 
 function weekdayLabelsLast7(): { key: string; label: string }[] {
@@ -161,6 +162,8 @@ export function HomeRightSidebar({
                 courseId: r.courseId,
                 lastUsedMode: r.lastUsedMode,
                 isExploreLearner: r.isExploreLearner,
+                materialId: r.materialId,
+                moduleId: r.resumeModuleId,
               });
               return (
                 <li

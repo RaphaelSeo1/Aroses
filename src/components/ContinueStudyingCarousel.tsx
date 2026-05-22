@@ -22,6 +22,7 @@ type Entry = {
    * courses).
    */
   lastUsedMode: CourseMode;
+  resumeModuleId: number | null;
 };
 
 function clamp(n: number, min: number, max: number): number {
@@ -81,6 +82,8 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
               courseId: e.courseId,
               lastUsedMode: e.lastUsedMode,
               isExploreLearner: e.isExploreLearner,
+              materialId: e.materialId,
+              moduleId: e.resumeModuleId,
             });
 
             const detailsHref = e.isExploreLearner

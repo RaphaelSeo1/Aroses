@@ -144,6 +144,7 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     .from("courses")
     .select("id")
     .eq("id", courseId)
+    .eq("user_id", user.id)
     .maybeSingle();
 
   if (!courseOwn) {
@@ -239,10 +240,10 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
    * production build (`next start`) without `VERCEL`, set `PDF_INGEST_CHUNKED=1` in `.env` to
    * opt into this path; otherwise the handler falls through to the monolithic response below.
    */
-  const useChunkedPdfIngest =
-    process.env.VERCEL === "1" ||
-    process.env.NODE_ENV === "development" ||
-    process.env.PDF_INGEST_CHUNKED === "1";
+  // Default: return 202 immediately and build in the background. The old
+  // monolith path blocked the HTTP request for minutes (especially bad for
+  // non-admin users on slow plans). Opt into sync only via PDF_INGEST_SYNCHRONOUS=1.
+  const useChunkedPdfIngest = process.env.PDF_INGEST_SYNCHRONOUS !== "1";
 
   if (useChunkedPdfIngest) {
     after(() => {

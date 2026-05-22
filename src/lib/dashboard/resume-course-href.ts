@@ -23,11 +23,29 @@ export function buildResumeCourseHref(args: {
   courseId: string;
   lastUsedMode: CourseMode;
   isExploreLearner: boolean;
+  /** Pin the study material when the course has several uploads. */
+  materialId?: string;
+  /** Pin the module from `user_mentored_sessions` when resuming Mentored. */
+  moduleId?: number | null;
 }): string {
   const base = args.isExploreLearner
     ? `/explore/${args.courseId}`
     : `/dashboard/courses/${args.courseId}`;
-  return args.lastUsedMode === "mentored"
-    ? `${base}/learn`
-    : `${base}/study?mode=learn`;
+  if (args.lastUsedMode === "mentored") {
+    const qs = new URLSearchParams();
+    if (args.materialId) qs.set("material", args.materialId);
+    if (typeof args.moduleId === "number") {
+      qs.set("module", String(args.moduleId));
+    }
+    const q = qs.toString();
+    return `${base}/learn${q ? `?${q}` : ""}`;
+  }
+  const qs = new URLSearchParams();
+  qs.set("mode", "learn");
+  if (args.materialId) qs.set("material", args.materialId);
+  if (typeof args.moduleId === "number") {
+    qs.set("module", String(args.moduleId));
+  }
+  const q = qs.toString();
+  return `${base}/study${q ? `?${q}` : ""}`;
 }

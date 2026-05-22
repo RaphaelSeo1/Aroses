@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { ImmersiveLearnClient } from "@/components/immersive/ImmersiveLearnClient";
+import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { fetchStudyMaterialForPublicExplore } from "@/lib/supabase/fetch-explore-study-material";
 import { createClient } from "@/lib/supabase/server";
@@ -78,6 +79,13 @@ export default async function ExploreLearnPage({
   if (typeof materialParam === "string" && UUID_RE.test(materialParam)) {
     materialId = materialParam;
     moduleIdToOpen = moduleIdFromUrl ?? null;
+    if (moduleIdToOpen == null) {
+      moduleIdToOpen = await resolveMentoredModuleForMaterial(
+        supabase,
+        user.id,
+        materialId
+      );
+    }
   } else {
     const target = await resolveResumeTarget(supabase, courseRow.id, user.id);
     if (target) {
