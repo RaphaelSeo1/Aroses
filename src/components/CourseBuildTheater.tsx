@@ -9,6 +9,7 @@ import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
 import { TypewriterText } from "@/components/TypewriterText";
+import type { SrsDueCounts } from "@/lib/srs-due";
 import {
   pollPdfIngestJob,
   type PdfBuildProgressUI,
@@ -213,11 +214,13 @@ export function CourseBuildTheater({
   jobIds,
   sectionId,
   courseTitle,
+  initialDueCounts,
 }: {
   courseId: string;
   jobIds: string[];
   sectionId?: string | null;
   courseTitle: string;
+  initialDueCounts?: SrsDueCounts;
 }) {
   const router = useRouter();
   const [activeJob, setActiveJob] = useState(jobIds[0] ?? "");
@@ -567,7 +570,7 @@ export function CourseBuildTheater({
             />
           ))
         : null}
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedIn initialDueCounts={initialDueCounts} />} />
       <CourseWorkspaceBackRow courseId={courseId} courseTitle={courseTitle} />
       <main className="min-h-[calc(100vh-4rem)] bg-white dark:bg-zinc-950">
         <div className="mx-auto max-w-3xl px-4 py-8 sm:px-10">

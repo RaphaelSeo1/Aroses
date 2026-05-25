@@ -4,7 +4,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { ExploreCoursesBoard } from "@/components/ExploreCoursesBoard";
 import { ExploreListBodySkeleton } from "@/components/MainRouteSkeleton";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { APP_NAME } from "@/lib/brand";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 
@@ -22,7 +22,7 @@ export default async function ExplorePage() {
       <AppHeader
         right={
           user ? (
-            <HeaderNavLoggedIn />
+            <HeaderNavLoggedInServer />
           ) : (
             <>
               <HeaderNavLink href="/explore">Explore</HeaderNavLink>

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { LegalFooterLinks } from "@/components/LegalFooterLinks";
 import { APP_NAME } from "@/lib/brand";
 import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
@@ -27,7 +27,7 @@ export async function LegalDocLayout({
       <AppHeader
         right={
           user ? (
-            <HeaderNavLoggedIn adminHubHref={adminHubHref} />
+            <HeaderNavLoggedInServer adminHubHref={adminHubHref} />
           ) : (
             <>
               <HeaderNavLink href="/explore">Explore</HeaderNavLink>

@@ -30,12 +30,19 @@ const POLL_INTERVAL_MS = 60_000;
 
 export function useSrsDueCounts(
   materialId?: string,
-  opts?: { enabled?: boolean; refreshKey?: number | string }
+  opts?: {
+    enabled?: boolean;
+    refreshKey?: number | string;
+    initialCounts?: SrsDueCounts | null;
+  }
 ): { counts: SrsDueCounts | null; loading: boolean; refresh: () => void } {
   const enabled = opts?.enabled !== false;
   const refreshKey = opts?.refreshKey;
-  const [counts, setCounts] = useState<SrsDueCounts | null>(null);
-  const [loading, setLoading] = useState(false);
+  const initialCounts = opts?.initialCounts;
+  const [counts, setCounts] = useState<SrsDueCounts | null>(
+    initialCounts ?? null
+  );
+  const [loading, setLoading] = useState(initialCounts == null);
   const [manualBump, setManualBump] = useState(0);
 
   useEffect(() => {

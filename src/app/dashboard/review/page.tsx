@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { MainRouteSkeleton } from "@/components/MainRouteSkeleton";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import { redirect } from "next/navigation";
@@ -9,7 +9,7 @@ import { ReviewDashboardClient } from "@/components/ReviewDashboardClient";
 export default function ReviewPage() {
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <Suspense fallback={<MainRouteSkeleton />}>
         <ReviewPageContent />
       </Suspense>

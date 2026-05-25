@@ -8,7 +8,7 @@ import { CoursePlayer } from "@/components/CoursePlayer";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import { HighlightedSummary } from "@/components/HighlightedSummary";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { McqQuiz } from "@/components/McqQuiz";
 import {
   exploreOutlineFromRpcPayload,
@@ -122,7 +122,7 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
 
   const headerRight =
     user ? (
-      <HeaderNavLoggedIn adminHubHref={adminHubHrefForSessionUser(user)} />
+      <HeaderNavLoggedInServer adminHubHref={adminHubHrefForSessionUser(user)} />
     ) : (
       <>
         <HeaderNavLink href="/explore">Explore</HeaderNavLink>

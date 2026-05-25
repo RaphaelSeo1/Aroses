@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
 import { CoursePlayer } from "@/components/CoursePlayer";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { summarizeCourseProgress } from "@/lib/learning-stats";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
@@ -207,7 +207,7 @@ export default async function StudyQuizPracticePage({ params, searchParams }: Pr
 
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <CourseWorkspaceBackRow
         courseId={courseId}
         courseTitle={courseTitle}

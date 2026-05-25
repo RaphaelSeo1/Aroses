@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { TutorSessionStartScreen } from "@/components/tutor-session/TutorSessionStartScreen";
 import { createClient } from "@/lib/supabase/server";
 
@@ -23,7 +23,7 @@ export default async function TutorSessionStartPage() {
 
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-16">
           <TutorSessionStartScreen />

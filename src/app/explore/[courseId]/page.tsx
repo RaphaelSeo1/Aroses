@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { ExploreCourseOutline } from "@/components/ExploreCourseOutline";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { APP_NAME } from "@/lib/brand";
 import { exploreOutlineFromRpcPayload } from "@/lib/explore-course-outline";
 import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
@@ -75,7 +75,7 @@ export default async function ExploreCoursePage({ params }: Props) {
       <AppHeader
         right={
           user ? (
-            <HeaderNavLoggedIn adminHubHref={adminHubHref} />
+            <HeaderNavLoggedInServer adminHubHref={adminHubHref} />
           ) : (
             <>
               <HeaderNavLink href="/explore">Explore</HeaderNavLink>

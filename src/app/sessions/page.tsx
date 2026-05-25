@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { createClient } from "@/lib/supabase/server";
 import { SessionsList } from "@/components/tutor-session/SessionsList";
 import type {
@@ -59,7 +59,7 @@ export default async function SessionsLibraryPage() {
 
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
           <div className="flex items-end justify-between gap-4">

@@ -7,7 +7,7 @@ import { CoursePlayer } from "@/components/CoursePlayer";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import { VoiceTutorDock } from "@/components/VoiceTutorDock";
 import { HighlightedSummary } from "@/components/HighlightedSummary";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { McqQuiz } from "@/components/McqQuiz";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
@@ -121,7 +121,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
   if (!row) {
     return (
       <>
-        <AppHeader right={<HeaderNavLoggedIn />} />
+        <AppHeader right={<HeaderNavLoggedInServer />} />
         <CourseWorkspaceBackRow
           courseId={courseId}
           courseTitle={courseTitle}
@@ -232,7 +232,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
   if (hasNewCourse && payload) {
     return (
       <>
-        <AppHeader right={<HeaderNavLoggedIn />} />
+        <AppHeader right={<HeaderNavLoggedInServer />} />
         <CourseWorkspaceBackRow
           courseId={courseId}
           courseTitle={courseTitle}
@@ -265,7 +265,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
     const keyConcepts = row.key_concepts ?? [];
     return (
       <>
-        <AppHeader right={<HeaderNavLoggedIn />} />
+        <AppHeader right={<HeaderNavLoggedInServer />} />
         <CourseWorkspaceBackRow
           courseId={courseId}
           courseTitle={courseTitle}
@@ -327,7 +327,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
 
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <CourseWorkspaceBackRow
         courseId={courseId}
         courseTitle={courseTitle}

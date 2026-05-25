@@ -1,5 +1,5 @@
 import { AppHeader } from "@/components/AppHeader";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import type { AdminActivityItem, AdminUserRow } from "@/lib/admin-dashboard-data";
 import {
   countAllAuthUsers,
@@ -75,7 +75,7 @@ export default async function AdminDashboardPage() {
   return (
     <>
       <AppHeader
-        right={<HeaderNavLoggedIn />}
+        right={<HeaderNavLoggedInServer />}
       />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <AdminDashboardClient

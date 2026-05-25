@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
 import { CourseMixQuizClient } from "@/components/CourseMixQuizClient";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
@@ -121,7 +121,7 @@ export default async function CourseMixStudyPage({ params, searchParams }: Props
 
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <CourseWorkspaceBackRow
         courseId={courseId}
         courseTitle={courseTitle}

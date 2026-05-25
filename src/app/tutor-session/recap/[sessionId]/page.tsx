@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { TutorRecapView } from "@/components/tutor-session/TutorRecapView";
 import { createClient } from "@/lib/supabase/server";
 import type {
@@ -31,7 +31,7 @@ export default async function TutorSessionRecapPage({ params }: Params) {
   }
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <TutorRecapView
         sessionId={data.id}
         initial={{

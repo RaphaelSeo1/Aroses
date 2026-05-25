@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { CourseBuildTheater } from "@/components/CourseBuildTheater";
+import { fetchSrsDueCountsForUser } from "@/lib/srs-due-counts-server";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
 
@@ -53,6 +54,7 @@ export default async function CourseStudyBuildPage({ params, searchParams }: Pro
   if (!courseRow) notFound();
 
   const courseTitle = courseRow.title?.trim() || "Course";
+  const initialDueCounts = await fetchSrsDueCountsForUser(supabase, user.id);
 
   return (
     <CourseBuildTheater
@@ -60,6 +62,7 @@ export default async function CourseStudyBuildPage({ params, searchParams }: Pro
       jobIds={pdfJobIds}
       sectionId={sectionFromUrl}
       courseTitle={courseTitle}
+      initialDueCounts={initialDueCounts}
     />
   );
 }

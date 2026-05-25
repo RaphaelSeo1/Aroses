@@ -9,7 +9,7 @@ import {
   type ExamGroupRow,
   type MaterialRow,
 } from "@/components/ExamGroupsPanel";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { ShareCourseButton } from "@/components/ShareCourseButton";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
@@ -129,7 +129,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
 
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
           {adminViewingOthersCourse ? (

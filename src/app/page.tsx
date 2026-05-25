@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { DashboardHomeContent } from "@/components/DashboardHomeContent";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { MainRouteSkeleton } from "@/components/MainRouteSkeleton";
 import { loadDashboardCourseLists } from "@/lib/load-dashboard-courses";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
@@ -12,7 +12,7 @@ import { redirect } from "next/navigation";
 export default function Home() {
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <Suspense fallback={<MainRouteSkeleton />}>
         <HomeContent />
       </Suspense>

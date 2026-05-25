@@ -1,6 +1,6 @@
 import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
-import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { MarketingLandingContent } from "@/components/MarketingLandingContent";
 import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { createClient } from "@/lib/supabase/server";
@@ -18,7 +18,7 @@ export default async function IntroPage() {
       <AppHeader
         right={
           user ? (
-            <HeaderNavLoggedIn adminHubHref={adminHubHref} />
+            <HeaderNavLoggedInServer adminHubHref={adminHubHref} />
           ) : (
             <>
               <HeaderNavLink href="/explore">Explore</HeaderNavLink>

@@ -4,7 +4,7 @@ import { useDashboardAdminNav } from "@/components/DashboardAdminNavContext";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { LogoutButton } from "@/components/LogoutButton";
 import { TutorSessionNavDropdown } from "@/components/TutorSessionNavDropdown";
-import { useSrsDueCounts } from "@/lib/srs-due";
+import { useSrsDueCounts, type SrsDueCounts } from "@/lib/srs-due";
 
 /**
  * Same primary navigation on every authenticated screen. Home is your workspace (`/`).
@@ -12,16 +12,23 @@ import { useSrsDueCounts } from "@/lib/srs-due";
 export function HeaderNavLoggedIn({
   courseHomeHref,
   adminHubHref: adminHubHrefProp,
+  initialDueCounts,
 }: {
   /** Show when studying — links back to uploads/workspace for this course. */
   courseHomeHref?: string;
   /** Creator-only admin hub (`/dashboard/admin`), when env allowlist matches. */
   adminHubHref?: string;
+  /** SSR due counts so the Review badge renders on first paint. */
+  initialDueCounts?: SrsDueCounts;
 }) {
   const dashboardNav = useDashboardAdminNav();
   const adminHubHref = adminHubHrefProp ?? dashboardNav?.adminHubHref;
-  const { counts: dueCounts } = useSrsDueCounts(undefined, { enabled: true });
-  const dueTotal = dueCounts?.total ?? 0;
+  const { counts: dueCounts } = useSrsDueCounts(undefined, {
+    enabled: true,
+    initialCounts: initialDueCounts,
+  });
+  const dueTotal = dueCounts?.total ?? initialDueCounts?.total ?? 0;
+  const badgeLabel = dueTotal > 99 ? "99+" : String(dueTotal);
   return (
     <>
       <HeaderNavLink
@@ -70,14 +77,18 @@ export function HeaderNavLoggedIn({
           <path d="M9 21h6" />
         </svg>
         <span>Review</span>
-        {dueTotal > 0 ? (
-          <span
-            aria-label={`${dueTotal} cards due`}
-            className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-brand px-1.5 py-0.5 text-[10px] font-bold leading-none text-white tabular-nums"
-          >
-            {dueTotal > 99 ? "99+" : dueTotal}
-          </span>
-        ) : null}
+        <span
+          aria-label={
+            dueTotal > 0 ? `${dueTotal} cards due` : "No cards due for review"
+          }
+          className={`ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none tabular-nums ${
+            dueTotal > 0
+              ? "bg-brand text-white"
+              : "bg-zinc-200/90 text-zinc-500 dark:bg-white/10 dark:text-zinc-400"
+          }`}
+        >
+          {badgeLabel}
+        </span>
       </HeaderNavLink>
       <HeaderNavLink
         href="/dashboard/profile"
