@@ -211,6 +211,8 @@ export function ImmersiveLessonRunner({
   const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
   const notesPanelRef = useRef<NotesPanelHandle | null>(null);
   const notesAppendedChunkRef = useRef<string | null>(null);
+  const [notesEditorReady, setNotesEditorReady] = useState(false);
+  const onNotesEditorReady = useCallback(() => setNotesEditorReady(true), []);
 
   // When the student toggles auto-generate OFF→ON we clear the
   // "already appended for chunk X" guard so the current chunk gets
@@ -423,6 +425,12 @@ export function ImmersiveLessonRunner({
     if (!ready) return;
     greetingFiredRef.current = true;
 
+    // Welcome-back has its own Resume / read-only panel — skip the
+    // spoken greeting so Rose doesn't talk over the student's choice.
+    if (phase === "welcome-back") {
+      return;
+    }
+
     // True first-time signal: either no session row exists OR the
     // session row is brand new (no history entries AND chunk index
     // still at 0). We deliberately do NOT treat `moduleIdx > 0` as
@@ -443,6 +451,12 @@ export function ImmersiveLessonRunner({
       : isFirstTime
         ? "first_time"
         : "returning";
+
+    const needsAcknowledgement =
+      scenario === "returning" || scenario === "all_complete";
+    if (needsAcknowledgement) {
+      setAwaitingContinue(true);
+    }
 
     // Pull the most natural "last lesson title". Prefer the lesson
     // mapped to the most recent history chunk; fall back to the
@@ -488,12 +502,7 @@ export function ImmersiveLessonRunner({
       }
 
       const needsAcknowledgement =
-        phase !== "welcome-back" &&
-        (scenario === "returning" || scenario === "all_complete");
-
-      if (needsAcknowledgement) {
-        setAwaitingContinue(true);
-      }
+        scenario === "returning" || scenario === "all_complete";
 
       if (interactionMode === "voice") {
         try {
@@ -512,11 +521,8 @@ export function ImmersiveLessonRunner({
         lastSpokenRef.current = text;
       }
 
-      // Welcome-back: Resume button arms chunk speech. Returning:
-      // Continue button. First-time / all-complete: auto-start lesson.
-      if (phase === "welcome-back") {
-        /* keep greetingPlayed false until Resume */
-      } else if (needsAcknowledgement) {
+      // Returning / all-complete: Continue button. First-time: auto-start.
+      if (needsAcknowledgement) {
         /* keep greetingPlayed false until Continue */
       } else {
         setGreetingPlayed(true);
@@ -556,11 +562,11 @@ export function ImmersiveLessonRunner({
     if (!chunk) return;
     if (phase !== "teaching") return;
     if (!autoGenerateNotes) return;
+    if (!notesEditorReady) return;
     if (notesAppendedChunkRef.current === chunk.id) return;
     if (!notesPanelRef.current) return;
     const points = chunk.keyPoints.slice(0, 5);
     if (points.length === 0) return;
-    notesAppendedChunkRef.current = chunk.id;
 
     // No forced H2 title — the student owns headings in the doc.
     // We tuck the concept into the intro line and use bullets only.
@@ -580,7 +586,7 @@ export function ImmersiveLessonRunner({
         ? { text, bold }
         : text;
     });
-    notesPanelRef.current.appendBlock({
+    const appended = notesPanelRef.current.appendBlock({
       skipHeading: true,
       intro,
       bullets,
@@ -589,7 +595,14 @@ export function ImmersiveLessonRunner({
           ? { emoji: "💡", text: chunk.analogy }
           : undefined,
     });
-  }, [autoGenerateNotes, chunk, phase]);
+    if (appended) notesAppendedChunkRef.current = chunk.id;
+  }, [autoGenerateNotes, chunk, notesEditorReady, phase]);
+
+  useEffect(() => {
+    setQuestionPopupDismissedFor(null);
+    setQuestionPopupMinimized(false);
+    setQuestionAudioStartedFor(null);
+  }, [chunk?.id]);
 
   useEffect(() => {
     if (phase !== "teaching") return;
@@ -600,8 +613,10 @@ export function ImmersiveLessonRunner({
     if (lastSpokenChunkIdRef.current === chunk.id) return;
     lastSpokenChunkIdRef.current = chunk.id;
 
-    setQuestionAudioStartedFor(null);
-    setQuestionPopupMinimized(false);
+    if (questionAudioStartedFor !== chunk.id) {
+      setQuestionAudioStartedFor(null);
+      setQuestionPopupMinimized(false);
+    }
 
     const explanation = chunk.explanation;
     const checkQuestion = chunk.checkQuestion;
@@ -1140,11 +1155,23 @@ export function ImmersiveLessonRunner({
     if (voiceMode !== "live") return;
     if (interactionMode !== "voice") return;
     if (phase !== "teaching") return;
+    if (!greetingPlayed) return;
+    if (awaitingContinue) return;
     if (voice.state.speaking) return;
     if (voice.state.recording) return;
     if (voice.state.transcribing) return;
     if (submitting) return;
     if (liveCycleGuardRef.current) return;
+    // Hold the mic while the check question is on screen — room noise
+    // shouldn't auto-submit an answer before the student is ready.
+    if (
+      chunk &&
+      questionAudioStartedFor === chunk.id &&
+      attempts === 0 &&
+      questionPopupDismissedFor !== chunk.id
+    ) {
+      return;
+    }
     liveCycleGuardRef.current = true;
     (async () => {
       try {
@@ -1161,8 +1188,14 @@ export function ImmersiveLessonRunner({
       }
     })();
   }, [
+    attempts,
+    awaitingContinue,
+    chunk,
+    greetingPlayed,
     interactionMode,
     phase,
+    questionAudioStartedFor,
+    questionPopupDismissedFor,
     submitAnswer,
     submitting,
     voice,
@@ -1758,6 +1791,7 @@ export function ImmersiveLessonRunner({
                   }
                   autoGenerate={autoGenerateNotes}
                   onAutoGenerateChange={handleAutoGenerateChange}
+                  onEditorReady={onNotesEditorReady}
                   editorRef={notesPanelRef}
                   className="h-[calc(100vh-220px)] min-h-[34rem]"
                 />
@@ -1812,6 +1846,7 @@ export function ImmersiveLessonRunner({
                     }
                     autoGenerate={autoGenerateNotes}
                     onAutoGenerateChange={handleAutoGenerateChange}
+                    onEditorReady={onNotesEditorReady}
                     editorRef={notesPanelRef}
                     className="h-full"
                   />
@@ -1945,20 +1980,17 @@ function QuestionCloud({
   onRepeat: () => void;
   onDismiss: () => void;
 }) {
-  // Escape behaviour: from expanded → minimize; from minimized →
-  // dismiss. That mirrors how desktop chat windows behave (esc
-  // collapses then closes). Mounted only while open so the listener
-  // tears down cleanly when the popup goes away.
+  // Escape: expanded → minimize; minimized → expand (never dismiss).
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (minimized) onDismiss();
+      if (minimized) onExpand();
       else onMinimize();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, minimized, onDismiss, onMinimize]);
+  }, [open, minimized, onExpand, onMinimize]);
 
   if (!open) return null;
 
@@ -1970,13 +2002,13 @@ function QuestionCloud({
     return (
       <div
         key={`q-chip-${chunkId}`}
-        className="question-cloud-chip fixed right-4 top-[88px] z-30 sm:right-6"
+        className="question-cloud-chip fixed right-4 top-[88px] z-30 w-[min(340px,calc(100vw-2rem))] sm:right-6"
       >
         <button
           type="button"
           onClick={onExpand}
           aria-label="Expand Rose's question"
-          className="q-chip-btn group relative inline-flex max-w-[280px] items-center gap-2.5 rounded-full border border-amber-200/80 bg-gradient-to-br from-amber-50 via-white to-amber-100/90 px-3.5 py-2 shadow-[0_18px_36px_-12px_rgba(180,140,40,0.35)] ring-1 ring-amber-200/50 transition hover:from-amber-100 hover:to-amber-200/90 sm:max-w-[340px] sm:px-4"
+          className="q-chip-btn group relative flex w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-full border border-amber-200/80 bg-gradient-to-br from-amber-50 via-white to-amber-100/90 px-3.5 py-2 shadow-[0_18px_36px_-12px_rgba(180,140,40,0.35)] ring-1 ring-amber-200/50 transition hover:from-amber-100 hover:to-amber-200/90 sm:px-4"
         >
           <span
             aria-hidden
@@ -1984,11 +2016,11 @@ function QuestionCloud({
           >
             💭
           </span>
-          <span className="flex min-w-0 flex-1 flex-col items-start text-left">
-            <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-700">
+          <span className="min-w-0 flex-1 overflow-hidden text-left">
+            <span className="block text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-700">
               Rose asks
             </span>
-            <span className="truncate text-[12px] font-medium text-zinc-800">
+            <span className="block truncate text-[12px] font-medium text-zinc-800">
               {text}
             </span>
           </span>

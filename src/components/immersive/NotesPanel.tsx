@@ -70,7 +70,7 @@ export type AutoGenerateBlock = {
 
 export type NotesPanelHandle = {
   /** Append a structured block (heading + optional intro + bullets + optional callout). */
-  appendBlock: (input: AutoGenerateBlock) => void;
+  appendBlock: (input: AutoGenerateBlock) => boolean;
 };
 
 /**
@@ -144,6 +144,7 @@ export function NotesPanel({
   onAutoGenerateChange,
   className,
   editorRef,
+  onEditorReady,
 }: {
   /**
    * Mentored Learning path — when set, the panel reads/writes
@@ -170,6 +171,8 @@ export function NotesPanel({
   className?: string;
   /** Optional imperative handle so the parent can append notes. */
   editorRef?: React.RefObject<NotesPanelHandle | null>;
+  /** Fired once the TipTap editor is mounted and the imperative handle is wired. */
+  onEditorReady?: () => void;
 }) {
   const endpoint = notesEndpoint ?? `/api/mentored/notes/${materialId}`;
   const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "error">(
@@ -261,7 +264,7 @@ export function NotesPanel({
     if (!editorRef) return;
     editorRef.current = {
       appendBlock: ({ heading, intro, bullets, callout, skipHeading }) => {
-        if (!editor) return;
+        if (!editor) return false;
 
         const doc = editor.getJSON();
         const nodes =
@@ -282,7 +285,7 @@ export function NotesPanel({
               n.type === "heading" &&
               n.content?.[0]?.text?.trim() === heading.trim()
           );
-          if (already) return;
+          if (already) return false;
         }
 
         // skipHeading path: dedupe by intro fingerprint (same chunk re-mounted).
@@ -293,7 +296,7 @@ export function NotesPanel({
             const t = n.content?.[0]?.text?.trim() ?? "";
             return t.startsWith(fingerprint) || fingerprint.startsWith(t.slice(0, 96));
           });
-          if (already) return;
+          if (already) return false;
         }
 
         const chain = editor.chain().focus("end");
@@ -378,12 +381,14 @@ export function NotesPanel({
         }
 
         chain.run();
+        return true;
       },
     };
+    onEditorReady?.();
     return () => {
       if (editorRef.current) editorRef.current = null;
     };
-  }, [editor, editorRef]);
+  }, [editor, editorRef, onEditorReady]);
 
   // Initial load — hydrate the editor with the saved doc once.
   useEffect(() => {

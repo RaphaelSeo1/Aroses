@@ -125,16 +125,12 @@ export function TutorSessionRunner({
     const raw = window.localStorage.getItem("rose:voiceMode");
     return raw === "live" ? "live" : "push";
   });
-  const updateVoiceMode = useCallback((next: "push" | "live") => {
-    setVoiceMode(next);
-    if (typeof window !== "undefined") {
-      try {
-        window.localStorage.setItem("rose:voiceMode", next);
-      } catch {
-        /* ignore — preference just won't persist */
-      }
-    }
-  }, []);
+  const voiceModeRef = useRef<"push" | "live">("push");
+  const voiceCaptureEpochRef = useRef(0);
+  const liveCycleGuardRef = useRef(false);
+  useEffect(() => {
+    voiceModeRef.current = voiceMode;
+  }, [voiceMode]);
 
   const onBargeInRef = useRef<() => void>(() => {});
   const voice = useMentoredVoice({
@@ -147,6 +143,31 @@ export function TutorSessionRunner({
     // speaker bleed triggers Rose to "hear" nothing and respond.
     bargeInEnabled: voiceMode === "live",
   });
+
+  const abortVoiceCapture = useCallback(async () => {
+    voiceCaptureEpochRef.current += 1;
+    liveCycleGuardRef.current = false;
+    voice.cancelSpeak();
+    if (voice.state.recording) {
+      await voice.stopRecording();
+    }
+  }, [voice]);
+
+  const updateVoiceMode = useCallback(
+    (next: "push" | "live") => {
+      if (next === voiceModeRef.current) return;
+      void abortVoiceCapture();
+      setVoiceMode(next);
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem("rose:voiceMode", next);
+        } catch {
+          /* ignore — preference just won't persist */
+        }
+      }
+    },
+    [abortVoiceCapture]
+  );
 
   // ----- notes panel handle ("+ Add to notes" buttons use this) -----
   const notesPanelRef = useRef<NotesPanelHandle | null>(null);
@@ -583,10 +604,16 @@ export function TutorSessionRunner({
   // Used when voiceMode === "live". Stops Rose if she's speaking,
   // captures until the student goes silent, transcribes, submits.
   const startLiveCapture = useCallback(async () => {
+    if (voiceModeRef.current !== "live") return;
+    const epoch = voiceCaptureEpochRef.current;
     voice.cancelSpeak();
     const blob = await voice.recordUntilSilence();
+    if (epoch !== voiceCaptureEpochRef.current) return;
+    if (voiceModeRef.current !== "live") return;
     if (!blob) return;
     const text = await voice.transcribe(blob);
+    if (epoch !== voiceCaptureEpochRef.current) return;
+    if (voiceModeRef.current !== "live") return;
     if (text) void submitTurn(text);
   }, [submitTurn, voice]);
 
@@ -672,7 +699,6 @@ export function TutorSessionRunner({
   }, [pushFinishVoiceAnswer, pushStartVoiceAnswer, voiceMode]);
 
   // ----- live mode: auto-listen after Rose finishes -----
-  const liveCycleGuardRef = useRef(false);
   useEffect(() => {
     if (voiceMode !== "live") return;
     if (voice.state.speaking) return;
@@ -685,17 +711,24 @@ export function TutorSessionRunner({
     // even runs.
     if (messagesRef.current.length === 0) return;
     liveCycleGuardRef.current = true;
+    const epoch = voiceCaptureEpochRef.current;
     (async () => {
       try {
         const blob = await voice.recordUntilSilence();
+        if (epoch !== voiceCaptureEpochRef.current) return;
+        if (voiceModeRef.current !== "live") return;
         if (!blob) return;
         const text = await voice.transcribe(blob);
+        if (epoch !== voiceCaptureEpochRef.current) return;
+        if (voiceModeRef.current !== "live") return;
         if (!text) return;
         void submitTurn(text);
       } catch (e) {
         console.error("[TutorSessionRunner live mode]", e);
       } finally {
-        liveCycleGuardRef.current = false;
+        if (epoch === voiceCaptureEpochRef.current) {
+          liveCycleGuardRef.current = false;
+        }
       }
     })();
   }, [

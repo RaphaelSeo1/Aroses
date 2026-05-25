@@ -231,10 +231,7 @@ export function DashboardHomeContent({
           )}
             </div>
             <div className="hidden lg:block">
-              <HomeRightSidebar
-                activityBuckets14={progress.activityBuckets}
-                recentPractice={progress.recentPractice}
-              />
+              <HomeRightSidebar activityBuckets14={progress.activityBuckets} />
             </div>
           </div>
         </div>
