@@ -277,7 +277,14 @@ export function ImmersiveLessonRunner({
       };
       setSession(body.session);
 
-      if (body.session && body.session.moduleId === activeModule.id) {
+      const storedModuleId =
+        typeof body.session?.moduleId === "number" && body.session.moduleId > 0
+          ? body.session.moduleId
+          : null;
+      const moduleMatches =
+        storedModuleId != null && storedModuleId === activeModule.id;
+
+      if (body.session && moduleMatches) {
         setChunkIdx(body.session.chunkIndex ?? 0);
         setAttempts(body.session.attemptState?.attempts ?? 0);
         if (body.session.lessonPlan?.moduleId === activeModule.id) {
@@ -291,6 +298,11 @@ export function ImmersiveLessonRunner({
           setPhase("welcome-back");
           return;
         }
+      } else if (body.session && storedModuleId == null) {
+        // Legacy rows used module_id=0 — resume module position but not chunk.
+        setChunkIdx(0);
+        setAttempts(0);
+        setPlan(null);
       } else if (body.session) {
         setChunkIdx(0);
         setAttempts(0);
@@ -360,6 +372,27 @@ export function ImmersiveLessonRunner({
     },
     [materialId]
   );
+
+  const progressRef = useRef({ moduleId: activeModule.id, chunkIdx: 0 });
+  progressRef.current = { moduleId: activeModule.id, chunkIdx };
+
+  // Keep session row in sync with the module the student is on.
+  useEffect(() => {
+    if (phase === "loading-session" || phase === "error") return;
+    void persist({ moduleId: activeModule.id });
+  }, [activeModule.id, materialId, persist, phase]);
+
+  useEffect(() => {
+    return () => {
+      const { moduleId, chunkIdx: chunkIndex } = progressRef.current;
+      fetch(`/api/mentored/session/${materialId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ moduleId, chunkIndex }),
+        keepalive: true,
+      }).catch(() => {});
+    };
+  }, [materialId]);
 
   const chunk: MentoredLessonChunk | null = plan?.chunks[chunkIdx] ?? null;
   const moduleCount = course.modules.length;

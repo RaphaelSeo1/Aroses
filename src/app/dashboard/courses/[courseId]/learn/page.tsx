@@ -175,6 +175,15 @@ export default async function LearnPage({ params, searchParams }: Props) {
       ? (modePrefRow.mode as CourseMode)
       : null;
 
+  // Students who chose Free Exploration should land in /study, not
+  // mentored onboarding again when they tap "Start learning".
+  if (initialMode === "free") {
+    const qs = new URLSearchParams();
+    qs.set("material", materialId);
+    qs.set("module", String(initialModuleId));
+    redirect(`/dashboard/courses/${courseId}/study?${qs.toString()}`);
+  }
+
   return (
     <ImmersiveLearnClient
       courseId={courseId}

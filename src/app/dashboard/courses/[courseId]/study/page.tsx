@@ -10,6 +10,7 @@ import { HighlightedSummary } from "@/components/HighlightedSummary";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { McqQuiz } from "@/components/McqQuiz";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
+import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
@@ -33,7 +34,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
 
   const moduleNum =
     typeof moduleParam === "string" ? Number(moduleParam) : Number.NaN;
-  const initialModuleFromUrl = Number.isFinite(moduleNum)
+  let initialModuleFromUrl = Number.isFinite(moduleNum)
     ? moduleNum
     : undefined;
 
@@ -55,6 +56,20 @@ export default async function StudyPage({ params, searchParams }: Props) {
   if (!courseRow) notFound();
 
   const courseTitle = courseRow.title?.trim() || "Course";
+
+  // `material=` without `module=` — resolve from saved session position.
+  if (
+    typeof materialId === "string" &&
+    UUID_RE.test(materialId) &&
+    initialModuleFromUrl == null
+  ) {
+    const resolved = await resolveMentoredModuleForMaterial(
+      supabase,
+      user.id,
+      materialId
+    );
+    if (resolved != null) initialModuleFromUrl = resolved;
+  }
 
   // Entry-point shortcut: when the URL doesn't already specify which
   // material + module to open (i.e. the user tapped "Learn" / "Continue"

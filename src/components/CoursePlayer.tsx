@@ -19,6 +19,7 @@ import { PersonalQuizSection } from "@/components/PersonalQuizSection";
 import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
 import { useSrsDueCounts } from "@/lib/srs-due";
 import { useCourseMode } from "@/lib/mentored/use-course-mode";
+import { persistStudyModulePosition } from "@/lib/study/persist-study-module";
 import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
 import { PracticeProgressPullTab } from "@/components/PracticeProgressPullTab";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
@@ -286,6 +287,10 @@ export function CoursePlayer({
   }, [activeModuleId, materialId]);
 
   useEffect(() => {
+    persistStudyModulePosition(materialId, activeModuleId);
+  }, [materialId, activeModuleId]);
+
+  useEffect(() => {
     if (mode !== "quiz" || practiceTab !== "module" || !activeModule) {
       setMissedQuizIndices([]);
       return;
@@ -457,6 +462,7 @@ export function CoursePlayer({
       if (typeof window !== "undefined" && previousModuleId !== modId) {
         window.scrollTo(0, 0);
       }
+      persistStudyModulePosition(materialId, modId);
     },
     [
       activeModuleId,

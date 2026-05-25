@@ -200,6 +200,13 @@ export default async function ExploreLearnPage({
       ? (modePrefRow.mode as CourseMode)
       : null;
 
+  if (initialMode === "free") {
+    const qs = new URLSearchParams();
+    qs.set("material", materialId);
+    qs.set("module", String(initialModuleId));
+    redirect(`/explore/${courseId}/study?${qs.toString()}`);
+  }
+
   return (
     <ImmersiveLearnClient
       courseId={courseId}

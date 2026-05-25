@@ -83,6 +83,17 @@ export async function POST(request: Request) {
       .maybeSingle();
     const cached = existing?.lesson_plan as MentoredLessonPlan | null;
     if (cached && cached.moduleId === moduleId && cached.chunks.length > 0) {
+      const now = new Date().toISOString();
+      await supabase.from("user_mentored_sessions").upsert(
+        {
+          user_id: user.id,
+          material_id: body.materialId,
+          module_id: moduleId,
+          updated_at: now,
+          last_seen_at: now,
+        },
+        { onConflict: "user_id,material_id" }
+      );
       return NextResponse.json({ plan: cached, cached: true });
     }
   }

@@ -122,6 +122,16 @@ export async function loadDashboardProgress(
     touchedMaterialIds.add(a.material_id);
   }
 
+  const { data: mentoredTouchRaw } = await supabase
+    .from("user_mentored_sessions")
+    .select("material_id")
+    .eq("user_id", ownerUserId);
+  for (const row of mentoredTouchRaw ?? []) {
+    if (typeof row.material_id === "string") {
+      touchedMaterialIds.add(row.material_id);
+    }
+  }
+
   const knownMaterialIds = new Set(
     (ownedMaterialsRaw ?? []).map((m) => m.id)
   );
@@ -223,8 +233,14 @@ export async function loadDashboardProgress(
       : { data: [] as { id: string; title: string }[] };
 
   const courseTitleById = new Map<string, string>();
+  for (const c of ownedCourses) {
+    courseTitleById.set(c.id, c.title);
+  }
   for (const c of recentCourseRows ?? []) {
     courseTitleById.set(c.id, c.title);
+  }
+  for (const m of ownedMaterialsRaw ?? []) {
+    courseIdByMaterialId.set(m.id, m.course_id);
   }
 
   const recentPracticeByCourse = new Map<
@@ -266,6 +282,46 @@ export async function loadDashboardProgress(
       correctLast10: base.correctLast10 + (att.is_correct ? 1 : 0),
     };
     recentPracticeByCourse.set(courseId, next);
+  }
+
+  const { data: recentMentoredRaw } = await supabase
+    .from("user_mentored_sessions")
+    .select(
+      "material_id, module_id, last_seen_at, study_materials!inner(course_id)"
+    )
+    .eq("user_id", ownerUserId)
+    .order("last_seen_at", { ascending: false })
+    .limit(80);
+
+  for (const row of recentMentoredRaw ?? []) {
+    const nested = row.study_materials as
+      | { course_id: string }
+      | { course_id: string }[]
+      | null;
+    const courseId = Array.isArray(nested)
+      ? nested[0]?.course_id
+      : nested?.course_id;
+    if (typeof courseId !== "string" || typeof row.material_id !== "string") {
+      continue;
+    }
+    courseIdByMaterialId.set(row.material_id, courseId);
+    const answeredAt =
+      typeof row.last_seen_at === "string" ? row.last_seen_at : "";
+    if (!answeredAt) continue;
+    const existing = recentPracticeByCourse.get(courseId);
+    if (
+      !existing ||
+      new Date(answeredAt).getTime() > new Date(existing.answeredAt).getTime()
+    ) {
+      recentPracticeByCourse.set(courseId, {
+        courseId,
+        materialId: row.material_id,
+        title: courseTitleById.get(courseId) ?? "Course",
+        answeredAt,
+        correctLast10: existing?.correctLast10 ?? 0,
+        totalLast10: existing?.totalLast10 ?? 0,
+      });
+    }
   }
 
   const { courses: summariesRaw, global } = buildCourseSummaries({

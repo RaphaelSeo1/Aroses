@@ -16,6 +16,7 @@ import {
 } from "@/lib/explore-course-outline";
 import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
+import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { createClient } from "@/lib/supabase/server";
@@ -45,7 +46,7 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
 
   const moduleNum =
     typeof sp.module === "string" ? Number(sp.module) : Number.NaN;
-  const initialModuleFromUrl = Number.isFinite(moduleNum)
+  let initialModuleFromUrl = Number.isFinite(moduleNum)
     ? moduleNum
     : undefined;
   const materialId =
@@ -81,6 +82,19 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
     .maybeSingle();
 
   if (!courseRow) notFound();
+
+  if (
+    typeof materialId === "string" &&
+    UUID_RE.test(materialId) &&
+    initialModuleFromUrl == null
+  ) {
+    const resolved = await resolveMentoredModuleForMaterial(
+      supabase,
+      user.id,
+      materialId
+    );
+    if (resolved != null) initialModuleFromUrl = resolved;
+  }
 
   const studyBase = `/explore/${courseId}/study`;
 

@@ -142,6 +142,20 @@ export function ImmersiveLearnClient({
 
   const onSwitchToFreeFromRunner = useCallback(() => {
     persistMode("free");
+  // Mark onboarding complete so reopening /learn does not replay the quiz.
+    fetch(`/api/mentored/onboarding/${materialId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        completedAt: new Date().toISOString(),
+        pathChoice: "original",
+      }),
+    }).catch((e) => console.error("[ImmersiveLearnClient skip onboarding]", e));
+    setOnboarding((prev) =>
+      prev
+        ? { ...prev, completedAt: new Date().toISOString() }
+        : prev
+    );
     const qs = new URLSearchParams();
     qs.set("material", materialId);
     if (activeModuleId != null) qs.set("module", String(activeModuleId));
