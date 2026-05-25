@@ -3,10 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  HEADER_NAV_ACCENT,
-  HEADER_NAV_NEUTRAL,
-} from "@/components/AppHeader";
 
 /**
  * Tutor Session nav with a chevron dropdown — compact menu only,
@@ -50,15 +46,19 @@ export function TutorSessionNavDropdown() {
     setOpen(false);
   }, [pathname]);
 
+  const pillVisual = active
+    ? "font-semibold text-brand bg-brand-blush/95 shadow-sm shadow-brand/10 hover:bg-brand-blush dark:bg-white/[0.14] dark:text-white dark:shadow-none dark:ring-1 dark:ring-brand-soft/45 dark:hover:bg-white/[0.18]"
+    : "font-medium text-brand-muted hover:bg-brand-blush hover:text-brand-ink dark:text-zinc-500 dark:hover:bg-white/10 dark:hover:text-zinc-100";
+
   return (
     <div ref={containerRef} className="relative inline-block">
-      <div className="inline-flex items-center gap-0.5">
+      <div
+        className={`inline-flex items-center rounded-full py-2 pl-3 pr-2 text-sm transition ${pillVisual}`}
+      >
         <Link
           href="/tutor-session"
           prefetch
-          className={`${
-            active ? HEADER_NAV_ACCENT : HEADER_NAV_NEUTRAL
-          } inline-flex items-center gap-1.5`}
+          className="inline-flex items-center gap-1.5"
           title="Start a one-on-one tutor session with Rose"
           aria-current={active ? "page" : undefined}
         >
@@ -82,16 +82,16 @@ export function TutorSessionNavDropdown() {
           aria-haspopup="menu"
           aria-expanded={open}
           aria-label="Tutor session menu"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-brand-muted transition hover:bg-brand-blush hover:text-brand-ink dark:text-zinc-500 dark:hover:bg-white/10 dark:hover:text-zinc-100"
+          className="-ml-px inline-flex w-4 shrink-0 items-center justify-center self-stretch opacity-70 transition hover:opacity-100"
         >
           <svg
             viewBox="0 0 24 24"
-            className={`h-3.5 w-3.5 transition-transform ${
+            className={`h-3 w-3 transition-transform ${
               open ? "rotate-180" : ""
             }`}
             fill="none"
             stroke="currentColor"
-            strokeWidth="2.4"
+            strokeWidth="2.6"
             strokeLinecap="round"
             strokeLinejoin="round"
             aria-hidden
