@@ -20,5 +20,7 @@ export async function resolveMentoredModuleForMaterial(
     console.error("[resolveMentoredModuleForMaterial]", error);
     return null;
   }
-  return typeof data?.module_id === "number" ? data.module_id : null;
+  return typeof data?.module_id === "number" && data.module_id > 0
+    ? data.module_id
+    : null;
 }

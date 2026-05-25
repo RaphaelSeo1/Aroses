@@ -34,7 +34,7 @@ export function buildResumeCourseHref(args: {
   if (args.lastUsedMode === "mentored") {
     const qs = new URLSearchParams();
     if (args.materialId) qs.set("material", args.materialId);
-    if (typeof args.moduleId === "number") {
+    if (typeof args.moduleId === "number" && args.moduleId > 0) {
       qs.set("module", String(args.moduleId));
     }
     const q = qs.toString();
@@ -43,7 +43,7 @@ export function buildResumeCourseHref(args: {
   const qs = new URLSearchParams();
   qs.set("mode", "learn");
   if (args.materialId) qs.set("material", args.materialId);
-  if (typeof args.moduleId === "number") {
+  if (typeof args.moduleId === "number" && args.moduleId > 0) {
     qs.set("module", String(args.moduleId));
   }
   const q = qs.toString();

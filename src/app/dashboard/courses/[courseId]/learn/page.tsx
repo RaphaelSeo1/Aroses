@@ -175,9 +175,15 @@ export default async function LearnPage({ params, searchParams }: Props) {
       ? (modePrefRow.mode as CourseMode)
       : null;
 
-  // Students who chose Free Exploration should land in /study, not
-  // mentored onboarding again when they tap "Start learning".
-  if (initialMode === "free") {
+  // Students who chose Free Exploration should land in /study when they
+  // tap "Start learning" — but NOT when they explicitly switch to
+  // Mentored from Free Exploration (material + module in the URL).
+  const explicitMentoredSwitch =
+    typeof moduleParam === "string" &&
+    moduleParam.trim().length > 0 &&
+    Number.isFinite(Number(moduleParam));
+
+  if (initialMode === "free" && !explicitMentoredSwitch) {
     const qs = new URLSearchParams();
     qs.set("material", materialId);
     qs.set("module", String(initialModuleId));

@@ -92,7 +92,8 @@ export async function resolveResumeTarget(
     return {
       materialId: lastMentored.material_id as string,
       moduleId:
-        typeof lastMentored.module_id === "number"
+        typeof lastMentored.module_id === "number" &&
+        lastMentored.module_id > 0
           ? lastMentored.module_id
           : null,
     };
@@ -102,7 +103,9 @@ export async function resolveResumeTarget(
     return {
       materialId: lastComp.material_id as string,
       moduleId:
-        typeof lastComp.module_id === "number" ? lastComp.module_id : null,
+        typeof lastComp.module_id === "number" && lastComp.module_id > 0
+          ? lastComp.module_id
+          : null,
     };
   }
 

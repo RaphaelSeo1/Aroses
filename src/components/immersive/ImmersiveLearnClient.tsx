@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { ImmersiveLessonRunner } from "@/components/immersive/ImmersiveLessonRunner";
@@ -105,6 +105,11 @@ export function ImmersiveLearnClient({
     },
     [materialId]
   );
+
+  // /learn is always Mentored — persist mode so resume links stay correct.
+  useEffect(() => {
+    persistMode("mentored");
+  }, [persistMode]);
 
   // ----- mode picker handlers -----
   const onChooseMode = useCallback(

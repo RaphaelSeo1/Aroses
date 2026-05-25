@@ -324,6 +324,25 @@ export async function loadDashboardProgress(
     }
   }
 
+  // Fill in any course titles missing from the quiz-based path (e.g.
+  // mentored-only activity on owned courses).
+  const missingTitleCourseIds = [...recentPracticeByCourse.keys()].filter(
+    (id) => !courseTitleById.has(id)
+  );
+  if (missingTitleCourseIds.length > 0) {
+    const { data: missingCourseRows } = await supabase
+      .from("courses")
+      .select("id, title")
+      .in("id", missingTitleCourseIds);
+    for (const c of missingCourseRows ?? []) {
+      courseTitleById.set(c.id, c.title);
+    }
+    for (const [courseId, entry] of recentPracticeByCourse) {
+      const title = courseTitleById.get(courseId);
+      if (title) entry.title = title;
+    }
+  }
+
   const { courses: summariesRaw, global } = buildCourseSummaries({
     courses,
     materials: allMaterials,
@@ -389,7 +408,8 @@ export async function loadDashboardProgress(
     for (const row of mentoredRows ?? []) {
       if (
         typeof row.material_id === "string" &&
-        typeof row.module_id === "number"
+        typeof row.module_id === "number" &&
+        row.module_id > 0
       ) {
         moduleByMaterialId.set(row.material_id, row.module_id);
       }
@@ -403,6 +423,7 @@ export async function loadDashboardProgress(
       modeByMaterialId.get(r.materialId) ?? "mentored";
     return {
       ...r,
+      title: s?.title ?? courseTitleById.get(r.courseId) ?? r.title,
       modulesCompleted: s?.modulesCompleted ?? 0,
       modulesTotal: s?.modulesTotal ?? 0,
       isExploreLearner: Boolean(s?.isExploreLearner),

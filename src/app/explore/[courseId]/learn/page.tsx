@@ -201,10 +201,17 @@ export default async function ExploreLearnPage({
       : null;
 
   if (initialMode === "free") {
-    const qs = new URLSearchParams();
-    qs.set("material", materialId);
-    qs.set("module", String(initialModuleId));
-    redirect(`/explore/${courseId}/study?${qs.toString()}`);
+    const explicitMentoredSwitch =
+      typeof moduleParam === "string" &&
+      moduleParam.trim().length > 0 &&
+      Number.isFinite(Number(moduleParam));
+
+    if (!explicitMentoredSwitch) {
+      const qs = new URLSearchParams();
+      qs.set("material", materialId);
+      qs.set("module", String(initialModuleId));
+      redirect(`/explore/${courseId}/study?${qs.toString()}`);
+    }
   }
 
   return (

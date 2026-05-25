@@ -111,6 +111,7 @@ export function CoursePlayer({
   initialModuleFromUrl,
   mode = "lessons",
   studyHrefBase,
+  learnHrefBase,
   courseManageEnabled = true,
   learnMode = false,
   workspaceCourseTitle,
@@ -127,6 +128,8 @@ export function CoursePlayer({
   mode?: "lessons" | "quiz";
   /** Defaults to dashboard study URL; use `/explore/[courseId]/study` for public learners. */
   studyHrefBase?: string;
+  /** Mentored Learning entry URL; derived from `studyHrefBase` when omitted. */
+  learnHrefBase?: string;
   /** When false, hide editing, AI refine, and generating more quiz questions (Explore). */
   courseManageEnabled?: boolean;
   /** When true, keep `mode=learn` on lecture/practice URLs (dashboard “study as learner”). */
@@ -140,6 +143,11 @@ export function CoursePlayer({
   const searchParams = useSearchParams();
   const studyBase =
     studyHrefBase ?? `/dashboard/courses/${courseId}/study`;
+  const learnBase =
+    learnHrefBase ??
+    (studyHrefBase
+      ? studyHrefBase.replace(/\/study\/?$/, "/learn")
+      : `/dashboard/courses/${courseId}/learn`);
   const practiceTab =
     mode === "quiz" && searchParams.get("practice") === "focus"
       ? "focus"
@@ -1217,9 +1225,7 @@ export function CoursePlayer({
                     const qs = new URLSearchParams();
                     qs.set("material", materialId);
                     qs.set("module", String(activeModule.id));
-                    router.push(
-                      `/dashboard/courses/${courseId}/learn?${qs.toString()}`
-                    );
+                    router.push(`${learnBase}?${qs.toString()}`);
                   } else {
                     setCourseMode("free");
                   }
