@@ -23,6 +23,7 @@ export function LessonPlanLoading({
   moduleTitle,
   stage = "plan",
   topBar,
+  onRequestExit,
 }: {
   courseTitle?: string;
   moduleIdx?: number;
@@ -31,6 +32,8 @@ export function LessonPlanLoading({
   /** "session" is short; "plan" is the slow Claude generation. */
   stage?: "session" | "plan";
   topBar?: React.ReactNode;
+  /** Shown on the loading card so Exit is reachable without the top bar. */
+  onRequestExit?: () => void;
 }) {
   const STEPS_PLAN = [
     "Reading the source lesson",
@@ -186,6 +189,18 @@ export function LessonPlanLoading({
           ) : null}
         </div>
       </GlassPanel>
+
+      {onRequestExit ? (
+        <div className="mt-6 flex justify-center">
+          <button
+            type="button"
+            onClick={onRequestExit}
+            className="rounded-full border border-white/60 bg-white/70 px-5 py-2 text-sm font-medium text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/90"
+          >
+            Leave course
+          </button>
+        </div>
+      ) : null}
 
       <style jsx>{`
         .lp-step {

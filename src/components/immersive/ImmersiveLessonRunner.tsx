@@ -122,7 +122,7 @@ export function ImmersiveLessonRunner({
     // talk — leaving the mic always-on monitor running causes Rose
     // to "hear" room noise / her own playback bleed and respond to
     // nothing. Gate the entire monitor on voice mode.
-    bargeInEnabled: voiceMode === "live",
+    bargeInEnabled: voiceMode === "live" && !awaitingContinue,
   });
   const lastSpokenChunkIdRef = useRef<string | null>(null);
   const recordPromiseRef = useRef<Promise<Blob | null> | null>(null);
@@ -235,6 +235,11 @@ export function ImmersiveLessonRunner({
   const greetingFiredRef = useRef(false);
   /** Returning students must tap Continue before Rose starts the lesson. */
   const [awaitingContinue, setAwaitingContinue] = useState(false);
+  /** Sync mirror — effects/voice callbacks read this without waiting for React. */
+  const awaitingContinueRef = useRef(false);
+  useEffect(() => {
+    awaitingContinueRef.current = awaitingContinue;
+  }, [awaitingContinue]);
 
   // ---- question popup (the centered "Rose asks" modal) ----
   //
@@ -456,7 +461,9 @@ export function ImmersiveLessonRunner({
     const needsAcknowledgement =
       scenario === "returning" || scenario === "all_complete";
     if (needsAcknowledgement) {
+      awaitingContinueRef.current = true;
       setAwaitingContinue(true);
+      lastSpokenChunkIdRef.current = null;
     }
 
     // Pull the most natural "last lesson title". Prefer the lesson
@@ -534,12 +541,14 @@ export function ImmersiveLessonRunner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, plan, session]);
 
-  const appendAutoNotesForChunk = useCallback(() => {
-    if (!chunk || phase !== "teaching") return;
-    if (awaitingContinue) return;
-    if (!autoGenerateNotes) return;
-    if (!notesEditorReady || !notesPanelRef.current) return;
-    if (notesAppendedChunkRef.current === chunk.id) return;
+  const appendAutoNotesForChunk = useCallback(
+    (opts?: { enabledOverride?: boolean }) => {
+      const enabled = opts?.enabledOverride ?? autoGenerateNotes;
+      if (!chunk || phase !== "teaching") return;
+      if (awaitingContinueRef.current) return;
+      if (!enabled) return;
+      if (!notesEditorReady || !notesPanelRef.current) return;
+      if (notesAppendedChunkRef.current === chunk.id) return;
 
     const points = chunk.keyPoints.slice(0, 5);
     const bullets =
@@ -578,19 +587,15 @@ export function ImmersiveLessonRunner({
           : undefined,
     });
     if (appended) notesAppendedChunkRef.current = chunk.id;
-  }, [
-    autoGenerateNotes,
-    awaitingContinue,
-    chunk,
-    notesEditorReady,
-    phase,
-  ]);
+    },
+    [autoGenerateNotes, chunk, notesEditorReady, phase]
+  );
 
   const handleAutoGenerateToggle = useCallback(
     (next: boolean) => {
       handleAutoGenerateChange(next);
       if (next) {
-        window.setTimeout(() => appendAutoNotesForChunk(), 0);
+        appendAutoNotesForChunk({ enabledOverride: true });
       }
     },
     [appendAutoNotesForChunk, handleAutoGenerateChange]
@@ -632,7 +637,7 @@ export function ImmersiveLessonRunner({
     if (!chunk) return;
     if (interactionMode !== "voice") return;
     if (!greetingPlayed) return;
-    if (awaitingContinue) return;
+    if (awaitingContinueRef.current) return;
     if (lastSpokenChunkIdRef.current === chunk.id) return;
     lastSpokenChunkIdRef.current = chunk.id;
 
@@ -670,7 +675,7 @@ export function ImmersiveLessonRunner({
     if (!chunk) return;
     if (interactionMode !== "text") return;
     if (!greetingPlayed) return;
-    if (awaitingContinue) return;
+    if (awaitingContinueRef.current) return;
     setQuestionAudioStartedFor(chunk.id);
     setQuestionPopupMinimized(false);
   }, [
@@ -694,6 +699,7 @@ export function ImmersiveLessonRunner({
   // Claude to finish (~3-6s) AND a full TTS round-trip.
   const submitAnswer = useCallback(
     async (utterance: string) => {
+      if (awaitingContinueRef.current) return;
       if (!chunk || !plan) return;
       const text = utterance.trim();
 
@@ -1027,6 +1033,7 @@ export function ImmersiveLessonRunner({
 
   // ----- voice input -----
   const startVoiceAnswer = useCallback(async () => {
+    if (awaitingContinueRef.current) return;
     if (submitting || voice.state.recording) return;
     voice.cancelSpeak();
     recordPromiseRef.current = voice.startRecording();
@@ -1134,6 +1141,7 @@ export function ImmersiveLessonRunner({
   // acknowledge the interruption + offer to resume instead of restarting
   // the explanation cold.
   const handleBargeIn = useCallback(async () => {
+    if (awaitingContinueRef.current) return;
     try {
       const spokenSoFar = lastSpokenRef.current.trim();
       if (spokenSoFar.length >= 8) {
@@ -1179,7 +1187,7 @@ export function ImmersiveLessonRunner({
     if (interactionMode !== "voice") return;
     if (phase !== "teaching") return;
     if (!greetingPlayed) return;
-    if (awaitingContinue) return;
+    if (awaitingContinueRef.current) return;
     if (voice.state.speaking) return;
     if (voice.state.recording) return;
     if (voice.state.transcribing) return;
@@ -1231,6 +1239,7 @@ export function ImmersiveLessonRunner({
   const resumeFromRecap = useCallback(() => {
     greetingFiredRef.current = false;
     setGreetingPlayed(false);
+    awaitingContinueRef.current = false;
     setAwaitingContinue(false);
     setTutorReply(null);
     lastSpokenChunkIdRef.current = null;
@@ -1239,9 +1248,12 @@ export function ImmersiveLessonRunner({
   }, [voice]);
 
   const acknowledgeAndContinue = useCallback(() => {
+    awaitingContinueRef.current = false;
     setAwaitingContinue(false);
     setGreetingPlayed(true);
-  }, []);
+    lastSpokenChunkIdRef.current = null;
+    voice.cancelSpeak();
+  }, [voice]);
 
   const goToNextModule = useCallback(async () => {
     const nextModule = course.modules[moduleIdx + 1];
@@ -1341,6 +1353,7 @@ export function ImmersiveLessonRunner({
           moduleTitle={activeModule.title}
           stage={phase === "loading-session" ? "session" : "plan"}
           topBar={topBar}
+          onRequestExit={() => setShowExitMenu(true)}
         />
         {showExitMenu ? (
           <ExitConfirm
