@@ -905,7 +905,7 @@ export function TutorSessionRunner({
                       ? "rounded-xl bg-zinc-900 px-3 py-1 text-white shadow-sm"
                       : "rounded-xl px-3 py-1 text-zinc-700 hover:bg-zinc-50"
                   }
-                  title="Hold M (or the mic button) to talk"
+                  title="Press and hold M or the mic button to speak"
                 >
                   Hold&nbsp;M
                 </button>
@@ -926,7 +926,7 @@ export function TutorSessionRunner({
               <span className="text-[10px] uppercase tracking-[0.14em] text-zinc-400">
                 {voiceMode === "live"
                   ? "Auto-listen on · barge-in to interrupt"
-                  : "Hold M or press &amp; hold the mic"}
+                  : "Press and hold M or the mic button to speak"}
               </span>
             </div>
             <div className="flex items-end gap-2">

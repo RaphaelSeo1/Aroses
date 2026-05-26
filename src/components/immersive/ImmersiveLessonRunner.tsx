@@ -423,13 +423,14 @@ export function ImmersiveLessonRunner({
       (phase === "welcome-back" && session != null) ||
       (phase === "module-complete" && session != null);
     if (!ready) return;
-    greetingFiredRef.current = true;
 
-    // Welcome-back has its own Resume / read-only panel — skip the
-    // spoken greeting so Rose doesn't talk over the student's choice.
+    // Welcome-back uses its own Resume panel first; greeting runs after
+    // the student taps Resume (see resumeFromRecap).
     if (phase === "welcome-back") {
       return;
     }
+
+    greetingFiredRef.current = true;
 
     // True first-time signal: either no session row exists OR the
     // session row is brand new (no history entries AND chunk index
@@ -533,6 +534,68 @@ export function ImmersiveLessonRunner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, plan, session]);
 
+  const appendAutoNotesForChunk = useCallback(() => {
+    if (!chunk || phase !== "teaching") return;
+    if (awaitingContinue) return;
+    if (!autoGenerateNotes) return;
+    if (!notesEditorReady || !notesPanelRef.current) return;
+    if (notesAppendedChunkRef.current === chunk.id) return;
+
+    const points = chunk.keyPoints.slice(0, 5);
+    const bullets =
+      points.length > 0
+        ? points
+        : chunk.explanation.trim().length > 0
+          ? [chunk.explanation.trim().slice(0, 400)]
+          : chunk.concept.trim().length > 0
+            ? [chunk.concept.trim()]
+            : [];
+    if (bullets.length === 0) return;
+
+    const intro =
+      chunk.concept +
+      (chunk.explanation && chunk.explanation.length > 0
+        ? chunk.explanation.length > 200
+          ? ` — ${chunk.explanation.slice(0, 197).trim()}…`
+          : ` — ${chunk.explanation}`
+        : "");
+    const keyTerms = chunk.keyPoints
+      .map((p) => p.split(/[—–:.]/)[0]?.trim())
+      .filter((s): s is string => !!s && s.length > 0 && s.length <= 40);
+    const bulletItems = bullets.map((text, i) => {
+      const bold = keyTerms[i];
+      return bold && text.toLowerCase().startsWith(bold.toLowerCase())
+        ? { text, bold }
+        : text;
+    });
+    const appended = notesPanelRef.current.appendBlock({
+      skipHeading: true,
+      intro,
+      bullets: bulletItems,
+      callout:
+        chunk.analogy && chunk.analogy.length > 0
+          ? { emoji: "💡", text: chunk.analogy }
+          : undefined,
+    });
+    if (appended) notesAppendedChunkRef.current = chunk.id;
+  }, [
+    autoGenerateNotes,
+    awaitingContinue,
+    chunk,
+    notesEditorReady,
+    phase,
+  ]);
+
+  const handleAutoGenerateToggle = useCallback(
+    (next: boolean) => {
+      handleAutoGenerateChange(next);
+      if (next) {
+        window.setTimeout(() => appendAutoNotesForChunk(), 0);
+      }
+    },
+    [appendAutoNotesForChunk, handleAutoGenerateChange]
+  );
+
   // ----- auto-speak fresh chunk -----
   // Held back until the greeting is done so the tutor doesn't talk over
   // itself. Once the greeting finishes (or text mode skips it), this
@@ -554,49 +617,9 @@ export function ImmersiveLessonRunner({
     return [{ id, heading, text }];
   }, [chunk, phase, consumedSuggestionIds]);
 
-  // Auto-generate side-effect: ref-write, not setState, so this
-  // doesn't trip the set-state-in-effect rule. Guarded by
-  // `notesAppendedChunkRef` so a chunk is appended at most once
-  // even across renders.
   useEffect(() => {
-    if (!chunk) return;
-    if (phase !== "teaching") return;
-    if (!autoGenerateNotes) return;
-    if (!notesEditorReady) return;
-    if (notesAppendedChunkRef.current === chunk.id) return;
-    if (!notesPanelRef.current) return;
-    const points = chunk.keyPoints.slice(0, 5);
-    if (points.length === 0) return;
-
-    // No forced H2 title — the student owns headings in the doc.
-    // We tuck the concept into the intro line and use bullets only.
-    const intro =
-      chunk.concept +
-      (chunk.explanation && chunk.explanation.length > 0
-        ? chunk.explanation.length > 200
-          ? ` — ${chunk.explanation.slice(0, 197).trim()}…`
-          : ` — ${chunk.explanation}`
-        : "");
-    const keyTerms = chunk.keyPoints
-      .map((p) => p.split(/[—–:.]/)[0]?.trim())
-      .filter((s): s is string => !!s && s.length > 0 && s.length <= 40);
-    const bullets = points.map((text, i) => {
-      const bold = keyTerms[i];
-      return bold && text.toLowerCase().startsWith(bold.toLowerCase())
-        ? { text, bold }
-        : text;
-    });
-    const appended = notesPanelRef.current.appendBlock({
-      skipHeading: true,
-      intro,
-      bullets,
-      callout:
-        chunk.analogy && chunk.analogy.length > 0
-          ? { emoji: "💡", text: chunk.analogy }
-          : undefined,
-    });
-    if (appended) notesAppendedChunkRef.current = chunk.id;
-  }, [autoGenerateNotes, chunk, notesEditorReady, phase]);
+    appendAutoNotesForChunk();
+  }, [appendAutoNotesForChunk]);
 
   useEffect(() => {
     setQuestionPopupDismissedFor(null);
@@ -1206,10 +1229,14 @@ export function ImmersiveLessonRunner({
   ]);
 
   const resumeFromRecap = useCallback(() => {
+    greetingFiredRef.current = false;
+    setGreetingPlayed(false);
     setAwaitingContinue(false);
-    setGreetingPlayed(true);
+    setTutorReply(null);
+    lastSpokenChunkIdRef.current = null;
+    voice.cancelSpeak();
     setPhase("loading-plan");
-  }, []);
+  }, [voice]);
 
   const acknowledgeAndContinue = useCallback(() => {
     setAwaitingContinue(false);
@@ -1298,7 +1325,7 @@ export function ImmersiveLessonRunner({
           : voice.state.recording
             ? "Listening — release M (or the mic) to send"
             : interactionMode === "voice" && voiceMode === "push"
-              ? "Hold M to talk · or hold the mic button"
+              ? "Press and hold M or the mic button to speak"
               : interactionMode === "voice" && voiceMode === "live"
                 ? "Live mode — just start speaking"
                 : null);
@@ -1306,14 +1333,23 @@ export function ImmersiveLessonRunner({
   // ---- branches that don't need the composer ----
   if (phase === "loading-session" || phase === "loading-plan") {
     return (
-      <LessonPlanLoading
-        courseTitle={course.title}
-        moduleIdx={Math.max(moduleIdx, 0)}
-        moduleCount={moduleCount}
-        moduleTitle={activeModule.title}
-        stage={phase === "loading-session" ? "session" : "plan"}
-        topBar={topBar}
-      />
+      <>
+        <LessonPlanLoading
+          courseTitle={course.title}
+          moduleIdx={Math.max(moduleIdx, 0)}
+          moduleCount={moduleCount}
+          moduleTitle={activeModule.title}
+          stage={phase === "loading-session" ? "session" : "plan"}
+          topBar={topBar}
+        />
+        {showExitMenu ? (
+          <ExitConfirm
+            onClose={() => setShowExitMenu(false)}
+            onSwitchToFree={onSwitchToFree}
+            onExit={onExit}
+          />
+        ) : null}
+      </>
     );
   }
 
@@ -1529,6 +1565,12 @@ export function ImmersiveLessonRunner({
       topBar={topBar}
       contentMaxWidth="wide"
       bottomBar={
+        awaitingContinue ? (
+          <div className="border-t border-white/70 bg-white/85 px-4 py-3 text-center text-xs text-zinc-500 backdrop-blur-md">
+            Tap <span className="font-semibold text-zinc-700">Continue lesson</span>{" "}
+            above when you&apos;re ready — Rose will wait for you.
+          </div>
+        ) : (
         <div className="immersive-dock border-t border-white/70 bg-white/85 shadow-[0_-12px_28px_-18px_rgba(60,60,90,0.20)] backdrop-blur-md">
           <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pt-3">
             {/* Mini activity row above the controls. The waveform is a
@@ -1572,6 +1614,7 @@ export function ImmersiveLessonRunner({
             />
           </div>
         </div>
+        )
       }
     >
       <ProgressHeader
@@ -1615,6 +1658,8 @@ export function ImmersiveLessonRunner({
           slide-in drawer toggled from the floating button below. */}
       <div className="mt-2 grid grid-cols-1 gap-6 xl:grid-cols-2 xl:gap-8">
         <div className="min-w-0">
+      {!awaitingContinue && chunk ? (
+        <>
 
       {/* §9 — On-demand image area. Renders when Rose has decided a
           visual would help OR the student explicitly asked for one
@@ -1767,6 +1812,8 @@ export function ImmersiveLessonRunner({
           try once more or just say &quot;move on&quot;.
         </p>
       ) : null}
+        </>
+      ) : null}
         </div>
 
         {/* Right column — notes panel. Sticky inside the scroll
@@ -1790,7 +1837,7 @@ export function ImmersiveLessonRunner({
                     })
                   }
                   autoGenerate={autoGenerateNotes}
-                  onAutoGenerateChange={handleAutoGenerateChange}
+                  onAutoGenerateChange={handleAutoGenerateToggle}
                   onEditorReady={onNotesEditorReady}
                   editorRef={notesPanelRef}
                   className="h-[calc(100vh-220px)] min-h-[34rem]"
@@ -1845,7 +1892,7 @@ export function ImmersiveLessonRunner({
                       })
                     }
                     autoGenerate={autoGenerateNotes}
-                    onAutoGenerateChange={handleAutoGenerateChange}
+                    onAutoGenerateChange={handleAutoGenerateToggle}
                     onEditorReady={onNotesEditorReady}
                     editorRef={notesPanelRef}
                     className="h-full"
@@ -2416,7 +2463,7 @@ function AnswerComposer({
             interactionMode === "voice"
               ? voiceMode === "live"
                 ? "Speak whenever — or type here…"
-                : "Hold M (or the mic) to speak · or type here…"
+                : "Press and hold M or the mic button to speak · or type here…"
               : "Type your answer (⌘↵ to submit)…"
           }
           className="block min-h-[2.5rem] flex-1 resize-none rounded-2xl border border-white/60 bg-white/70 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-500 focus:border-fuchsia-300 focus:bg-white/90 focus:outline-none focus:ring-2 focus:ring-fuchsia-200/60"
@@ -2446,7 +2493,7 @@ function AnswerComposer({
                   : "rounded-2xl border border-white/60 bg-white/70 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-white/90 disabled:opacity-50"
               }
               title={
-                recording ? "Release to send" : "Hold to talk (or press & hold M)"
+                recording ? "Release to send" : "Press and hold to speak"
               }
             >
               {transcribing

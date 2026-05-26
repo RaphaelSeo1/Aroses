@@ -13,6 +13,10 @@ import TaskItem from "@tiptap/extension-task-item";
 import Typography from "@tiptap/extension-typography";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
+import {
+  readRoseDocAttrs,
+  RoseDocument,
+} from "./notes/RoseDocument";
 
 /**
  * Premium Notion-style notes panel docked to the right side of
@@ -105,6 +109,33 @@ function pickDocEmoji(title: string): string {
   return "📝";
 }
 
+const EMOJI_PICKS = [
+  "📝",
+  "📖",
+  "📚",
+  "✏️",
+  "💡",
+  "🧠",
+  "🧬",
+  "🧪",
+  "⚛️",
+  "📐",
+  "💻",
+  "🎨",
+  "🎵",
+  "🌍",
+  "🪐",
+  "❤️",
+  "🏛️",
+  "⚖️",
+  "💰",
+  "🗣️",
+  "✨",
+  "🔥",
+  "⭐",
+  "🎯",
+] as const;
+
 function formatRelativeTime(ms: number): string {
   const diff = Date.now() - ms;
   if (diff < 0 || diff < 4 * 1000) return "just now";
@@ -181,20 +212,22 @@ export function NotesPanel({
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const initialDocRef = useRef<unknown | null>(null);
-
-  const docEmoji = useMemo(
-    () => pickDocEmoji(`${lessonTitle} ${courseTitle}`),
-    [lessonTitle, courseTitle]
+  const defaultTitle = courseTitle || lessonTitle || "Notes";
+  const [docTitle, setDocTitle] = useState(defaultTitle);
+  const [docEmoji, setDocEmoji] = useState(() =>
+    pickDocEmoji(`${lessonTitle} ${courseTitle}`)
   );
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const emojiPickerRef = useRef<HTMLDivElement | null>(null);
 
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
-        // CodeBlock + Blockquote + HorizontalRule come from StarterKit.
-        // We re-style them via the global CSS at the bottom.
+        document: false,
       }),
+      RoseDocument,
       Underline,
       Highlight.configure({ multicolor: false }),
       Typography,
@@ -406,6 +439,15 @@ export function NotesPanel({
         };
         if (cancelled) return;
         const doc = body.notes?.contentJson;
+        const attrs = readRoseDocAttrs(doc);
+        if (attrs.roseDocTitle?.trim()) {
+          setDocTitle(attrs.roseDocTitle.trim());
+        } else {
+          setDocTitle(defaultTitle);
+        }
+        if (attrs.roseDocEmoji) {
+          setDocEmoji(attrs.roseDocEmoji);
+        }
         if (doc && editor && !editor.isDestroyed) {
           initialDocRef.current = doc;
           editor.commands.setContent(doc as never, { emitUpdate: false });
@@ -425,19 +467,37 @@ export function NotesPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editor, endpoint]);
+  }, [defaultTitle, editor, endpoint]);
+
+  useEffect(() => {
+    if (!emojiPickerOpen) return;
+    const onPointer = (e: MouseEvent) => {
+      if (!emojiPickerRef.current?.contains(e.target as Node)) {
+        setEmojiPickerOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointer);
+    return () => window.removeEventListener("mousedown", onPointer);
+  }, [emojiPickerOpen]);
 
   const saveNow = useCallback(async () => {
     if (!editor || editor.isDestroyed) return;
-    const json = editor.getJSON();
-    const text = docToPlainText(json);
+    editor.commands.updateAttributes("doc", {
+      roseDocTitle: docTitle.trim(),
+      roseDocEmoji: docEmoji,
+    });
+    const jsonWithMeta = editor.getJSON();
+    const text = docToPlainText(jsonWithMeta);
     setSaving("saving");
     const attempt = async (): Promise<boolean> => {
       try {
         const res = await fetch(endpoint, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contentJson: json, contentText: text }),
+          body: JSON.stringify({
+            contentJson: jsonWithMeta,
+            contentText: text,
+          }),
         });
         return res.ok;
       } catch {
@@ -459,7 +519,11 @@ export function NotesPanel({
     } else {
       setSaving("error");
     }
-  }, [editor, endpoint]);
+  }, [docEmoji, docTitle, editor, endpoint]);
+
+  const persistDocChrome = useCallback(() => {
+    void saveNow();
+  }, [saveNow]);
 
   // Autosave: debounce 1500ms after the last update event.
   useEffect(() => {
@@ -625,15 +689,46 @@ export function NotesPanel({
               so a user-typed first H1 becomes the de-facto title
               and can be edited / deleted like any other block. */}
           <header className="mb-6">
-            <span
-              className="mb-2 block text-3xl leading-none select-none"
-              aria-hidden
-            >
-              {docEmoji}
-            </span>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">
-              {courseTitle || lessonTitle || "Notes"}
-            </p>
+            <div className="relative mb-3" ref={emojiPickerRef}>
+              <button
+                type="button"
+                onClick={() => setEmojiPickerOpen((o) => !o)}
+                className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-zinc-200/80 bg-white text-3xl leading-none shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50"
+                aria-label="Choose document emoji"
+                title="Choose emoji"
+              >
+                {docEmoji}
+              </button>
+              {emojiPickerOpen ? (
+                <div className="absolute left-0 top-full z-20 mt-2 grid w-[min(16rem,calc(100vw-3rem))] grid-cols-6 gap-1 rounded-2xl border border-zinc-200 bg-white p-2 shadow-xl">
+                  {EMOJI_PICKS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => {
+                        setDocEmoji(emoji);
+                        setEmojiPickerOpen(false);
+                        persistDocChrome();
+                      }}
+                      className={`flex h-9 w-9 items-center justify-center rounded-lg text-xl hover:bg-zinc-100 ${
+                        emoji === docEmoji ? "bg-zinc-100 ring-1 ring-zinc-300" : ""
+                      }`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <input
+              type="text"
+              value={docTitle}
+              onChange={(e) => setDocTitle(e.target.value)}
+              onBlur={() => persistDocChrome()}
+              placeholder="Untitled notes"
+              className="w-full border-none bg-transparent text-2xl font-semibold tracking-tight text-zinc-900 placeholder:text-zinc-300 focus:outline-none focus:ring-0"
+              aria-label="Notes title"
+            />
             <p className="mt-0.5 text-[12px] text-zinc-400">
               {lastSavedAt
                 ? `Edited ${formatRelativeTime(lastSavedAt)}`
