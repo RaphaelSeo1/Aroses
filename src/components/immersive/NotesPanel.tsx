@@ -17,6 +17,7 @@ import {
   readRoseDocAttrs,
   RoseDocument,
 } from "./notes/RoseDocument";
+import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
 
 /**
  * Premium Notion-style notes panel docked to the right side of
@@ -70,6 +71,10 @@ export type AutoGenerateBlock = {
   >;
   /** Optional callout block appended below the bullets (key takeaway). */
   callout?: { emoji?: string; text: string };
+  /** Optional vocabulary list (rendered as H3 + bullets with bold terms). */
+  vocabulary?: Array<{ term: string; definition?: string }>;
+  /** When true, skip intro-fingerprint dedupe (explicit user toggle). */
+  skipDedupe?: boolean;
 };
 
 export type NotesPanelHandle = {
@@ -173,6 +178,7 @@ export function NotesPanel({
   onConsumeSuggestion,
   autoGenerate,
   onAutoGenerateChange,
+  onAutoGenerateUserToggle,
   className,
   editorRef,
   onEditorReady,
@@ -199,6 +205,8 @@ export function NotesPanel({
   onConsumeSuggestion: (id: string) => void;
   autoGenerate: boolean;
   onAutoGenerateChange: (next: boolean) => void;
+  /** Fired when the student clicks the toggle (not on initial load sync). */
+  onAutoGenerateUserToggle?: (next: boolean) => void;
   className?: string;
   /** Optional imperative handle so the parent can append notes. */
   editorRef?: React.RefObject<NotesPanelHandle | null>;
@@ -295,9 +303,28 @@ export function NotesPanel({
   // callout.
   useEffect(() => {
     if (!editorRef) return;
-    editorRef.current = {
-      appendBlock: ({ heading, intro, bullets, callout, skipHeading }) => {
-        if (!editor) return false;
+    const handle = {
+      appendBlock: ({
+        heading,
+        intro,
+        bullets,
+        callout,
+        vocabulary,
+        skipHeading,
+        skipDedupe,
+      }: AutoGenerateBlock) => {
+        autoGenLog("inserting notes into editor", {
+          hasEditor: !!editor,
+          editorDestroyed: editor?.isDestroyed ?? null,
+          skipHeading,
+          skipDedupe,
+          introPreview: intro?.slice(0, 80),
+          bulletCount: bullets.length,
+        });
+        if (!editor) {
+          autoGenLog("insertion aborted — editor not ready");
+          return false;
+        }
 
         const doc = editor.getJSON();
         const nodes =
@@ -312,7 +339,7 @@ export function NotesPanel({
 
         // Skip if this exact heading block was already appended (prevents
         // duplicate stacks when auto-generate re-fires on the same chunk).
-        if (heading && !skipHeading) {
+        if (heading && !skipHeading && !skipDedupe) {
           const already = nodes.some(
             (n) =>
               n.type === "heading" &&
@@ -322,14 +349,19 @@ export function NotesPanel({
         }
 
         // skipHeading path: dedupe by intro fingerprint (same chunk re-mounted).
-        if (skipHeading && intro && intro.trim().length > 0) {
+        if (!skipDedupe && skipHeading && intro && intro.trim().length > 0) {
           const fingerprint = intro.trim().slice(0, 96);
           const already = nodes.some((n) => {
             if (n.type !== "paragraph") return false;
             const t = n.content?.[0]?.text?.trim() ?? "";
             return t.startsWith(fingerprint) || fingerprint.startsWith(t.slice(0, 96));
           });
-          if (already) return false;
+          if (already) {
+            autoGenLog("insertion skipped — dedupe matched existing intro", {
+              fingerprint,
+            });
+            return false;
+          }
         }
 
         const chain = editor.chain().focus("end");
@@ -400,6 +432,35 @@ export function NotesPanel({
           });
         }
 
+        if (vocabulary && vocabulary.length > 0) {
+          chain.insertContent({
+            type: "heading",
+            attrs: { level: 3 },
+            content: [{ type: "text", text: "Key vocabulary" }],
+          });
+          chain.insertContent({
+            type: "bulletList",
+            content: vocabulary.map(({ term, definition }) => ({
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: definition
+                    ? [
+                        {
+                          type: "text",
+                          text: term,
+                          marks: [{ type: "bold" }],
+                        },
+                        { type: "text", text: ` — ${definition}` },
+                      ]
+                    : [{ type: "text", text: term, marks: [{ type: "bold" }] }],
+                },
+              ],
+            })),
+          });
+        }
+
         if (callout && callout.text.trim().length > 0) {
           chain.insertContent({
             type: "callout",
@@ -414,21 +475,34 @@ export function NotesPanel({
         }
 
         chain.run();
+        autoGenLog("insertion complete", {
+          docSizeAfter: editor.state.doc.content.size,
+        });
         return true;
       },
     };
-    onEditorReady?.();
+    editorRef.current = handle;
+    autoGenLog("editor imperative handle wired");
     return () => {
-      if (editorRef.current) editorRef.current = null;
+      if (editorRef.current === handle) {
+        editorRef.current = null;
+        autoGenLog("editor imperative handle cleared (this instance unmounted)");
+      }
     };
-  }, [editor, editorRef, onEditorReady]);
+  }, [editor, editorRef]);
 
   // Initial load — hydrate the editor with the saved doc once.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      autoGenLog("loading saved notes from server", { endpoint });
       try {
         const res = await fetch(endpoint);
+        autoGenLog("load response received", {
+          ok: res.ok,
+          status: res.status,
+          endpoint,
+        });
         if (!res.ok) return;
         const body = (await res.json()) as {
           notes?: {
@@ -437,6 +511,10 @@ export function NotesPanel({
             updatedAt?: string;
           };
         };
+        autoGenLog("load response body parsed", {
+          autoGenerate: body.notes?.autoGenerate,
+          hasContent: !!body.notes?.contentJson,
+        });
         if (cancelled) return;
         const doc = body.notes?.contentJson;
         const attrs = readRoseDocAttrs(doc);
@@ -451,16 +529,24 @@ export function NotesPanel({
         if (doc && editor && !editor.isDestroyed) {
           initialDocRef.current = doc;
           editor.commands.setContent(doc as never, { emitUpdate: false });
+          autoGenLog("editor hydrated from saved doc");
         }
         if (typeof body.notes?.autoGenerate === "boolean") {
+          autoGenLog("syncing autoGenerate preference from server (no append)", {
+            autoGenerate: body.notes.autoGenerate,
+          });
           onAutoGenerateChange(body.notes.autoGenerate);
         }
         if (body.notes?.updatedAt) {
           const t = Date.parse(body.notes.updatedAt);
           if (!Number.isNaN(t)) setLastSavedAt(t);
         }
+        if (!cancelled) {
+          autoGenLog("notes panel ready — firing onEditorReady");
+          onEditorReady?.();
+        }
       } catch (e) {
-        console.error("[NotesPanel load]", e);
+        autoGenLogError("load failed", e, { endpoint });
       }
     })();
     return () => {
@@ -546,25 +632,63 @@ export function NotesPanel({
   // Auto-generate toggle: persist immediately via a payload-only PUT.
   const onToggleAutoGenerate = useCallback(
     async (next: boolean) => {
+      autoGenLog("button clicked");
+      const notesExist =
+        !!editor &&
+        !editor.isDestroyed &&
+        docToPlainText(editor.getJSON()).trim().length > 0;
+      autoGenLog("current state", {
+        isGenerating: false,
+        hasGenerated: autoGenerate,
+        notesExist,
+        autoGenerate,
+        hasEditor: !!editor,
+      });
+      onAutoGenerateUserToggle?.(next);
       onAutoGenerateChange(next);
-      if (!editor) return;
+      if (!editor) {
+        autoGenLog("persist skipped — no editor for PUT");
+        return;
+      }
       const json = editor.getJSON();
       const text = docToPlainText(json);
+      const payload = {
+        contentJson: json,
+        contentText: text,
+        autoGenerate: next,
+      };
+      autoGenLog("sending request to persist toggle", {
+        endpoint,
+        payload: { autoGenerate: next, contentTextLength: text.length },
+      });
       try {
-        await fetch(endpoint, {
+        const res = await fetch(endpoint, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contentJson: json,
-            contentText: text,
-            autoGenerate: next,
-          }),
+          body: JSON.stringify(payload),
         });
+        const bodyText = await res.text();
+        autoGenLog("persist toggle response received", {
+          ok: res.ok,
+          status: res.status,
+          bodyPreview: bodyText.slice(0, 200),
+        });
+        if (!res.ok) {
+          autoGenLogError("persist toggle failed", new Error(`HTTP ${res.status}`), {
+            body: bodyText,
+          });
+        }
       } catch (e) {
-        console.error("[NotesPanel autoGenerate toggle]", e);
+        autoGenLogError("persist toggle error", e, { endpoint });
       }
     },
-    [editor, endpoint, onAutoGenerateChange]
+    [
+      autoGenerate,
+      editor,
+      endpoint,
+      onAutoGenerateChange,
+      onAutoGenerateUserToggle,
+    ]
   );
 
   const insertSuggestion = useCallback(

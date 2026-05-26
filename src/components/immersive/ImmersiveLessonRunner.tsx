@@ -24,6 +24,9 @@ import type {
   MentoredTurnResponse,
 } from "@/types/mentored";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
+import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
+import { buildAutoNotesFromChunk } from "@/lib/mentored/build-auto-notes";
+import { useMinWidth } from "@/hooks/use-min-width";
 
 /**
  * Immersive version of MentoredLessonRunner.
@@ -219,7 +222,11 @@ export function ImmersiveLessonRunner({
   const notesPanelRef = useRef<NotesPanelHandle | null>(null);
   const notesAppendedChunkRef = useRef<string | null>(null);
   const [notesEditorReady, setNotesEditorReady] = useState(false);
-  const onNotesEditorReady = useCallback(() => setNotesEditorReady(true), []);
+  const onNotesEditorReady = useCallback(() => {
+    autoGenLog("parent: notes editor hydrated and ready");
+    setNotesEditorReady(true);
+  }, []);
+  const showDockedNotes = useMinWidth(1280);
 
   // When the student toggles auto-generate OFF→ON we clear the
   // "already appended for chunk X" guard so the current chunk gets
@@ -228,11 +235,30 @@ export function ImmersiveLessonRunner({
   // sees the ref still says "appended", returns early). This wrapper
   // is what we pass down to NotesPanel as `onAutoGenerateChange`.
   const handleAutoGenerateChange = useCallback((next: boolean) => {
+    autoGenLog("parent: autoGenerate state change", { next });
     setAutoGenerateNotes((prev) => {
       if (next && !prev) notesAppendedChunkRef.current = null;
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    autoGenLog("parent: material changed — resetting notes editor ready");
+    setNotesEditorReady(false);
+    notesAppendedChunkRef.current = null;
+  }, [materialId]);
+
+  useEffect(() => {
+    if (awaitingContinue) setNotesDrawerOpen(false);
+  }, [awaitingContinue]);
+
+  const showNotesPanel = !awaitingContinue && phase === "teaching";
+
+  useEffect(() => {
+    if (!showNotesPanel) {
+      setNotesEditorReady(false);
+    }
+  }, [showNotesPanel]);
 
   // ---- session opening greeting ----
   // Plays once per mount, the moment the runner has a session loaded.
@@ -405,6 +431,15 @@ export function ImmersiveLessonRunner({
   const moduleCount = course.modules.length;
   const moduleIdx = course.modules.findIndex((m) => m.id === activeModule.id);
 
+  const lessonKeyTerms = useMemo(() => {
+    if (!chunk) return activeModule.lessons.flatMap((l) => l.key_terms ?? []);
+    const idx = chunk.sourceLessonIndex;
+    if (typeof idx === "number" && activeModule.lessons[idx]) {
+      return activeModule.lessons[idx].key_terms ?? [];
+    }
+    return activeModule.lessons.flatMap((l) => l.key_terms ?? []);
+  }, [activeModule.lessons, chunk]);
+
   // ----- session opening greeting (spoken + transcript) -----
   //
   // Plays once per page load. Picks a scenario from the loaded session:
@@ -542,63 +577,69 @@ export function ImmersiveLessonRunner({
   }, [phase, plan, session]);
 
   const appendAutoNotesForChunk = useCallback(
-    (opts?: { enabledOverride?: boolean }) => {
+    (opts?: { enabledOverride?: boolean; skipDedupe?: boolean }) => {
       const enabled = opts?.enabledOverride ?? autoGenerateNotes;
-      if (!chunk || phase !== "teaching") return;
-      if (awaitingContinueRef.current) return;
-      if (!enabled) return;
-      if (!notesEditorReady || !notesPanelRef.current) return;
-      if (notesAppendedChunkRef.current === chunk.id) return;
+      const state = {
+        enabled,
+        autoGenerateNotes,
+        phase,
+        chunkId: chunk?.id ?? null,
+        awaitingContinue: awaitingContinueRef.current,
+        notesEditorReady,
+        hasPanelRef: !!notesPanelRef.current,
+        appendedChunkRef: notesAppendedChunkRef.current,
+      };
+      autoGenLog("appendAutoNotesForChunk called", state);
 
-    const points = chunk.keyPoints.slice(0, 5);
-    const bullets =
-      points.length > 0
-        ? points
-        : chunk.explanation.trim().length > 0
-          ? [chunk.explanation.trim().slice(0, 400)]
-          : chunk.concept.trim().length > 0
-            ? [chunk.concept.trim()]
-            : [];
-    if (bullets.length === 0) return;
+      if (!chunk || phase !== "teaching") {
+        autoGenLog("append aborted — not in teaching or no chunk", state);
+        return;
+      }
+      if (awaitingContinueRef.current) {
+        autoGenLog("append aborted — awaitingContinue", state);
+        return;
+      }
+      if (!enabled) {
+        autoGenLog("append aborted — autoGenerate disabled", state);
+        return;
+      }
+      if (!notesEditorReady || !notesPanelRef.current) {
+        autoGenLog("append aborted — editor not ready or ref missing", state);
+        return;
+      }
+      if (notesAppendedChunkRef.current === chunk.id) {
+        autoGenLog("append aborted — chunk already appended", state);
+        return;
+      }
 
-    const intro =
-      chunk.concept +
-      (chunk.explanation && chunk.explanation.length > 0
-        ? chunk.explanation.length > 200
-          ? ` — ${chunk.explanation.slice(0, 197).trim()}…`
-          : ` — ${chunk.explanation}`
-        : "");
-    const keyTerms = chunk.keyPoints
-      .map((p) => p.split(/[—–:.]/)[0]?.trim())
-      .filter((s): s is string => !!s && s.length > 0 && s.length <= 40);
-    const bulletItems = bullets.map((text, i) => {
-      const bold = keyTerms[i];
-      return bold && text.toLowerCase().startsWith(bold.toLowerCase())
-        ? { text, bold }
-        : text;
-    });
-    const appended = notesPanelRef.current.appendBlock({
-      skipHeading: true,
-      intro,
-      bullets: bulletItems,
-      callout:
-        chunk.analogy && chunk.analogy.length > 0
-          ? { emoji: "💡", text: chunk.analogy }
-          : undefined,
-    });
-    if (appended) notesAppendedChunkRef.current = chunk.id;
+      const block = buildAutoNotesFromChunk(chunk, lessonKeyTerms);
+      if (!block) {
+        autoGenLog("append aborted — no structured note content", {
+          keyPoints: chunk.keyPoints,
+          concept: chunk.concept,
+        });
+        return;
+      }
+
+      const appended = notesPanelRef.current.appendBlock({
+        ...block,
+        skipDedupe: opts?.skipDedupe,
+      });
+      autoGenLog("appendBlock returned", { appended, chunkId: chunk.id });
+      if (appended) notesAppendedChunkRef.current = chunk.id;
     },
-    [autoGenerateNotes, chunk, notesEditorReady, phase]
+    [autoGenerateNotes, chunk, lessonKeyTerms, notesEditorReady, phase]
   );
 
-  const handleAutoGenerateToggle = useCallback(
+  const handleAutoGenerateUserToggle = useCallback(
     (next: boolean) => {
-      handleAutoGenerateChange(next);
+      autoGenLog("user toggle — triggering append", { next });
       if (next) {
-        appendAutoNotesForChunk({ enabledOverride: true });
+        notesAppendedChunkRef.current = null;
+        appendAutoNotesForChunk({ enabledOverride: true, skipDedupe: true });
       }
     },
-    [appendAutoNotesForChunk, handleAutoGenerateChange]
+    [appendAutoNotesForChunk]
   );
 
   // ----- auto-speak fresh chunk -----
@@ -1576,7 +1617,7 @@ export function ImmersiveLessonRunner({
   return (
     <ImmersiveShell
       topBar={topBar}
-      contentMaxWidth="wide"
+      contentMaxWidth={showNotesPanel ? "wide" : "default"}
       bottomBar={
         awaitingContinue ? (
           <div className="border-t border-white/70 bg-white/85 px-4 py-3 text-center text-xs text-zinc-500 backdrop-blur-md">
@@ -1638,7 +1679,7 @@ export function ImmersiveLessonRunner({
       />
 
       {awaitingContinue ? (
-        <GlassPanel className="mt-6" tone="reply">
+        <GlassPanel className="mx-auto mt-6 max-w-2xl" tone="reply">
           <p className="text-sm leading-relaxed text-zinc-800">
             {tutorReply ??
               "Welcome back — let me know when you are ready and we will pick up from here."}
@@ -1662,14 +1703,10 @@ export function ImmersiveLessonRunner({
         </GlassPanel>
       ) : null}
 
-      {/* Side-by-side layout (§2): lesson + question on the left,
-          notes editor on the right.
-          True 50/50 split at xl (1280px+) — both columns are
-          `minmax(0, 1fr)` with a 32px gap so each panel matches the
-          full width the lesson column used to have when it was solo.
-          On <xl viewports the notes panel drops out and becomes a
-          slide-in drawer toggled from the floating button below. */}
-      <div className="mt-2 grid grid-cols-1 gap-6 xl:grid-cols-2 xl:gap-8">
+      {!awaitingContinue ? (
+      <div
+        className={`mt-2 grid grid-cols-1 gap-6 ${showNotesPanel ? "xl:grid-cols-2 xl:gap-8" : ""}`}
+      >
         <div className="min-w-0">
       {!awaitingContinue && chunk ? (
         <>
@@ -1829,15 +1866,14 @@ export function ImmersiveLessonRunner({
       ) : null}
         </div>
 
-        {/* Right column — notes panel. Sticky inside the scroll
-            container so the editor stays visible as the student
-            scrolls the lesson cards on the left. Capped to
-            calc(100vh - dock - header) so the panel itself can
-            scroll independently. Hidden on <lg; replaced by a
-            slide-in drawer below. */}
+        {/* Right column — notes panel. Only one NotesPanel instance
+            mounts at a time (docked xl+ OR mobile drawer) so the
+            shared editorRef is never cleared by an unmounted twin. */}
+        {showNotesPanel && showDockedNotes ? (
         <div className="hidden min-w-0 xl:block">
           <div className="sticky top-2">
                 <NotesPanel
+                  key="mentored-notes-panel"
                   materialId={materialId}
                   lessonTitle={activeModule.title}
                   courseTitle={course.title}
@@ -1850,20 +1886,24 @@ export function ImmersiveLessonRunner({
                     })
                   }
                   autoGenerate={autoGenerateNotes}
-                  onAutoGenerateChange={handleAutoGenerateToggle}
+                  onAutoGenerateChange={handleAutoGenerateChange}
+                  onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
                   onEditorReady={onNotesEditorReady}
                   editorRef={notesPanelRef}
                   className="h-[calc(100vh-220px)] min-h-[34rem]"
                 />
           </div>
         </div>
+        ) : null}
       </div>
+      ) : null}
 
       {/* Mobile / narrow-screen drawer — toggled by the floating
           button. Slides in from the right with a fade overlay so
           students on phones still get notes without losing the
           lesson focus. Uses fixed positioning + a high z-index so
           it sits above the dock but below ExitConfirm (z-30). */}
+      {showNotesPanel ? (
       <button
         type="button"
         onClick={() => setNotesDrawerOpen(true)}
@@ -1872,7 +1912,8 @@ export function ImmersiveLessonRunner({
       >
         ✎ Notes
       </button>
-      {notesDrawerOpen ? (
+      ) : null}
+      {showNotesPanel && notesDrawerOpen && !showDockedNotes ? (
         <div className="fixed inset-0 z-30 flex xl:hidden">
           <button
             type="button"
@@ -1893,6 +1934,7 @@ export function ImmersiveLessonRunner({
             </div>
             <div className="flex-1 overflow-hidden p-3">
                   <NotesPanel
+                    key="mentored-notes-panel"
                     materialId={materialId}
                     lessonTitle={activeModule.title}
                     courseTitle={course.title}
@@ -1905,7 +1947,8 @@ export function ImmersiveLessonRunner({
                       })
                     }
                     autoGenerate={autoGenerateNotes}
-                    onAutoGenerateChange={handleAutoGenerateToggle}
+                    onAutoGenerateChange={handleAutoGenerateChange}
+                    onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
                     onEditorReady={onNotesEditorReady}
                     editorRef={notesPanelRef}
                     className="h-full"

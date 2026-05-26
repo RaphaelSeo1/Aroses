@@ -2,6 +2,26 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 
+function apiAutoGenLog(step: string, payload?: Record<string, unknown>): void {
+  if (payload !== undefined) {
+    console.log(`AUTO-GENERATE: API ${step}`, payload);
+  } else {
+    console.log(`AUTO-GENERATE: API ${step}`);
+  }
+}
+
+function apiAutoGenLogError(
+  step: string,
+  error: unknown,
+  extra?: Record<string, unknown>
+): void {
+  const err =
+    error instanceof Error
+      ? { name: error.name, message: error.message, stack: error.stack }
+      : error;
+  console.error(`AUTO-GENERATE: API ${step}`, { error: err, ...extra });
+}
+
 /**
  * GET  /api/mentored/notes/[materialId]
  *   Returns the student's notes doc for this material (or a fresh
@@ -57,6 +77,7 @@ function normalize(row: {
 
 export async function GET(_req: Request, ctx: Params) {
   const { materialId } = await ctx.params;
+  apiAutoGenLog("GET /api/mentored/notes/[materialId] called", { materialId });
   if (!UUID_RE.test(materialId)) {
     return NextResponse.json({ error: "Invalid material id." }, { status: 400 });
   }
@@ -87,19 +108,22 @@ export async function GET(_req: Request, ctx: Params) {
   }
 
   if (!data) {
-    return NextResponse.json({
-      notes: {
-        contentJson: EMPTY_DOC,
-        contentText: "",
-        autoGenerate: false,
-        updatedAt: new Date(0).toISOString(),
-      } satisfies NotesPayload,
-    });
+    const empty = {
+      contentJson: EMPTY_DOC,
+      contentText: "",
+      autoGenerate: false,
+      updatedAt: new Date(0).toISOString(),
+    } satisfies NotesPayload;
+    apiAutoGenLog("returning response", { notes: empty });
+    return NextResponse.json({ notes: empty });
   }
 
-  return NextResponse.json({
-    notes: normalize(data as Parameters<typeof normalize>[0]),
+  const notes = normalize(data as Parameters<typeof normalize>[0]);
+  apiAutoGenLog("returning response", {
+    autoGenerate: notes.autoGenerate,
+    contentTextLength: notes.contentText.length,
   });
+  return NextResponse.json({ notes });
 }
 
 export async function PUT(request: Request, ctx: Params) {
@@ -118,6 +142,15 @@ export async function PUT(request: Request, ctx: Params) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+
+  const isAutoGenerateToggle = typeof body.autoGenerate === "boolean";
+  apiAutoGenLog("PUT /api/mentored/notes/[materialId] called", {
+    materialId,
+    autoGenerate: body.autoGenerate,
+    contentTextLength:
+      typeof body.contentText === "string" ? body.contentText.length : null,
+    isAutoGenerateToggle,
+  });
 
   if (!body.contentJson || typeof body.contentJson !== "object") {
     return NextResponse.json({ error: "Missing contentJson." }, { status: 400 });
@@ -173,11 +206,15 @@ export async function PUT(request: Request, ctx: Params) {
     .maybeSingle();
 
   if (error || !data) {
+    apiAutoGenLogError("PUT failed", error, { materialId });
     console.error("[mentored/notes PUT]", error);
     return NextResponse.json({ error: "Could not save." }, { status: 500 });
   }
 
-  return NextResponse.json({
-    notes: normalize(data as Parameters<typeof normalize>[0]),
+  const notes = normalize(data as Parameters<typeof normalize>[0]);
+  apiAutoGenLog("returning response", {
+    autoGenerate: notes.autoGenerate,
+    contentTextLength: notes.contentText.length,
   });
+  return NextResponse.json({ notes });
 }
