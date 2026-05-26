@@ -113,6 +113,13 @@ export function ImmersiveLessonRunner({
     }
   }, []);
 
+  /** Returning students must tap Continue before Rose starts the lesson. */
+  const [awaitingContinue, setAwaitingContinue] = useState(false);
+  const awaitingContinueRef = useRef(false);
+  useEffect(() => {
+    awaitingContinueRef.current = awaitingContinue;
+  }, [awaitingContinue]);
+
   const voice = useMentoredVoice({
     materialId,
     onBargeIn: () => onBargeInRef.current(),
@@ -233,13 +240,6 @@ export function ImmersiveLessonRunner({
   // doesn't talk over the welcome line.
   const [greetingPlayed, setGreetingPlayed] = useState(false);
   const greetingFiredRef = useRef(false);
-  /** Returning students must tap Continue before Rose starts the lesson. */
-  const [awaitingContinue, setAwaitingContinue] = useState(false);
-  /** Sync mirror — effects/voice callbacks read this without waiting for React. */
-  const awaitingContinueRef = useRef(false);
-  useEffect(() => {
-    awaitingContinueRef.current = awaitingContinue;
-  }, [awaitingContinue]);
 
   // ---- question popup (the centered "Rose asks" modal) ----
   //
