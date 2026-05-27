@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { listRecentCourseProgress } from "@/lib/course-progress/db";
 import {
   bucketAttemptsLastDays,
   buildCourseSummaries,
@@ -39,6 +40,8 @@ export type DashboardProgressPayload = {
     lastUsedMode: CourseMode;
     /** Last Mentored Learning module for this material (if any). */
     resumeModuleId: number | null;
+    resumeLessonIndex: number | null;
+    resumeScrollPosition: number | null;
   }[];
 };
 
@@ -130,6 +133,15 @@ export async function loadDashboardProgress(
     if (typeof row.material_id === "string") {
       touchedMaterialIds.add(row.material_id);
     }
+  }
+
+  const recentProgressRows = await listRecentCourseProgress(
+    supabase,
+    ownerUserId,
+    12
+  );
+  for (const p of recentProgressRows) {
+    if (p.materialId) touchedMaterialIds.add(p.materialId);
   }
 
   const knownMaterialIds = new Set(
@@ -247,19 +259,35 @@ export async function loadDashboardProgress(
     string,
     {
       courseId: string;
-      /**
-       * material_id of the FIRST attempt we see for this course in the
-       * recent-attempts list (which is ordered DESC by answered_at), so
-       * it's the most-recently-practiced material for that course. We
-       * use it as the key for the per-course Mentored/Free mode lookup.
-       */
       materialId: string;
       title: string;
       answeredAt: string;
       correctLast10: number;
       totalLast10: number;
+      lastUsedMode: CourseMode;
+      resumeModuleId: number | null;
+      resumeLessonIndex: number | null;
+      resumeScrollPosition: number | null;
     }
   >();
+
+  for (const p of recentProgressRows) {
+    if (!p.materialId) continue;
+    courseIdByMaterialId.set(p.materialId, p.courseId);
+    recentCourseIds.add(p.courseId);
+    recentPracticeByCourse.set(p.courseId, {
+      courseId: p.courseId,
+      materialId: p.materialId,
+      title: courseTitleById.get(p.courseId) ?? "Course",
+      answeredAt: p.lastInteractedAt,
+      correctLast10: 0,
+      totalLast10: 0,
+      lastUsedMode: p.lastMode === "free" ? "free" : "mentored",
+      resumeModuleId: p.lastModuleId,
+      resumeLessonIndex: p.lastLessonIndex,
+      resumeScrollPosition: p.lastScrollPosition,
+    });
+  }
 
   for (const att of recentAttemptsRaw ?? []) {
     const courseId = courseIdByMaterialId.get(att.material_id);
@@ -273,6 +301,10 @@ export async function loadDashboardProgress(
       answeredAt: att.answered_at,
       correctLast10: 0,
       totalLast10: 0,
+      lastUsedMode: "mentored" as CourseMode,
+      resumeModuleId: null,
+      resumeLessonIndex: null,
+      resumeScrollPosition: null,
     };
 
     if (base.totalLast10 >= 10) continue;
@@ -281,6 +313,14 @@ export async function loadDashboardProgress(
       totalLast10: base.totalLast10 + 1,
       correctLast10: base.correctLast10 + (att.is_correct ? 1 : 0),
     };
+    if (
+      !existing ||
+      new Date(att.answered_at).getTime() >
+        new Date(base.answeredAt).getTime()
+    ) {
+      next.materialId = att.material_id;
+      next.answeredAt = att.answered_at;
+    }
     recentPracticeByCourse.set(courseId, next);
   }
 
@@ -314,12 +354,20 @@ export async function loadDashboardProgress(
       new Date(answeredAt).getTime() > new Date(existing.answeredAt).getTime()
     ) {
       recentPracticeByCourse.set(courseId, {
+        ...existing,
         courseId,
         materialId: row.material_id,
-        title: courseTitleById.get(courseId) ?? "Course",
+        title: courseTitleById.get(courseId) ?? existing?.title ?? "Course",
         answeredAt,
         correctLast10: existing?.correctLast10 ?? 0,
         totalLast10: existing?.totalLast10 ?? 0,
+        lastUsedMode: existing?.lastUsedMode ?? "mentored",
+        resumeModuleId:
+          typeof row.module_id === "number" && row.module_id > 0
+            ? row.module_id
+            : existing?.resumeModuleId ?? null,
+        resumeLessonIndex: existing?.resumeLessonIndex ?? null,
+        resumeScrollPosition: existing?.resumeScrollPosition ?? null,
       });
     }
   }
@@ -418,9 +466,8 @@ export async function loadDashboardProgress(
 
   const recentPractice = recentSlice.map((r) => {
     const s = summaryByCourseId.get(r.courseId);
-    // First-time entry → Mentored, per spec ("flagship experience").
     const lastUsedMode: CourseMode =
-      modeByMaterialId.get(r.materialId) ?? "mentored";
+      r.lastUsedMode ?? modeByMaterialId.get(r.materialId) ?? "mentored";
     return {
       ...r,
       title: s?.title ?? courseTitleById.get(r.courseId) ?? r.title,
@@ -428,7 +475,10 @@ export async function loadDashboardProgress(
       modulesTotal: s?.modulesTotal ?? 0,
       isExploreLearner: Boolean(s?.isExploreLearner),
       lastUsedMode,
-      resumeModuleId: moduleByMaterialId.get(r.materialId) ?? null,
+      resumeModuleId:
+        r.resumeModuleId ?? moduleByMaterialId.get(r.materialId) ?? null,
+      resumeLessonIndex: r.resumeLessonIndex ?? null,
+      resumeScrollPosition: r.resumeScrollPosition ?? null,
     };
   });
 
@@ -437,12 +487,14 @@ export async function loadDashboardProgress(
     14
   );
 
-  const hasCourses = summaries.some(
-    (s) =>
-      s.uploadsCount > 0 ||
-      s.quizAttempts > 0 ||
-      s.modulesCompleted > 0
-  );
+  const hasCourses =
+    recentProgressRows.length > 0 ||
+    summaries.some(
+      (s) =>
+        s.uploadsCount > 0 ||
+        s.quizAttempts > 0 ||
+        s.modulesCompleted > 0
+    );
 
   return {
     hasCourses,

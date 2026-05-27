@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { syncCourseProgressFromMaterial } from "@/lib/course-progress/sync-from-material";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import type {
@@ -179,7 +180,15 @@ export async function PUT(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Could not save." }, { status: 500 });
   }
 
+  const row = data as Parameters<typeof normalize>[0];
+  await syncCourseProgressFromMaterial(supabase, user.id, materialId, {
+    materialId,
+    lastModuleId: row.module_id,
+    lastChunkIndex: row.chunk_index,
+    lastMode: "mentored",
+  });
+
   return NextResponse.json({
-    session: normalize(data as Parameters<typeof normalize>[0]),
+    session: normalize(row),
   });
 }

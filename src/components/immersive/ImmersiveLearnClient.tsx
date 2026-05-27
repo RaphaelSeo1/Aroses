@@ -259,6 +259,7 @@ export function ImmersiveLearnClient({
   }
   return (
     <ImmersiveLessonRunner
+      courseId={courseId}
       materialId={materialId}
       course={course}
       activeModule={activeModule}

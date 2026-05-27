@@ -19,6 +19,7 @@ import { PersonalQuizSection } from "@/components/PersonalQuizSection";
 import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
 import { useSrsDueCounts } from "@/lib/srs-due";
 import { useCourseMode } from "@/lib/mentored/use-course-mode";
+import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { persistStudyModulePosition } from "@/lib/study/persist-study-module";
 import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
 import { PracticeProgressPullTab } from "@/components/PracticeProgressPullTab";
@@ -109,6 +110,8 @@ export function CoursePlayer({
   initialCompletedModuleIds,
   sidebarOutlines,
   initialModuleFromUrl,
+  initialLessonIndex,
+  initialScrollPosition,
   mode = "lessons",
   studyHrefBase,
   learnHrefBase,
@@ -124,6 +127,9 @@ export function CoursePlayer({
   initialCompletedModuleIds: number[];
   sidebarOutlines: SidebarMaterialOutline[];
   initialModuleFromUrl?: number;
+  /** Resume reading position within the active module (Free Exploration). */
+  initialLessonIndex?: number;
+  initialScrollPosition?: number;
   /** `lessons` = lecture only + link to practice page. `quiz` = review + quiz (no lesson body). */
   mode?: "lessons" | "quiz";
   /** Defaults to dashboard study URL; use `/explore/[courseId]/study` for public learners. */
@@ -280,14 +286,20 @@ export function CoursePlayer({
   );
 
   const scrollToLesson = useCallback(
-    (lessonIndex: number) => {
+    (lessonIndex: number, opts?: { persist?: boolean }) => {
       const mod = course.modules.find((m) => m.id === activeModuleId);
       if (!mod) return;
       document
         .getElementById(`lesson-${mod.id}-${lessonIndex}`)
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (opts?.persist !== false) {
+        persistStudyModulePosition(courseId, materialId, activeModuleId, {
+          lessonIndex,
+          mode: "free",
+        });
+      }
     },
-    [course.modules, activeModuleId]
+    [activeModuleId, course.modules, courseId, materialId]
   );
 
   useEffect(() => {
@@ -295,8 +307,56 @@ export function CoursePlayer({
   }, [activeModuleId, materialId]);
 
   useEffect(() => {
-    persistStudyModulePosition(materialId, activeModuleId);
-  }, [materialId, activeModuleId]);
+    persistStudyModulePosition(courseId, materialId, activeModuleId, {
+      mode: "free",
+    });
+  }, [courseId, materialId, activeModuleId]);
+
+  useEffect(() => {
+    if (mode !== "lessons") return;
+    const lesson =
+      typeof initialLessonIndex === "number" ? initialLessonIndex : null;
+    const scroll =
+      typeof initialScrollPosition === "number" && initialScrollPosition > 0
+        ? initialScrollPosition
+        : null;
+    if (scroll != null) {
+      window.scrollTo(0, scroll);
+      return;
+    }
+    if (lesson != null) {
+      const t = window.setTimeout(() => scrollToLesson(lesson, { persist: false }), 80);
+      return () => window.clearTimeout(t);
+    }
+  }, [
+    initialLessonIndex,
+    initialScrollPosition,
+    materialId,
+    activeModuleId,
+    mode,
+    scrollToLesson,
+  ]);
+
+  useEffect(() => {
+    if (mode !== "lessons") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        touchCourseProgress(courseId, {
+          materialId,
+          lastModuleId: activeModuleId,
+          lastMode: "free",
+          lastScrollPosition: Math.round(window.scrollY),
+        });
+      }, 2000);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (timer) clearTimeout(timer);
+    };
+  }, [activeModuleId, courseId, materialId, mode]);
 
   useEffect(() => {
     if (mode !== "quiz" || practiceTab !== "module" || !activeModule) {
@@ -470,7 +530,7 @@ export function CoursePlayer({
       if (typeof window !== "undefined" && previousModuleId !== modId) {
         window.scrollTo(0, 0);
       }
-      persistStudyModulePosition(materialId, modId);
+      persistStudyModulePosition(courseId, materialId, modId, { mode: "free" });
     },
     [
       activeModuleId,

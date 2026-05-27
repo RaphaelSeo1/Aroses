@@ -1,6 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { lessonKey } from "@/lib/course-progress/validate-position";
+import { syncCourseProgressFromMaterial } from "@/lib/course-progress/sync-from-material";
 import type { CoursePayload } from "@/types/course";
 
 export async function POST(request: Request) {
@@ -40,7 +42,7 @@ export async function POST(request: Request) {
 
   const { data: row, error: fetchErr } = await supabase
     .from("study_materials")
-    .select("course_payload")
+    .select("course_payload, course_id")
     .eq("id", b.materialId)
     .maybeSingle();
 
@@ -72,6 +74,17 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
+
+  const moduleId = b.moduleId;
+  const mod = payload?.modules?.find((m) => m.id === moduleId);
+  const lessonKeys =
+    mod?.lessons?.map((_, i) => lessonKey(moduleId, i)) ?? [lessonKey(moduleId, 0)];
+  await syncCourseProgressFromMaterial(supabase, user.id, b.materialId, {
+    materialId: b.materialId,
+    lastModuleId: moduleId,
+    lastMode: "free",
+    appendCompletedLessonKeys: lessonKeys,
+  });
 
   return NextResponse.json({ ok: true, saved: true });
 }

@@ -24,6 +24,7 @@ import type {
   MentoredTurnResponse,
 } from "@/types/mentored";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
+import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
 import { buildAutoNotesFromChunk } from "@/lib/mentored/build-auto-notes";
 import { useMinWidth } from "@/hooks/use-min-width";
@@ -49,6 +50,7 @@ type Phase =
   | "error";
 
 export function ImmersiveLessonRunner({
+  courseId,
   materialId,
   course,
   activeModule,
@@ -57,6 +59,7 @@ export function ImmersiveLessonRunner({
   onExit,
   onAdvanceModule,
 }: {
+  courseId: string;
   materialId: string;
   course: CoursePayload;
   activeModule: CourseModule;
@@ -666,6 +669,28 @@ export function ImmersiveLessonRunner({
   useEffect(() => {
     appendAutoNotesForChunk();
   }, [appendAutoNotesForChunk]);
+
+  useEffect(() => {
+    if (!chunk || phase !== "teaching" || awaitingContinue) return;
+    touchCourseProgress(courseId, {
+      materialId,
+      lastModuleId: activeModule.id,
+      lastMode: "mentored",
+      lastChunkIndex: chunkIdx,
+      lastLessonIndex:
+        typeof chunk.sourceLessonIndex === "number"
+          ? chunk.sourceLessonIndex
+          : 0,
+    });
+  }, [
+    activeModule.id,
+    awaitingContinue,
+    chunk,
+    chunkIdx,
+    courseId,
+    materialId,
+    phase,
+  ]);
 
   useEffect(() => {
     setQuestionPopupDismissedFor(null);

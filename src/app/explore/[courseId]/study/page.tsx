@@ -16,6 +16,10 @@ import {
 } from "@/lib/explore-course-outline";
 import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
+import {
+  loadCourseProgress,
+  upsertCourseProgress,
+} from "@/lib/course-progress/db";
 import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
@@ -37,6 +41,8 @@ type Props = {
     material?: string;
     module?: string;
     mode?: string;
+    lesson?: string;
+    scroll?: string;
   }>;
 };
 
@@ -49,6 +55,12 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
   let initialModuleFromUrl = Number.isFinite(moduleNum)
     ? moduleNum
     : undefined;
+  const lessonNum =
+    typeof sp.lesson === "string" ? Number(sp.lesson) : Number.NaN;
+  let initialLessonIndex = Number.isFinite(lessonNum) ? lessonNum : undefined;
+  const scrollNum =
+    typeof sp.scroll === "string" ? Number(sp.scroll) : Number.NaN;
+  let initialScrollPosition = Number.isFinite(scrollNum) ? scrollNum : undefined;
   const materialId =
     typeof sp.material === "string" ? sp.material : undefined;
 
@@ -109,7 +121,11 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
       const qs = new URLSearchParams();
       qs.set("material", target.materialId);
       if (target.moduleId != null) qs.set("module", String(target.moduleId));
-      if (sp.mode === "learn") qs.set("mode", "learn");
+      if (target.lessonIndex != null) qs.set("lesson", String(target.lessonIndex));
+      if (target.scrollPosition != null && target.scrollPosition > 0) {
+        qs.set("scroll", String(target.scrollPosition));
+      }
+      if (sp.mode === "learn" || target.mode === "free") qs.set("mode", "learn");
       redirect(`${studyBase}?${qs.toString()}`);
     }
   }
@@ -267,6 +283,43 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
   }
 
   if (hasNewCourse && payload) {
+    const savedProgress = await loadCourseProgress(
+      supabase,
+      user.id,
+      courseRow.id
+    );
+    if (
+      savedProgress?.materialId === row.id &&
+      initialModuleFromUrl == null &&
+      savedProgress.lastModuleId != null
+    ) {
+      initialModuleFromUrl = savedProgress.lastModuleId;
+    }
+    if (savedProgress?.materialId === row.id && initialLessonIndex == null) {
+      initialLessonIndex = savedProgress.lastLessonIndex;
+    }
+    if (
+      savedProgress?.materialId === row.id &&
+      initialScrollPosition == null &&
+      savedProgress.lastScrollPosition != null
+    ) {
+      initialScrollPosition = savedProgress.lastScrollPosition;
+    }
+    const openModuleId =
+      (initialModuleFromUrl != null &&
+        payload.modules.some((m) => m.id === initialModuleFromUrl) &&
+        initialModuleFromUrl) ||
+      payload.modules[0]?.id;
+    if (openModuleId != null) {
+      await upsertCourseProgress(supabase, user.id, courseRow.id, {
+        materialId: row.id,
+        lastModuleId: openModuleId,
+        lastMode: "free",
+        lastLessonIndex: initialLessonIndex ?? 0,
+        lastScrollPosition: initialScrollPosition ?? undefined,
+      });
+    }
+
     return (
       <>
         <AppHeader right={headerRight} />
@@ -294,8 +347,11 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
           initialCompletedModuleIds={completedModuleIds}
           sidebarOutlines={sidebarOutlines}
           initialModuleFromUrl={initialModuleFromUrl}
+          initialLessonIndex={initialLessonIndex}
+          initialScrollPosition={initialScrollPosition}
           studyHrefBase={studyBase}
           courseManageEnabled={false}
+          learnMode={sp.mode === "learn"}
         />
       </>
     );

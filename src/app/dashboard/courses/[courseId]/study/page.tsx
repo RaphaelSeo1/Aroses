@@ -10,6 +10,10 @@ import { HighlightedSummary } from "@/components/HighlightedSummary";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { McqQuiz } from "@/components/McqQuiz";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
+import {
+  loadCourseProgress,
+  upsertCourseProgress,
+} from "@/lib/course-progress/db";
 import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
@@ -23,13 +27,24 @@ const UUID_RE =
 
 type Props = {
   params: Promise<{ courseId: string }>;
-  searchParams: Promise<{ material?: string; module?: string; mode?: string }>;
+  searchParams: Promise<{
+    material?: string;
+    module?: string;
+    mode?: string;
+    lesson?: string;
+    scroll?: string;
+  }>;
 };
 
 export default async function StudyPage({ params, searchParams }: Props) {
   const { courseId } = await params;
-  const { material: materialId, module: moduleParam, mode: modeParam } =
-    await searchParams;
+  const {
+    material: materialId,
+    module: moduleParam,
+    mode: modeParam,
+    lesson: lessonParam,
+    scroll: scrollParam,
+  } = await searchParams;
   const learnMode = modeParam === "learn";
 
   const moduleNum =
@@ -37,6 +52,12 @@ export default async function StudyPage({ params, searchParams }: Props) {
   let initialModuleFromUrl = Number.isFinite(moduleNum)
     ? moduleNum
     : undefined;
+  const lessonNum =
+    typeof lessonParam === "string" ? Number(lessonParam) : Number.NaN;
+  let initialLessonIndex = Number.isFinite(lessonNum) ? lessonNum : undefined;
+  const scrollNum =
+    typeof scrollParam === "string" ? Number(scrollParam) : Number.NaN;
+  let initialScrollPosition = Number.isFinite(scrollNum) ? scrollNum : undefined;
 
   if (!UUID_RE.test(courseId)) notFound();
 
@@ -84,7 +105,11 @@ export default async function StudyPage({ params, searchParams }: Props) {
       const qs = new URLSearchParams();
       qs.set("material", target.materialId);
       if (target.moduleId != null) qs.set("module", String(target.moduleId));
-      if (learnMode) qs.set("mode", "learn");
+      if (target.lessonIndex != null) qs.set("lesson", String(target.lessonIndex));
+      if (target.scrollPosition != null && target.scrollPosition > 0) {
+        qs.set("scroll", String(target.scrollPosition));
+      }
+      if (learnMode || target.mode === "free") qs.set("mode", "learn");
       redirect(`/dashboard/courses/${courseId}/study?${qs.toString()}`);
     }
   }
@@ -172,6 +197,12 @@ export default async function StudyPage({ params, searchParams }: Props) {
     Array.isArray(legacyQuestions) &&
     legacyQuestions.length > 0;
 
+  const savedProgress = await loadCourseProgress(
+    supabase,
+    user.id,
+    courseRow.id
+  );
+
   let completedModuleIds: number[] = [];
   if (hasNewCourse) {
     const { data: comp, error: ce } = await supabase
@@ -245,6 +276,40 @@ export default async function StudyPage({ params, searchParams }: Props) {
   }
 
   if (hasNewCourse && payload) {
+    if (
+      savedProgress?.materialId === row.id &&
+      initialModuleFromUrl == null &&
+      savedProgress.lastModuleId != null
+    ) {
+      initialModuleFromUrl = savedProgress.lastModuleId;
+    }
+    if (savedProgress?.materialId === row.id && initialLessonIndex == null) {
+      initialLessonIndex = savedProgress.lastLessonIndex;
+    }
+    if (
+      savedProgress?.materialId === row.id &&
+      initialScrollPosition == null &&
+      savedProgress.lastScrollPosition != null
+    ) {
+      initialScrollPosition = savedProgress.lastScrollPosition;
+    }
+
+    const openModuleId =
+      (initialModuleFromUrl != null &&
+        payload.modules.some((m) => m.id === initialModuleFromUrl) &&
+        initialModuleFromUrl) ||
+      payload.modules[0]?.id;
+
+    if (openModuleId != null) {
+      await upsertCourseProgress(supabase, user.id, courseRow.id, {
+        materialId: row.id,
+        lastModuleId: openModuleId,
+        lastMode: "free",
+        lastLessonIndex: initialLessonIndex ?? 0,
+        lastScrollPosition: initialScrollPosition ?? undefined,
+      });
+    }
+
     return (
       <>
         <AppHeader right={<HeaderNavLoggedInServer />} />
@@ -269,6 +334,8 @@ export default async function StudyPage({ params, searchParams }: Props) {
           initialCompletedModuleIds={completedModuleIds}
           sidebarOutlines={sidebarOutlines}
           initialModuleFromUrl={initialModuleFromUrl}
+          initialLessonIndex={initialLessonIndex}
+          initialScrollPosition={initialScrollPosition}
           courseManageEnabled={!learnMode}
           learnMode={learnMode}
         />

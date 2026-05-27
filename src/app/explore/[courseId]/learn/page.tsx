@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { ImmersiveLearnClient } from "@/components/immersive/ImmersiveLearnClient";
+import { upsertCourseProgress } from "@/lib/course-progress/db";
 import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { fetchStudyMaterialForPublicExplore } from "@/lib/supabase/fetch-explore-study-material";
@@ -89,6 +90,17 @@ export default async function ExploreLearnPage({
   } else {
     const target = await resolveResumeTarget(supabase, courseRow.id, user.id);
     if (target) {
+      if (target.mode === "free") {
+        const qs = new URLSearchParams();
+        qs.set("material", target.materialId);
+        if (target.moduleId != null) qs.set("module", String(target.moduleId));
+        if (target.lessonIndex != null) qs.set("lesson", String(target.lessonIndex));
+        if (target.scrollPosition != null && target.scrollPosition > 0) {
+          qs.set("scroll", String(target.scrollPosition));
+        }
+        qs.set("mode", "learn");
+        redirect(`/explore/${courseId}/study?${qs.toString()}`);
+      }
       materialId = target.materialId;
       moduleIdToOpen = target.moduleId;
     }
@@ -144,6 +156,12 @@ export default async function ExploreLearnPage({
       payload.modules.some((m) => m.id === moduleIdToOpen) &&
       moduleIdToOpen) ||
     payload.modules[0].id;
+
+  await upsertCourseProgress(supabase, user.id, courseRow.id, {
+    materialId,
+    lastModuleId: initialModuleId,
+    lastMode: "mentored",
+  });
 
   // ---- onboarding state ----
   const { data: onboardingRow } = await supabase

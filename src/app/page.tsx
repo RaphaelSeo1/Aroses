@@ -9,6 +9,8 @@ import { profileNeedsOnboarding } from "@/lib/onboarding-gate";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import { redirect } from "next/navigation";
 
+export const dynamic = "force-dynamic";
+
 export default function Home() {
   return (
     <>
