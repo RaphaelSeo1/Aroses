@@ -194,8 +194,8 @@ export function SessionsList({
       ) : null}
       <ul className="grid gap-3 sm:grid-cols-2">
         {filtered.map((s) => {
-          const isActive = s.status === "active";
-          const target = isActive
+          const isLive = s.status === "active" || s.status === "paused";
+          const target = isLive
             ? `/tutor-session/active/${s.id}`
             : `/tutor-session/recap/${s.id}`;
           const emoji = s.modeTag ? MODE_EMOJI[s.modeTag] ?? "💬" : "💬";
@@ -217,9 +217,13 @@ export function SessionsList({
                       {s.title}
                     </h3>
                   </div>
-                  {isActive ? (
+                  {s.status === "active" ? (
                     <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-800">
                       Active
+                    </span>
+                  ) : s.status === "paused" ? (
+                    <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-900">
+                      Paused
                     </span>
                   ) : null}
                 </div>
@@ -237,8 +241,10 @@ export function SessionsList({
                   </p>
                 ) : (
                   <p className="mt-2 text-sm italic text-zinc-400">
-                    {isActive
-                      ? "In progress."
+                    {isLive
+                      ? s.status === "paused"
+                        ? "Paused — tap to resume."
+                        : "In progress."
                       : "(no recap — session was very short)"}
                   </p>
                 )}

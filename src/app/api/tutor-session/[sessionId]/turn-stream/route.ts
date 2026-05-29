@@ -43,9 +43,15 @@ export async function POST(request: Request, ctx: Params) {
     });
   }
 
-  let body: { utterance?: unknown };
+  let body: {
+    utterance?: unknown;
+    autoGenerateNotes?: unknown;
+    explicitNotesRequest?: unknown;
+    /** Bracket instruction — drives Rose but is not stored as a user turn. */
+    systemTurn?: unknown;
+  };
   try {
-    body = (await request.json()) as { utterance?: unknown };
+    body = (await request.json()) as typeof body;
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON" }), {
       status: 400,
@@ -60,6 +66,10 @@ export async function POST(request: Request, ctx: Params) {
       headers: { "Content-Type": "application/json" },
     });
   }
+
+  const autoGenerateNotes = body.autoGenerateNotes === true;
+  const explicitNotesRequest = body.explicitNotesRequest === true;
+  const systemTurn = body.systemTurn === true;
 
   const supabase = await createClient();
   const {
@@ -86,10 +96,18 @@ export async function POST(request: Request, ctx: Params) {
     });
   }
   if (sessionRow.status !== "active") {
-    return new Response(JSON.stringify({ error: "Session has ended" }), {
-      status: 409,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        error:
+          sessionRow.status === "paused"
+            ? "Session is paused"
+            : "Session has ended",
+      }),
+      {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   }
 
   const history: TutorSessionMessage[] = Array.isArray(
@@ -98,22 +116,32 @@ export async function POST(request: Request, ctx: Params) {
     ? (sessionRow.conversation_transcript as TutorSessionMessage[])
     : [];
 
-  // 1. Append the student utterance to the transcript IMMEDIATELY so
-  //    crashes mid-stream still record what they said.
   const userMessage: TutorSessionMessage = {
     role: "user",
     content: utterance,
     ts: Date.now(),
   };
-  const transcriptAfterUser = [...history, userMessage];
-  await supabase
-    .from("tutor_sessions")
-    .update({
-      conversation_transcript: transcriptAfterUser,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", sessionId)
-    .eq("user_id", user.id);
+  const transcriptAfterUser = systemTurn
+    ? history
+    : [...history, userMessage];
+
+  if (!systemTurn) {
+    // Append the student utterance immediately so crashes mid-stream still
+    // record what they said.
+    await supabase
+      .from("tutor_sessions")
+      .update({
+        conversation_transcript: transcriptAfterUser,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", sessionId)
+      .eq("user_id", user.id);
+  } else {
+    console.log("[tutor-inactivity] systemTurn — skipping user transcript row", {
+      sessionId,
+      utterancePreview: utterance.slice(0, 80),
+    });
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -133,6 +161,8 @@ export async function POST(request: Request, ctx: Params) {
           discussionSummary: sessionRow.discussion_summary ?? "",
           history,
           studentUtterance: utterance,
+          autoGenerateNotes,
+          explicitNotesRequest,
         })) {
           if (evt.type === "text") {
             assistantText += evt.delta;
@@ -141,6 +171,7 @@ export async function POST(request: Request, ctx: Params) {
             send("meta", {
               intent: evt.intent,
               imageRequest: evt.imageRequest,
+              notesAppend: evt.notesAppend,
             });
           }
         }

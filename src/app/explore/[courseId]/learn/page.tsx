@@ -219,9 +219,11 @@ export default async function ExploreLearnPage({
     .maybeSingle();
 
   const initialMode: CourseMode | null =
-    modePrefRow && (modePrefRow.mode === "free" || modePrefRow.mode === "mentored")
+    modePrefRow?.mode === "free" || modePrefRow?.mode === "mentored"
       ? (modePrefRow.mode as CourseMode)
-      : null;
+      : savedProgress?.lastMode === "free" || savedProgress?.lastMode === "mentored"
+        ? savedProgress.lastMode
+        : null;
 
   const explicitMentoredSwitch =
     typeof moduleParam === "string" &&
@@ -229,6 +231,12 @@ export default async function ExploreLearnPage({
     Number.isFinite(Number(moduleParam));
 
   if ((initialMode === "free" || progressSaysFree) && !explicitMentoredSwitch) {
+    console.log("[mode-persist] explore learn redirect to study", {
+      courseId,
+      materialId,
+      initialMode,
+      progressSaysFree,
+    });
     const qs = new URLSearchParams();
     const resumeMaterial =
       progressSaysFree && savedProgress?.materialId

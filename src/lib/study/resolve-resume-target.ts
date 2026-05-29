@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CoursePayload } from "@/types/course";
 import { loadCourseProgress } from "@/lib/course-progress/db";
 import type { StoredCourseMode } from "@/types/course-progress";
+import type { CourseMode } from "@/types/mentored";
 
 export type ResumeTarget = {
   materialId: string;
@@ -12,6 +13,23 @@ export type ResumeTarget = {
   chunkIndex?: number | null;
   mode?: StoredCourseMode | null;
 };
+
+async function loadMaterialModePref(
+  supabase: SupabaseClient,
+  userId: string,
+  materialId: string
+): Promise<CourseMode | null> {
+  const { data } = await supabase
+    .from("user_course_mode_prefs")
+    .select("mode")
+    .eq("user_id", userId)
+    .eq("material_id", materialId)
+    .maybeSingle();
+  if (data?.mode === "free" || data?.mode === "mentored") {
+    return data.mode;
+  }
+  return null;
+}
 
 /**
  * Resolves where to drop a user when they open a course without explicit
@@ -97,8 +115,14 @@ export async function resolveResumeTarget(
   const freshest = Math.max(mentoredAt, compAt, attemptAt);
 
   if (freshest > 0 && freshest === mentoredAt && lastMentored) {
+    const materialId = lastMentored.material_id as string;
+    const modePref = await loadMaterialModePref(supabase, userId, materialId);
+    console.log("[mode-persist] resume legacy mentored", {
+      materialId,
+      modePref,
+    });
     return {
-      materialId: lastMentored.material_id as string,
+      materialId,
       moduleId:
         typeof lastMentored.module_id === "number" &&
         lastMentored.module_id > 0
@@ -108,18 +132,24 @@ export async function resolveResumeTarget(
         typeof lastMentored.chunk_index === "number"
           ? lastMentored.chunk_index
           : null,
-      mode: "mentored",
+      mode: modePref ?? "mentored",
     };
   }
 
   if (freshest > 0 && freshest === compAt && lastComp) {
+    const materialId = lastComp.material_id as string;
+    const modePref = await loadMaterialModePref(supabase, userId, materialId);
+    console.log("[mode-persist] resume legacy completion", {
+      materialId,
+      modePref,
+    });
     return {
-      materialId: lastComp.material_id as string,
+      materialId,
       moduleId:
         typeof lastComp.module_id === "number" && lastComp.module_id > 0
           ? lastComp.module_id
           : null,
-      mode: "mentored",
+      mode: modePref ?? "free",
     };
   }
 
@@ -130,13 +160,22 @@ export async function resolveResumeTarget(
     typeof lastAttempt.material_id === "string"
   ) {
     const matId = lastAttempt.material_id;
+    const modePref = await loadMaterialModePref(supabase, userId, matId);
     const { data: mat } = await supabase
       .from("study_materials")
       .select("id, course_payload")
       .eq("id", matId)
       .maybeSingle();
     const ids = extractModuleIds(mat?.course_payload);
-    return { materialId: matId, moduleId: ids[0] ?? null, mode: "mentored" };
+    console.log("[mode-persist] resume legacy attempt", {
+      materialId: matId,
+      modePref,
+    });
+    return {
+      materialId: matId,
+      moduleId: ids[0] ?? null,
+      mode: modePref ?? "free",
+    };
   }
 
   const { data: materials } = await supabase

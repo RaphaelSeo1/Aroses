@@ -39,6 +39,10 @@ export function buildTutorSystemPrompt(input: {
   topic: string;
   referenceSummary: string;
   discussionSummary: string;
+  /** When true, Rose should emit notesAppend in META for teaching turns. */
+  autoGenerateNotes?: boolean;
+  /** When true, the student explicitly asked to save content to notes. */
+  explicitNotesRequest?: boolean;
 }): string {
   const modeBlock = input.modeTag ? MODE_INSTRUCTIONS[input.modeTag] : "";
   const topicBlock = input.topic.trim()
@@ -50,6 +54,28 @@ export function buildTutorSystemPrompt(input: {
   const discussionBlock = input.discussionSummary.trim()
     ? `\n\nWHAT YOU HAVE ALREADY COVERED IN THIS SESSION (running summary — don't repeat these explanations from scratch):\n${input.discussionSummary.trim().slice(0, 2000)}`
     : "";
+
+  const notesBlock =
+    input.explicitNotesRequest || input.autoGenerateNotes
+      ? `\n\nSTUDENT NOTES PANEL (structured append via META):
+The student has a live notes doc beside this chat.${
+          input.explicitNotesRequest
+            ? " They just asked you to add key concepts or this conversation to their notes."
+            : " Auto-generate is ON — after substantive teaching, capture key concepts for them."
+        }
+In your spoken reply: acknowledge briefly ("Got it — adding that to your notes" or similar) then continue naturally.
+In META, include "notesAppend" with:
+- "heading": short topic (3-8 words)
+- optional "intro": one-sentence gist (not the full spoken reply)
+- "bullets": 2-5 items — each { "text": "...", "bold": "KeyTerm" } when a term leads the point
+- optional "vocabulary": [{ "term", "definition" }] for new terms you defined
+- optional "callout": { "emoji": "💡", "text": "remember-this takeaway" }
+Skip notesAppend for: pure quiz questions, one-word clarifications, greetings, or when nothing substantive was taught.${
+          input.explicitNotesRequest
+            ? " The student explicitly asked — always include notesAppend summarizing what they wanted saved."
+            : ""
+        }`
+      : `\n\nSTUDENT NOTES: If the student asks you to add something to their notes / save key concepts / "put this in my notes", confirm in your spoken reply and include "notesAppend" in META (same shape as above). Otherwise omit notesAppend.`;
 
   return `You are Rose, running a one-on-one tutor session with a student. This is NOT a course — there is no pre-built lesson plan. Adapt to whatever the student wants to work on right now.
 
@@ -65,15 +91,16 @@ CORE BEHAVIOR:
 QUESTION SCOPE RULES (strict):
 - Only ask about content YOU have just explained OR that's in the uploaded reference materials. Don't pop quiz on random adjacent topics.
 - Don't ask application questions unless you've walked through at least one applied example first.
-- Match question difficulty to what was actually covered.${topicBlock}${referenceBlock}${discussionBlock}${modeBlock ? `\n\n${modeBlock}` : ""}
+- Match question difficulty to what was actually covered.${topicBlock}${referenceBlock}${discussionBlock}${notesBlock}${modeBlock ? `\n\n${modeBlock}` : ""}
 
 OUTPUT FORMAT (STRICT):
 1. First, your spoken reply as plain text. No markdown formatting.
 2. Then on a new line, write exactly: <<<META>>>
 3. Then on a new line, emit a JSON object:
-{"intent":"answer|teach|clarify|question|wrap_up|other","imageRequest":{"query":"<short noun phrase>","type":"diagram"|"photo"|"illustration"}|null}
+{"intent":"answer|teach|clarify|question|wrap_up|other","imageRequest":{"query":"<short noun phrase>","type":"diagram"|"photo"|"illustration"}|null,"notesAppend":{"heading":"...","intro":"...","bullets":[{"text":"...","bold":"Term"}],"vocabulary":[{"term":"...","definition":"..."}],"callout":{"emoji":"💡","text":"..."}}|null}
 
-Set imageRequest sparingly — only when a visual would genuinely help OR the student explicitly asked. Never for grammar/abstract/math equations.`;
+Set imageRequest sparingly — only when a visual would genuinely help OR the student explicitly asked. Never for grammar/abstract/math equations.
+Set notesAppend when instructed above; otherwise null.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,11 +117,22 @@ export type TutorTurnInput = {
   /** Prior messages, oldest-first. We trim if too long. */
   history: TutorSessionMessage[];
   studentUtterance: string;
+  autoGenerateNotes?: boolean;
+  explicitNotesRequest?: boolean;
 };
 
 export type TutorTurnImageRequest = {
   query: string;
   type: "diagram" | "photo" | "illustration";
+};
+
+/** Structured block appended to the student's live notes panel. */
+export type TutorNotesAppend = {
+  heading?: string;
+  intro?: string;
+  bullets?: Array<string | { text: string; bold?: string }>;
+  vocabulary?: Array<{ term: string; definition?: string }>;
+  callout?: { emoji?: string; text: string };
 };
 
 export type TutorTurnEvent =
@@ -103,20 +141,83 @@ export type TutorTurnEvent =
       type: "meta";
       intent: string;
       imageRequest: TutorTurnImageRequest | null;
+      notesAppend: TutorNotesAppend | null;
     };
 
 function stripJsonFence(s: string): string {
   return s.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "");
 }
 
+function parseNotesAppend(raw: unknown): TutorNotesAppend | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const bulletsRaw = o.bullets;
+  const bullets: TutorNotesAppend["bullets"] = [];
+  if (Array.isArray(bulletsRaw)) {
+    for (const item of bulletsRaw) {
+      if (typeof item === "string" && item.trim()) {
+        bullets.push(item.trim());
+      } else if (item && typeof item === "object") {
+        const b = item as Record<string, unknown>;
+        const text = typeof b.text === "string" ? b.text.trim() : "";
+        if (!text) continue;
+        const bold = typeof b.bold === "string" ? b.bold.trim() : undefined;
+        bullets.push(bold ? { text, bold } : { text });
+      }
+    }
+  }
+  const vocabulary: TutorNotesAppend["vocabulary"] = [];
+  if (Array.isArray(o.vocabulary)) {
+    for (const v of o.vocabulary) {
+      if (!v || typeof v !== "object") continue;
+      const row = v as Record<string, unknown>;
+      const term = typeof row.term === "string" ? row.term.trim() : "";
+      if (!term) continue;
+      vocabulary.push({
+        term,
+        definition:
+          typeof row.definition === "string" ? row.definition.trim() : undefined,
+      });
+    }
+  }
+  let callout: TutorNotesAppend["callout"];
+  if (o.callout && typeof o.callout === "object") {
+    const c = o.callout as Record<string, unknown>;
+    const text = typeof c.text === "string" ? c.text.trim() : "";
+    if (text) {
+      callout = {
+        emoji: typeof c.emoji === "string" ? c.emoji : undefined,
+        text,
+      };
+    }
+  }
+  const heading =
+    typeof o.heading === "string" ? o.heading.trim().slice(0, 120) : undefined;
+  const intro =
+    typeof o.intro === "string" ? o.intro.trim().slice(0, 400) : undefined;
+  if (!heading && bullets.length === 0 && vocabulary.length === 0 && !callout) {
+    return null;
+  }
+  return {
+    heading,
+    intro,
+    bullets: bullets.length > 0 ? bullets : undefined,
+    vocabulary: vocabulary.length > 0 ? vocabulary : undefined,
+    callout,
+  };
+}
+
 function parseTutorMeta(raw: string): {
   intent: string;
   imageRequest: TutorTurnImageRequest | null;
+  notesAppend: TutorNotesAppend | null;
 } {
   const trimmed = stripJsonFence(raw).trim();
   const start = trimmed.indexOf("{");
   const end = trimmed.lastIndexOf("}");
-  if (start < 0 || end <= start) return { intent: "other", imageRequest: null };
+  if (start < 0 || end <= start) {
+    return { intent: "other", imageRequest: null, notesAppend: null };
+  }
   try {
     const obj = JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
     const intent =
@@ -131,9 +232,10 @@ function parseTutorMeta(raw: string): {
           : "illustration";
       if (q.length >= 3 && q.length <= 80) imageRequest = { query: q, type: t };
     }
-    return { intent, imageRequest };
+    const notesAppend = parseNotesAppend(obj.notesAppend);
+    return { intent, imageRequest, notesAppend };
   } catch {
-    return { intent: "other", imageRequest: null };
+    return { intent: "other", imageRequest: null, notesAppend: null };
   }
 }
 
@@ -157,6 +259,8 @@ export async function* runTutorTurnStream(
     topic: input.topic,
     referenceSummary: input.referenceSummary,
     discussionSummary: input.discussionSummary,
+    autoGenerateNotes: input.autoGenerateNotes,
+    explicitNotesRequest: input.explicitNotesRequest,
   });
 
   const trimmedHistory = input.history.slice(-20);
@@ -209,12 +313,17 @@ export async function* runTutorTurnStream(
   if (!inMeta) {
     const tail = buffered.slice(textForwardedUpTo);
     if (tail) yield { type: "text", delta: tail };
-    yield { type: "meta", intent: "other", imageRequest: null };
+    yield { type: "meta", intent: "other", imageRequest: null, notesAppend: null };
     return;
   }
   const metaSlice = buffered.slice(textForwardedUpTo);
   const meta = parseTutorMeta(metaSlice);
-  yield { type: "meta", intent: meta.intent, imageRequest: meta.imageRequest };
+  yield {
+    type: "meta",
+    intent: meta.intent,
+    imageRequest: meta.imageRequest,
+    notesAppend: meta.notesAppend,
+  };
 }
 
 // ---------------------------------------------------------------------------

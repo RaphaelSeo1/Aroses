@@ -5,8 +5,15 @@ import { useRouter } from "next/navigation";
 import {
   NotesPanel,
   type NotesPanelHandle,
+  type AutoGenerateBlock,
 } from "@/components/immersive/NotesPanel";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
+import {
+  buildAutoNotesFromTutorTurn,
+  studentRequestedNotesSave,
+} from "@/lib/mentored/build-auto-notes-from-tutor-turn";
+import { autoGenLog } from "@/lib/mentored/auto-generate-log";
+import type { TutorNotesAppend } from "@/lib/ai/tutor-session";
 import type {
   TutorSessionRecord,
   TutorSessionUpload,
@@ -54,8 +61,35 @@ type LocalMessage = {
   };
 };
 
-const IDLE_CHECK_IN_MS = 5 * 60 * 1000; // 5 min silent → Rose checks in
-const ONE_HOUR_MS = 60 * 60 * 1000;
+/** Bracket-wrapped instructions — never shown as student speech. */
+function isSystemUtterance(text: string): boolean {
+  return text.trim().startsWith("[");
+}
+
+function isPersistedSystemUserMessage(role: string, content: string): boolean {
+  return role === "user" && isSystemUtterance(content);
+}
+
+// ---- Inactivity timeout thresholds (adjust here) ----
+/** First gentle check-in after this much student silence. */
+const INACTIVITY_GENTLE_CHECK_IN_MS = 5 * 60 * 1000;
+/** Final check-in + pause after this much total student silence. */
+const INACTIVITY_FINAL_PAUSE_MS = 15 * 60 * 1000;
+/** Auto-end session + recap after this much total student silence. */
+const INACTIVITY_AUTO_END_MS = 60 * 60 * 1000;
+
+const GENTLE_CHECK_IN_TEXT =
+  "Hey, still with me? No rush — just let me know when you're ready.";
+const FINAL_CHECK_IN_TEXT =
+  "I'll pause our session here for now — just press resume whenever you want to pick back up!";
+
+function inactivityLog(step: string, payload?: Record<string, unknown>): void {
+  if (payload !== undefined) {
+    console.log(`[tutor-inactivity] ${step}`, payload);
+  } else {
+    console.log(`[tutor-inactivity] ${step}`);
+  }
+}
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -71,12 +105,14 @@ export function TutorSessionRunner({
   const router = useRouter();
 
   // ----- conversation state -----
-  const [messages, setMessages] = useState<LocalMessage[]>(
-    (initial.transcript ?? []).map((m, i) => ({
-      id: `${m.ts}-${i}`,
-      role: m.role,
-      content: m.content,
-    }))
+  const [messages, setMessages] = useState<LocalMessage[]>(() =>
+    (initial.transcript ?? [])
+      .filter((m) => !isPersistedSystemUserMessage(m.role, m.content))
+      .map((m, i) => ({
+        id: `${m.ts}-${i}`,
+        role: m.role,
+        content: m.content,
+      }))
   );
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -84,6 +120,13 @@ export function TutorSessionRunner({
   const [submitting, setSubmitting] = useState(false);
   const [endError, setEndError] = useState<string | null>(null);
   const [endingSession, setEndingSession] = useState(false);
+  const [sessionPaused, setSessionPaused] = useState(
+    initial.status === "paused"
+  );
+  const sessionPausedRef = useRef(initial.status === "paused");
+  const [sessionBooting, setSessionBooting] = useState(
+    () => (initial.transcript ?? []).length === 0
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // ----- session timer -----
@@ -172,6 +215,84 @@ export function TutorSessionRunner({
   // ----- notes panel handle ("+ Add to notes" buttons use this) -----
   const notesPanelRef = useRef<NotesPanelHandle | null>(null);
   const [addedNoteIds, setAddedNoteIds] = useState<Set<string>>(new Set());
+  const [autoGenerateNotes, setAutoGenerateNotes] = useState(false);
+  const autoGenerateNotesRef = useRef(false);
+  const [notesEditorReady, setNotesEditorReady] = useState(false);
+  const notesAppendedTurnRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    autoGenerateNotesRef.current = autoGenerateNotes;
+  }, [autoGenerateNotes]);
+
+  const handleAutoGenerateChange = useCallback((next: boolean) => {
+    autoGenLog("tutor session autoGenerate state", { next });
+    setAutoGenerateNotes(next);
+  }, []);
+
+  const notesAppendToBlock = useCallback(
+    (notes: TutorNotesAppend): AutoGenerateBlock | null => {
+      const bullets = notes.bullets ?? [];
+      if (
+        !notes.heading &&
+        bullets.length === 0 &&
+        !(notes.vocabulary?.length ?? 0) &&
+        !notes.callout
+      ) {
+        return null;
+      }
+      return {
+        heading: notes.heading,
+        intro: notes.intro,
+        bullets,
+        vocabulary: notes.vocabulary,
+        callout: notes.callout,
+      };
+    },
+    []
+  );
+
+  const appendNotesBlock = useCallback(
+    (
+      block: AutoGenerateBlock,
+      turnKey: string,
+      opts?: { skipDedupe?: boolean }
+    ) => {
+      const handle = notesPanelRef.current;
+      if (!handle || !notesEditorReady) {
+        autoGenLog("tutor append skipped — editor not ready", { turnKey });
+        return false;
+      }
+      if (!opts?.skipDedupe && notesAppendedTurnRef.current.has(turnKey)) {
+        autoGenLog("tutor append skipped — already appended", { turnKey });
+        return false;
+      }
+      const ok = handle.appendBlock({ ...block, skipDedupe: opts?.skipDedupe });
+      if (ok) notesAppendedTurnRef.current.add(turnKey);
+      autoGenLog("tutor appendBlock", { turnKey, ok });
+      return ok;
+    },
+    [notesEditorReady]
+  );
+
+  const handleAutoGenerateUserToggle = useCallback(
+    (next: boolean) => {
+      autoGenLog("tutor user toggle auto-generate", { next });
+      if (!next) return;
+      const lastAssistant = [...messagesRef.current]
+        .reverse()
+        .find((m) => m.role === "assistant" && !m.streaming && m.content.trim());
+      if (!lastAssistant) return;
+      const block = buildAutoNotesFromTutorTurn(lastAssistant.content, {
+        headingHint: initial.title,
+      });
+      if (block) {
+        appendNotesBlock(block, `toggle-${lastAssistant.id}`, {
+          skipDedupe: true,
+        });
+      }
+    },
+    [appendNotesBlock, initial.title]
+  );
 
   // ----- mid-session uploads -----
   // Local mirror of the session's uploads — seeded from `initial`,
@@ -183,14 +304,15 @@ export function TutorSessionRunner({
   const [showMaterialsDrawer, setShowMaterialsDrawer] = useState(false);
   const midUploadInputRef = useRef<HTMLInputElement>(null);
 
-  // ----- idle / long-session nudges -----
-  // We stamp activity (any send or any Rose-spoken sentence) and
-  // schedule a check-in if nothing happens for IDLE_CHECK_IN_MS.
-  // The 1-hour nudge fires at most once per session.
-  const lastActivityRef = useRef<number>(Date.now());
-  const idleNudgeSentRef = useRef<boolean>(false);
-  const hourNudgeSentRef = useRef<boolean>(false);
-  const sessionStartRef = useRef<number>(Date.parse(initial.startedAt) || Date.now());
+  // ----- inactivity tracking (student silence only) -----
+  const lastStudentActivityRef = useRef<number>(Date.now());
+  /** 0 = none sent, 1 = gentle sent, 2 = final sent (session paused). */
+  const checkInsSentRef = useRef<0 | 1 | 2>(0);
+  const autoEndTriggeredRef = useRef(false);
+
+  useEffect(() => {
+    sessionPausedRef.current = sessionPaused;
+  }, [sessionPaused]);
 
   // ----- live caption sync: revealed sentences -----
   // Text is appended to the assistant bubble ONLY when its sentence
@@ -252,22 +374,128 @@ export function TutorSessionRunner({
     [initial.id]
   );
 
+  const resumeSessionQuiet = useCallback(async () => {
+    if (!sessionPausedRef.current) return;
+    try {
+      const res = await fetch(`/api/tutor-session/${initial.id}/resume`, {
+        method: "POST",
+      });
+      if (!res.ok) return;
+      sessionPausedRef.current = false;
+      setSessionPaused(false);
+      inactivityLog("session resumed (quiet)");
+    } catch (e) {
+      console.error("[TutorSessionRunner resumeSessionQuiet]", e);
+    }
+  }, [initial.id]);
+
+  const pauseSessionFromInactivity = useCallback(async () => {
+    if (sessionPausedRef.current) return;
+    inactivityLog("pausing session after final check-in");
+    await abortVoiceCapture();
+    try {
+      const res = await fetch(`/api/tutor-session/${initial.id}/pause`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        console.error("[TutorSessionRunner pauseSession]", res.status);
+        return;
+      }
+      sessionPausedRef.current = true;
+      setSessionPaused(true);
+    } catch (e) {
+      console.error("[TutorSessionRunner pauseSession]", e);
+    }
+  }, [abortVoiceCapture, initial.id]);
+
+  const deliverRoseMessage = useCallback(
+    async (
+      text: string,
+      opts?: { persist?: boolean; speak?: boolean; thenPause?: boolean }
+    ) => {
+      if (endingSession) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const assistantId = `a-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: assistantId, role: "assistant", content: trimmed },
+      ]);
+      if (opts?.persist !== false) {
+        try {
+          await fetch(
+            `/api/tutor-session/${initial.id}/assistant-message`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: trimmed }),
+            }
+          );
+        } catch (e) {
+          console.error("[TutorSessionRunner deliverRoseMessage persist]", e);
+        }
+      }
+      if (opts?.speak !== false) {
+        try {
+          await voice.speak(trimmed);
+        } catch (e) {
+          console.error("[TutorSessionRunner deliverRoseMessage speak]", e);
+        }
+      }
+      if (opts?.thenPause) {
+        await pauseSessionFromInactivity();
+      }
+    },
+    [endingSession, initial.id, pauseSessionFromInactivity, voice]
+  );
+
+  const autoEndFromInactivity = useCallback(async () => {
+    if (autoEndTriggeredRef.current || endingSession) return;
+    autoEndTriggeredRef.current = true;
+    inactivityLog("auto-ending session after 60m inactivity");
+    await abortVoiceCapture();
+    setEndingSession(true);
+    setEndError(null);
+    try {
+      const res = await fetch(`/api/tutor-session/${initial.id}/end`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        throw new Error(`End failed (${res.status})`);
+      }
+      router.push(`/tutor-session/recap/${initial.id}`);
+    } catch (e) {
+      console.error("[TutorSessionRunner autoEndFromInactivity]", e);
+      setEndError("Session timed out but could not auto-end. Use End session.");
+      setEndingSession(false);
+      autoEndTriggeredRef.current = false;
+    }
+  }, [abortVoiceCapture, endingSession, initial.id, router]);
+
   const submitTurn = useCallback(
-    async (utterance: string) => {
+    async (utterance: string, opts?: { system?: boolean }) => {
       const text = utterance.trim();
       if (!text || submitting) return;
+      if (sessionPausedRef.current && !opts?.system) {
+        await resumeSessionQuiet();
+      }
+      const isSystem = opts?.system === true || isSystemUtterance(text);
+      const explicitNotesRequest =
+        !isSystem && studentRequestedNotesSave(text);
+      const autoGenerateNotes = autoGenerateNotesRef.current;
       setComposer("");
       setSubmitting(true);
-      lastActivityRef.current = Date.now();
-      idleNudgeSentRef.current = false;
-
-      // Append user message immediately.
+      if (!isSystem) {
+        lastStudentActivityRef.current = Date.now();
+        checkInsSentRef.current = 0;
+        inactivityLog("student activity — reset check-in counter");
+      }
+      // Append user bubble only for real student turns.
       const userMsg: LocalMessage = {
         id: `u-${Date.now()}`,
         role: "user",
         content: text,
       };
-      // Create empty assistant placeholder.
       const assistantId = `a-${Date.now()}`;
       const assistantMsg: LocalMessage = {
         id: assistantId,
@@ -275,9 +503,18 @@ export function TutorSessionRunner({
         content: "",
         streaming: true,
       };
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
-
-      // Reset the revealed-sentences tracker for this turn.
+      setMessages((prev) =>
+        isSystem
+          ? [...prev, assistantMsg]
+          : [...prev, userMsg, assistantMsg]
+      );
+      if (isSystem) {
+        inactivityLog("system turn started", {
+          preview: text.slice(0, 72),
+        });
+      } else {
+        setSessionBooting(false);
+      }
       revealedSentencesRef.current = [];
 
       // Sentence pump for TTS — consumes deltas as they form.
@@ -319,9 +556,6 @@ export function TutorSessionRunner({
                 m.id === assistantId ? { ...m, content: revealed } : m
               )
             );
-            // Each spoken sentence counts as activity — Rose is
-            // working, the student isn't actually idle.
-            lastActivityRef.current = Date.now();
           },
         })
         .catch((e) => {
@@ -351,13 +585,21 @@ export function TutorSessionRunner({
         }
       }
 
+      let turnIntent = "other";
+      let notesAppendedFromMeta = false;
+
       try {
         const res = await fetch(
           `/api/tutor-session/${initial.id}/turn-stream`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ utterance: text }),
+            body: JSON.stringify({
+              utterance: text,
+              autoGenerateNotes: autoGenerateNotes && !isSystem,
+              explicitNotesRequest,
+              systemTurn: isSystem,
+            }),
           }
         );
         if (!res.ok || !res.body) {
@@ -399,19 +641,29 @@ export function TutorSessionRunner({
             } else if (event === "meta") {
               try {
                 const parsed = JSON.parse(data) as {
+                  intent?: string;
                   imageRequest?: {
                     query?: string;
                     type?: string;
                   } | null;
+                  notesAppend?: TutorNotesAppend | null;
                 };
+                if (typeof parsed.intent === "string") {
+                  turnIntent = parsed.intent;
+                }
                 const ir = parsed.imageRequest;
                 if (ir && typeof ir.query === "string") {
                   const t =
                     ir.type === "diagram" || ir.type === "photo"
                       ? ir.type
                       : "illustration";
-                  // Fire-and-forget — image arrives on its own.
                   void fetchImageForMessage(assistantId, ir.query, t);
+                }
+                const block = parsed.notesAppend
+                  ? notesAppendToBlock(parsed.notesAppend)
+                  : null;
+                if (block) {
+                  notesAppendedFromMeta = appendNotesBlock(block, assistantId);
                 }
               } catch {
                 /* ignore malformed meta */
@@ -425,11 +677,36 @@ export function TutorSessionRunner({
         }
         flushSentences(true);
         streamDone = true;
+        const finalContent =
+          revealedSentencesRef.current.length > 0
+            ? revealedSentencesRef.current.join(" ")
+            : buffered.trim();
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId ? { ...m, streaming: false } : m
           )
         );
+        if (isSystem) {
+          setSessionBooting(false);
+          inactivityLog("system turn finished");
+        }
+        if (
+          !isSystem &&
+          !notesAppendedFromMeta &&
+          finalContent.length > 40 &&
+          (explicitNotesRequest ||
+            (autoGenerateNotes &&
+              (turnIntent === "teach" ||
+                turnIntent === "answer" ||
+                turnIntent === "clarify")))
+        ) {
+          const fallback = buildAutoNotesFromTutorTurn(finalContent, {
+            headingHint: initial.title,
+          });
+          if (fallback) {
+            appendNotesBlock(fallback, assistantId);
+          }
+        }
       } catch (e) {
         console.error("[TutorSessionRunner submitTurn]", e);
         streamDone = true;
@@ -451,11 +728,21 @@ export function TutorSessionRunner({
               : m
           )
         );
+        if (isSystem) setSessionBooting(false);
       } finally {
         setSubmitting(false);
       }
     },
-    [fetchImageForMessage, initial.id, submitting, voice]
+    [
+      appendNotesBlock,
+      fetchImageForMessage,
+      initial.id,
+      initial.title,
+      notesAppendToBlock,
+      resumeSessionQuiet,
+      submitting,
+      voice,
+    ]
   );
 
   // ----- mid-session uploads -----
@@ -508,7 +795,7 @@ export function TutorSessionRunner({
           const trigger = `[The student just attached: ${names.join(
             ", "
           )}. Look at it briefly and react in one or two sentences — acknowledge what you see, ask what they want to do with it.]`;
-          void submitTurn(trigger);
+          void submitTurn(trigger, { system: true });
         }
       } catch (e) {
         console.error("[TutorSessionRunner handleUploadFiles]", e);
@@ -541,14 +828,22 @@ export function TutorSessionRunner({
         firstSentence.length > 0 && firstSentence.length <= 80
           ? firstSentence.replace(/[.!?]$/, "")
           : "From Rose";
-      const intro =
+      const rest =
         firstSentence === trimmed
           ? undefined
           : trimmed.slice(firstSentence.length).trim() || undefined;
+      const bulletCandidates = trimmed
+        .split(/(?<=[.!?])\s+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 24 && s.length < 280)
+        .slice(0, 4);
       handle.appendBlock({
         heading,
-        intro,
-        bullets: [],
+        intro: rest,
+        bullets:
+          bulletCandidates.length > 1
+            ? bulletCandidates.map((line) => ({ text: line }))
+            : [],
       });
       setAddedNoteIds((prev) => {
         const next = new Set(prev);
@@ -566,39 +861,45 @@ export function TutorSessionRunner({
     []
   );
 
-  // ----- idle check-in + 1-hour nudge -----
-  // Both run on a single 30s interval. They're cheap to evaluate and
-  // intentionally lazy so they don't fire during active conversation
-  // (lastActivityRef is bumped every send + every spoken sentence).
+  // ----- inactivity check-ins + auto-end -----
   useEffect(() => {
     const interval = window.setInterval(() => {
-      if (endingSession) return;
-      if (submitting) return;
-      if (voice.state.speaking) return;
+      if (endingSession || autoEndTriggeredRef.current) return;
+      if (submitting || voice.state.speaking) return;
+
       const now = Date.now();
-      // Idle: silent for 5 minutes.
-      if (
-        !idleNudgeSentRef.current &&
-        now - lastActivityRef.current > IDLE_CHECK_IN_MS
-      ) {
-        idleNudgeSentRef.current = true;
-        void submitTurn(
-          "[The student has been silent for several minutes. Check in gently — ask if they want to keep going, switch topics, or wrap up. One short, warm sentence.]"
-        );
+      const silentMs = now - lastStudentActivityRef.current;
+      const checkIns = checkInsSentRef.current;
+
+      if (silentMs >= INACTIVITY_AUTO_END_MS) {
+        inactivityLog("threshold reached — auto end", { silentMs, checkIns });
+        void autoEndFromInactivity();
+        return;
       }
-      // 1-hour: total elapsed > 1h.
-      if (
-        !hourNudgeSentRef.current &&
-        now - sessionStartRef.current > ONE_HOUR_MS
-      ) {
-        hourNudgeSentRef.current = true;
-        void submitTurn(
-          "[The session has been running for over an hour. Briefly suggest wrapping up with a recap, but offer to keep going if they want. One or two sentences.]"
-        );
+
+      if (sessionPausedRef.current) return;
+
+      if (checkIns === 0 && silentMs >= INACTIVITY_GENTLE_CHECK_IN_MS) {
+        checkInsSentRef.current = 1;
+        inactivityLog("gentle check-in", { silentMs });
+        void deliverRoseMessage(GENTLE_CHECK_IN_TEXT);
+        return;
+      }
+
+      if (checkIns === 1 && silentMs >= INACTIVITY_FINAL_PAUSE_MS) {
+        checkInsSentRef.current = 2;
+        inactivityLog("final check-in + pause", { silentMs });
+        void deliverRoseMessage(FINAL_CHECK_IN_TEXT, { thenPause: true });
       }
     }, 30_000);
     return () => window.clearInterval(interval);
-  }, [endingSession, submitTurn, submitting, voice.state.speaking]);
+  }, [
+    autoEndFromInactivity,
+    deliverRoseMessage,
+    endingSession,
+    submitting,
+    voice.state.speaking,
+  ]);
 
   // ----- LIVE mode: tap mic OR barge-in → record till silence -----
   // Used when voiceMode === "live". Stops Rose if she's speaking,
@@ -701,6 +1002,8 @@ export function TutorSessionRunner({
   // ----- live mode: auto-listen after Rose finishes -----
   useEffect(() => {
     if (voiceMode !== "live") return;
+    if (sessionPausedRef.current) return;
+    if (sessionBooting) return;
     if (voice.state.speaking) return;
     if (voice.state.recording) return;
     if (voice.state.transcribing) return;
@@ -739,27 +1042,52 @@ export function TutorSessionRunner({
     voice.state.transcribing,
     voiceMode,
     submitTurn,
+    sessionBooting,
   ]);
 
+  const resumeSessionWithWelcome = useCallback(async () => {
+    if (endingSession) return;
+    try {
+      const res = await fetch(`/api/tutor-session/${initial.id}/resume`, {
+        method: "POST",
+      });
+      if (!res.ok) return;
+      sessionPausedRef.current = false;
+      setSessionPaused(false);
+      checkInsSentRef.current = 0;
+      lastStudentActivityRef.current = Date.now();
+      inactivityLog("session resumed with welcome");
+      const topic =
+        initial.topic?.trim() || initial.title?.trim() || "your topic";
+      await deliverRoseMessage(
+        `Welcome back! We were talking about ${topic} — want to keep going from there?`
+      );
+    } catch (e) {
+      console.error("[TutorSessionRunner resumeSessionWithWelcome]", e);
+    }
+  }, [deliverRoseMessage, endingSession, initial.id, initial.title, initial.topic]);
+
   // ----- opening greeting (once, if transcript empty) -----
-  //
-  // Schedule via setTimeout so we never call setState synchronously
-  // inside the effect body. Synthetic opening trigger phrased as a
-  // system instruction so Rose's first reply is a proper greeting
-  // that acknowledges the topic / uploads instead of looking like
-  // the student said those words.
   const greetedRef = useRef(false);
   useEffect(() => {
     if (greetedRef.current) return;
-    if ((initial.transcript ?? []).length > 0) return;
+    if ((initial.transcript ?? []).length > 0) {
+      setSessionBooting(false);
+      return;
+    }
+    if (sessionPausedRef.current) {
+      setSessionBooting(false);
+      return;
+    }
     greetedRef.current = true;
+    inactivityLog("session-start firing opening greeting");
     const opener = initial.topic
       ? `[Session starting. The student wrote: "${initial.topic}". Greet them, briefly acknowledge it, and ask what they want to dig into first.]`
       : initial.referenceSummary
         ? `[Session starting. The student has uploaded reference material. Greet them warmly, mention what you can see in the materials in one sentence, and ask what they want to focus on first.]`
         : `[Session starting. The student hasn't given a topic yet. Greet them warmly and ask what they'd like to work on.]`;
     const t = window.setTimeout(() => {
-      void submitTurn(opener);
+      void submitTurn(opener, { system: true });
     }, 0);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -774,6 +1102,7 @@ export function TutorSessionRunner({
       );
       if (!confirm) return;
     }
+    await abortVoiceCapture();
     setEndingSession(true);
     setEndError(null);
     try {
@@ -789,7 +1118,7 @@ export function TutorSessionRunner({
       setEndError("Couldn't end the session. Try again.");
       setEndingSession(false);
     }
-  }, [endingSession, initial.id, messages.length, router]);
+  }, [abortVoiceCapture, endingSession, initial.id, messages.length, router]);
 
   // ----- ui helpers -----
   const recordingHint = useMemo(() => {
@@ -847,6 +1176,21 @@ export function TutorSessionRunner({
             {endError}
           </p>
         ) : null}
+        {sessionPaused ? (
+          <div className="mx-auto mt-2 max-w-6xl rounded-2xl border border-amber-200 bg-amber-50/95 px-4 py-3 text-sm text-amber-950">
+            <p className="font-medium">
+              Session paused — you can resume anytime from here or your
+              Sessions library.
+            </p>
+            <button
+              type="button"
+              onClick={() => void resumeSessionWithWelcome()}
+              className="mt-2 inline-flex items-center rounded-full bg-amber-900 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-800"
+            >
+              Resume session
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* True 50/50 split at xl (1280px+) — same treatment as the
@@ -867,7 +1211,7 @@ export function TutorSessionRunner({
                 onClick={() => setShowMaterialsDrawer(true)}
               />
             ) : null}
-            {messages.length === 0 ? (
+            {sessionBooting && messages.length === 0 ? (
               <p className="text-center text-sm text-zinc-400">
                 Rose is getting ready…
               </p>
@@ -1046,10 +1390,14 @@ export function TutorSessionRunner({
                     void submitTurn(composer);
                   }
                 }}
-                placeholder="Type or hit the mic to talk…"
+                placeholder={
+                  sessionPaused
+                    ? "Type to resume, or use the Resume button above…"
+                    : "Type or hit the mic to talk…"
+                }
                 rows={1}
                 className="min-h-[44px] flex-1 resize-none rounded-2xl border border-zinc-200 bg-white px-4 py-2.5 text-sm leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-200"
-                disabled={submitting}
+                disabled={submitting || endingSession}
               />
               <button
                 type="button"
@@ -1079,8 +1427,10 @@ export function TutorSessionRunner({
               }
               suggestions={[]}
               onConsumeSuggestion={() => {}}
-              autoGenerate={false}
-              onAutoGenerateChange={() => {}}
+              autoGenerate={autoGenerateNotes}
+              onAutoGenerateChange={handleAutoGenerateChange}
+              onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
+              onEditorReady={() => setNotesEditorReady(true)}
               editorRef={notesPanelRef}
               className="h-[calc(100vh-200px)] min-h-[34rem]"
             />
@@ -1112,12 +1462,7 @@ function MessageBubble({
   addedRecently: boolean;
 }) {
   const isUser = message.role === "user";
-  // Strip [bracket-style] instruction-only opener turns from display
-  // (the synthetic greeting / nudge triggers). Rose's reply IS shown.
-  const display =
-    isUser && message.content.trim().startsWith("[")
-      ? "(starting your session…)"
-      : message.content;
+  const display = message.content;
   const canAddToNotes =
     !isUser && !message.streaming && message.content.trim().length > 12;
   return (

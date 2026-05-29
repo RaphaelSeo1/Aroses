@@ -320,6 +320,9 @@ export async function loadDashboardProgress(
     ) {
       next.materialId = att.material_id;
       next.answeredAt = att.answered_at;
+      if (existing?.lastUsedMode) {
+        next.lastUsedMode = existing.lastUsedMode;
+      }
     }
     recentPracticeByCourse.set(courseId, next);
   }

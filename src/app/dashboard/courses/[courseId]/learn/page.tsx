@@ -199,13 +199,21 @@ export default async function LearnPage({ params, searchParams }: Props) {
     .maybeSingle();
 
   const initialMode: CourseMode | null =
-    modePrefRow && (modePrefRow.mode === "free" || modePrefRow.mode === "mentored")
+    modePrefRow?.mode === "free" || modePrefRow?.mode === "mentored"
       ? (modePrefRow.mode as CourseMode)
-      : null;
+      : savedProgress?.lastMode === "free" || savedProgress?.lastMode === "mentored"
+        ? savedProgress.lastMode
+        : null;
 
   // Students in Free Exploration should land on /study — check both the
   // per-material mode pref and the course-level progress record.
   if ((initialMode === "free" || progressSaysFree) && !explicitMentoredSwitch) {
+    console.log("[mode-persist] learn redirect to study", {
+      courseId,
+      materialId,
+      initialMode,
+      progressSaysFree,
+    });
     const qs = new URLSearchParams();
     const resumeMaterial =
       progressSaysFree && savedProgress?.materialId

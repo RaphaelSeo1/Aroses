@@ -33,6 +33,8 @@ type Props = {
   onAttemptRecorded?: () => void;
   /** Fires once when the learner finishes the last question (before exit buttons). */
   onPassFinished?: () => void;
+  /** Resets local session state (reshuffle) without undoing saved progress. */
+  onPracticeAgain?: () => void;
 };
 
 export function ModuleQuiz({
@@ -47,6 +49,7 @@ export function ModuleQuiz({
   mixedCourseReview = false,
   onAttemptRecorded,
   onPassFinished,
+  onPracticeAgain,
 }: Props) {
   const [index, setIndex] = useState(0);
   const [wrongAttempts, setWrongAttempts] = useState(0);
@@ -344,6 +347,16 @@ export function ModuleQuiz({
           the lessons or jump ahead.
         </p>
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+          {onPracticeAgain ? (
+            <button
+              type="button"
+              disabled={savingExit}
+              onClick={() => onPracticeAgain()}
+              className="transition-none inline-flex flex-1 items-center justify-center rounded-full border border-brand-border bg-brand-blush px-6 py-2.5 text-sm font-semibold text-brand-ink hover:bg-brand-blush/80 disabled:opacity-60 dark:border-brand-border/50 dark:bg-brand-blush/8 dark:text-brand-blush dark:hover:bg-brand-blush/12 sm:flex-none"
+            >
+              Practice again
+            </button>
+          ) : null}
           <button
             type="button"
             disabled={savingExit}

@@ -31,9 +31,7 @@ export default async function TutorSessionActivePage({ params }: Params) {
     notFound();
   }
 
-  // If the session has already been ended, redirect to its recap
-  // page rather than re-opening the live runner. Reopening an ended
-  // session is a follow-up feature.
+  // If the session has already been ended, redirect to its recap page.
   if (sessionRow.status === "ended") {
     redirect(`/tutor-session/recap/${sessionId}`);
   }

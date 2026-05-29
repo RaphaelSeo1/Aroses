@@ -52,11 +52,38 @@ export async function GET(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Could not load." }, { status: 500 });
   }
 
-  // New courses default to Mentored.
-  const mode: CourseMode =
-    data && typeof data.mode === "string" && data.mode === "free"
-      ? "free"
-      : "mentored";
+  const { data: matRow } = await supabase
+    .from("study_materials")
+    .select("course_id")
+    .eq("id", materialId)
+    .maybeSingle();
+
+  let progressMode: CourseMode | null = null;
+  if (matRow?.course_id) {
+    const { data: progressRow } = await supabase
+      .from("user_course_progress")
+      .select("last_mode")
+      .eq("user_id", user.id)
+      .eq("course_id", matRow.course_id)
+      .maybeSingle();
+    if (progressRow?.last_mode === "free" || progressRow?.last_mode === "mentored") {
+      progressMode = progressRow.last_mode;
+    }
+  }
+
+  const prefMode: CourseMode | null =
+    data?.mode === "free" || data?.mode === "mentored"
+      ? (data.mode as CourseMode)
+      : null;
+
+  const mode: CourseMode = prefMode ?? progressMode ?? "mentored";
+
+  console.log("[mode-persist] GET", {
+    materialId,
+    prefMode,
+    progressMode,
+    resolved: mode,
+  });
 
   return NextResponse.json({ mode });
 }
@@ -116,6 +143,8 @@ export async function PUT(request: Request, ctx: Params) {
     materialId,
     lastMode: mode,
   });
+
+  console.log("[mode-persist] PUT saved", { materialId, mode });
 
   return NextResponse.json({ mode });
 }

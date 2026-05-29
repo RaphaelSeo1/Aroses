@@ -15,9 +15,9 @@ import { CourseModeToggle } from "@/components/CourseModeToggle";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
 import { LessonNotesCapture } from "@/components/LessonNotesCapture";
 import { ModuleQuizReview } from "@/components/ModuleQuizReview";
+import { ModuleQuiz } from "@/components/ModuleQuiz";
 import { PersonalQuizSection } from "@/components/PersonalQuizSection";
-import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
-import { useSrsDueCounts } from "@/lib/srs-due";
+import { buildQuizSessionItems } from "@/lib/quiz-session";
 import { useCourseMode } from "@/lib/mentored/use-course-mode";
 import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { persistStudyModulePosition } from "@/lib/study/persist-study-module";
@@ -359,7 +359,11 @@ export function CoursePlayer({
   }, [activeModuleId, courseId, materialId, mode]);
 
   useEffect(() => {
-    if (mode !== "quiz" || practiceTab !== "module" || !activeModule) {
+    if (!activeModule) {
+      setMissedQuizIndices([]);
+      return;
+    }
+    if (mode === "quiz" && practiceTab !== "module") {
       setMissedQuizIndices([]);
       return;
     }
@@ -455,12 +459,36 @@ export function CoursePlayer({
 
   const moduleQuizBank = activeModule?.quiz ?? EMPTY_MODULE_QUIZ;
 
-  // Live due-count for this material so the Start button can advertise
-  // pending review work.
-  const { counts: dueCounts } = useSrsDueCounts(materialId, {
-    enabled: mode === "quiz",
-    refreshKey: reviewRefreshEpoch,
-  });
+  const moduleQuizSessionItems = useMemo(() => {
+    const items = buildQuizSessionItems(
+      moduleQuizBank,
+      missedQuizIndices,
+      quizSessionEpoch
+    );
+    console.log("[FREE-EXPLORE] module quiz session", {
+      materialId,
+      moduleId: activeModule?.id,
+      bankSize: moduleQuizBank.length,
+      sessionSize: items.length,
+      missedCount: missedQuizIndices.length,
+      epoch: quizSessionEpoch,
+    });
+    return items;
+  }, [
+    moduleQuizBank,
+    missedQuizIndices,
+    quizSessionEpoch,
+    materialId,
+    activeModule?.id,
+  ]);
+
+  const restartModulePractice = useCallback(() => {
+    console.log("[FREE-EXPLORE] practice again", {
+      materialId,
+      moduleId: activeModule?.id,
+    });
+    setQuizSessionEpoch((e) => e + 1);
+  }, [materialId, activeModule?.id]);
 
   // Mentored Learning vs. Free Exploration toggle (Phase 1 of the
   // Mentored Learning rollout). New courses default to Mentored.
@@ -470,11 +498,12 @@ export function CoursePlayer({
   useEffect(() => {
     if (mode !== "lessons") return;
     setCourseMode("free");
-  }, [mode, materialId, setCourseMode]);
-
-  const dueForThisMaterial =
-    dueCounts?.byMaterial.find((m) => m.materialId === materialId) ??
-    (dueCounts ? { module: 0, personal: 0, total: 0 } : null);
+    touchCourseProgress(courseId, {
+      materialId,
+      lastModuleId: activeModuleId,
+      lastMode: "free",
+    });
+  }, [mode, materialId, setCourseMode, courseId, activeModuleId]);
 
   const moduleQuizPageHref = useMemo(
     () =>
@@ -644,6 +673,7 @@ export function CoursePlayer({
       : practiceMasteryPct;
 
   const persistModuleCompletion = useCallback(async (moduleId: number) => {
+    console.log("[complete-module] persisting", { materialId, moduleId, courseId });
     const res = await fetch("/api/complete-module", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -651,6 +681,7 @@ export function CoursePlayer({
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
+      console.error("[complete-module] failed", { materialId, moduleId, body });
       throw new Error(
         typeof body.error === "string"
           ? body.error
@@ -658,6 +689,7 @@ export function CoursePlayer({
       );
     }
     setCompleted((prev) => new Set([...prev, moduleId]));
+    console.log("[complete-module] saved", { materialId, moduleId });
     if (alignProgressWithProfile) router.refresh();
   }, [materialId, router, alignProgressWithProfile]);
 
@@ -688,6 +720,31 @@ export function CoursePlayer({
     void persistModuleCompletion(activeModule.id).catch(() => {});
     bumpReviewRefresh();
   }, [activeModule, persistModuleCompletion, bumpReviewRefresh]);
+
+  const handleModuleQuizComplete = useCallback(
+    async (choice: "review_lessons" | "next_module") => {
+      if (!activeModule) return;
+      if (choice === "next_module") {
+        await completeModuleOnServer(activeModule.id, {
+          advanceToNextModule: true,
+        });
+        return;
+      }
+      if (mode === "quiz") {
+        setQuizOpen(false);
+        router.push(lecturePageHref);
+        return;
+      }
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    [
+      activeModule,
+      completeModuleOnServer,
+      lecturePageHref,
+      mode,
+      router,
+    ]
+  );
 
   function beginRename(mod: CourseModule) {
     setManageError(null);
@@ -1283,17 +1340,29 @@ export function CoursePlayer({
               <CourseModeToggle
                 mode={courseMode}
                 onChange={(next) => {
-                  // Mentored Learning lives in the dedicated immersive route
-                  // now — switching here just navigates there and lets that
-                  // page persist the mode + run onboarding/lesson.
+                  console.log("[mode-persist] toggle", {
+                    courseId,
+                    materialId,
+                    next,
+                  });
                   if (next === "mentored") {
                     setCourseMode("mentored");
+                    touchCourseProgress(courseId, {
+                      materialId,
+                      lastModuleId: activeModule.id,
+                      lastMode: "mentored",
+                    });
                     const qs = new URLSearchParams();
                     qs.set("material", materialId);
                     qs.set("module", String(activeModule.id));
                     router.push(`${learnBase}?${qs.toString()}`);
                   } else {
                     setCourseMode("free");
+                    touchCourseProgress(courseId, {
+                      materialId,
+                      lastModuleId: activeModule.id,
+                      lastMode: "free",
+                    });
                   }
                 }}
                 hint="Mentored Learning opens in a focused tutoring view; Free Exploration is the reading mode you're in now."
@@ -1365,15 +1434,26 @@ export function CoursePlayer({
                   Practice & review
                 </h3>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  Jump to practice with either tab below—the lecture page stays
-                  uncluttered.
+                  Jump to the practice room with either tab below—the lecture
+                  page stays uncluttered.
                 </p>
+                {completed.has(activeModule.id) ? (
+                  <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/90 px-4 py-2.5 text-sm font-medium text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-100">
+                    Module complete — open the practice room to run questions
+                    again anytime.
+                  </p>
+                ) : null}
                 <div className="mt-5 flex flex-wrap gap-3">
                   <Link
                     href={moduleQuizPageHref}
                     className="inline-flex items-center justify-center rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
                   >
                     Module quiz
+                    {moduleQuizBank.length > 0 ? (
+                      <span className="ml-2 inline-flex items-center justify-center rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums">
+                        {moduleQuizBank.length}
+                      </span>
+                    ) : null}
                   </Link>
                   <Link
                     href={focusQuizPageHref}
@@ -1591,12 +1671,10 @@ export function CoursePlayer({
                       </div>
                     ) : null}
 
-                    {!quizOpen ? (
+                    {moduleQuizBank.length === 0 ? null : !quizOpen ? (
                       <button
                         type="button"
-                        disabled={
-                          moduleQuizBank.length === 0 || personalQuizActive
-                        }
+                        disabled={personalQuizActive}
                         onClick={() => {
                           setQuizSessionEpoch((e) => e + 1);
                           setQuizOpen(true);
@@ -1610,22 +1688,13 @@ export function CoursePlayer({
                           });
                         }}
                         title={
-                          moduleQuizBank.length === 0
-                            ? "Generate questions first"
-                            : personalQuizActive
-                              ? "Finish your focus quiz first"
-                              : undefined
+                          personalQuizActive
+                            ? "Finish your focus quiz first"
+                            : undefined
                         }
                         className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
                       >
-                        {dueForThisMaterial && dueForThisMaterial.module > 0
-                          ? `Review ${dueForThisMaterial.module} due card${dueForThisMaterial.module === 1 ? "" : "s"}`
-                          : "Start module review"}
-                        {dueForThisMaterial && dueForThisMaterial.module > 0 ? (
-                          <span className="inline-flex items-center justify-center rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums">
-                            {dueForThisMaterial.module}
-                          </span>
-                        ) : null}
+                        Start module quiz
                       </button>
                     ) : (
                       <div
@@ -1649,28 +1718,30 @@ export function CoursePlayer({
                             ← Back to overview
                           </button>
                         </div>
-                        <SrsReviewLauncher
-                          key={`${activeModule.id}-${quizSessionEpoch}`}
-                          scope="module"
+                        <ModuleQuiz
+                          key={`quiz-${activeModule.id}-${quizSessionEpoch}`}
                           materialId={materialId}
                           moduleId={activeModule.id}
-                          sessionKey={`module-${materialId}-${activeModule.id}`}
-                          heading="Module review"
-                          onExit={() => {
-                            setQuizOpen(false);
-                            bumpReviewRefresh();
-                          }}
-                          onComplete={() => {
-                            // Fire-and-forget: refresh review/progress state,
-                            // and mark the module complete if the learner
-                            // finished the deck. The SRS card scheduling has
-                            // already happened on the server.
-                            bumpReviewRefresh();
-                            handleQuizPassFinished?.();
-                            void completeModuleOnServer(activeModule.id, {
-                              advanceToNextModule: false,
-                            });
-                          }}
+                          items={moduleQuizSessionItems}
+                          shuffleEpoch={quizSessionEpoch}
+                          hasNextModule={hasNextModule}
+                          nextMaterialFileName={nextMaterialInfo?.fileName}
+                          onPassFinished={handleQuizPassFinished}
+                          onAttemptRecorded={bumpReviewRefresh}
+                          onPracticeAgain={restartModulePractice}
+                          onCompleteQuiz={handleModuleQuizComplete}
+                          onNextMaterial={
+                            nextMaterialInfo
+                              ? () => {
+                                  const q = `?${buildStudySearchParams(
+                                    nextMaterialInfo.materialId,
+                                    nextMaterialInfo.moduleId,
+                                    learnMode
+                                  )}`;
+                                  router.push(`${studyBase}${q}`);
+                                }
+                              : undefined
+                          }
                         />
                       </div>
                     )}

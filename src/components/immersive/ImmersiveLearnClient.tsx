@@ -7,6 +7,7 @@ import { ImmersiveLessonRunner } from "@/components/immersive/ImmersiveLessonRun
 import { ImmersiveModePicker } from "@/components/immersive/ImmersiveModePicker";
 import { ImmersiveShell } from "@/components/immersive/ImmersiveShell";
 import { MentoredOnboardingFlow } from "@/components/MentoredOnboardingFlow";
+import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import type { CoursePayload } from "@/types/course";
 import type {
   CourseMode,
@@ -97,13 +98,15 @@ export function ImmersiveLearnClient({
   // ----- mode persistence (fire-and-forget) -----
   const persistMode = useCallback(
     (mode: CourseMode) => {
+      console.log("[mode-persist] immersive save", { courseId, materialId, mode });
+      touchCourseProgress(courseId, { materialId, lastMode: mode });
       fetch(`/api/mentored/mode/${materialId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
       }).catch((e) => console.error("[ImmersiveLearnClient persistMode]", e));
     },
-    [materialId]
+    [courseId, materialId]
   );
 
   // /learn is always Mentored — persist mode so resume links stay correct.

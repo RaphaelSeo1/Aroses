@@ -30,7 +30,9 @@ export function useCourseMode(materialId: string): {
       .then((r) => (r.ok ? r.json() : { mode: "mentored" }))
       .then((body: { mode?: CourseMode }) => {
         if (cancelled) return;
-        setModeState(body.mode === "free" ? "free" : "mentored");
+        const resolved = body.mode === "free" ? "free" : "mentored";
+        console.log("[mode-persist] loaded", { materialId, mode: resolved });
+        setModeState(resolved);
       })
       .catch(() => {
         if (!cancelled) setModeState("mentored");
@@ -47,6 +49,7 @@ export function useCourseMode(materialId: string): {
 
   const setMode = useCallback(
     (next: CourseMode) => {
+      console.log("[mode-persist] saving", { materialId, mode: next });
       setModeState(next);
       // Fire-and-forget — the local optimistic update is the source of truth
       // for UI; the server write is for cross-device sticky state.
@@ -54,7 +57,13 @@ export function useCourseMode(materialId: string): {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: next }),
-      }).catch((e) => console.error("[useCourseMode]", e));
+      })
+        .then((r) => {
+          if (!r.ok) {
+            console.error("[mode-persist] save failed", { materialId, status: r.status });
+          }
+        })
+        .catch((e) => console.error("[useCourseMode]", e));
     },
     [materialId]
   );

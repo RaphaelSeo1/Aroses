@@ -13,7 +13,7 @@ export type TutorSessionModeTag =
   | "quiz_me"
   | "exploring";
 
-export type TutorSessionStatus = "active" | "ended";
+export type TutorSessionStatus = "active" | "paused" | "ended";
 
 export type TutorSessionRecapStatus =
   | "idle"

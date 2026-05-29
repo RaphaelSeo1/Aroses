@@ -61,6 +61,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, saved: false });
   }
 
+  console.log("[complete-module] request", {
+    userId: user.id,
+    materialId: b.materialId,
+    moduleId: b.moduleId,
+  });
+
   const { error } = await supabase.from("module_completion").upsert({
     user_id: user.id,
     material_id: b.materialId,

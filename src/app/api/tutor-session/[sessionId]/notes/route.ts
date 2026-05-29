@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/server";
  *   Returns the live notes TipTap doc (JSON) for this session.
  *
  * PUT /api/tutor-session/[sessionId]/notes
- *   Upserts the live notes. Body: { contentJson, contentText }.
+ *   Upserts the live notes. Body: { contentJson, contentText, autoGenerate? }.
  *
  * Mirrors the shape of /api/mentored/notes/[materialId] so the
  * reused NotesPanel component can swap endpoints via props.
@@ -22,6 +22,12 @@ const EMPTY_DOC = {
   content: [{ type: "paragraph" }],
 };
 
+function readAutoGenerate(row: {
+  auto_generate_notes?: boolean | null;
+}): boolean {
+  return Boolean(row.auto_generate_notes);
+}
+
 export async function GET(_req: Request, ctx: Params) {
   const { sessionId } = await ctx.params;
   if (!UUID_RE.test(sessionId)) {
@@ -34,22 +40,29 @@ export async function GET(_req: Request, ctx: Params) {
   if (!user) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   }
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("tutor_sessions")
-    .select("live_notes_json, live_notes_text, updated_at, user_id")
+    .select(
+      "live_notes_json, live_notes_text, auto_generate_notes, updated_at, user_id"
+    )
     .eq("id", sessionId)
     .maybeSingle();
+  if (error) {
+    console.error("[tutor-session notes GET]", error);
+    return NextResponse.json({ error: "Could not load." }, { status: 500 });
+  }
   if (!data || data.user_id !== user.id) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  console.log("AUTO-GENERATE: tutor notes GET", {
+    sessionId,
+    autoGenerate: readAutoGenerate(data),
+  });
   return NextResponse.json({
     notes: {
       contentJson: data.live_notes_json ?? EMPTY_DOC,
       contentText: data.live_notes_text ?? "",
-      // No autoGenerate concept on tutor sessions (the auto-gen
-      // toggle is per-material on the mentored path); we always
-      // return false so the NotesPanel toggle stays in sync.
-      autoGenerate: false,
+      autoGenerate: readAutoGenerate(data),
       updatedAt: data.updated_at,
     },
   });
@@ -63,6 +76,7 @@ export async function PUT(request: Request, ctx: Params) {
   let body: {
     contentJson?: unknown;
     contentText?: string;
+    autoGenerate?: boolean;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -89,23 +103,30 @@ export async function PUT(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   }
 
-  // Ownership check via UPDATE WHERE — RLS already enforces it but
-  // we want a clean 404 vs 200 result.
   const text =
     typeof body.contentText === "string"
       ? body.contentText.slice(0, 50_000)
       : "";
 
+  const patch: Record<string, unknown> = {
+    live_notes_json: body.contentJson,
+    live_notes_text: text,
+    updated_at: new Date().toISOString(),
+  };
+  if (typeof body.autoGenerate === "boolean") {
+    patch.auto_generate_notes = body.autoGenerate;
+    console.log("AUTO-GENERATE: tutor notes PUT toggle", {
+      sessionId,
+      autoGenerate: body.autoGenerate,
+    });
+  }
+
   const { data, error } = await supabase
     .from("tutor_sessions")
-    .update({
-      live_notes_json: body.contentJson,
-      live_notes_text: text,
-      updated_at: new Date().toISOString(),
-    })
+    .update(patch)
     .eq("id", sessionId)
     .eq("user_id", user.id)
-    .select("live_notes_json, live_notes_text, updated_at")
+    .select("live_notes_json, live_notes_text, auto_generate_notes, updated_at")
     .maybeSingle();
 
   if (error) {
@@ -120,7 +141,7 @@ export async function PUT(request: Request, ctx: Params) {
     notes: {
       contentJson: data.live_notes_json,
       contentText: data.live_notes_text,
-      autoGenerate: false,
+      autoGenerate: readAutoGenerate(data),
       updatedAt: data.updated_at,
     },
   });
