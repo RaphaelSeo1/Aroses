@@ -4,6 +4,7 @@ import { after, NextResponse } from "next/server";
 import { buildLivePreviewCourse, tryOutlinePreviewFromStreamTail } from "@/lib/pdf-ingest-preview";
 import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import type { CoursePayload } from "@/types/course";
 
 export const runtime = "nodejs";
@@ -58,13 +59,22 @@ export async function GET(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data: row, error } = await supabase
+  const JOB_SELECT_BASE =
+    "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_preview_outline, ingest_modules, original_file_name, stream_preview, ingest_phase, ingest_epoch";
+
+  let { data: row, error } = await supabase
     .from("pdf_ingest_jobs")
-    .select(
-      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_preview_outline, ingest_modules, original_file_name, stream_preview, ingest_phase, ingest_epoch, ingest_transcript, source_format"
-    )
+    .select(`${JOB_SELECT_BASE}, ingest_transcript, source_format`)
     .eq("id", jobId)
     .maybeSingle();
+
+  if (error && isMissingDbColumnError(error, "ingest_transcript", "source_format")) {
+    ({ data: row, error } = await supabase
+      .from("pdf_ingest_jobs")
+      .select(JOB_SELECT_BASE)
+      .eq("id", jobId)
+      .maybeSingle());
+  }
 
   if (error || !row) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });

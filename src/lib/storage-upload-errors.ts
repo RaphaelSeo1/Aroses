@@ -70,7 +70,19 @@ export function describePdfIngestUploadFailure(message: string): string {
   }
 
   if (m.includes("payload too large") || m.includes("413")) {
-    return "PDF is too large for the configured storage limit (150 MB max).";
+    return "File is too large for the configured storage limit (150 MB max).";
+  }
+
+  if (
+    m.includes("mime") ||
+    m.includes("content type") ||
+    m.includes("not allowed") ||
+    m.includes("invalidrequest")
+  ) {
+    return (
+      "This file type isn't allowed by storage yet. In Supabase SQL Editor, run migration " +
+      "`039_study_ingest_multi_format.sql` to enable Word, slides, images, audio, and video uploads."
+    );
   }
 
   return (

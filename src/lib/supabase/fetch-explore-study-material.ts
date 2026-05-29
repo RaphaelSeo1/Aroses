@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 
 export type ExploreStudyMaterialRow = {
   id: string;
@@ -12,30 +13,38 @@ export type ExploreStudyMaterialRow = {
   ingest_media?: unknown | null;
 };
 
-const SELECT =
-  "id, summary, key_concepts, questions, course_id, file_name, course_payload, ingest_media";
+const SELECT_BASE =
+  "id, summary, key_concepts, questions, course_id, file_name, course_payload";
 
 async function selectMaterial(
   client: SupabaseClient,
   courseId: string,
   materialId?: string | null
 ) {
-  if (materialId) {
+  const run = (columns: string) => {
+    if (materialId) {
+      return client
+        .from("study_materials")
+        .select(columns)
+        .eq("id", materialId)
+        .eq("course_id", courseId)
+        .maybeSingle();
+    }
     return client
       .from("study_materials")
-      .select(SELECT)
-      .eq("id", materialId)
+      .select(columns)
       .eq("course_id", courseId)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
+  };
+
+  let result = await run(`${SELECT_BASE}, ingest_media`);
+  if (result.error && isMissingDbColumnError(result.error, "ingest_media")) {
+    result = await run(SELECT_BASE);
   }
-  return client
-    .from("study_materials")
-    .select(SELECT)
-    .eq("course_id", courseId)
-    .order("sort_order", { ascending: true })
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  return result;
 }
 
 /**
@@ -59,7 +68,7 @@ export async function fetchStudyMaterialForPublicExplore(
     return { row: null, error: primary.error };
   }
   if (primary.data) {
-    return { row: primary.data as ExploreStudyMaterialRow, error: null };
+    return { row: primary.data as unknown as ExploreStudyMaterialRow, error: null };
   }
 
   const admin = createAdminClient();
@@ -73,7 +82,7 @@ export async function fetchStudyMaterialForPublicExplore(
     return { row: null, error: fb.error };
   }
   return {
-    row: (fb.data as ExploreStudyMaterialRow) ?? null,
+    row: (fb.data as unknown as ExploreStudyMaterialRow) ?? null,
     error: null,
   };
 }

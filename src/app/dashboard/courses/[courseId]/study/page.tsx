@@ -20,6 +20,10 @@ import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-m
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
+import {
+  selectLatestStudyMaterialForCourse,
+  selectStudyMaterialById,
+} from "@/lib/supabase/select-study-material";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload, SidebarMaterialOutline } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
@@ -116,7 +120,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
     }
   }
 
-  let row: {
+  type StudyRow = {
     id: string;
     summary: string;
     key_concepts: string[] | null;
@@ -124,18 +128,17 @@ export default async function StudyPage({ params, searchParams }: Props) {
     course_id: string;
     file_name: string;
     course_payload: unknown | null;
-    ingest_media: unknown | null;
-  } | null = null;
+    ingest_media?: unknown | null;
+  };
+
+  let row: StudyRow | null = null;
 
   if (materialId) {
-    const { data, error } = await supabase
-      .from("study_materials")
-      .select(
-        "id, summary, key_concepts, questions, course_id, file_name, course_payload, ingest_media"
-      )
-      .eq("id", materialId)
-      .eq("course_id", courseRow.id)
-      .maybeSingle();
+    const { data, error } = await selectStudyMaterialById(
+      supabase,
+      materialId,
+      courseRow.id
+    );
 
     if (error) {
       console.error(error);
@@ -143,16 +146,10 @@ export default async function StudyPage({ params, searchParams }: Props) {
     }
     row = data;
   } else {
-    const { data, error } = await supabase
-      .from("study_materials")
-      .select(
-        "id, summary, key_concepts, questions, course_id, file_name, course_payload, ingest_media"
-      )
-      .eq("course_id", courseRow.id)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { data, error } = await selectLatestStudyMaterialForCourse(
+      supabase,
+      courseRow.id
+    );
 
     if (error) {
       console.error(error);

@@ -14,6 +14,7 @@ import {
   UUID_RE,
 } from "@/lib/study-ingest/path";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
+import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 
 export const runtime = "nodejs";
 
@@ -267,7 +268,7 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     };
   });
 
-  const baseJobInsert: Record<string, unknown> = {
+  const minimalJobInsert: Record<string, unknown> = {
     user_id: user.id,
     course_id: courseId,
     exam_group_id: examGroupId,
@@ -277,55 +278,41 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
         ? primaryName
         : `${primaryName} + ${files.length - 1} more`,
     status: "pending",
+  };
+
+  const extendedJobInsert: Record<string, unknown> = {
+    ...minimalJobInsert,
     source_format: primaryKind,
     source_files: files.length > 1 ? sourceFilesJson : null,
   };
 
   if (studyContextValue) {
-    baseJobInsert.study_context = studyContextValue;
+    minimalJobInsert.study_context = studyContextValue;
+    extendedJobInsert.study_context = studyContextValue;
   }
 
   let { data: jobRow, error: jobInsErr } = await supabase
     .from("pdf_ingest_jobs")
-    .insert(baseJobInsert as never)
+    .insert(extendedJobInsert as never)
     .select("id")
     .single();
 
-  if (jobInsErr && studyContextValue) {
-    const isMissingCol =
-      jobInsErr.code === "42703" ||
-      (jobInsErr.message ?? "").includes("study_context") ||
-      (jobInsErr.message ?? "").includes("schema cache");
-    if (isMissingCol) {
-      const { study_context: _sc, ...withoutCtx } = baseJobInsert;
-      void _sc;
-      const fallback = await supabase
-        .from("pdf_ingest_jobs")
-        .insert(withoutCtx as never)
-        .select("id")
-        .single();
-      jobRow = fallback.data;
-      jobInsErr = fallback.error;
-    }
-  }
-
-  if (jobInsErr && (jobInsErr.message ?? "").includes("source_files")) {
-    const minimal = {
-      user_id: user.id,
-      course_id: courseId,
-      exam_group_id: examGroupId,
-      storage_path: primary.storagePath,
-      original_file_name: baseJobInsert.original_file_name,
-      status: "pending",
-      ...(studyContextValue ? { study_context: studyContextValue } : {}),
-    };
-    const fallback = await supabase
+  if (
+    jobInsErr &&
+    isMissingDbColumnError(
+      jobInsErr,
+      "source_format",
+      "source_files",
+      "study_context"
+    )
+  ) {
+    const retry = await supabase
       .from("pdf_ingest_jobs")
-      .insert(minimal as never)
+      .insert(minimalJobInsert as never)
       .select("id")
       .single();
-    jobRow = fallback.data;
-    jobInsErr = fallback.error;
+    jobRow = retry.data;
+    jobInsErr = retry.error;
   }
 
   if (jobInsErr || !jobRow) {

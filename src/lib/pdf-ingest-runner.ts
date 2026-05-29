@@ -24,6 +24,7 @@ import {
   type PdfIngestStreamSink,
 } from "@/lib/ai/study-generation";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import {
   deriveFileStemFromPayload,
@@ -416,11 +417,27 @@ async function finalizePdfIngest(
     materialInsert.ingest_media = options.ingestMedia;
   }
 
-  const { data: row, error: insErr } = await admin
+  let { data: row, error: insErr } = await admin
     .from("study_materials")
     .insert(materialInsert as never)
     .select("id")
     .single();
+
+  if (
+    insErr &&
+    options?.ingestMedia &&
+    isMissingDbColumnError(insErr, "ingest_media")
+  ) {
+    const { ingest_media: _m, ...withoutMedia } = materialInsert;
+    void _m;
+    const retry = await admin
+      .from("study_materials")
+      .insert(withoutMedia as never)
+      .select("id")
+      .single();
+    row = retry.data;
+    insErr = retry.error;
+  }
 
   if (insErr || !row) {
     console.error("[pdf-ingest] insert study_materials", jobId, insErr);
@@ -1010,7 +1027,7 @@ export async function runPdfIngestJob(
   // Audio/video: pause for transcript review before outline generation.
   if (previewResult.ingestMedia) {
     if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) return;
-    await admin
+    const { error: reviewErr } = await admin
       .from("pdf_ingest_jobs")
       .update({
         ingest_transcript: sourceTextForOutline,
@@ -1019,8 +1036,18 @@ export async function runPdfIngestJob(
       })
       .eq("id", jobId)
       .eq("ingest_epoch", claimedEpoch);
-    console.info("[pdf-ingest] awaiting transcript review", { jobId });
-    return;
+    if (!reviewErr) {
+      console.info("[pdf-ingest] awaiting transcript review", { jobId });
+      return;
+    }
+    if (isMissingDbColumnError(reviewErr, "ingest_transcript")) {
+      console.warn(
+        "[pdf-ingest] ingest_transcript column missing; skipping review pause",
+        jobId
+      );
+    } else {
+      console.error("[pdf-ingest] transcript review update", jobId, reviewErr);
+    }
   }
 
   await runPdfIngestOutlinePhase(admin, {
