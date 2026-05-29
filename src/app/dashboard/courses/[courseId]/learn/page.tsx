@@ -1,6 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 import { ImmersiveLearnClient } from "@/components/immersive/ImmersiveLearnClient";
-import { upsertCourseProgress } from "@/lib/course-progress/db";
+import {
+  loadCourseProgress,
+  upsertCourseProgress,
+} from "@/lib/course-progress/db";
 import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
@@ -57,6 +60,12 @@ export default async function LearnPage({ params, searchParams }: Props) {
 
   const courseRow = await fetchCourseForDashboard(supabase, courseId, user.id);
   if (!courseRow) notFound();
+
+  const savedProgress = await loadCourseProgress(
+    supabase,
+    user.id,
+    courseRow.id
+  );
 
   // ---- resolve which material to open ----
   let materialId: string | null = null;
@@ -132,11 +141,12 @@ export default async function LearnPage({ params, searchParams }: Props) {
       moduleIdToOpen) ||
     payload.modules[0].id;
 
-  await upsertCourseProgress(supabase, user.id, courseRow.id, {
-    materialId,
-    lastModuleId: initialModuleId,
-    lastMode: "mentored",
-  });
+  const explicitMentoredSwitch =
+    typeof moduleParam === "string" &&
+    moduleParam.trim().length > 0 &&
+    Number.isFinite(Number(moduleParam));
+
+  const progressSaysFree = savedProgress?.lastMode === "free";
 
   // ---- onboarding state ----
   const { data: onboardingRow } = await supabase
@@ -193,20 +203,40 @@ export default async function LearnPage({ params, searchParams }: Props) {
       ? (modePrefRow.mode as CourseMode)
       : null;
 
-  // Students who chose Free Exploration should land in /study when they
-  // tap "Start learning" — but NOT when they explicitly switch to
-  // Mentored from Free Exploration (material + module in the URL).
-  const explicitMentoredSwitch =
-    typeof moduleParam === "string" &&
-    moduleParam.trim().length > 0 &&
-    Number.isFinite(Number(moduleParam));
-
-  if (initialMode === "free" && !explicitMentoredSwitch) {
+  // Students in Free Exploration should land on /study — check both the
+  // per-material mode pref and the course-level progress record.
+  if ((initialMode === "free" || progressSaysFree) && !explicitMentoredSwitch) {
     const qs = new URLSearchParams();
-    qs.set("material", materialId);
-    qs.set("module", String(initialModuleId));
+    const resumeMaterial =
+      progressSaysFree && savedProgress?.materialId
+        ? savedProgress.materialId
+        : materialId;
+    const resumeModule =
+      progressSaysFree && savedProgress?.lastModuleId != null
+        ? savedProgress.lastModuleId
+        : initialModuleId;
+    qs.set("material", resumeMaterial);
+    qs.set("module", String(resumeModule));
+    qs.set("mode", "learn");
+    if (progressSaysFree && savedProgress) {
+      if (savedProgress.lastLessonIndex > 0) {
+        qs.set("lesson", String(savedProgress.lastLessonIndex));
+      }
+      if (
+        savedProgress.lastScrollPosition != null &&
+        savedProgress.lastScrollPosition > 0
+      ) {
+        qs.set("scroll", String(savedProgress.lastScrollPosition));
+      }
+    }
     redirect(`/dashboard/courses/${courseId}/study?${qs.toString()}`);
   }
+
+  await upsertCourseProgress(supabase, user.id, courseRow.id, {
+    materialId,
+    lastModuleId: initialModuleId,
+    lastMode: "mentored",
+  });
 
   return (
     <ImmersiveLearnClient

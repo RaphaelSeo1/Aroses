@@ -181,11 +181,22 @@ export async function PUT(request: Request, ctx: Params) {
   }
 
   const row = data as Parameters<typeof normalize>[0];
+  // Free Exploration reuses this endpoint for module-only position writes.
+  // Only stamp `last_mode: mentored` when the payload is clearly a mentored
+  // session update — otherwise we clobber Free Exploration resume state.
+  const isMentoredActivity =
+    typeof body.chunkIndex === "number" ||
+    body.lessonPlan !== undefined ||
+    body.attemptState !== undefined ||
+    body.lastRecap !== undefined ||
+    body.appendHistory !== undefined;
+
   await syncCourseProgressFromMaterial(supabase, user.id, materialId, {
     materialId,
     lastModuleId: row.module_id,
-    lastChunkIndex: row.chunk_index,
-    lastMode: "mentored",
+    ...(isMentoredActivity
+      ? { lastChunkIndex: row.chunk_index, lastMode: "mentored" as const }
+      : {}),
   });
 
   return NextResponse.json({

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { syncCourseProgressFromMaterial } from "@/lib/course-progress/sync-from-material";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import type { CourseMode } from "@/types/mentored";
@@ -110,6 +111,11 @@ export async function PUT(request: Request, ctx: Params) {
     console.error("[mentored/mode PUT]", error);
     return NextResponse.json({ error: "Could not save." }, { status: 500 });
   }
+
+  await syncCourseProgressFromMaterial(supabase, user.id, materialId, {
+    materialId,
+    lastMode: mode,
+  });
 
   return NextResponse.json({ mode });
 }

@@ -466,6 +466,12 @@ export function CoursePlayer({
   // Mentored Learning rollout). New courses default to Mentored.
   const { mode: courseMode, setMode: setCourseMode } =
     useCourseMode(materialId);
+
+  useEffect(() => {
+    if (mode !== "lessons") return;
+    setCourseMode("free");
+  }, [mode, materialId, setCourseMode]);
+
   const dueForThisMaterial =
     dueCounts?.byMaterial.find((m) => m.materialId === materialId) ??
     (dueCounts ? { module: 0, personal: 0, total: 0 } : null);
