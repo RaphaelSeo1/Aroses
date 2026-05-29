@@ -7,7 +7,7 @@ import { detectIngestFormat, INGEST_ACCEPT_ATTRIBUTE } from "@/lib/study-ingest/
 import {
   TUTOR_SESSION_MAX_FILES,
   TUTOR_SESSION_MAX_TOTAL_BYTES,
-} from "@/lib/tutor-session/extract-upload";
+} from "@/lib/tutor-session/upload-limits";
 
 /**
  * Start screen for Tutor Sessions.

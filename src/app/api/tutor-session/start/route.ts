@@ -5,9 +5,11 @@ import {
 } from "@/lib/ai/tutor-session";
 import {
   extractTutorSessionUpload,
+} from "@/lib/tutor-session/extract-upload";
+import {
   TUTOR_SESSION_MAX_FILES,
   TUTOR_SESSION_MAX_TOTAL_BYTES,
-} from "@/lib/tutor-session/extract-upload";
+} from "@/lib/tutor-session/upload-limits";
 import { detectIngestFormat } from "@/lib/study-ingest/formats";
 import type {
   TutorSessionModeTag,

@@ -9,8 +9,10 @@ import {
   summarizePdfUpload,
 } from "@/lib/ai/tutor-session";
 
-export const TUTOR_SESSION_MAX_FILES = 5;
-export const TUTOR_SESSION_MAX_TOTAL_BYTES = 200 * 1024 * 1024;
+import {
+  TUTOR_SESSION_MAX_FILES,
+  TUTOR_SESSION_MAX_TOTAL_BYTES,
+} from "@/lib/tutor-session/upload-limits";
 
 export type TutorExtractResult = {
   extractedContent: string;

@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { TutorSessionUpload } from "@/types/tutor-session";
+import { extractTutorSessionUpload } from "@/lib/tutor-session/extract-upload";
 import {
-  extractTutorSessionUpload,
   TUTOR_SESSION_MAX_FILES,
   TUTOR_SESSION_MAX_TOTAL_BYTES,
-} from "@/lib/tutor-session/extract-upload";
+} from "@/lib/tutor-session/upload-limits";
 import { detectIngestFormat } from "@/lib/study-ingest/formats";
 
 /**
