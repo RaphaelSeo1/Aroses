@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
   generateSessionTitle,
-  summarizeImageUpload,
-  summarizePdfUpload,
 } from "@/lib/ai/tutor-session";
-import { extractPdfText } from "@/lib/pdf-text/extract";
+import {
+  extractTutorSessionUpload,
+  TUTOR_SESSION_MAX_FILES,
+  TUTOR_SESSION_MAX_TOTAL_BYTES,
+} from "@/lib/tutor-session/extract-upload";
+import { detectIngestFormat } from "@/lib/study-ingest/formats";
 import type {
   TutorSessionModeTag,
   TutorSessionRecord,
@@ -41,19 +44,8 @@ import type {
  * so a short wait is expected.
  */
 
-const MAX_FILES = 5;
-const MAX_FILE_BYTES = 12 * 1024 * 1024; // 12 MB
-const VALID_PDF_MIMES = ["application/pdf"];
-const VALID_IMAGE_MIMES = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-];
-const VALID_TEXT_MIMES = [
-  "text/plain",
-  "text/markdown",
-];
+const MAX_FILES = TUTOR_SESSION_MAX_FILES;
+const MAX_TOTAL_BYTES = TUTOR_SESSION_MAX_TOTAL_BYTES;
 
 function isModeTag(v: unknown): v is TutorSessionModeTag {
   return (
@@ -95,13 +87,21 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+  let totalBytes = 0;
   for (const f of fileEntries) {
-    if (f.size > MAX_FILE_BYTES) {
+    if (!detectIngestFormat(f.name, f.type)) {
       return NextResponse.json(
-        { error: `File "${f.name}" exceeds the 12 MB limit.` },
-        { status: 413 }
+        { error: `Unsupported file type: ${f.name}` },
+        { status: 400 }
       );
     }
+    totalBytes += f.size;
+  }
+  if (totalBytes > MAX_TOTAL_BYTES) {
+    return NextResponse.json(
+      { error: "Combined upload exceeds 200MB." },
+      { status: 413 }
+    );
   }
 
   // 1. Insert the session row first so we have a UUID to namespace
@@ -137,19 +137,16 @@ export async function POST(request: Request) {
   for (const file of fileEntries) {
     const buf = Buffer.from(await file.arrayBuffer());
     const mime = file.type || "application/octet-stream";
-    let kind: "pdf" | "image" | "text";
-    if (VALID_PDF_MIMES.includes(mime)) kind = "pdf";
-    else if (VALID_IMAGE_MIMES.includes(mime)) kind = "image";
-    else if (VALID_TEXT_MIMES.includes(mime)) kind = "text";
-    else {
-      // Unknown / unsupported — skip silently. Could surface a soft
-      // warning in the response if we want stricter UX later.
-      continue;
-    }
+    const formatKind = detectIngestFormat(file.name, mime);
+    if (!formatKind) continue;
 
-    // Storage path: {user_id}/{session_id}/{timestamp}-{name}. The
-    // timestamp prevents collisions when the same filename is
-    // uploaded twice.
+    const fileKind: "pdf" | "image" | "text" =
+      formatKind === "pdf"
+        ? "pdf"
+        : formatKind === "image"
+          ? "image"
+          : "text";
+
     const safeName = file.name.replace(/[^\w.\-]+/g, "_").slice(0, 120);
     const storagePath = `${user.id}/${sessionRow.id}/${Date.now()}-${safeName}`;
     const { error: storageError } = await supabase.storage
@@ -163,33 +160,19 @@ export async function POST(request: Request) {
       continue;
     }
 
-    // 2a. Extract content + summarize.
     let extractedContent = "";
     let summary = "";
-    if (kind === "pdf") {
-      extractedContent = (await extractPdfText(buf)).slice(0, 30_000);
-      summary = extractedContent
-        ? await summarizePdfUpload({ fileName: file.name, extractedText: extractedContent })
-        : `(${file.name} — couldn't extract text; might be a scanned PDF without OCR.)`;
-    } else if (kind === "image") {
-      const base64 = buf.toString("base64");
-      const mediaType = mime as
-        | "image/jpeg"
-        | "image/png"
-        | "image/gif"
-        | "image/webp";
-      summary = await summarizeImageUpload({
+    try {
+      const result = await extractTutorSessionUpload({
+        buffer: buf,
         fileName: file.name,
-        imageBase64: base64,
-        mediaType,
+        mimeType: mime,
       });
-      extractedContent = summary; // For images the summary IS the extracted info.
-    } else {
-      const text = buf.toString("utf-8").slice(0, 30_000);
-      extractedContent = text;
-      summary = text
-        ? await summarizePdfUpload({ fileName: file.name, extractedText: text })
-        : `(${file.name})`;
+      extractedContent = result.extractedContent;
+      summary = result.summary;
+    } catch (e) {
+      console.error("[tutor-session/start extract]", e);
+      continue;
     }
 
     const { data: uploadRow } = await supabase
@@ -198,7 +181,7 @@ export async function POST(request: Request) {
         session_id: sessionRow.id,
         user_id: user.id,
         file_name: file.name,
-        file_kind: kind,
+        file_kind: fileKind,
         mime_type: mime,
         size_bytes: file.size,
         storage_path: storagePath,

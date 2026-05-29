@@ -3,6 +3,16 @@ import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
 import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  detectIngestFormat,
+  MAX_INGEST_BATCH_TOTAL_BYTES,
+  MAX_INGEST_FILES_PER_BATCH,
+  maxBytesForKind,
+} from "@/lib/study-ingest/formats";
+import {
+  isValidIngestStoragePath,
+  UUID_RE,
+} from "@/lib/study-ingest/path";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 
 export const runtime = "nodejs";
@@ -10,29 +20,56 @@ export const runtime = "nodejs";
 /**
  * Must be a **numeric literal** (Next.js 16). Keep in sync with `PDF_PROCESS_MAX_DURATION_SEC`
  * in `@/lib/pdf-route-duration`. **Vercel Pro:** up to 900 s. **Hobby:** use **60** or deploy fails.
- *
- * Set to 800 so the after() callback can drive both phase 1 (extract + outline, ~3-5 min)
- * AND all module writes (phase 2, ~30-60 s × N modules) in a single invocation, letting
- * uploads complete even when the user navigates away before the client's polling loop fires.
  */
 export const maxDuration = 800;
 
 export const dynamic = "force-dynamic";
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+type IngestFileInput = {
+  storagePath: string;
+  originalFileName?: string;
+};
 
-const INGEST_OBJECT_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.pdf$/i;
-
-async function removeIngestObject(
+async function removeIngestObjects(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
-  storagePath: string
+  paths: string[]
 ) {
+  if (paths.length === 0) return;
   await admin.storage
     .from(STUDY_PDF_INGEST_BUCKET)
-    .remove([storagePath])
+    .remove(paths)
     .catch(() => {});
+}
+
+function parseFilesInput(body: Record<string, unknown>): IngestFileInput[] | null {
+  if (Array.isArray(body.files) && body.files.length > 0) {
+    const out: IngestFileInput[] = [];
+    for (const item of body.files) {
+      if (!item || typeof item !== "object") return null;
+      const r = item as Record<string, unknown>;
+      if (typeof r.storagePath !== "string") return null;
+      out.push({
+        storagePath: r.storagePath,
+        originalFileName:
+          typeof r.originalFileName === "string" ? r.originalFileName : undefined,
+      });
+    }
+    return out;
+  }
+
+  if (typeof body.storagePath === "string") {
+    return [
+      {
+        storagePath: body.storagePath,
+        originalFileName:
+          typeof body.originalFileName === "string"
+            ? body.originalFileName
+            : undefined,
+      },
+    ];
+  }
+
+  return null;
 }
 
 async function handleProcessPdfPost(request: Request): Promise<Response> {
@@ -67,7 +104,7 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     body = await request.json();
   } catch {
     return NextResponse.json(
-      { error: "Expected JSON: courseId, examGroupId, storagePath." },
+      { error: "Expected JSON: courseId, examGroupId, storagePath or files[]." },
       { status: 400 }
     );
   }
@@ -76,16 +113,8 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  const { courseId, examGroupId, storagePath, originalFileName, studyContext } =
-    body as {
-      courseId?: unknown;
-      examGroupId?: unknown;
-      storagePath?: unknown;
-      originalFileName?: unknown;
-      // Per-upload goal that overrides the course-level `study_context` for
-      // this specific lecture. Optional; falls back to course context.
-      studyContext?: unknown;
-    };
+  const raw = body as Record<string, unknown>;
+  const { courseId, examGroupId, studyContext } = raw;
   const studyContextValue =
     typeof studyContext === "string" && studyContext.trim().length > 0
       ? studyContext.trim().slice(0, 4000)
@@ -102,31 +131,40 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     );
   }
 
-  if (typeof storagePath !== "string") {
+  const files = parseFilesInput(raw);
+  if (!files || files.length === 0) {
     return NextResponse.json(
-      { error: "Missing or invalid storagePath." },
+      { error: "Missing or invalid storagePath / files." },
+      { status: 400 }
+    );
+  }
+
+  if (files.length > MAX_INGEST_FILES_PER_BATCH) {
+    return NextResponse.json(
+      {
+        error: `Too many files (${files.length}). Maximum is ${MAX_INGEST_FILES_PER_BATCH} per course.`,
+      },
       { status: 400 }
     );
   }
 
   const prefix = `${user.id}/`;
-  if (!storagePath.startsWith(prefix)) {
-    return NextResponse.json(
-      { error: "Upload path does not match your account." },
-      { status: 403 }
-    );
-  }
-
-  const objectKey = storagePath.slice(prefix.length);
-  if (!INGEST_OBJECT_RE.test(objectKey)) {
-    return NextResponse.json(
-      { error: "Invalid ingest file name." },
-      { status: 400 }
-    );
-  }
-
-  if (storagePath.includes("..") || storagePath.includes("\\")) {
-    return NextResponse.json({ error: "Invalid path." }, { status: 400 });
+  for (const f of files) {
+    if (!isValidIngestStoragePath(f.storagePath, user.id)) {
+      return NextResponse.json(
+        { error: `Invalid ingest file name: ${f.storagePath}` },
+        { status: 400 }
+      );
+    }
+    if (!f.storagePath.startsWith(prefix)) {
+      return NextResponse.json(
+        { error: "Upload path does not match your account." },
+        { status: 403 }
+      );
+    }
+    if (f.storagePath.includes("..") || f.storagePath.includes("\\")) {
+      return NextResponse.json({ error: "Invalid path." }, { status: 400 });
+    }
   }
 
   const admin = createAdminClient();
@@ -140,6 +178,49 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     );
   }
 
+  let totalBytes = 0;
+  for (const f of files) {
+    const name =
+      f.originalFileName?.trim() ||
+      f.storagePath.slice(prefix.length);
+    const kind = detectIngestFormat(name);
+    if (!kind) {
+      await removeIngestObjects(admin, files.map((x) => x.storagePath));
+      return NextResponse.json(
+        { error: `Unsupported file type: ${name}` },
+        { status: 400 }
+      );
+    }
+    const { data: blob } = await admin.storage
+      .from(STUDY_PDF_INGEST_BUCKET)
+      .download(f.storagePath);
+    if (blob) {
+      const buf = Buffer.from(await blob.arrayBuffer());
+      totalBytes += buf.length;
+      if (buf.length > maxBytesForKind(kind)) {
+        await removeIngestObjects(admin, files.map((x) => x.storagePath));
+        const maxMb = Math.round(maxBytesForKind(kind) / (1024 * 1024));
+        const gotMb = Math.round(buf.length / (1024 * 1024));
+        return NextResponse.json(
+          {
+            error: `${name} is too large (${gotMb}MB). Maximum is ${maxMb}MB for this file type.`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+  }
+
+  if (totalBytes > MAX_INGEST_BATCH_TOTAL_BYTES) {
+    await removeIngestObjects(admin, files.map((x) => x.storagePath));
+    return NextResponse.json(
+      {
+        error: `Combined upload exceeds the ${Math.round(MAX_INGEST_BATCH_TOTAL_BYTES / (1024 * 1024 * 1024))}GB limit per course.`,
+      },
+      { status: 400 }
+    );
+  }
+
   const { data: courseOwn } = await supabase
     .from("courses")
     .select("id")
@@ -148,7 +229,7 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     .maybeSingle();
 
   if (!courseOwn) {
-    await removeIngestObject(admin, storagePath);
+    await removeIngestObjects(admin, files.map((x) => x.storagePath));
     return NextResponse.json({ error: "Course not found" }, { status: 403 });
   }
 
@@ -160,55 +241,67 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     .maybeSingle();
 
   if (!groupOwn) {
-    await removeIngestObject(admin, storagePath);
+    await removeIngestObjects(admin, files.map((x) => x.storagePath));
     return NextResponse.json(
       { error: "Invalid section for this course." },
       { status: 403 }
     );
   }
 
-  const baseJobInsert = {
+  const primary = files[0];
+  const primaryName =
+    primary.originalFileName?.trim() ||
+    primary.storagePath.split("/").pop() ||
+    "upload";
+  const primaryKind = detectIngestFormat(primaryName);
+
+  const sourceFilesJson = files.map((f) => {
+    const label =
+      f.originalFileName?.trim() ||
+      f.storagePath.split("/").pop() ||
+      "file";
+    return {
+      storagePath: f.storagePath,
+      originalFileName: label,
+      kind: detectIngestFormat(label),
+    };
+  });
+
+  const baseJobInsert: Record<string, unknown> = {
     user_id: user.id,
     course_id: courseId,
     exam_group_id: examGroupId,
-    storage_path: storagePath,
+    storage_path: primary.storagePath,
     original_file_name:
-      typeof originalFileName === "string" && originalFileName.trim().length > 0
-        ? originalFileName.trim()
-        : null,
+      files.length === 1
+        ? primaryName
+        : `${primaryName} + ${files.length - 1} more`,
     status: "pending",
+    source_format: primaryKind,
+    source_files: files.length > 1 ? sourceFilesJson : null,
   };
 
-  // `study_context` is part of migration 030; cast through `any` so the
-  // generated Supabase types (which may predate the migration) don't reject
-  // the field at compile time. The runtime fallback below covers the case
-  // where the column genuinely isn't there yet.
+  if (studyContextValue) {
+    baseJobInsert.study_context = studyContextValue;
+  }
+
   let { data: jobRow, error: jobInsErr } = await supabase
     .from("pdf_ingest_jobs")
-    .insert(
-      (studyContextValue
-        ? { ...baseJobInsert, study_context: studyContextValue }
-        : baseJobInsert) as never
-    )
+    .insert(baseJobInsert as never)
     .select("id")
     .single();
 
-  // Migration `030_pdf_ingest_per_upload_study_context.sql` adds the new
-  // `study_context` column. If that hasn't been applied yet the insert will
-  // fail with code 42703 (undefined_column) — retry without the field so
-  // uploads keep working until the operator applies migrations.
   if (jobInsErr && studyContextValue) {
     const isMissingCol =
       jobInsErr.code === "42703" ||
       (jobInsErr.message ?? "").includes("study_context") ||
       (jobInsErr.message ?? "").includes("schema cache");
     if (isMissingCol) {
-      console.warn(
-        "[process-pdf] study_context column missing; retrying without per-upload context"
-      );
+      const { study_context: _sc, ...withoutCtx } = baseJobInsert;
+      void _sc;
       const fallback = await supabase
         .from("pdf_ingest_jobs")
-        .insert(baseJobInsert)
+        .insert(withoutCtx as never)
         .select("id")
         .single();
       jobRow = fallback.data;
@@ -216,13 +309,32 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     }
   }
 
+  if (jobInsErr && (jobInsErr.message ?? "").includes("source_files")) {
+    const minimal = {
+      user_id: user.id,
+      course_id: courseId,
+      exam_group_id: examGroupId,
+      storage_path: primary.storagePath,
+      original_file_name: baseJobInsert.original_file_name,
+      status: "pending",
+      ...(studyContextValue ? { study_context: studyContextValue } : {}),
+    };
+    const fallback = await supabase
+      .from("pdf_ingest_jobs")
+      .insert(minimal as never)
+      .select("id")
+      .single();
+    jobRow = fallback.data;
+    jobInsErr = fallback.error;
+  }
+
   if (jobInsErr || !jobRow) {
     console.error("[process-pdf] insert pdf_ingest_jobs", jobInsErr);
-    await removeIngestObject(admin, storagePath);
+    await removeIngestObjects(admin, files.map((x) => x.storagePath));
     return NextResponse.json(
       {
         error:
-          "Could not start PDF build. Apply database migrations `020_pdf_ingest_jobs.sql` and `021_pdf_ingest_chunked.sql` in Supabase, then try again.",
+          "Could not start the build. Apply database migrations `020_pdf_ingest_jobs.sql`, `021_pdf_ingest_chunked.sql`, and `039_study_ingest_multi_format.sql` in Supabase, then try again.",
         ...(process.env.NODE_ENV === "development" && jobInsErr
           ? { debug: jobInsErr.message }
           : {}),
@@ -232,35 +344,10 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
   }
 
   const jobId = jobRow.id;
-
-  /**
-   * Return `202` + `jobId` and run phase 1 in `after()` so the client can redirect to the course
-   * page and poll (same UX as production). On Vercel, `VERCEL=1`. In `next dev`, `NODE_ENV` is
-   * `development` — use chunked there too so local matches the deployed app. For a local
-   * production build (`next start`) without `VERCEL`, set `PDF_INGEST_CHUNKED=1` in `.env` to
-   * opt into this path; otherwise the handler falls through to the monolithic response below.
-   */
-  // Default: return 202 immediately and build in the background. The old
-  // monolith path blocked the HTTP request for minutes (especially bad for
-  // non-admin users on slow plans). Opt into sync only via PDF_INGEST_SYNCHRONOUS=1.
   const useChunkedPdfIngest = process.env.PDF_INGEST_SYNCHRONOUS !== "1";
 
   if (useChunkedPdfIngest) {
     after(() => {
-      // Mirror the manual "Restart this PDF" flow exactly: phase 1 only,
-      // worker exits after outline is saved, browser polling drives `/expand`
-      // for each module (each gets its own 5-minute Vercel budget).
-      //
-      // The previous `driveModules: true` path tried to do extract + outline
-      // + ALL modules in a single 5 min invocation. For N>4 modules or any
-      // queue/429-backoff wait the worker would hit `maxDuration`, get
-      // killed, and the auto-recovery would loop the job back to
-      // `reading_pdf` indefinitely. Restart works because it does *not* set
-      // driveModules — match that.
-      //
-      // Trade-off: if the user closes the tab before modules finish, module
-      // writing pauses (no client to drive `/expand`). They can reopen the
-      // course and click Restart to resume. Far better than the broken loop.
       void runPdfIngestJob(jobId).catch((e) =>
         console.error("[process-pdf] after()", jobId, e)
       );
@@ -297,7 +384,7 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
       error:
         typeof done?.error_message === "string" && done.error_message.trim()
           ? done.error_message.trim()
-          : "PDF build failed. Check the server log and try again.",
+          : "Build failed. Check the server log and try again.",
     },
     { status: 500 }
   );
@@ -309,11 +396,11 @@ export async function POST(request: Request) {
   } catch (e) {
     console.error("[process-pdf] POST uncaught", e);
     const hint =
-      e instanceof Error ? e.message : "Unknown error starting PDF build.";
+      e instanceof Error ? e.message : "Unknown error starting build.";
     return NextResponse.json(
       {
         error:
-          "Could not start the PDF build on the server. Redeploy the latest code, confirm migrations 020 and 021 (pdf ingest) are applied in Supabase, then try again.",
+          "Could not start the build on the server. Redeploy the latest code, confirm migrations are applied in Supabase, then try again.",
         ...(process.env.NODE_ENV === "development" ? { debug: hint } : {}),
       },
       { status: 500 }

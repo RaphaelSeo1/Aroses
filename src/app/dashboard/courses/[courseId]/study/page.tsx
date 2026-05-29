@@ -3,7 +3,9 @@ import { notFound, redirect } from "next/navigation";
 import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
+import { IngestMediaPanel } from "@/components/IngestMediaPanel";
 import { CoursePlayer } from "@/components/CoursePlayer";
+import { parseIngestMedia } from "@/types/ingest-media";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import { VoiceTutorDock } from "@/components/VoiceTutorDock";
 import { HighlightedSummary } from "@/components/HighlightedSummary";
@@ -122,13 +124,14 @@ export default async function StudyPage({ params, searchParams }: Props) {
     course_id: string;
     file_name: string;
     course_payload: unknown | null;
+    ingest_media: unknown | null;
   } | null = null;
 
   if (materialId) {
     const { data, error } = await supabase
       .from("study_materials")
       .select(
-        "id, summary, key_concepts, questions, course_id, file_name, course_payload"
+        "id, summary, key_concepts, questions, course_id, file_name, course_payload, ingest_media"
       )
       .eq("id", materialId)
       .eq("course_id", courseRow.id)
@@ -143,7 +146,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
     const { data, error } = await supabase
       .from("study_materials")
       .select(
-        "id, summary, key_concepts, questions, course_id, file_name, course_payload"
+        "id, summary, key_concepts, questions, course_id, file_name, course_payload, ingest_media"
       )
       .eq("course_id", courseRow.id)
       .order("sort_order", { ascending: true })
@@ -310,6 +313,8 @@ export default async function StudyPage({ params, searchParams }: Props) {
       });
     }
 
+    const ingestMedia = parseIngestMedia(row.ingest_media);
+
     return (
       <>
         <AppHeader right={<HeaderNavLoggedInServer />} />
@@ -322,8 +327,11 @@ export default async function StudyPage({ params, searchParams }: Props) {
             {displayMaterialSectionLabel(row.file_name)}
           </p>
         </div>
-        {/* Self-study goals are now per-upload (set when adding each PDF) so
-            we no longer surface a course-wide goal banner here. */}
+        {ingestMedia ? (
+          <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
+            <IngestMediaPanel materialId={row.id} media={ingestMedia} />
+          </div>
+        ) : null}
         <CoursePlayer
           key={row.id}
           mode="lessons"

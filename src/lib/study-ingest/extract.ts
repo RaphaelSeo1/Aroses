@@ -1,0 +1,337 @@
+import Anthropic from "@anthropic-ai/sdk";
+import mammoth from "mammoth";
+import pdfParse from "pdf-parse";
+import { extractPdfTextHeadTail } from "@/lib/pdf-text-head-tail";
+import {
+  detectIngestFormat,
+  extensionOfFileName,
+  type IngestFormatKind,
+} from "@/lib/study-ingest/formats";
+import { extractPptxSlides } from "@/lib/study-ingest/pptx";
+import { rtfToPlainText } from "@/lib/study-ingest/rtf";
+import {
+  transcribeMediaBuffer,
+  transcriptWithTimestamps,
+  type TranscriptionResult,
+} from "@/lib/study-ingest/transcribe";
+
+export type ExtractedSourceMeta = {
+  fileName: string;
+  kind: IngestFormatKind;
+  pageCount?: number;
+  wordCount?: number;
+  slideCount?: number;
+  transcript?: TranscriptionResult;
+  retainStorage?: boolean;
+};
+
+export type ExtractedStudyChunk = {
+  /** Attribution prefix, e.g. `[from lecture.pptx slide 4]` */
+  attribution: string;
+  body: string;
+};
+
+export type ExtractedStudyContent = {
+  /** Combined plain text for outline generation (with attribution blocks). */
+  plainText: string;
+  chunks: ExtractedStudyChunk[];
+  meta: ExtractedSourceMeta;
+  /** Minimum chars gate — same threshold as PDF ingest. */
+  charCount: number;
+};
+
+function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+function attributionPrefix(fileName: string, detail: string): string {
+  return `[from ${fileName} ${detail}]`;
+}
+
+async function extractPdfBuffer(
+  buf: Buffer,
+  fileName: string,
+  onHeartbeat?: () => void
+): Promise<ExtractedStudyContent> {
+  const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
+  const maxPages = maxPagesRaw ? Number(maxPagesRaw) : 60;
+  const safeMaxPages =
+    Number.isFinite(maxPages) && maxPages >= 1 && maxPages <= 400
+      ? Math.floor(maxPages)
+      : 60;
+
+  let text = "";
+  let numpages = 0;
+
+  const useHeadTail = process.env.PDF_INGEST_FAST_EXTRACT?.trim() !== "0";
+  if (useHeadTail) {
+    try {
+        const extracted = await extractPdfTextHeadTail(buf, {
+          onHeartbeat: onHeartbeat
+            ? () => Promise.resolve(onHeartbeat())
+            : undefined,
+        });
+      if (extracted.text.length >= 80) {
+        text = extracted.text;
+        numpages = extracted.numpages;
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+
+  if (text.length < 80) {
+    const parsed = await pdfParse(buf, { max: safeMaxPages });
+    text = (parsed.text ?? "").trim();
+    numpages = typeof parsed.numpages === "number" ? parsed.numpages : 0;
+  }
+
+  if (text.length < 80) {
+    throw new Error(
+      "Not enough text extracted from this PDF. Try slides with selectable text or another file."
+    );
+  }
+
+  const attr = attributionPrefix(fileName, "document");
+  return {
+    plainText: `${attr}\n${text}`,
+    chunks: [{ attribution: attr, body: text }],
+    meta: { fileName, kind: "pdf", pageCount: numpages, wordCount: wordCount(text) },
+    charCount: text.length,
+  };
+}
+
+async function extractWordBuffer(
+  buf: Buffer,
+  fileName: string
+): Promise<ExtractedStudyContent> {
+  const ext = extensionOfFileName(fileName);
+  if (ext === "doc") {
+    throw new Error(
+      "Legacy .doc files aren't supported yet. Save as .docx in Word or export as PDF."
+    );
+  }
+  try {
+    const { value } = await mammoth.extractRawText({ buffer: buf });
+    const text = (value ?? "").trim();
+    if (text.length < 80) {
+      throw new Error(
+        "Not enough text found in this Word document. Try exporting as PDF."
+      );
+    }
+    const attr = attributionPrefix(fileName, "document");
+    return {
+      plainText: `${attr}\n${text}`,
+      chunks: [{ attribution: attr, body: text }],
+      meta: { fileName, kind: "word", wordCount: wordCount(text) },
+      charCount: text.length,
+    };
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("Not enough")) throw e;
+    throw new Error(
+      "Could not read this Word file. It may be damaged — try saving as .docx or PDF."
+    );
+  }
+}
+
+async function extractSlidesBuffer(
+  buf: Buffer,
+  fileName: string
+): Promise<ExtractedStudyContent> {
+  const ext = extensionOfFileName(fileName);
+  if (ext === "ppt") {
+    throw new Error(
+      "Legacy .ppt files aren't supported yet. Save as .pptx or export as PDF."
+    );
+  }
+  const { slides, plainText } = await extractPptxSlides(buf);
+  if (plainText.length < 80) {
+    throw new Error(
+      "Not enough text on these slides. Try a deck with text or export as PDF."
+    );
+  }
+  const chunks: ExtractedStudyChunk[] = slides.map((s) => {
+    const detail = `slide ${s.index}`;
+    const body = [s.title, s.body, s.notes ? `(Notes: ${s.notes})` : ""]
+      .filter(Boolean)
+      .join("\n");
+    return {
+      attribution: attributionPrefix(fileName, detail),
+      body,
+    };
+  });
+  const combined = chunks
+    .map((c) => `${c.attribution}\n${c.body}`)
+    .join("\n\n");
+  return {
+    plainText: combined,
+    chunks,
+    meta: { fileName, kind: "slides", slideCount: slides.length, wordCount: wordCount(plainText) },
+    charCount: plainText.length,
+  };
+}
+
+function extractTextLikeBuffer(
+  buf: Buffer,
+  fileName: string,
+  kind: "text" | "markdown" | "rtf"
+): ExtractedStudyContent {
+  const raw =
+    kind === "rtf"
+      ? rtfToPlainText(buf.toString("utf8"))
+      : buf.toString("utf8").replace(/^\uFEFF/, "").trim();
+  if (raw.length < 80) {
+    throw new Error("Not enough text in this file to build a course.");
+  }
+  const attr = attributionPrefix(fileName, kind === "markdown" ? "markdown" : "document");
+  return {
+    plainText: `${attr}\n${raw}`,
+    chunks: [{ attribution: attr, body: raw }],
+    meta: { fileName, kind, wordCount: wordCount(raw) },
+    charCount: raw.length,
+  };
+}
+
+function imageMediaType(
+  fileName: string
+): "image/jpeg" | "image/png" | "image/gif" | "image/webp" | null {
+  const ext = extensionOfFileName(fileName);
+  if (ext === "png") return "image/png";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+  if (ext === "jpg" || ext === "jpeg" || ext === "heic" || ext === "heif") {
+    return "image/jpeg";
+  }
+  return null;
+}
+
+async function extractImageBuffer(
+  buf: Buffer,
+  fileName: string,
+  imageIndex?: number
+): Promise<ExtractedStudyContent> {
+  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error(
+      "Image reading requires ANTHROPIC_API_KEY on the server. Upload a PDF or text file instead."
+    );
+  }
+  const mediaType = imageMediaType(fileName);
+  if (!mediaType) {
+    throw new Error(
+      "This image format isn't supported yet. Try PNG or JPEG."
+    );
+  }
+
+  const detail =
+    typeof imageIndex === "number"
+      ? `image ${imageIndex + 1}`
+      : "image";
+  const attr = attributionPrefix(fileName, detail);
+
+  const anthropic = new Anthropic({ apiKey, timeout: 90_000, maxRetries: 1 });
+  const msg = await anthropic.messages.create({
+    model: process.env.ANTHROPIC_FAST_MODEL?.trim() || "claude-haiku-4-5",
+    max_tokens: 4096,
+    temperature: 0.2,
+    system: `You extract study material from photos for course generation. For each image:
+1. Transcribe ALL visible text (handwriting, slides, textbook pages) accurately.
+2. Describe diagrams, charts, equations, and whiteboard drawings briefly.
+3. Preserve structure with headings where obvious.
+
+Output plain text only — no markdown code fences.`,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: buf.toString("base64"),
+            },
+          },
+          {
+            type: "text",
+            text: `FILENAME: ${fileName}\n\nExtract all study content from this image.`,
+          },
+        ],
+      },
+    ],
+  });
+
+  const block = msg.content.find((b) => b.type === "text");
+  const text = block && block.type === "text" ? block.text.trim() : "";
+  if (text.length < 40) {
+    throw new Error(
+      "I couldn't read text from this image. Make sure the photo is in focus and well-lit."
+    );
+  }
+
+  return {
+    plainText: `${attr}\n${text}`,
+    chunks: [{ attribution: attr, body: text }],
+    meta: { fileName, kind: "image", wordCount: wordCount(text) },
+    charCount: text.length,
+  };
+}
+
+async function extractMediaBuffer(
+  buf: Buffer,
+  fileName: string,
+  kind: "audio" | "video"
+): Promise<ExtractedStudyContent> {
+  const transcript = await transcribeMediaBuffer(buf, fileName);
+  const body = transcriptWithTimestamps(transcript);
+  const attr = attributionPrefix(fileName, "transcript");
+  return {
+    plainText: `${attr}\n${body}`,
+    chunks: [{ attribution: attr, body }],
+    meta: {
+      fileName,
+      kind,
+      wordCount: wordCount(body),
+      transcript,
+      retainStorage: true,
+    },
+    charCount: body.length,
+  };
+}
+
+export async function extractStudyMaterialFromBuffer(input: {
+  buffer: Buffer;
+  fileName: string;
+  kind?: IngestFormatKind | null;
+  imageIndex?: number;
+  onHeartbeat?: () => void;
+}): Promise<ExtractedStudyContent> {
+  const kind =
+    input.kind ?? detectIngestFormat(input.fileName) ?? null;
+  if (!kind) {
+    throw new Error(
+      "This file format isn't supported yet. Try PDF, Word (.docx), PowerPoint (.pptx), text, images, or audio."
+    );
+  }
+
+  switch (kind) {
+    case "pdf":
+      return extractPdfBuffer(input.buffer, input.fileName, input.onHeartbeat);
+    case "word":
+      return extractWordBuffer(input.buffer, input.fileName);
+    case "slides":
+      return extractSlidesBuffer(input.buffer, input.fileName);
+    case "text":
+    case "markdown":
+      return extractTextLikeBuffer(input.buffer, input.fileName, kind);
+    case "rtf":
+      return extractTextLikeBuffer(input.buffer, input.fileName, "rtf");
+    case "image":
+      return extractImageBuffer(input.buffer, input.fileName, input.imageIndex);
+    case "audio":
+    case "video":
+      return extractMediaBuffer(input.buffer, input.fileName, kind);
+    default:
+      throw new Error("Unsupported file type.");
+  }
+}

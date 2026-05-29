@@ -4,8 +4,11 @@ import {
   APIUserAbortError,
   RateLimitError,
 } from "@anthropic-ai/sdk";
-import pdfParse from "pdf-parse";
-import { extractPdfTextHeadTail } from "@/lib/pdf-text-head-tail";
+import {
+  extractContentForIngestJob,
+  removeIngestObjects,
+  type IngestSourceFileRef,
+} from "@/lib/study-ingest/job-extract";
 import {
   parseCourseModule,
   parseCourseOutlinePayload,
@@ -21,24 +24,27 @@ import {
   type PdfIngestStreamSink,
 } from "@/lib/ai/study-generation";
 import { createAdminClient } from "@/lib/supabase/admin";
-import {
-  MAX_STUDY_PDF_BYTES,
-  STUDY_PDF_INGEST_BUCKET,
-} from "@/lib/study-pdf-ingest";
+import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import {
   deriveFileStemFromPayload,
   finalizeMaterialSectionLabel,
   stripKnownDocumentExtension,
 } from "@/lib/study-material-display-name";
 
+function normalizeStoragePaths(storagePath: string | string[]): string[] {
+  return Array.isArray(storagePath) ? storagePath : [storagePath];
+}
+
 async function removeIngestObject(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
-  storagePath: string
+  storagePath: string | string[],
+  options?: { retainStorage?: boolean }
 ) {
-  await admin.storage
-    .from(STUDY_PDF_INGEST_BUCKET)
-    .remove([storagePath])
-    .catch(() => {});
+  await removeIngestObjects(
+    admin,
+    normalizeStoragePaths(storagePath),
+    Boolean(options?.retainStorage)
+  );
 }
 
 function truncateErr(msg: string, max = 400): string {
@@ -179,8 +185,9 @@ function createPdfStreamSink(
 async function failJob(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
-  storagePath: string,
-  message: string
+  storagePath: string | string[],
+  message: string,
+  options?: { retainStorage?: boolean }
 ) {
   await admin
     .from("pdf_ingest_jobs")
@@ -193,7 +200,7 @@ async function failJob(
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);
-  await removeIngestObject(admin, storagePath);
+  await removeIngestObject(admin, storagePath, options);
 }
 
 /** True if another restart bumped `ingest_epoch` — this invocation must not write or delete storage. */
@@ -226,7 +233,7 @@ async function isStaleIngestEpoch(
 async function failJobUnlessStale(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
-  storagePath: string,
+  storagePath: string | string[],
   message: string,
   claimedEpoch: number
 ): Promise<void> {
@@ -271,6 +278,23 @@ function parseStoredModules(raw: unknown): CourseModule[] {
   return raw.map((m) => parseCourseModule(m));
 }
 
+function storagePathsForJob(job: {
+  storage_path: string;
+  source_files?: unknown;
+}): string[] {
+  if (Array.isArray(job.source_files)) {
+    const paths = job.source_files
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const p = (item as { storagePath?: unknown }).storagePath;
+        return typeof p === "string" ? p : null;
+      })
+      .filter((p): p is string => Boolean(p));
+    if (paths.length > 0) return paths;
+  }
+  return [job.storage_path];
+}
+
 
 function pdfIngestModuleBatchSize(remaining: number, peerCount: number): number {
   // Module concurrency vs Anthropic TPM trade-off:
@@ -294,10 +318,14 @@ async function finalizePdfIngest(
   jobId: string,
   courseId: string,
   examGroupId: string,
-  storagePath: string,
+  storagePath: string | string[],
   originalFileName: string | null,
   outline: CourseOutlinePayload,
-  modulesRaw: CourseModule[]
+  modulesRaw: CourseModule[],
+  options?: {
+    retainStorage?: boolean;
+    ingestMedia?: Record<string, unknown> | null;
+  }
 ): Promise<{ materialId: string } | null> {
   // Idempotency guard: if a concurrent expand call (e.g. from a page refresh)
   // already finalized this job, return the existing materialId instead of
@@ -373,19 +401,24 @@ async function finalizePdfIngest(
   // in a single UPDATE that also sets material_id. Doing both in one operation
   // avoids a window where status=complete but material_id=null (which would
   // leave the polling client spinning forever).
+  const materialInsert: Record<string, unknown> = {
+    user_id: materialOwnerId,
+    course_id: courseId,
+    exam_group_id: examGroupId,
+    file_name: storedFileName,
+    summary: payload.description,
+    key_concepts: [] as string[],
+    questions: [] as unknown[],
+    course_payload: payload,
+    sort_order: nextSortOrder,
+  };
+  if (options?.ingestMedia) {
+    materialInsert.ingest_media = options.ingestMedia;
+  }
+
   const { data: row, error: insErr } = await admin
     .from("study_materials")
-    .insert({
-      user_id: materialOwnerId,
-      course_id: courseId,
-      exam_group_id: examGroupId,
-      file_name: storedFileName,
-      summary: payload.description,
-      key_concepts: [] as string[],
-      questions: [] as unknown[],
-      course_payload: payload,
-      sort_order: nextSortOrder,
-    })
+    .insert(materialInsert as never)
     .select("id")
     .single();
 
@@ -436,7 +469,9 @@ async function finalizePdfIngest(
       : null;
   }
 
-  await removeIngestObject(admin, storagePath);
+  await removeIngestObject(admin, storagePath, {
+    retainStorage: options?.retainStorage,
+  });
 
   return { materialId: row.id };
 }
@@ -461,7 +496,7 @@ export async function runPdfIngestExpandOne(
   const { data: job, error: loadErr } = await admin
     .from("pdf_ingest_jobs")
     .select(
-      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, status, material_id, error_message, ingest_source_text, ingest_outline, ingest_modules, ingest_epoch, created_at"
+      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, status, material_id, error_message, ingest_source_text, ingest_outline, ingest_modules, ingest_epoch, created_at, retain_storage, ingest_media, source_files"
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -529,6 +564,8 @@ export async function runPdfIngestExpandOne(
       ? (job as { ingest_epoch: number }).ingest_epoch
       : 0;
 
+  const storagePaths = storagePathsForJob(job);
+
   let outline: CourseOutlinePayload;
   try {
     outline = parseCourseOutlinePayload(job.ingest_outline as unknown);
@@ -537,14 +574,12 @@ export async function runPdfIngestExpandOne(
     await failJobUnlessStale(
       admin,
       jobId,
-      job.storage_path,
-      "Stored course outline was invalid. Try uploading the PDF again.",
+      storagePaths,
+      "Stored course outline was invalid. Try uploading again.",
       expandEpoch
     );
     return { kind: "failed", message: "Invalid stored outline." };
   }
-
-  const storagePath = job.storage_path;
   let modulesBuilt: CourseModule[];
   try {
     modulesBuilt = parseStoredModules(job.ingest_modules);
@@ -553,8 +588,8 @@ export async function runPdfIngestExpandOne(
     await failJobUnlessStale(
       admin,
       jobId,
-      storagePath,
-      "Saved module data was invalid. Try uploading the PDF again.",
+      storagePaths,
+      "Saved module data was invalid. Try uploading again.",
       expandEpoch
     );
     return { kind: "failed", message: "Saved module data was invalid." };
@@ -563,16 +598,26 @@ export async function runPdfIngestExpandOne(
   const n = outline.modules.length;
   const prefix = modulesBuilt.slice(0, n);
 
+  const retainStorage = Boolean(
+    (job as { retain_storage?: unknown }).retain_storage
+  );
+  const ingestMedia =
+    (job as { ingest_media?: unknown }).ingest_media &&
+    typeof (job as { ingest_media?: unknown }).ingest_media === "object"
+      ? ((job as { ingest_media: Record<string, unknown> }).ingest_media)
+      : null;
+
   if (prefix.length >= n) {
     const fin = await finalizePdfIngest(
       admin,
       jobId,
       job.course_id,
       job.exam_group_id,
-      storagePath,
+      storagePaths,
       job.original_file_name,
       outline,
-      prefix
+      prefix,
+      { retainStorage, ingestMedia }
     );
     if (!fin) {
       return { kind: "failed", message: "Could not save study material." };
@@ -699,7 +744,7 @@ export async function runPdfIngestExpandOne(
       };
     }
     const message = mapAiFailureToMessage(jobId, e);
-    await failJobUnlessStale(admin, jobId, storagePath, message, expandEpoch);
+    await failJobUnlessStale(admin, jobId, storagePaths, message, expandEpoch);
     return { kind: "failed", message };
   } finally {
     clearInterval(moduleHeartbeat);
@@ -724,7 +769,7 @@ export async function runPdfIngestExpandOne(
     await failJobUnlessStale(
       admin,
       jobId,
-      storagePath,
+      storagePaths,
       "Could not save module progress. Try uploading again.",
       expandEpoch
     );
@@ -741,7 +786,7 @@ export async function runPdfIngestExpandOne(
     await failJobUnlessStale(
       admin,
       jobId,
-      storagePath,
+      storagePaths,
       "Could not save module progress. Try uploading again.",
       expandEpoch
     );
@@ -754,10 +799,11 @@ export async function runPdfIngestExpandOne(
       jobId,
       job.course_id,
       job.exam_group_id,
-      storagePath,
+      storagePaths,
       job.original_file_name,
       outline,
-      cappedNext
+      cappedNext,
+      { retainStorage, ingestMedia }
     );
     if (!fin) {
       return { kind: "failed", message: "Could not save study material." };
@@ -850,170 +896,240 @@ export async function runPdfIngestJob(
 
   const t0 = Date.now();
 
-  // Retry up to 4 times with short delays — Supabase Storage can have
-  // brief propagation lag right after upload, especially on cold paths.
-  const DL_DELAYS_MS = [1_500, 3_000, 6_000];
-  let buf: Buffer | null = null;
-  for (let attempt = 0; attempt <= DL_DELAYS_MS.length; attempt++) {
-    // Heartbeat at the top of every attempt so the GET-route phase-1
-    // stall reset (default 15 s) never false-positives during legitimate
-    // download retries.
-    await touchJobProgress(admin, jobId);
-    try {
-      const { data: blob, error: dlErr } = await admin.storage
-        .from(STUDY_PDF_INGEST_BUCKET)
-        .download(storagePath);
-
-      if (dlErr || !blob) {
-        if (attempt < DL_DELAYS_MS.length) {
-          await sleep(DL_DELAYS_MS[attempt]);
-          continue;
-        }
-        console.error("[pdf-ingest] download failed after retries", jobId, dlErr);
-        await failJobUnlessStale(
-          admin,
-          jobId,
-          storagePath,
-          "Could not read the uploaded PDF from storage. Try uploading again.",
-          claimedEpoch
-        );
-        return;
-      }
-
-      buf = Buffer.from(await blob.arrayBuffer());
-      break;
-    } catch (e) {
-      if (attempt < DL_DELAYS_MS.length) {
-        await sleep(DL_DELAYS_MS[attempt]);
-        continue;
-      }
-      console.error("[pdf-ingest] download unexpected after retries", jobId, e);
-      await failJobUnlessStale(
-        admin,
-        jobId,
-        storagePath,
-        "Could not read the uploaded PDF from storage.",
-        claimedEpoch
-      );
-      return;
+  let sourceFiles: IngestSourceFileRef[] | null = null;
+  const { data: filesRow } = await admin
+    .from("pdf_ingest_jobs")
+    .select("source_files")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (filesRow && Array.isArray((filesRow as { source_files?: unknown }).source_files)) {
+    const parsed: IngestSourceFileRef[] = [];
+    for (const item of (filesRow as { source_files: unknown[] }).source_files) {
+      if (!item || typeof item !== "object") continue;
+      const r = item as Record<string, unknown>;
+      if (typeof r.storagePath !== "string") continue;
+      parsed.push({
+        storagePath: r.storagePath,
+        originalFileName:
+          typeof r.originalFileName === "string" ? r.originalFileName : null,
+        kind:
+          typeof r.kind === "string"
+            ? (r.kind as IngestSourceFileRef["kind"])
+            : undefined,
+      });
     }
+    if (parsed.length > 0) sourceFiles = parsed;
   }
-  if (!buf) return; // all retries failed — already failed the job above
 
-  await touchJobProgress(admin, jobId);
-
-  if (buf.length > MAX_STUDY_PDF_BYTES) {
-    await failJobUnlessStale(
-      admin,
-      jobId,
-      storagePath,
-      "PDF is too large for this server (max 150 MB). Split the file or export fewer pages.",
-      claimedEpoch
-    );
-    return;
-  }
+  const cleanupPaths =
+    sourceFiles?.map((f) => f.storagePath) ?? [storagePath];
 
   console.info("[pdf-ingest] start", {
     jobId,
-    bytes: buf.length,
     path: storagePath.slice(0, 80),
+    fileCount: sourceFiles?.length ?? 1,
   });
 
-  /** pdf-parse and long CPU stretches may not call per-page heartbeat — keep row fresh. */
   const extractKeepAlive = setInterval(() => {
     void touchJobProgress(admin, jobId);
   }, 8_000);
 
-  type PreviewExtract = {
+  let previewResult: {
     text: string;
     numpages: number;
     skippedMiddle: boolean;
+    retainStorage: boolean;
+    ingestMedia: Record<string, unknown> | null;
   };
 
-  let previewResult: PreviewExtract | null = null;
   try {
-    const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
-    const maxPages = maxPagesRaw ? Number(maxPagesRaw) : 60;
-    const safeMaxPages =
-      Number.isFinite(maxPages) && maxPages >= 1 && maxPages <= 400
-        ? Math.floor(maxPages)
-        : 60;
-
-    const useHeadTailPdfExtract =
-      process.env.PDF_INGEST_FAST_EXTRACT?.trim() !== "0";
-
-    let usedHeadTailPdfExtract = false;
-    if (useHeadTailPdfExtract) {
-      try {
-        const extracted = await extractPdfTextHeadTail(buf, {
-          onHeartbeat: () => touchJobProgress(admin, jobId),
-        });
-        if (extracted.text.length >= 80) {
-          previewResult = extracted;
-          usedHeadTailPdfExtract = true;
-          console.info("[pdf-ingest] extract preview slice", {
-            jobId,
-            numpages: extracted.numpages,
-            skippedMiddle: extracted.skippedMiddle,
-            chars: extracted.text.length,
-          });
+    const extracted = await extractContentForIngestJob({
+      admin,
+      jobId,
+      primaryStoragePath: storagePath,
+      primaryFileName: claimed.original_file_name,
+      sourceFiles,
+      onHeartbeat: () => touchJobProgress(admin, jobId),
+      onPhase: async (phase) => {
+        if (phase === "transcribing") {
+          await admin
+            .from("pdf_ingest_jobs")
+            .update({
+              ingest_phase: "transcribing",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", jobId);
         }
-      } catch (e) {
-        console.warn(
-          "[pdf-ingest] head-tail PDF extract failed; falling back to pdf-parse",
-          jobId,
-          e
-        );
-      }
-    }
+      },
+    });
+    previewResult = {
+      text: extracted.text,
+      numpages: extracted.numpages,
+      skippedMiddle: extracted.skippedMiddle,
+      retainStorage: extracted.retainStorage,
+      ingestMedia: extracted.ingestMedia,
+    };
 
-    if (!previewResult) {
-      try {
-        const parsed = await pdfParse(buf, { max: safeMaxPages });
-        const t = (parsed.text ?? "").trim();
-        const np = typeof parsed.numpages === "number" ? parsed.numpages : 0;
-        const nr =
-          typeof (parsed as { numrender?: number }).numrender === "number"
-            ? (parsed as { numrender: number }).numrender
-            : np;
-        previewResult = {
-          text: t,
-          numpages: np,
-          skippedMiddle: np > 0 && nr < np,
-        };
-      } catch {
-        await failJobUnlessStale(
-          admin,
-          jobId,
-          storagePath,
-          "Could not read PDF. Try another file.",
-          claimedEpoch
-        );
-        return;
-      }
-    }
+    await admin
+      .from("pdf_ingest_jobs")
+      .update({
+        retain_storage: extracted.retainStorage,
+        ingest_media: extracted.ingestMedia,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .then(() => {}, () => {});
 
-    if (previewResult.text.length < 80) {
-      await failJobUnlessStale(
-        admin,
-        jobId,
-        storagePath,
-        "Not enough text extracted from this PDF. Try slides with selectable text or another file.",
-        claimedEpoch
-      );
-      return;
-    }
+    console.info("[pdf-ingest] extract ok", {
+      jobId,
+      chars: extracted.text.length,
+      numpages: extracted.numpages,
+      retainStorage: extracted.retainStorage,
+    });
 
     await touchJobProgress(admin, jobId);
+  } catch (e) {
+    const msg =
+      e instanceof Error && e.message.trim()
+        ? e.message.trim()
+        : "Could not process this file. Try another format or a smaller file.";
+    await failJobUnlessStale(
+      admin,
+      jobId,
+      cleanupPaths,
+      msg,
+      claimedEpoch
+    );
+    return;
   } finally {
     clearInterval(extractKeepAlive);
   }
 
-  // Single-pass outline: the live preview comes from streaming this same
-  // outline call (UI reads `stream_preview` and parses prefixes as it grows).
-  // Avoid extra Anthropic calls per job — with many PDFs in parallel they
-  // stack up and exhaust the serverless wall clock before modules can start.
   const sourceTextForOutline = previewResult.text;
+
+  // Audio/video: pause for transcript review before outline generation.
+  if (previewResult.ingestMedia) {
+    if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) return;
+    await admin
+      .from("pdf_ingest_jobs")
+      .update({
+        ingest_transcript: sourceTextForOutline,
+        ingest_phase: "reviewing_transcript",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .eq("ingest_epoch", claimedEpoch);
+    console.info("[pdf-ingest] awaiting transcript review", { jobId });
+    return;
+  }
+
+  await runPdfIngestOutlinePhase(admin, {
+    jobId,
+    claimed,
+    claimedEpoch,
+    cleanupPaths,
+    sourceTextForOutline,
+    courseStudyContext,
+    driveModules: options?.driveModules,
+    t0,
+  });
+}
+
+/**
+ * Resume after the student confirms an audio/video transcript.
+ */
+export async function runPdfIngestContinueAfterTranscript(
+  jobId: string,
+  options?: { driveModules?: boolean }
+): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+
+  const { data: job } = await admin
+    .from("pdf_ingest_jobs")
+    .select(
+      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, ingest_epoch, created_at, ingest_transcript, source_files, status, ingest_phase"
+    )
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (!job || job.status !== "running") return;
+  if ((job as { ingest_phase?: string }).ingest_phase !== "reviewing_transcript") {
+    return;
+  }
+
+  const transcript =
+    typeof (job as { ingest_transcript?: unknown }).ingest_transcript === "string"
+      ? (job as { ingest_transcript: string }).ingest_transcript.trim()
+      : "";
+  if (transcript.length < 80) return;
+
+  const claimedEpoch =
+    typeof (job as { ingest_epoch?: unknown }).ingest_epoch === "number"
+      ? (job as { ingest_epoch: number }).ingest_epoch
+      : 0;
+
+  const cleanupPaths = storagePathsForJob(job as { storage_path: string; source_files?: unknown });
+
+  let courseStudyContext: string | null = null;
+  const { data: jobCtxRow } = await admin
+    .from("pdf_ingest_jobs")
+    .select("study_context")
+    .eq("id", jobId)
+    .maybeSingle();
+  const rawCtx = (jobCtxRow as { study_context?: unknown } | null)?.study_context;
+  if (typeof rawCtx === "string" && rawCtx.trim()) {
+    courseStudyContext = rawCtx.trim();
+  } else if (job.course_id) {
+    const { data: courseRow } = await admin
+      .from("courses")
+      .select("study_context")
+      .eq("id", job.course_id)
+      .maybeSingle();
+    const raw = courseRow?.study_context;
+    courseStudyContext =
+      typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+  }
+
+  await runPdfIngestOutlinePhase(admin, {
+    jobId,
+    claimed: job,
+    claimedEpoch,
+    cleanupPaths,
+    sourceTextForOutline: transcript,
+    courseStudyContext,
+    driveModules: options?.driveModules,
+    t0: Date.now(),
+  });
+}
+
+async function runPdfIngestOutlinePhase(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  input: {
+    jobId: string;
+    claimed: {
+      user_id: string;
+      created_at?: string;
+    };
+    claimedEpoch: number;
+    cleanupPaths: string[];
+    sourceTextForOutline: string;
+    courseStudyContext: string | null;
+    driveModules?: boolean;
+    t0: number;
+  }
+): Promise<void> {
+  const {
+    jobId,
+    claimed,
+    claimedEpoch,
+    cleanupPaths,
+    sourceTextForOutline,
+    courseStudyContext,
+    driveModules,
+    t0,
+  } = input;
+
   const storedMaterial = materialTextForPdfIngest(sourceTextForOutline);
 
   if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
@@ -1113,7 +1229,7 @@ export async function runPdfIngestJob(
       return;
     }
     const message = mapAiFailureToMessage(jobId, e);
-    await failJobUnlessStale(admin, jobId, storagePath, message, claimedEpoch);
+    await failJobUnlessStale(admin, jobId, cleanupPaths, message, claimedEpoch);
     return;
   } finally {
     clearInterval(heartbeat);
@@ -1140,7 +1256,7 @@ export async function runPdfIngestJob(
     await failJobUnlessStale(
       admin,
       jobId,
-      storagePath,
+      cleanupPaths,
       "Could not save outline. Apply migration 021_pdf_ingest_chunked.sql in Supabase, then try again.",
       claimedEpoch
     );
@@ -1154,7 +1270,7 @@ export async function runPdfIngestJob(
     await failJobUnlessStale(
       admin,
       jobId,
-      storagePath,
+      cleanupPaths,
       "Could not save outline. Apply migration 021_pdf_ingest_chunked.sql in Supabase, then try again.",
       claimedEpoch
     );
@@ -1167,7 +1283,7 @@ export async function runPdfIngestJob(
     modules: outline.modules.length,
   });
 
-  if (!options?.driveModules) return;
+  if (!driveModules) return;
 
   // Phase 2: drive all module expansions inline so the job completes without
   // the browser client needing to stay open (upload-and-leave support).

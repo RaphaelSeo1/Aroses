@@ -89,6 +89,7 @@ type JobGetJson = {
   streamPreview?: string | null;
   previewCourse?: unknown;
   ingestPhase?: PdfIngestPhase | null;
+  ingestTranscript?: string;
 };
 
 export type PdfIngestPhase =
@@ -97,7 +98,9 @@ export type PdfIngestPhase =
   | "digesting_full_pdf"
   | "planning_preview"
   | "planning_outline"
-  | "writing_modules";
+  | "writing_modules"
+  | "reviewing_transcript"
+  | "transcribing";
 
 /** Per-attempt timeout for GET /jobs/:id. Stops the poll from hanging forever if a single fetch stalls. */
 const JOB_GET_TIMEOUT_MS = 45_000;
@@ -266,6 +269,7 @@ export type PollPdfIngestJobSnapshot = {
   status: string;
   outlineReady: boolean;
   ingestPhase?: PdfIngestPhase;
+  ingestTranscript?: string;
   modulesBuilt?: number;
   modulesTotal?: number;
 };
@@ -330,13 +334,18 @@ export async function pollPdfIngestJob(
       rawPhase === "digesting_full_pdf" ||
       rawPhase === "planning_preview" ||
       rawPhase === "planning_outline" ||
-      rawPhase === "writing_modules"
+      rawPhase === "writing_modules" ||
+      rawPhase === "reviewing_transcript" ||
+      rawPhase === "transcribing"
         ? rawPhase
         : undefined;
+    const ingestTranscript =
+      typeof data.ingestTranscript === "string" ? data.ingestTranscript : undefined;
     options?.onJobSnapshot?.({
       status: snapStatus,
       outlineReady: Boolean(data.outlineReady),
       ingestPhase,
+      ingestTranscript,
       modulesBuilt:
         typeof data.modulesBuilt === "number" ? data.modulesBuilt : undefined,
       modulesTotal:
@@ -366,10 +375,19 @@ export async function pollPdfIngestJob(
       return { materialId: data.materialId };
     }
     if (data.status === "failed") {
-      return { error: data.error ?? "PDF build failed." };
+      return { error: data.error ?? "Build failed." };
     }
 
-    // Drive `POST /expand`: (a) next module when built < total, (b) finalize-only when
+    if (ingestPhase === "reviewing_transcript") {
+      onProgress?.({
+        line: "Review the transcript below, fix any errors, then continue.",
+        bar: null,
+      });
+      await sleep(2_000);
+      continue;
+    }
+
+    // Drive `POST /expand`:
     // built === total but job is still `running` (server saves all modules then finalizes;
     // if the client never got the completion response from the last module expand, or
     // finalize lagged, GET can sit at N/N + running — without another expand the UI
@@ -515,9 +533,14 @@ export async function pollPdfIngestJob(
           streamPeek.length > 0
             ? "Step 2/2: Planning course outline with AI (receiving model output)…"
             : "Step 2/2: Planning course outline with AI (then writing each module)…";
+      } else if (data.ingestPhase === "transcribing") {
+        phaseLine =
+          "Transcribing audio or video (this can take several minutes for long recordings)…";
+      } else if (data.ingestPhase === "reviewing_transcript") {
+        phaseLine = "Waiting for you to review the transcript…";
       } else if (ingestPhase === "reading_pdf") {
         phaseLine =
-          "Step 1/2: Extracting text from your PDF (long slide decks read the first and last pages first so this step finishes sooner)…";
+          "Step 1/2: Extracting content from your files (documents, slides, images, or media)…";
       } else if (streamPeek.length > 0) {
         phaseLine =
           "Step 2/2: Planning course outline with AI (receiving model output)…";

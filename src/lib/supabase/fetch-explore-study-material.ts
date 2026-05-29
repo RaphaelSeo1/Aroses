@@ -9,10 +9,11 @@ export type ExploreStudyMaterialRow = {
   course_id: string;
   file_name: string;
   course_payload: unknown | null;
+  ingest_media?: unknown | null;
 };
 
 const SELECT =
-  "id, summary, key_concepts, questions, course_id, file_name, course_payload";
+  "id, summary, key_concepts, questions, course_id, file_name, course_payload, ingest_media";
 
 async function selectMaterial(
   client: SupabaseClient,

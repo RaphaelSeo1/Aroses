@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { TutorSessionModeTag } from "@/types/tutor-session";
+import { detectIngestFormat, INGEST_ACCEPT_ATTRIBUTE } from "@/lib/study-ingest/formats";
+import {
+  TUTOR_SESSION_MAX_FILES,
+  TUTOR_SESSION_MAX_TOTAL_BYTES,
+} from "@/lib/tutor-session/extract-upload";
 
 /**
  * Start screen for Tutor Sessions.
@@ -62,23 +67,6 @@ const MODE_CHIPS: ModeChip[] = [
   },
 ];
 
-const MAX_FILES = 5;
-const MAX_FILE_MB = 12;
-const ACCEPTED = ".pdf,.png,.jpg,.jpeg,.gif,.webp,.txt,.md";
-// MIME types we know how to extract on the server. Anything else
-// dropped or pasted is rejected with a soft warning. Mirrors the
-// VALID_*_MIMES lists in /api/tutor-session/start.
-const ACCEPTED_MIMES = new Set<string>([
-  "application/pdf",
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "text/plain",
-  "text/markdown",
-]);
-const ACCEPTED_EXT_RE = /\.(pdf|png|jpe?g|gif|webp|txt|md)$/i;
-
 export function TutorSessionStartScreen() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -115,19 +103,26 @@ export function TutorSessionStartScreen() {
       const next = [...prev];
       let rejectedUnsupported: string | null = null;
       for (const f of incoming) {
-        const mime = f.type || "";
-        const supported =
-          ACCEPTED_MIMES.has(mime) || ACCEPTED_EXT_RE.test(f.name);
-        if (!supported) {
+        const kind = detectIngestFormat(f.name, f.type);
+        if (!kind) {
           rejectedUnsupported = f.name;
           continue;
         }
-        if (f.size > MAX_FILE_MB * 1024 * 1024) {
-          setError(`"${f.name}" is over ${MAX_FILE_MB} MB — skipping.`);
+        if (kind === "audio" || kind === "video") {
+          rejectedUnsupported = f.name;
+          setError(
+            `"${f.name}" is audio/video — use course upload for recordings. Tutor sessions accept documents and images.`
+          );
           continue;
         }
-        if (next.length >= MAX_FILES) {
-          setError(`Up to ${MAX_FILES} files at a time.`);
+        if (next.length >= TUTOR_SESSION_MAX_FILES) {
+          setError(`Up to ${TUTOR_SESSION_MAX_FILES} files at a time.`);
+          break;
+        }
+        const nextTotal =
+          next.reduce((s, x) => s + x.size, 0) + f.size;
+        if (nextTotal > TUTOR_SESSION_MAX_TOTAL_BYTES) {
+          setError("Combined upload exceeds 200MB.");
           break;
         }
         if (
@@ -140,7 +135,7 @@ export function TutorSessionStartScreen() {
       }
       if (rejectedUnsupported && next.length === prev.length) {
         setError(
-          `"${rejectedUnsupported}" isn't a supported type (PDF, image, .txt, or .md).`
+          `"${rejectedUnsupported}" isn't supported for tutor sessions (try PDF, Word, slides, images, or text).`
         );
       }
       return next;
@@ -366,7 +361,7 @@ export function TutorSessionStartScreen() {
           <input
             ref={fileInputRef}
             type="file"
-            accept={ACCEPTED}
+            accept={INGEST_ACCEPT_ATTRIBUTE}
             multiple
             className="sr-only"
             onChange={(e) => addFiles(e.target.files)}

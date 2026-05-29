@@ -8,6 +8,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
+import { TranscriptReviewPanel } from "@/components/TranscriptReviewPanel";
 import { TypewriterText } from "@/components/TypewriterText";
 import type { SrsDueCounts } from "@/lib/srs-due";
 import {
@@ -90,11 +91,25 @@ function tabStatusLine(
         "Step 2/2: the model is drafting the course outline (JSON). Large slide decks can take several minutes.",
     };
   }
+  if (snap?.ingestPhase === "reviewing_transcript") {
+    return {
+      line: "Review transcript",
+      detail:
+        "Fix transcription errors below, then continue to course generation.",
+    };
+  }
+  if (snap?.ingestPhase === "transcribing") {
+    return {
+      line: "Transcribing…",
+      detail:
+        "Speech-to-text can take several minutes for long recordings.",
+    };
+  }
   if (snap?.ingestPhase === "reading_pdf") {
     return {
-      line: "Reading PDF…",
+      line: "Processing files…",
       detail:
-        "Step 1/2: extracting text from the start and end of your PDF. The outline streams in right after.",
+        "Step 1/2: extracting text from documents, slides, images, or transcribing media.",
     };
   }
   if (snap?.status === "pending") {
@@ -398,6 +413,34 @@ export function CourseBuildTheater({
   }, [jobIds]);
 
   useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission === "default") {
+      void Notification.requestPermission().catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    if (phase !== "done" || summary !== "success") return;
+    if (typeof document === "undefined" || !document.hidden) return;
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    const firstMaterial = jobIds
+      .map((id) => terminalByJob[id]?.materialId)
+      .find((m) => typeof m === "string" && m.length > 0);
+    if (!firstMaterial) return;
+
+    try {
+      new Notification("Your course is ready", {
+        body: "Open Aroses to start studying.",
+        tag: `course-build-${courseId}`,
+      });
+    } catch {
+      /* ignore */
+    }
+  }, [phase, summary, jobIds, terminalByJob, courseId]);
+
+  useEffect(() => {
     if (jobIds.length === 0) return;
     if (!jobIds.every((id) => terminalByJob[id] != null)) return;
 
@@ -692,6 +735,16 @@ export function CourseBuildTheater({
                   />
                 ) : null}
               </div>
+            </div>
+          ) : null}
+
+          {snapshotByJob[activeJob]?.ingestPhase === "reviewing_transcript" &&
+          snapshotByJob[activeJob]?.ingestTranscript ? (
+            <div className="mb-8">
+              <TranscriptReviewPanel
+                jobId={activeJob}
+                initialTranscript={snapshotByJob[activeJob]!.ingestTranscript!}
+              />
             </div>
           ) : null}
 

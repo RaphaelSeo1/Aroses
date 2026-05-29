@@ -5,6 +5,8 @@ import {
   AppHeader,
 } from "@/components/AppHeader";
 import { CoursePlayer } from "@/components/CoursePlayer";
+import { IngestMediaPanel } from "@/components/IngestMediaPanel";
+import { parseIngestMedia } from "@/types/ingest-media";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import { HighlightedSummary } from "@/components/HighlightedSummary";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
@@ -320,6 +322,8 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
       });
     }
 
+    const ingestMedia = parseIngestMedia(row.ingest_media);
+
     return (
       <>
         <AppHeader right={headerRight} />
@@ -337,6 +341,11 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
             </span>
           </p>
         </div>
+        {ingestMedia ? (
+          <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6">
+            <IngestMediaPanel materialId={row.id} media={ingestMedia} />
+          </div>
+        ) : null}
         <CoursePlayer
           key={row.id}
           mode="lessons"

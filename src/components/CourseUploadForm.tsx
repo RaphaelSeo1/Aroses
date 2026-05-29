@@ -2,41 +2,50 @@
 
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   describePdfIngestUploadFailure,
 } from "@/lib/storage-upload-errors";
-import {
-  MAX_STUDY_PDF_BYTES,
-  STUDY_PDF_INGEST_BUCKET,
-} from "@/lib/study-pdf-ingest";
+import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import type { PdfBuildProgressUI } from "@/lib/pdf-ingest-client";
+import { ingestStoragePathForFile } from "@/lib/study-ingest/client-upload";
+import {
+  describeIngestFile,
+  INGEST_SIZE_HINT,
+  validateIngestBatch,
+} from "@/lib/study-ingest/validate";
+import {
+  estimatedProcessingHint,
+  formatLabel,
+  INGEST_ACCEPT_ATTRIBUTE,
+  type IngestFormatKind,
+} from "@/lib/study-ingest/formats";
 
-/**
- * Per-file delay offset when starting multiple PDF builds in parallel.
- * Single/dual uploads start near-instantly; larger batches are spread out so
- * they don't all hit Anthropic in one wave (the server also has its own outline
- * slot gate, but spacing starts here reduces initial contention further).
- */
-function pdfIngestStartStaggerMs(total: number): number {
-  if (total <= 1) return 0;
-  // Tiny stagger just to avoid exact-simultaneous DB writes — the real work
-  // is async server-side, so we no longer need multi-second gaps.
-  if (total <= 3) return 150;
-  if (total <= 6) return 120;
-  return 100;
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function isPdfFile(f: File): boolean {
-  return (
-    f.type === "application/pdf" ||
-    f.name.toLowerCase().endsWith(".pdf")
-  );
+function fileKindIcon(kind: IngestFormatKind): string {
+  switch (kind) {
+    case "pdf":
+    case "word":
+    case "text":
+    case "markdown":
+    case "rtf":
+      return "📄";
+    case "slides":
+      return "📊";
+    case "image":
+      return "🖼";
+    case "audio":
+      return "🎧";
+    case "video":
+      return "🎬";
+    default:
+      return "📎";
+  }
 }
 
 /** Prefer API `{ error: string }`; otherwise explain status / body so we never hide gateway/HTML failures. */
@@ -112,6 +121,52 @@ export function CourseUploadForm({
     null
   );
   const [dragOver, setDragOver] = useState(false);
+  const [fileMeta, setFileMeta] = useState<
+    Record<string, { durationSec?: number; hint?: string }>
+  >({});
+
+  const fileKey = (f: File) => `${f.name}:${f.size}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    const next: Record<string, { durationSec?: number; hint?: string }> = {};
+    void (async () => {
+      for (const f of files) {
+        const d = describeIngestFile(f);
+        const key = fileKey(f);
+        if (!d) continue;
+        next[key] = { hint: estimatedProcessingHint(d.kind) };
+        if (d.kind === "audio" || d.kind === "video") {
+          const url = URL.createObjectURL(f);
+          try {
+            const el = document.createElement(
+              d.kind === "video" ? "video" : "audio"
+            );
+            el.preload = "metadata";
+            el.src = url;
+            await new Promise<void>((resolve, reject) => {
+              el.onloadedmetadata = () => resolve();
+              el.onerror = () => reject(new Error("metadata"));
+            });
+            if (!cancelled && Number.isFinite(el.duration)) {
+              next[key] = {
+                ...next[key],
+                durationSec: el.duration,
+              };
+            }
+          } catch {
+            /* ignore */
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+        }
+      }
+      if (!cancelled) setFileMeta(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [files]);
 
   /**
    * Rewrite the per-upload goal into a tight one-liner using the same
@@ -152,34 +207,42 @@ export function CourseUploadForm({
     }
   }, [studyGoal]);
 
-  const addPdfFiles = useCallback((list: FileList | File[] | null | undefined) => {
-    const arr = Array.from(list ?? []).filter(isPdfFile);
-    const nonPdf = Array.from(list ?? []).filter((f) => !isPdfFile(f));
-    if (nonPdf.length > 0 && arr.length === 0) {
-      setError("Please use PDF files (.pdf) only.");
-      return;
-    }
-    if (nonPdf.length > 0) {
-      setError(
-        `${nonPdf.length} non-PDF file(s) skipped. Only PDFs are added.`
-      );
-    } else {
-      setError(null);
-    }
-    setSuccess(null);
-    if (arr.length === 0) return;
-
-    setFiles((prev) => {
-      const next = [...prev];
-      for (const f of arr) {
-        const dup = next.some(
-          (x) => x.name === f.name && x.size === f.size
-        );
-        if (!dup) next.push(f);
+  const addIngestFiles = useCallback(
+    (list: FileList | File[] | null | undefined) => {
+      const incoming = Array.from(list ?? []);
+      const accepted: File[] = [];
+      const rejected: string[] = [];
+      for (const f of incoming) {
+        if (describeIngestFile(f)) accepted.push(f);
+        else rejected.push(f.name);
       }
-      return next;
-    });
-  }, []);
+      if (accepted.length === 0) {
+        setError(
+          rejected.length > 0
+            ? `Unsupported file type${rejected.length > 1 ? "s" : ""}: ${rejected.slice(0, 3).join(", ")}${rejected.length > 3 ? "…" : ""}. Try PDF, Word, slides, text, images, audio, or video.`
+            : "Choose a supported file type."
+        );
+        return;
+      }
+      if (rejected.length > 0) {
+        setError(
+          `${rejected.length} unsupported file(s) skipped. Supported: PDF, Word, PowerPoint, text, images, audio, video.`
+        );
+      } else {
+        setError(null);
+      }
+      setSuccess(null);
+      setFiles((prev) => {
+        const next = [...prev];
+        for (const f of accepted) {
+          const dup = next.some((x) => x.name === f.name && x.size === f.size);
+          if (!dup) next.push(f);
+        }
+        return next;
+      });
+    },
+    []
+  );
 
   function removeFile(index: number) {
     setFiles((prev) => prev.filter((_, i) => i !== index));
@@ -245,16 +308,29 @@ export function CourseUploadForm({
       return;
     }
     if (files.length === 0) {
-      setError("Choose or drop at least one PDF.");
+      setError("Choose or drop at least one file.");
       return;
     }
 
-    const queue = [...files];
-    const total = queue.length;
-    setLoading(true);
+    const descriptors = files
+      .map((f) => describeIngestFile(f))
+      .filter((d): d is NonNullable<typeof d> => d !== null);
+    const batchErr = validateIngestBatch(descriptors);
+    if (batchErr) {
+      setError(batchErr);
+      return;
+    }
 
-    const failures: string[] = [];
-    let lastMaterialId: string | undefined;
+    setLoading(true);
+    setBuildProgress({
+      line:
+        files.length > 1
+          ? `Uploading ${files.length} files for one course…`
+          : `${files[0].name} — Uploading…`,
+      bar: "indeterminate",
+    });
+
+    const uploadedPaths: string[] = [];
 
     try {
       const supabase = createClient();
@@ -269,74 +345,26 @@ export function CourseUploadForm({
       }
 
       const userId = user.id;
+      const apiFiles: { storagePath: string; originalFileName: string }[] = [];
 
-      const lineByIndex = new Map<number, PdfBuildProgressUI>();
-      const emitProgress = (fileIndex: number, p: PdfBuildProgressUI) => {
-        if (total === 1) {
-          setBuildProgress(p);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const pathInfo = ingestStoragePathForFile(userId, file);
+        if (!pathInfo) {
+          setError(`${file.name}: unsupported format.`);
+          setLoading(false);
           return;
         }
-        lineByIndex.set(fileIndex, p);
-        const ordered = [...lineByIndex.entries()]
-          .sort((a, b) => a[0] - b[0])
-          .map(([, v]) => v.line);
-        const bars = [...lineByIndex.values()].map((v) => v.bar);
-        let bar: PdfBuildProgressUI["bar"] = "indeterminate";
-        if (!bars.some((b) => b === "indeterminate" || b === null)) {
-          const nums = bars.filter((x): x is number => typeof x === "number");
-          bar = nums.length
-            ? nums.reduce((a, b) => a + b, 0) / nums.length
-            : null;
-        } else if (bars.every((b) => b === null)) {
-          bar = null;
-        }
+
         setBuildProgress({
-          line:
-            `${total} PDFs · starting with short spacing so they can build sooner\n${ordered.join("\n")}`,
-          bar,
-        });
-      };
-
-      type StartOkJob = {
-        ok: true;
-        mode: "job";
-        jobId: string;
-        fileName: string;
-      };
-      type StartOkMat = {
-        ok: true;
-        mode: "material";
-        materialId: string;
-        fileName: string;
-      };
-      type StartFail = { ok: false; failure: string };
-      type StartResult = StartOkJob | StartOkMat | StartFail;
-
-      async function startOnePdf(
-        file: File,
-        fileIndex: number
-      ): Promise<StartResult> {
-        emitProgress(fileIndex, {
-          line:
-            total > 1
-              ? `${fileIndex + 1}/${total}: ${file.name} — Uploading…`
-              : `${file.name} — Uploading…`,
+          line: `Uploading ${i + 1}/${files.length}: ${file.name}…`,
           bar: "indeterminate",
         });
 
-        if (file.size > MAX_STUDY_PDF_BYTES) {
-          return {
-            ok: false,
-            failure: `${file.name}: PDF is too large (max 150 MB). Split the file or export fewer pages.`,
-          };
-        }
-
-        const storagePath = `${userId}/${crypto.randomUUID()}.pdf`;
-
         const { error: upErr } = await supabase.storage
           .from(STUDY_PDF_INGEST_BUCKET)
-          .upload(storagePath, file, {
-            contentType: "application/pdf",
+          .upload(pathInfo.storagePath, file, {
+            contentType: pathInfo.contentType,
             cacheControl: "3600",
             upsert: false,
           });
@@ -346,166 +374,93 @@ export function CourseUploadForm({
             typeof upErr === "object" && upErr && "message" in upErr
               ? String((upErr as { message: unknown }).message)
               : String(upErr);
-          return {
-            ok: false,
-            failure: `${file.name}: ${describePdfIngestUploadFailure(detail)}`,
-          };
-        }
-
-        let res: Response;
-        try {
-          res = await fetch("/api/process-pdf", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              courseId,
-              examGroupId,
-              storagePath,
-              originalFileName: file.name,
-              // Per-upload goal — overrides the course-level study_context
-              // for this lecture only. Sent for every file in the batch so
-              // the runner sees the user's most recent intent.
-              studyContext: studyGoal.trim() || undefined,
-            }),
-          });
-        } catch {
           await supabase.storage
             .from(STUDY_PDF_INGEST_BUCKET)
-            .remove([storagePath])
+            .remove(uploadedPaths)
             .catch(() => {});
-          return {
-            ok: false,
-            failure: `${file.name}: Network error while starting build.`,
-          };
+          setError(`${file.name}: ${describePdfIngestUploadFailure(detail)}`);
+          setLoading(false);
+          return;
         }
 
-        const raw = await res.text();
-
-        if (!res.ok) {
-          return {
-            ok: false,
-            failure: `${file.name}: ${messageFromUploadResponse(res, raw)}`,
-          };
-        }
-
-        try {
-          const body = JSON.parse(raw) as {
-            materialId?: string;
-            jobId?: string;
-          };
-          if (typeof body.materialId === "string" && body.materialId) {
-            return {
-              ok: true,
-              mode: "material",
-              materialId: body.materialId,
-              fileName: file.name,
-            };
-          }
-          if (typeof body.jobId === "string" && body.jobId) {
-            emitProgress(fileIndex, {
-              line:
-                total > 1
-                  ? `${fileIndex + 1}/${total}: ${file.name} — Build started`
-                  : `${file.name} — Build started`,
-              bar: "indeterminate",
-            });
-            return {
-              ok: true,
-              mode: "job",
-              jobId: body.jobId,
-              fileName: file.name,
-            };
-          }
-        } catch {
-          return {
-            ok: false,
-            failure: `${file.name}: Invalid response from server.`,
-          };
-        }
-
-        return {
-          ok: false,
-          failure: `${file.name}: Invalid response from server (missing material id).`,
-        };
+        uploadedPaths.push(pathInfo.storagePath);
+        apiFiles.push({
+          storagePath: pathInfo.storagePath,
+          originalFileName: file.name,
+        });
       }
 
-      const startResults: StartResult[] = new Array(total);
-      const spacingMs = pdfIngestStartStaggerMs(total);
-      await Promise.all(
-        queue.map(async (file, fileIndex) => {
-          if (fileIndex > 0 && spacingMs > 0) {
-            await sleep(fileIndex * spacingMs);
-          }
-          startResults[fileIndex] = await startOnePdf(file, fileIndex);
-        })
-      );
+      setBuildProgress({
+        line: "Starting course build…",
+        bar: "indeterminate",
+      });
 
-      const jobs = startResults.filter(
-        (r): r is StartOkJob => Boolean(r?.ok && r.mode === "job")
-      );
-      const mats = startResults.filter(
-        (r): r is StartOkMat => Boolean(r?.ok && r.mode === "material")
-      );
-      const startFails = startResults.filter(
-        (r): r is StartFail => Boolean(r && !r.ok)
-      );
-
-      for (const f of startFails) {
-        failures.push(f.failure);
-      }
-
-      if (jobs.length > 0) {
-        setBuildProgress(null);
-        setFiles([]);
-        const qs = new URLSearchParams();
-        qs.set("pdfJobs", jobs.map((j) => j.jobId).join(","));
-        qs.set("section", examGroupId);
-        router.push(
-          `/dashboard/courses/${courseId}/study/build?${qs.toString()}`
-        );
+      let res: Response;
+      try {
+        res = await fetch("/api/process-pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            courseId,
+            examGroupId,
+            files: apiFiles,
+            studyContext: studyGoal.trim() || undefined,
+          }),
+        });
+      } catch {
+        await supabase.storage
+          .from(STUDY_PDF_INGEST_BUCKET)
+          .remove(uploadedPaths)
+          .catch(() => {});
+        setError("Network error while starting build.");
         setLoading(false);
-        if (startFails.length > 0) {
-          setError(
-            `${jobs.length} build(s) opened in study view. These files did not start:\n${startFails.map((x) => x.failure).join("\n")}`
-          );
-        }
         return;
       }
 
-      for (const m of mats) {
-        lastMaterialId = m.materialId;
+      const raw = await res.text();
+      if (!res.ok) {
+        await supabase.storage
+          .from(STUDY_PDF_INGEST_BUCKET)
+          .remove(uploadedPaths)
+          .catch(() => {});
+        setError(messageFromUploadResponse(res, raw));
+        setLoading(false);
+        return;
+      }
+
+      let body: { materialId?: string; jobId?: string };
+      try {
+        body = JSON.parse(raw) as { materialId?: string; jobId?: string };
+      } catch {
+        setError("Invalid response from server.");
+        setLoading(false);
+        return;
       }
 
       setBuildProgress(null);
       setFiles([]);
 
-      if (total === 1 && failures.length === 0 && lastMaterialId) {
+      if (typeof body.jobId === "string" && body.jobId) {
+        const qs = new URLSearchParams();
+        qs.set("pdfJobs", body.jobId);
+        qs.set("section", examGroupId);
         router.push(
-          `/dashboard/courses/${courseId}/study?material=${encodeURIComponent(lastMaterialId)}`
+          `/dashboard/courses/${courseId}/study/build?${qs.toString()}`
         );
-        router.refresh();
+        setLoading(false);
         return;
       }
 
-      router.refresh();
-
-      if (failures.length > 0) {
-        const okCount = total - failures.length;
-        setError(
-          okCount > 0
-            ? `${okCount} of ${total} built successfully.\n${failures.join("\n")}`
-            : failures.join("\n")
+      if (typeof body.materialId === "string" && body.materialId) {
+        router.push(
+          `/dashboard/courses/${courseId}/study?material=${encodeURIComponent(body.materialId)}`
         );
-        if (okCount > 0) {
-          setSuccess(`${okCount} upload(s) ready under this section.`);
-        }
-      } else {
-        setSuccess(
-          total === 1
-            ? "Upload ready — open it from the list below."
-            : `Built ${total} study sets — they appear in this group below.`
-        );
+        router.refresh();
+        setLoading(false);
+        return;
       }
+
+      setError("Invalid response from server (missing job id).");
     } catch {
       setBuildProgress(null);
       setError("Network error. Check your connection.");
@@ -543,7 +498,7 @@ export function CourseUploadForm({
     e.stopPropagation();
     dragDepthRef.current = 0;
     setDragOver(false);
-    addPdfFiles(e.dataTransfer.files);
+    addIngestFiles(e.dataTransfer.files);
   }
 
   if (!examGroupId) {
@@ -630,19 +585,19 @@ export function CourseUploadForm({
 
       <div>
         <span className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          PDF or lecture slides
+          Study materials
         </span>
 
         <input
           ref={inputRef}
-          id="pdf"
-          name="pdf"
+          id="study-ingest"
+          name="study-ingest"
           type="file"
-          accept="application/pdf,.pdf"
+          accept={INGEST_ACCEPT_ATTRIBUTE}
           multiple
           className="sr-only"
           onChange={(e) => {
-            addPdfFiles(e.target.files);
+            addIngestFiles(e.target.files);
             e.target.value = "";
           }}
         />
@@ -661,10 +616,16 @@ export function CourseUploadForm({
           }`}
         >
           <span className="pointer-events-none text-sm font-medium text-zinc-800 dark:text-zinc-100">
-            {dragOver ? "Drop PDFs here" : "Drag & drop PDFs here"}
+            {dragOver
+              ? "Drop files here"
+              : "Drag and drop your study material here"}
           </span>
           <span className="pointer-events-none mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-            or click to browse — you can select multiple files
+            PDFs, Word docs, slides, videos, audio, or images — multiple files
+            build one course
+          </span>
+          <span className="pointer-events-none mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+            Limits: {INGEST_SIZE_HINT}
           </span>
         </button>
 
@@ -672,7 +633,7 @@ export function CourseUploadForm({
           <>
             {files.length > 1 ? (
               <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-                Drag the handle to reorder — PDFs build in this order.
+                Drag to reorder — all files are combined into one course.
               </p>
             ) : null}
             <ul className="mt-2 space-y-2">
@@ -714,8 +675,27 @@ export function CourseUploadForm({
                         </svg>
                       </span>
                     ) : null}
-                    <span className="min-w-0 flex-1 truncate font-medium text-zinc-900 dark:text-zinc-100">
-                      {file.name}
+                    <span className="shrink-0 text-base" aria-hidden>
+                      {fileKindIcon(
+                        describeIngestFile(file)?.kind ?? "pdf"
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-zinc-900 dark:text-zinc-100">
+                        {file.name}
+                      </span>
+                      <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                        {formatLabel(
+                          describeIngestFile(file)?.kind ?? "pdf"
+                        )}{" "}
+                        · {formatFileSize(file.size)}
+                        {fileMeta[fileKey(file)]?.durationSec != null
+                          ? ` · ${Math.round(fileMeta[fileKey(file)]!.durationSec! / 60)} min`
+                          : ""}
+                        {fileMeta[fileKey(file)]?.hint
+                          ? ` · ${fileMeta[fileKey(file)]!.hint}`
+                          : ""}
+                      </span>
                     </span>
                     <button
                       type="button"
@@ -733,9 +713,10 @@ export function CourseUploadForm({
         )}
 
         <p className="mt-2 text-xs text-zinc-500">
-          PDFs with selectable text work best; scanned pages may not extract reliably.
-          After upload you&apos;ll open the study build view. Large files can take
-          several minutes—keep this tab open.
+          Your files are private to your account. Make sure you have permission
+          to use copyrighted material. Videos and audio are transcribed (up to
+          25MB per file for transcription). Processing can take several minutes
+          for long recordings.
         </p>
       </div>
 
@@ -790,7 +771,7 @@ export function CourseUploadForm({
         {loading
           ? "Building…"
           : files.length > 1
-            ? `Upload & build ${files.length} courses`
+            ? `Upload & build course (${files.length} files)`
             : "Upload & build course"}
       </button>
     </form>

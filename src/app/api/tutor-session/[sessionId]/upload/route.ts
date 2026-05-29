@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import {
-  summarizeImageUpload,
-  summarizePdfUpload,
-} from "@/lib/ai/tutor-session";
-import { extractPdfText } from "@/lib/pdf-text/extract";
 import type { TutorSessionUpload } from "@/types/tutor-session";
+import {
+  extractTutorSessionUpload,
+  TUTOR_SESSION_MAX_FILES,
+  TUTOR_SESSION_MAX_TOTAL_BYTES,
+} from "@/lib/tutor-session/extract-upload";
+import { detectIngestFormat } from "@/lib/study-ingest/formats";
 
 /**
  * POST /api/tutor-session/[sessionId]/upload
@@ -28,16 +29,8 @@ import type { TutorSessionUpload } from "@/types/tutor-session";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const MAX_FILES = 5;
-const MAX_FILE_BYTES = 12 * 1024 * 1024;
-const VALID_PDF_MIMES = ["application/pdf"];
-const VALID_IMAGE_MIMES = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-];
-const VALID_TEXT_MIMES = ["text/plain", "text/markdown"];
+const MAX_FILES = TUTOR_SESSION_MAX_FILES;
+const MAX_TOTAL_BYTES = TUTOR_SESSION_MAX_TOTAL_BYTES;
 
 type Params = { params: Promise<{ sessionId: string }> };
 
@@ -93,13 +86,21 @@ export async function POST(request: Request, ctx: Params) {
       { status: 400 }
     );
   }
+  let totalBytes = 0;
   for (const f of fileEntries) {
-    if (f.size > MAX_FILE_BYTES) {
+    if (!detectIngestFormat(f.name, f.type)) {
       return NextResponse.json(
-        { error: `File "${f.name}" exceeds the 12 MB limit.` },
-        { status: 413 }
+        { error: `Unsupported file type: ${f.name}` },
+        { status: 400 }
       );
     }
+    totalBytes += f.size;
+  }
+  if (totalBytes > MAX_TOTAL_BYTES) {
+    return NextResponse.json(
+      { error: "Combined upload exceeds 200MB." },
+      { status: 413 }
+    );
   }
 
   const newSummaries: string[] = [];
@@ -109,14 +110,17 @@ export async function POST(request: Request, ctx: Params) {
   for (const file of fileEntries) {
     const buf = Buffer.from(await file.arrayBuffer());
     const mime = file.type || "application/octet-stream";
-    let kind: "pdf" | "image" | "text";
-    if (VALID_PDF_MIMES.includes(mime)) kind = "pdf";
-    else if (VALID_IMAGE_MIMES.includes(mime)) kind = "image";
-    else if (VALID_TEXT_MIMES.includes(mime)) kind = "text";
-    else {
+    const formatKind = detectIngestFormat(file.name, mime);
+    if (!formatKind) {
       failedFiles.push(`${file.name} (unsupported type)`);
       continue;
     }
+    const fileKind: "pdf" | "image" | "text" =
+      formatKind === "pdf"
+        ? "pdf"
+        : formatKind === "image"
+          ? "image"
+          : "text";
 
     const safeName = file.name.replace(/[^\w.\-]+/g, "_").slice(0, 120);
     const storagePath = `${user.id}/${sessionId}/${Date.now()}-${safeName}`;
@@ -132,40 +136,18 @@ export async function POST(request: Request, ctx: Params) {
     let extractedContent = "";
     let summary = "";
     try {
-      if (kind === "pdf") {
-        extractedContent = (await extractPdfText(buf)).slice(0, 30_000);
-        summary = extractedContent
-          ? await summarizePdfUpload({
-              fileName: file.name,
-              extractedText: extractedContent,
-            })
-          : `(${file.name} — couldn't extract text; might be a scanned PDF.)`;
-      } else if (kind === "image") {
-        const base64 = buf.toString("base64");
-        const mediaType = mime as
-          | "image/jpeg"
-          | "image/png"
-          | "image/gif"
-          | "image/webp";
-        summary = await summarizeImageUpload({
-          fileName: file.name,
-          imageBase64: base64,
-          mediaType,
-        });
-        extractedContent = summary;
-      } else {
-        const text = buf.toString("utf-8").slice(0, 30_000);
-        extractedContent = text;
-        summary = text
-          ? await summarizePdfUpload({
-              fileName: file.name,
-              extractedText: text,
-            })
-          : `(${file.name})`;
-      }
+      const result = await extractTutorSessionUpload({
+        buffer: buf,
+        fileName: file.name,
+        mimeType: mime,
+      });
+      extractedContent = result.extractedContent;
+      summary = result.summary;
     } catch (e) {
+      const msg = e instanceof Error ? e.message : "extract failed";
       console.error("[tutor-session upload extract]", e);
-      summary = `(${file.name} — couldn't read this; ask Rose to ignore it.)`;
+      failedFiles.push(`${file.name} (${msg})`);
+      continue;
     }
 
     const { data: uploadRow, error: insertError } = await supabase
@@ -174,7 +156,7 @@ export async function POST(request: Request, ctx: Params) {
         session_id: sessionId,
         user_id: user.id,
         file_name: file.name,
-        file_kind: kind,
+        file_kind: fileKind,
         mime_type: mime,
         size_bytes: file.size,
         storage_path: storagePath,

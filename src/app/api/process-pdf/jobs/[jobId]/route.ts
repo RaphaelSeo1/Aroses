@@ -61,7 +61,7 @@ export async function GET(_request: Request, ctx: Params) {
   const { data: row, error } = await supabase
     .from("pdf_ingest_jobs")
     .select(
-      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_preview_outline, ingest_modules, original_file_name, stream_preview, ingest_phase, ingest_epoch"
+      "status, material_id, error_message, updated_at, created_at, ingest_outline, ingest_preview_outline, ingest_modules, original_file_name, stream_preview, ingest_phase, ingest_epoch, ingest_transcript, source_format"
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -182,6 +182,7 @@ export async function GET(_request: Request, ctx: Params) {
     ingestPhaseRawEarly === "reading_pdf" ||
     ingestPhaseRawEarly === "reading_full_pdf" ||
     ingestPhaseRawEarly === "planning_outline" ||
+    ingestPhaseRawEarly === "transcribing" ||
     ingestPhaseRawEarly === null ||
     ingestPhaseRawEarly === undefined ||
     ingestPhaseRawEarly === "";
@@ -343,9 +344,16 @@ export async function GET(_request: Request, ctx: Params) {
     ingestPhaseRaw === "digesting_full_pdf" ||
     ingestPhaseRaw === "planning_preview" ||
     ingestPhaseRaw === "planning_outline" ||
-    ingestPhaseRaw === "writing_modules"
+    ingestPhaseRaw === "writing_modules" ||
+    ingestPhaseRaw === "reviewing_transcript" ||
+    ingestPhaseRaw === "transcribing"
       ? ingestPhaseRaw
       : null;
+
+  const ingestTranscript =
+    typeof (row as { ingest_transcript?: unknown }).ingest_transcript === "string"
+      ? (row as { ingest_transcript: string }).ingest_transcript
+      : undefined;
 
   let previewCourse: CoursePayload | null = null;
   if (
@@ -383,6 +391,7 @@ export async function GET(_request: Request, ctx: Params) {
     originalFileName,
     streamPreview,
     ingestPhase,
+    ingestTranscript,
     previewCourse,
   });
 }
