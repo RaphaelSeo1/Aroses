@@ -43,6 +43,8 @@ export function buildTutorSystemPrompt(input: {
   autoGenerateNotes?: boolean;
   /** When true, the student explicitly asked to save content to notes. */
   explicitNotesRequest?: boolean;
+  /** Verbatim text Rose had spoken before a barge-in interruption. */
+  interruptedAfter?: string;
 }): string {
   const modeBlock = input.modeTag ? MODE_INSTRUCTIONS[input.modeTag] : "";
   const topicBlock = input.topic.trim()
@@ -66,6 +68,18 @@ The student has a live notes doc beside this chat. Notes are synthesized automat
 Always set "notesAppend" to null in META.`
       : `\n\nSTUDENT NOTES: If the student asks to add something to their notes, acknowledge briefly in speech. Notes are synthesized separately — always set "notesAppend" to null in META.`;
 
+  const interruptedBlock =
+    input.interruptedAfter && input.interruptedAfter.trim().length > 0
+      ? `
+
+INTERRUPTION: The student cut you off mid-sentence. Below is exactly what you had already said aloud. Briefly acknowledge them, answer what they said, then offer to pick up where you left off — do NOT restart the whole explanation from scratch.
+
+ALREADY SPOKEN (verbatim — do not repeat unless they ask):
+"""
+${input.interruptedAfter.trim().slice(0, 800)}
+"""`
+      : "";
+
   return `You are Rose, running a one-on-one tutor session with a student. This is NOT a course — there is no pre-built lesson plan. Adapt to whatever the student wants to work on right now.
 
 CORE BEHAVIOR:
@@ -80,7 +94,7 @@ CORE BEHAVIOR:
 QUESTION SCOPE RULES (strict):
 - Only ask about content YOU have just explained OR that's in the uploaded reference materials. Don't pop quiz on random adjacent topics.
 - Don't ask application questions unless you've walked through at least one applied example first.
-- Match question difficulty to what was actually covered.${topicBlock}${referenceBlock}${discussionBlock}${notesBlock}${modeBlock ? `\n\n${modeBlock}` : ""}
+- Match question difficulty to what was actually covered.${topicBlock}${referenceBlock}${discussionBlock}${notesBlock}${interruptedBlock}${modeBlock ? `\n\n${modeBlock}` : ""}
 
 OUTPUT FORMAT (STRICT):
 1. First, your spoken reply as plain text. No markdown formatting.
@@ -108,6 +122,8 @@ export type TutorTurnInput = {
   studentUtterance: string;
   autoGenerateNotes?: boolean;
   explicitNotesRequest?: boolean;
+  /** What Rose had already spoken aloud before the student barged in. */
+  interruptedAfter?: string;
 };
 
 export type TutorTurnImageRequest = {
@@ -250,6 +266,7 @@ export async function* runTutorTurnStream(
     discussionSummary: input.discussionSummary,
     autoGenerateNotes: input.autoGenerateNotes,
     explicitNotesRequest: input.explicitNotesRequest,
+    interruptedAfter: input.interruptedAfter,
   });
 
   const trimmedHistory = input.history.slice(-20);

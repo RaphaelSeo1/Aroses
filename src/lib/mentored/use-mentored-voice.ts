@@ -77,6 +77,10 @@ export function useMentoredVoice(opts: {
    * watch for barge-in if we're not speaking).
    */
   bargeInEnabled?: boolean;
+  /** RMS threshold for barge-in detection (default 0.07). Higher = less sensitive. */
+  bargeRms?: number;
+  /** Ms of sustained voice above threshold before barge-in fires (default 220). */
+  bargeSustainMs?: number;
 }) {
   const playbackRate = opts.playbackRate ?? 1;
   /** Live ref so mid-utterance speed changes apply to the next sentence/chunk. */
@@ -88,6 +92,8 @@ export function useMentoredVoice(opts: {
     }
   }, [playbackRate]);
   const bargeInEnabled = opts.bargeInEnabled !== false;
+  const bargeRms = opts.bargeRms ?? BARGE_RMS;
+  const bargeSustainMs = opts.bargeSustainMs ?? BARGE_SUSTAIN_MS;
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speakAbortRef = useRef<AbortController | null>(null);
@@ -193,11 +199,11 @@ export function useMentoredVoice(opts: {
         }
         const rms = Math.sqrt(sum / buf.length);
         const now = performance.now();
-        if (rms >= BARGE_RMS) {
+        if (rms >= bargeRms) {
           if (bargeStartAtRef.current === 0) bargeStartAtRef.current = now;
           else if (
             !bargeFiredRef.current &&
-            now - bargeStartAtRef.current >= BARGE_SUSTAIN_MS
+            now - bargeStartAtRef.current >= bargeSustainMs
           ) {
             bargeFiredRef.current = true;
             // Tear down the speech + invoke callback. Caller decides what
@@ -230,7 +236,7 @@ export function useMentoredVoice(opts: {
       console.warn("[useMentoredVoice barge monitor]", e);
       stopBargeMonitor();
     }
-  }, [bargeInEnabled, stopBargeMonitor]);
+  }, [bargeInEnabled, bargeRms, bargeSustainMs, stopBargeMonitor]);
 
   // ----- speak -----
   const cancelSpeak = useCallback(() => {

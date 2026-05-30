@@ -13,6 +13,8 @@ import {
   studentRequestedNotesSave,
 } from "@/lib/mentored/build-auto-notes-from-tutor-turn";
 import { autoGenLog } from "@/lib/mentored/auto-generate-log";
+import { isLikelyNoiseTranscript } from "@/lib/mentored/is-likely-noise-transcript";
+import { isTutorTurnEligibleForNotes } from "@/lib/ai/synthesize-tutor-notes";
 import type {
   TutorSessionRecord,
   TutorSessionUpload,
@@ -184,6 +186,10 @@ export function TutorSessionRunner({
     // mouse-down on the mic button — otherwise room noise or the
     // speaker bleed triggers Rose to "hear" nothing and respond.
     bargeInEnabled: voiceMode === "live",
+    // Tutor sessions: stricter than mentored — coughs / room noise
+    // should not cut Rose off mid-sentence.
+    bargeRms: 0.11,
+    bargeSustainMs: 420,
   });
 
   const abortVoiceCapture = useCallback(async () => {
@@ -218,6 +224,7 @@ export function TutorSessionRunner({
   const autoGenerateNotesRef = useRef(false);
   const [notesEditorReady, setNotesEditorReady] = useState(false);
   const notesAppendedTurnRef = useRef<Set<string>>(new Set());
+  const notesSynthesisInFlightRef = useRef(false);
 
   useEffect(() => {
     autoGenerateNotesRef.current = autoGenerateNotes;
@@ -258,6 +265,14 @@ export function TutorSessionRunner({
       studentUtterance?: string,
       opts?: { skipDedupe?: boolean }
     ) => {
+      if (!opts?.skipDedupe && notesAppendedTurnRef.current.has(turnKey)) {
+        autoGenLog("tutor synthesize skipped — turn already noted", { turnKey });
+        return false;
+      }
+      if (notesSynthesisInFlightRef.current && !opts?.skipDedupe) {
+        autoGenLog("tutor synthesize skipped — backfill in flight", { turnKey });
+        return false;
+      }
       autoGenLog("tutor synthesize notes start", {
         turnKey,
         roseLen: roseReply.length,
@@ -302,31 +317,96 @@ export function TutorSessionRunner({
     [appendNotesBlock, initial.id, initial.title]
   );
 
+  const markAllAssistantTurnsNoted = useCallback(() => {
+    for (const m of messagesRef.current) {
+      if (m.role === "assistant") {
+        notesAppendedTurnRef.current.add(m.id);
+      }
+    }
+  }, []);
+
+  const backfillSessionNotes = useCallback(async () => {
+    const handle = notesPanelRef.current;
+    if (!handle || !notesEditorReady) {
+      autoGenLog("tutor backfill skipped — editor not ready");
+      return;
+    }
+    if (handle.hasContent()) {
+      autoGenLog("tutor backfill skipped — notes already exist");
+      return;
+    }
+    if (notesSynthesisInFlightRef.current) {
+      autoGenLog("tutor backfill skipped — synthesis in flight");
+      return;
+    }
+
+    const hasEligible = messagesRef.current.some(
+      (m) =>
+        m.role === "assistant" &&
+        isTutorTurnEligibleForNotes("assistant", m.content)
+    );
+    if (!hasEligible) {
+      autoGenLog("tutor backfill skipped — no eligible teaching turns");
+      return;
+    }
+
+    notesSynthesisInFlightRef.current = true;
+    autoGenLog("tutor backfill start", { sessionId: initial.id });
+
+    try {
+      const res = await fetch(
+        `/api/tutor-session/${initial.id}/synthesize-notes`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ backfill: true }),
+        }
+      );
+      if (!res.ok) {
+        autoGenLog("tutor backfill failed", { status: res.status });
+        return;
+      }
+      const data = (await res.json()) as { blocks?: AutoGenerateBlock[] };
+      const blocks = data.blocks ?? [];
+      if (blocks.length === 0) return;
+
+      let appended = 0;
+      for (const block of blocks) {
+        const key = `backfill-${block.heading?.trim() || appended}`;
+        if (appendNotesBlock(block, key)) appended += 1;
+      }
+      if (appended > 0) {
+        markAllAssistantTurnsNoted();
+      }
+      autoGenLog("tutor backfill done", { sectionCount: blocks.length, appended });
+    } catch (e) {
+      console.error("[TutorSessionRunner backfillSessionNotes]", e);
+      autoGenLog("tutor backfill error");
+    } finally {
+      notesSynthesisInFlightRef.current = false;
+    }
+  }, [
+    appendNotesBlock,
+    initial.id,
+    markAllAssistantTurnsNoted,
+    notesEditorReady,
+  ]);
+
   const handleAutoGenerateUserToggle = useCallback(
     (next: boolean) => {
       autoGenLog("tutor user toggle auto-generate", { next });
       if (!next) return;
-      const msgs = messagesRef.current;
-      const lastAssistant = [...msgs]
-        .reverse()
-        .find((m) => m.role === "assistant" && !m.streaming && m.content.trim());
-      if (!lastAssistant) return;
-      const assistantIdx = msgs.findIndex((m) => m.id === lastAssistant.id);
-      const priorStudent =
-        assistantIdx > 0
-          ? [...msgs.slice(0, assistantIdx)]
-              .reverse()
-              .find((m) => m.role === "user" && m.content.trim())
-          : undefined;
-      void synthesizeAndAppendNotes(
-        `toggle-${lastAssistant.id}`,
-        lastAssistant.content,
-        priorStudent?.content,
-        { skipDedupe: true }
-      );
+      void backfillSessionNotes();
     },
-    [synthesizeAndAppendNotes]
+    [backfillSessionNotes]
   );
+
+  // When auto-generate is already on (e.g. resumed session) and notes
+  // are empty, backfill once from the full transcript.
+  useEffect(() => {
+    if (!notesEditorReady || !autoGenerateNotes) return;
+    void backfillSessionNotes();
+  }, [autoGenerateNotes, backfillSessionNotes, notesEditorReady]);
 
   // ----- mid-session uploads -----
   // Local mirror of the session's uploads — seeded from `initial`,
@@ -354,6 +434,19 @@ export function TutorSessionRunner({
   // the Mentored Learning behavior so voice and captions stay in
   // lockstep. The ref is reset at the start of every assistant turn.
   const revealedSentencesRef = useRef<string[]>([]);
+
+  /** Active turn TTS — used to resume after false barge-ins (coughs). */
+  type ActiveTurnVoice = {
+    generation: number;
+    assistantId: string;
+    sentences: string[];
+    spokenCount: number;
+    streamDone: boolean;
+  };
+  const activeTurnVoiceRef = useRef<ActiveTurnVoice | null>(null);
+  const turnVoiceGenerationRef = useRef(0);
+  const resumeTurnPlaybackRef = useRef<(() => Promise<void>) | null>(null);
+  const interruptedContextRef = useRef<string | null>(null);
 
   // ----- auto-scroll the feed on new content -----
   useEffect(() => {
@@ -551,50 +644,74 @@ export function TutorSessionRunner({
       }
       revealedSentencesRef.current = [];
 
-      // Sentence pump for TTS — consumes deltas as they form.
-      const sentenceQueue: string[] = [];
-      let streamDone = false;
-      const sentenceIterable: AsyncIterable<string> = {
-        [Symbol.asyncIterator]() {
-          return {
-            async next(): Promise<IteratorResult<string>> {
-              while (sentenceQueue.length === 0 && !streamDone) {
-                await new Promise((r) => setTimeout(r, 30));
-              }
-              if (sentenceQueue.length > 0) {
-                return { value: sentenceQueue.shift() as string, done: false };
-              }
-              return { value: "", done: true };
-            },
-          };
-        },
+      const turnGen = ++turnVoiceGenerationRef.current;
+      const turnVoice: ActiveTurnVoice = {
+        generation: turnGen,
+        assistantId,
+        sentences: [],
+        spokenCount: 0,
+        streamDone: false,
+      };
+      activeTurnVoiceRef.current = turnVoice;
+
+      const revealSentence = (sentence: string) => {
+        const s = sentence.trim();
+        if (!s) return;
+        revealedSentencesRef.current = [...revealedSentencesRef.current, s];
+        const revealed = revealedSentencesRef.current.join(" ");
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: revealed } : m
+          )
+        );
       };
 
-      // §12 — Live caption sync. Captions are appended to the
-      // assistant bubble ONLY when the matching sentence is actually
-      // being spoken. When TTS fails for a particular sentence we
-      // still reveal it (info.failed === true) so the student isn't
-      // staring at an empty bubble.
-      voice
-        .speakSentenceStream(sentenceIterable, {
-          onSentencePlaying: (sentence) => {
-            const s = sentence.trim();
-            if (!s) return;
-            revealedSentencesRef.current = [
-              ...revealedSentencesRef.current,
-              s,
-            ];
-            const revealed = revealedSentencesRef.current.join(" ");
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId ? { ...m, content: revealed } : m
-              )
-            );
-          },
-        })
-        .catch((e) => {
-          console.error("[TutorSessionRunner speakSentenceStream]", e);
-        });
+      const runTurnPlayback = async (fromIndex: number) => {
+        if (turnVoice.generation !== turnGen) return;
+        voice.cancelSpeak();
+        async function* sentenceSource(): AsyncGenerator<string> {
+          let idx = fromIndex;
+          while (true) {
+            while (idx >= turnVoice.sentences.length && !turnVoice.streamDone) {
+              await new Promise((r) => setTimeout(r, 25));
+            }
+            if (idx >= turnVoice.sentences.length && turnVoice.streamDone) {
+              return;
+            }
+            yield turnVoice.sentences[idx]!;
+            idx += 1;
+          }
+        }
+        try {
+          await voice.speakSentenceStream(sentenceSource(), {
+            onSentencePlaying: (sentence, relativeIndex, info) => {
+              const absoluteIndex = fromIndex + relativeIndex;
+              if (absoluteIndex >= turnVoice.spokenCount) {
+                turnVoice.spokenCount = absoluteIndex + 1;
+                revealSentence(sentence);
+              }
+              if (info?.failed) {
+                console.warn("[TutorSessionRunner] TTS failed for sentence", {
+                  preview: sentence.slice(0, 60),
+                });
+              }
+            },
+          });
+        } catch (e) {
+          console.error("[TutorSessionRunner runTurnPlayback]", e);
+        }
+      };
+
+      resumeTurnPlaybackRef.current = async () => {
+        const turn = activeTurnVoiceRef.current;
+        if (!turn || turn.generation !== turnGen) return;
+        if (turn.spokenCount >= turn.sentences.length && turn.streamDone) {
+          return;
+        }
+        await runTurnPlayback(turn.spokenCount);
+      };
+
+      void runTurnPlayback(0);
 
       // SSE stream.
       let buffered = "";
@@ -608,18 +725,21 @@ export function TutorSessionRunner({
         while ((m = SENTENCE_RE.exec(buffered))) {
           const end = m.index + m[0].length;
           const sentence = buffered.slice(lastIdx, end).trim();
-          if (sentence.length > 0) sentenceQueue.push(sentence);
+          if (sentence.length > 0) turnVoice.sentences.push(sentence);
           lastIdx = end;
         }
         lastFlushedAt = lastIdx;
         if (force) {
           const tail = buffered.slice(lastIdx).trim();
-          if (tail.length > 0) sentenceQueue.push(tail);
+          if (tail.length > 0) turnVoice.sentences.push(tail);
           lastFlushedAt = buffered.length;
         }
       }
 
       let turnIntent = "other";
+
+      const interruptedAfter = interruptedContextRef.current;
+      if (interruptedAfter) interruptedContextRef.current = null;
 
       try {
         const res = await fetch(
@@ -632,6 +752,7 @@ export function TutorSessionRunner({
               autoGenerateNotes: autoGenerateNotes && !isSystem,
               explicitNotesRequest,
               systemTurn: isSystem,
+              interruptedAfter: interruptedAfter ?? undefined,
             }),
           }
         );
@@ -702,7 +823,7 @@ export function TutorSessionRunner({
           }
         }
         flushSentences(true);
-        streamDone = true;
+        turnVoice.streamDone = true;
         const finalContent =
           revealedSentencesRef.current.length > 0
             ? revealedSentencesRef.current.join(" ")
@@ -718,7 +839,7 @@ export function TutorSessionRunner({
         }
         if (
           !isSystem &&
-          finalContent.length > 40 &&
+          isTutorTurnEligibleForNotes("assistant", finalContent) &&
           (explicitNotesRequest ||
             (autoGenerateNotes &&
               (turnIntent === "teach" ||
@@ -734,7 +855,7 @@ export function TutorSessionRunner({
         }
       } catch (e) {
         console.error("[TutorSessionRunner submitTurn]", e);
-        streamDone = true;
+        turnVoice.streamDone = true;
         // Fallback: if we never revealed anything (TTS never fired
         // either), show the raw buffer so the student isn't stuck.
         const fallback =
@@ -923,21 +1044,40 @@ export function TutorSessionRunner({
   ]);
 
   // ----- LIVE mode: tap mic OR barge-in → record till silence -----
-  // Used when voiceMode === "live". Stops Rose if she's speaking,
-  // captures until the student goes silent, transcribes, submits.
+  const processLiveCapture = useCallback(
+    async (opts?: { fromBargeIn?: boolean }) => {
+      if (voiceModeRef.current !== "live") return;
+      const epoch = voiceCaptureEpochRef.current;
+      const blob = await voice.recordUntilSilence();
+      if (epoch !== voiceCaptureEpochRef.current) return;
+      if (voiceModeRef.current !== "live") return;
+      if (!blob) {
+        await resumeTurnPlaybackRef.current?.();
+        return;
+      }
+      const text = await voice.transcribe(blob);
+      if (epoch !== voiceCaptureEpochRef.current) return;
+      if (voiceModeRef.current !== "live") return;
+      if (!text || isLikelyNoiseTranscript(text)) {
+        interruptedContextRef.current = null;
+        await resumeTurnPlaybackRef.current?.();
+        return;
+      }
+      if (opts?.fromBargeIn) {
+        const spokenBefore = revealedSentencesRef.current.join(" ").trim();
+        if (spokenBefore.length >= 8) {
+          interruptedContextRef.current = spokenBefore;
+        }
+      }
+      void submitTurn(text);
+    },
+    [submitTurn, voice]
+  );
+
   const startLiveCapture = useCallback(async () => {
-    if (voiceModeRef.current !== "live") return;
-    const epoch = voiceCaptureEpochRef.current;
     voice.cancelSpeak();
-    const blob = await voice.recordUntilSilence();
-    if (epoch !== voiceCaptureEpochRef.current) return;
-    if (voiceModeRef.current !== "live") return;
-    if (!blob) return;
-    const text = await voice.transcribe(blob);
-    if (epoch !== voiceCaptureEpochRef.current) return;
-    if (voiceModeRef.current !== "live") return;
-    if (text) void submitTurn(text);
-  }, [submitTurn, voice]);
+    await processLiveCapture();
+  }, [processLiveCapture, voice]);
 
   // ----- PUSH mode: hold-to-talk (mic button mousedown/up or M key) -----
   // Used when voiceMode === "push". The student presses-and-holds;
@@ -974,13 +1114,13 @@ export function TutorSessionRunner({
   }, [startLiveCapture, voiceMode]);
 
   // Barge-in callback — only fires when bargeInEnabled (i.e. live
-  // mode). Routes straight to the live capture path.
+  // mode). False positives (coughs) resume Rose where she left off.
   useEffect(() => {
     onBargeInRef.current = () => {
       if (voiceMode !== "live") return;
-      void startLiveCapture();
+      void processLiveCapture({ fromBargeIn: true });
     };
-  }, [startLiveCapture, voiceMode]);
+  }, [processLiveCapture, voiceMode]);
 
   // ----- hold M to talk (push mode only) -----
   const mDownRef = useRef(false);
@@ -1045,7 +1185,10 @@ export function TutorSessionRunner({
         const text = await voice.transcribe(blob);
         if (epoch !== voiceCaptureEpochRef.current) return;
         if (voiceModeRef.current !== "live") return;
-        if (!text) return;
+        if (!text || isLikelyNoiseTranscript(text)) {
+          await resumeTurnPlaybackRef.current?.();
+          return;
+        }
         void submitTurn(text);
       } catch (e) {
         console.error("[TutorSessionRunner live mode]", e);
@@ -1451,6 +1594,7 @@ export function TutorSessionRunner({
               autoGenerate={autoGenerateNotes}
               onAutoGenerateChange={handleAutoGenerateChange}
               onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
+              autoGenerateBackfillOnlyWhenEmpty
               onEditorReady={() => setNotesEditorReady(true)}
               editorRef={notesPanelRef}
               className="h-full min-h-0"

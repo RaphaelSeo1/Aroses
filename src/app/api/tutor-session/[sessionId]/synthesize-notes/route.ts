@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
-import { synthesizeTutorNotes } from "@/lib/ai/synthesize-tutor-notes";
+import {
+  synthesizeTutorNotes,
+  synthesizeTutorNotesFromTranscript,
+} from "@/lib/ai/synthesize-tutor-notes";
 import { createClient } from "@/lib/supabase/server";
+import type { TutorSessionMessage } from "@/types/tutor-session";
 
 /**
  * POST /api/tutor-session/[sessionId]/synthesize-notes
  *
- * Turns Rose's spoken reply into structured study notes (not a transcript).
+ * Single turn: `{ roseReply, studentUtterance? }` → `{ block }`
+ * Full session backfill: `{ backfill: true }` → `{ blocks }`
  */
 
 const UUID_RE =
@@ -20,6 +25,7 @@ export async function POST(request: Request, ctx: Params) {
   }
 
   let body: {
+    backfill?: unknown;
     roseReply?: unknown;
     studentUtterance?: unknown;
   };
@@ -27,12 +33,6 @@ export async function POST(request: Request, ctx: Params) {
     body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-
-  const roseReply =
-    typeof body.roseReply === "string" ? body.roseReply.trim() : "";
-  if (roseReply.length < 20) {
-    return NextResponse.json({ error: "roseReply too short" }, { status: 400 });
   }
 
   const supabase = await createClient();
@@ -45,7 +45,9 @@ export async function POST(request: Request, ctx: Params) {
 
   const { data: sessionRow } = await supabase
     .from("tutor_sessions")
-    .select("id, user_id, topic, mode_tag, status")
+    .select(
+      "id, user_id, topic, mode_tag, status, conversation_transcript, reference_summary"
+    )
     .eq("id", sessionId)
     .maybeSingle();
 
@@ -56,12 +58,50 @@ export async function POST(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Session has ended" }, { status: 409 });
   }
 
+  const modeTag = (sessionRow.mode_tag as string | null) ?? null;
+  const sessionTopic = sessionRow.topic ?? "";
+
+  if (body.backfill === true) {
+    const transcript: TutorSessionMessage[] = Array.isArray(
+      sessionRow.conversation_transcript
+    )
+      ? (sessionRow.conversation_transcript as TutorSessionMessage[])
+      : [];
+
+    console.log("[synthesize-notes] backfill request", {
+      sessionId,
+      transcriptTurns: transcript.length,
+    });
+
+    const blocks = await synthesizeTutorNotesFromTranscript({
+      transcript,
+      sessionTopic,
+      modeTag,
+      referenceSummary: sessionRow.reference_summary ?? "",
+    });
+
+    if (blocks.length === 0) {
+      return NextResponse.json(
+        { error: "Could not synthesize notes from transcript." },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ blocks });
+  }
+
+  const roseReply =
+    typeof body.roseReply === "string" ? body.roseReply.trim() : "";
+  if (roseReply.length < 20) {
+    return NextResponse.json({ error: "roseReply too short" }, { status: 400 });
+  }
+
   const studentUtterance =
     typeof body.studentUtterance === "string"
       ? body.studentUtterance.trim()
       : undefined;
 
-  console.log("[synthesize-notes] request", {
+  console.log("[synthesize-notes] single-turn request", {
     sessionId,
     roseLen: roseReply.length,
     hasStudent: Boolean(studentUtterance),
@@ -70,8 +110,8 @@ export async function POST(request: Request, ctx: Params) {
   const block = await synthesizeTutorNotes({
     roseReply,
     studentUtterance,
-    sessionTopic: sessionRow.topic ?? "",
-    modeTag: (sessionRow.mode_tag as string | null) ?? null,
+    sessionTopic,
+    modeTag,
   });
 
   if (!block) {

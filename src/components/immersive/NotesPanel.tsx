@@ -80,6 +80,8 @@ export type AutoGenerateBlock = {
 export type NotesPanelHandle = {
   /** Append a structured block (heading + optional intro + bullets + optional callout). */
   appendBlock: (input: AutoGenerateBlock) => boolean;
+  /** True when the editor has any saved note content. */
+  hasContent: () => boolean;
 };
 
 /**
@@ -179,6 +181,7 @@ export function NotesPanel({
   autoGenerate,
   onAutoGenerateChange,
   onAutoGenerateUserToggle,
+  autoGenerateBackfillOnlyWhenEmpty = false,
   className,
   editorRef,
   onEditorReady,
@@ -207,6 +210,8 @@ export function NotesPanel({
   onAutoGenerateChange: (next: boolean) => void;
   /** Fired when the student clicks the toggle (not on initial load sync). */
   onAutoGenerateUserToggle?: (next: boolean) => void;
+  /** When true, turning auto-generate on only triggers backfill if notes are empty. */
+  autoGenerateBackfillOnlyWhenEmpty?: boolean;
   className?: string;
   /** Optional imperative handle so the parent can append notes. */
   editorRef?: React.RefObject<NotesPanelHandle | null>;
@@ -480,6 +485,10 @@ export function NotesPanel({
         });
         return true;
       },
+      hasContent: () => {
+        if (!editor || editor.isDestroyed) return false;
+        return docToPlainText(editor.getJSON()).trim().length > 0;
+      },
     };
     editorRef.current = handle;
     autoGenLog("editor imperative handle wired");
@@ -644,7 +653,10 @@ export function NotesPanel({
         autoGenerate,
         hasEditor: !!editor,
       });
-      onAutoGenerateUserToggle?.(next);
+      // Only backfill when turning ON with an empty notes doc (tutor sessions).
+      if (next && (!autoGenerateBackfillOnlyWhenEmpty || !notesExist)) {
+        onAutoGenerateUserToggle?.(next);
+      }
       onAutoGenerateChange(next);
       if (!editor) {
         autoGenLog("persist skipped — no editor for PUT");
@@ -684,6 +696,7 @@ export function NotesPanel({
     },
     [
       autoGenerate,
+      autoGenerateBackfillOnlyWhenEmpty,
       editor,
       endpoint,
       onAutoGenerateChange,

@@ -49,6 +49,8 @@ export async function POST(request: Request, ctx: Params) {
     explicitNotesRequest?: unknown;
     /** Bracket instruction — drives Rose but is not stored as a user turn. */
     systemTurn?: unknown;
+    /** Rose text already spoken before a voice barge-in. */
+    interruptedAfter?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -70,6 +72,10 @@ export async function POST(request: Request, ctx: Params) {
   const autoGenerateNotes = body.autoGenerateNotes === true;
   const explicitNotesRequest = body.explicitNotesRequest === true;
   const systemTurn = body.systemTurn === true;
+  const interruptedAfter =
+    typeof body.interruptedAfter === "string"
+      ? body.interruptedAfter.trim().slice(0, 800)
+      : undefined;
 
   const supabase = await createClient();
   const {
@@ -163,6 +169,7 @@ export async function POST(request: Request, ctx: Params) {
           studentUtterance: utterance,
           autoGenerateNotes,
           explicitNotesRequest,
+          interruptedAfter,
         })) {
           if (evt.type === "text") {
             assistantText += evt.delta;
