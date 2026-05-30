@@ -32,6 +32,28 @@ export type GlobalLearningTotals = {
   uploadsTotal: number;
 };
 
+export function payloadModuleCount(payload: unknown): number {
+  const pl = payload as CoursePayload | null;
+  return Array.isArray(pl?.modules) ? pl.modules.length : 0;
+}
+
+/** Only count completions that still exist in the material's current payload. */
+export function validModuleCompletionCount(
+  payload: unknown,
+  completedModuleIds: Set<number> | undefined
+): number {
+  const pl = payload as CoursePayload | null;
+  if (!Array.isArray(pl?.modules) || pl.modules.length === 0 || !completedModuleIds) {
+    return 0;
+  }
+  const validIds = new Set(pl.modules.map((m) => m.id));
+  let count = 0;
+  for (const id of completedModuleIds) {
+    if (validIds.has(id)) count++;
+  }
+  return count;
+}
+
 /** Bucket attempts into `days` slots: index 0 = oldest day, index days-1 = today. */
 export function bucketAttemptsLastDays(
   answeredAtIso: string[],
@@ -102,12 +124,13 @@ export function buildCourseSummaries(args: {
     let quizCorrect = 0;
     const materialsOut: MaterialProgress[] = [];
 
-    for (const m of mats) {
-      const pl = m.course_payload as CoursePayload | null;
-      const nMod = pl?.modules?.length ?? 0;
+    const activeMats = mats.filter((m) => payloadModuleCount(m.course_payload) > 0);
+
+    for (const m of activeMats) {
+      const nMod = payloadModuleCount(m.course_payload);
       modulesTotal += nMod;
       const doneSet = completedByMaterial.get(m.id);
-      const doneCount = doneSet?.size ?? 0;
+      const doneCount = validModuleCompletionCount(m.course_payload, doneSet);
       modulesCompleted += doneCount;
       gUploads++;
 
@@ -136,7 +159,7 @@ export function buildCourseSummaries(args: {
       description: course.description,
       modulesTotal,
       modulesCompleted,
-      uploadsCount: mats.length,
+      uploadsCount: activeMats.length,
       quizAttempts,
       quizCorrect,
       quizAccuracyPct:

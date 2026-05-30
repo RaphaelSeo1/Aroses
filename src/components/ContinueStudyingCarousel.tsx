@@ -13,6 +13,8 @@ type Entry = {
   totalLast10: number;
   modulesCompleted: number;
   modulesTotal: number;
+  /** Generated uploads / sections in this course (exam groups). */
+  uploadsCount?: number;
   isExploreLearner: boolean;
   /**
    * Drives the "Open" button target. "mentored" lands the student on
@@ -76,6 +78,12 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
             const progressPct = pct(e.modulesCompleted, e.modulesTotal);
             const score =
               e.totalLast10 > 0 ? `${e.correctLast10}/${e.totalLast10}` : "—";
+            const moduleLabel =
+              (e.uploadsCount ?? 0) > 1
+                ? `${e.modulesTotal} checkpoints · ${e.uploadsCount} sections`
+                : e.modulesTotal > 0
+                  ? `${e.modulesTotal} modules`
+                  : null;
             // Route to the experience the student last used — Mentored
             // Learning OR Free Exploration — instead of always landing
             // them on the reading view. New / never-opened courses
@@ -114,10 +122,10 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
                     </p>
                     <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                       {formatRelativeTime(e.answeredAt)}
-                      {e.modulesTotal > 0 ? (
+                      {moduleLabel ? (
                         <>
                           <span className="mx-2 text-zinc-300 dark:text-zinc-700">·</span>
-                          {e.modulesTotal} modules
+                          {moduleLabel}
                         </>
                       ) : null}
                     </p>
@@ -136,7 +144,7 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
                   <div className="flex items-center justify-between gap-3 text-xs font-medium text-zinc-600 dark:text-zinc-400">
                     <span>
                       {e.modulesTotal > 0
-                        ? `${e.modulesCompleted}/${e.modulesTotal} complete`
+                        ? `${e.modulesCompleted}/${e.modulesTotal} checkpoints`
                         : "Progress"}
                     </span>
                     <span className="tabular-nums text-zinc-700 dark:text-zinc-300">

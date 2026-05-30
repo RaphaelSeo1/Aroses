@@ -9,6 +9,9 @@ import {
   removeIngestObjects,
   type IngestSourceFileRef,
 } from "@/lib/study-ingest/job-extract";
+import { embedSourceImagesInModules } from "@/lib/study-ingest/source-images/embed-in-course";
+import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
+import { parseIngestSourceImages } from "@/lib/study-ingest/source-images/upload";
 import {
   parseCourseModule,
   parseCourseOutlinePayload,
@@ -326,6 +329,7 @@ async function finalizePdfIngest(
   options?: {
     retainStorage?: boolean;
     ingestMedia?: Record<string, unknown> | null;
+    sourceImages?: IngestSourceImageRecord[];
   }
 ): Promise<{ materialId: string } | null> {
   // Idempotency guard: if a concurrent expand call (e.g. from a page refresh)
@@ -340,7 +344,11 @@ async function finalizePdfIngest(
     return { materialId: alreadyDone.material_id as string };
   }
 
-  const modules = renumberModules(modulesRaw);
+  const modules = renumberModules(
+    options?.sourceImages?.length
+      ? embedSourceImagesInModules(modulesRaw, options.sourceImages)
+      : modulesRaw
+  );
   const payload: CoursePayload = {
     title: outline.title,
     description: outline.description,
@@ -513,7 +521,7 @@ export async function runPdfIngestExpandOne(
   const { data: job, error: loadErr } = await admin
     .from("pdf_ingest_jobs")
     .select(
-      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, status, material_id, error_message, ingest_source_text, ingest_outline, ingest_modules, ingest_epoch, created_at, retain_storage, ingest_media, source_files"
+      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, status, material_id, error_message, ingest_source_text, ingest_outline, ingest_modules, ingest_epoch, created_at, retain_storage, ingest_media, ingest_source_images, source_files"
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -624,6 +632,10 @@ export async function runPdfIngestExpandOne(
       ? ((job as { ingest_media: Record<string, unknown> }).ingest_media)
       : null;
 
+  const sourceImages = parseIngestSourceImages(
+    (job as { ingest_source_images?: unknown }).ingest_source_images
+  );
+
   if (prefix.length >= n) {
     const fin = await finalizePdfIngest(
       admin,
@@ -634,7 +646,7 @@ export async function runPdfIngestExpandOne(
       job.original_file_name,
       outline,
       prefix,
-      { retainStorage, ingestMedia }
+      { retainStorage, ingestMedia, sourceImages }
     );
     if (!fin) {
       return { kind: "failed", message: "Could not save study material." };
@@ -820,7 +832,7 @@ export async function runPdfIngestExpandOne(
       job.original_file_name,
       outline,
       cappedNext,
-      { retainStorage, ingestMedia }
+      { retainStorage, ingestMedia, sourceImages }
     );
     if (!fin) {
       return { kind: "failed", message: "Could not save study material." };
@@ -963,6 +975,7 @@ export async function runPdfIngestJob(
     const extracted = await extractContentForIngestJob({
       admin,
       jobId,
+      userId: claimed.user_id,
       primaryStoragePath: storagePath,
       primaryFileName: claimed.original_file_name,
       sourceFiles,
@@ -992,10 +1005,26 @@ export async function runPdfIngestJob(
       .update({
         retain_storage: extracted.retainStorage,
         ingest_media: extracted.ingestMedia,
+        ingest_source_images: extracted.sourceImages,
         updated_at: new Date().toISOString(),
       })
       .eq("id", jobId)
-      .then(() => {}, () => {});
+      .then(({ error }) => {
+        if (
+          error &&
+          isMissingDbColumnError(error, "ingest_source_images")
+        ) {
+          return admin
+            .from("pdf_ingest_jobs")
+            .update({
+              retain_storage: extracted.retainStorage,
+              ingest_media: extracted.ingestMedia,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", jobId);
+        }
+        return { error };
+      }, () => {});
 
     console.info("[pdf-ingest] extract ok", {
       jobId,

@@ -1352,6 +1352,11 @@ export function CoursePlayer({
                       lastModuleId: activeModule.id,
                       lastMode: "mentored",
                     });
+                    fetch(`/api/mentored/mode/${materialId}`, {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ mode: "mentored" }),
+                    }).catch(() => {});
                     const qs = new URLSearchParams();
                     qs.set("material", materialId);
                     qs.set("module", String(activeModule.id));
@@ -1363,6 +1368,11 @@ export function CoursePlayer({
                       lastModuleId: activeModule.id,
                       lastMode: "free",
                     });
+                    fetch(`/api/mentored/mode/${materialId}`, {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ mode: "free" }),
+                    }).catch(() => {});
                   }
                 }}
                 hint="Mentored Learning opens in a focused tutoring view; Free Exploration is the reading mode you're in now."

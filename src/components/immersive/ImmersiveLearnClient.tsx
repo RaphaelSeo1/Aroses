@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { ImmersiveLessonRunner } from "@/components/immersive/ImmersiveLessonRunner";
@@ -109,12 +109,10 @@ export function ImmersiveLearnClient({
     [courseId, materialId]
   );
 
-  // /learn is always Mentored — persist mode so resume links stay correct.
-  useEffect(() => {
-    persistMode("mentored");
-  }, [persistMode]);
-
   // ----- mode picker handlers -----
+  // When the student explicitly chose Mentored (picker or runner), persist
+  // so Continue studying reopens the right experience. Server-side /learn
+  // also stamps mentored on first paint — this covers client-side picks.
   const onChooseMode = useCallback(
     (mode: CourseMode) => {
       persistMode(mode);
@@ -124,6 +122,7 @@ export function ImmersiveLearnClient({
         const qs = new URLSearchParams();
         qs.set("material", materialId);
         if (activeModuleId != null) qs.set("module", String(activeModuleId));
+        qs.set("mode", "learn");
         router.push(`${studyBase}?${qs.toString()}`);
         return;
       }
@@ -167,6 +166,7 @@ export function ImmersiveLearnClient({
     const qs = new URLSearchParams();
     qs.set("material", materialId);
     if (activeModuleId != null) qs.set("module", String(activeModuleId));
+    qs.set("mode", "learn");
     router.push(`${studyBase}?${qs.toString()}`);
   }, [activeModuleId, materialId, persistMode, router, studyBase]);
 

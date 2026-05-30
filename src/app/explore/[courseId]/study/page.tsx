@@ -97,17 +97,32 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
 
   if (!courseRow) notFound();
 
+  const learnMode = sp.mode === "learn";
+  const savedProgress = await loadCourseProgress(
+    supabase,
+    user.id,
+    courseRow.id
+  );
+
   if (
     typeof materialId === "string" &&
     UUID_RE.test(materialId) &&
     initialModuleFromUrl == null
   ) {
-    const resolved = await resolveMentoredModuleForMaterial(
-      supabase,
-      user.id,
-      materialId
-    );
-    if (resolved != null) initialModuleFromUrl = resolved;
+    if (
+      savedProgress?.materialId === materialId &&
+      savedProgress.lastModuleId != null &&
+      (savedProgress.lastMode === "free" || learnMode)
+    ) {
+      initialModuleFromUrl = savedProgress.lastModuleId;
+    } else {
+      const resolved = await resolveMentoredModuleForMaterial(
+        supabase,
+        user.id,
+        materialId
+      );
+      if (resolved != null) initialModuleFromUrl = resolved;
+    }
   }
 
   const studyBase = `/explore/${courseId}/study`;
@@ -222,7 +237,8 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
     const { data: comp, error: ce } = await supabase
       .from("module_completion")
       .select("module_id")
-      .eq("material_id", row.id);
+      .eq("material_id", row.id)
+      .eq("user_id", user.id);
 
     if (!ce && comp) {
       completedModuleIds = comp.map((c) => c.module_id);
@@ -261,7 +277,8 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
       const { data: compRows } = await supabase
         .from("module_completion")
         .select("material_id, module_id")
-        .in("material_id", outlineIds);
+        .in("material_id", outlineIds)
+        .eq("user_id", user.id);
 
       for (const c of compRows ?? []) {
         const arr = compByMaterial.get(c.material_id) ?? [];
@@ -285,11 +302,6 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
   }
 
   if (hasNewCourse && payload) {
-    const savedProgress = await loadCourseProgress(
-      supabase,
-      user.id,
-      courseRow.id
-    );
     if (
       savedProgress?.materialId === row.id &&
       initialModuleFromUrl == null &&

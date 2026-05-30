@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { classifyLessonImage } from "@/lib/ai/mentored";
 import { searchWikimediaImage } from "@/lib/images/wikimedia";
+import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import type { CourseModule, CoursePayload } from "@/types/course";
@@ -110,18 +111,22 @@ export async function GET(_req: Request, ctx: Params) {
   // 2. Need to classify — pull the lesson from the material payload.
   const { data: materialRow } = await supabase
     .from("study_materials")
-    .select("payload, course_id")
+    .select("course_payload, course_id")
     .eq("id", materialId)
     .maybeSingle();
-  if (!materialRow?.payload || typeof materialRow.payload !== "object") {
+  if (!materialRow?.course_payload || typeof materialRow.course_payload !== "object") {
     return NextResponse.json({ image: null });
   }
-  const payload = materialRow.payload as CoursePayload;
+  const payload = materialRow.course_payload as CoursePayload;
   const lessonModule: CourseModule | undefined = payload.modules?.find(
     (m) => m.id === moduleId
   );
   const lesson = lessonModule?.lessons?.[lessonIndex];
   if (!lesson) {
+    return NextResponse.json({ image: null });
+  }
+
+  if (lessonMarkdownHasImages(lesson.content)) {
     return NextResponse.json({ image: null });
   }
 

@@ -29,6 +29,7 @@ export type DashboardProgressPayload = {
     totalLast10: number;
     modulesCompleted: number;
     modulesTotal: number;
+    uploadsCount: number;
     isExploreLearner: boolean;
     /**
      * Which experience the student last used for this material. New
@@ -111,11 +112,13 @@ export async function loadDashboardProgress(
 
   const { data: completionsRaw } = await supabase
     .from("module_completion")
-    .select("material_id, module_id");
+    .select("material_id, module_id")
+    .eq("user_id", ownerUserId);
 
   const { data: attemptsRaw } = await supabase
     .from("question_attempts")
-    .select("material_id, is_correct");
+    .select("material_id, is_correct")
+    .eq("user_id", ownerUserId);
 
   const touchedMaterialIds = new Set<string>();
   for (const c of completionsRaw ?? []) {
@@ -446,6 +449,38 @@ export async function loadDashboardProgress(
   }
 
   const recentSlice = sortedRecent.slice(0, 8);
+
+  const carouselCourseIds = [...new Set(recentSlice.map((r) => r.courseId))];
+  if (carouselCourseIds.length > 0) {
+    const { data: carouselMaterials, error: carouselMatErr } = await supabase
+      .from("study_materials")
+      .select("id, course_id, file_name, course_payload")
+      .in("course_id", carouselCourseIds);
+    if (carouselMatErr) {
+      console.error("[dashboard-progress carousel materials]", carouselMatErr);
+    } else {
+      for (const m of carouselMaterials ?? []) {
+        materialsById.set(m.id, m);
+      }
+    }
+  }
+  const allMaterialsForCarousel = [...materialsById.values()];
+  const { courses: carouselSummaries } = buildCourseSummaries({
+    courses: courses.filter((c) => carouselCourseIds.includes(c.id)),
+    materials: allMaterialsForCarousel,
+    completions: completionsRaw ?? [],
+    attempts: attemptsRaw ?? [],
+  });
+  const carouselSummaryByCourseId = new Map(
+    carouselSummaries.map((s) => [
+      s.courseId,
+      {
+        ...s,
+        isExploreLearner: !ownedCourseIds.has(s.courseId),
+      },
+    ])
+  );
+
   const moduleByMaterialId = new Map<string, number>();
   if (recentMaterialIdsForMode.length > 0) {
     const { data: mentoredRows, error: mentoredErr } = await supabase
@@ -468,14 +503,18 @@ export async function loadDashboardProgress(
   }
 
   const recentPractice = recentSlice.map((r) => {
-    const s = summaryByCourseId.get(r.courseId);
+    const s =
+      carouselSummaryByCourseId.get(r.courseId) ??
+      summaryByCourseId.get(r.courseId);
+    const prefMode = modeByMaterialId.get(r.materialId);
     const lastUsedMode: CourseMode =
-      r.lastUsedMode ?? modeByMaterialId.get(r.materialId) ?? "mentored";
+      prefMode ?? (r.lastUsedMode === "free" ? "free" : "mentored");
     return {
       ...r,
       title: s?.title ?? courseTitleById.get(r.courseId) ?? r.title,
       modulesCompleted: s?.modulesCompleted ?? 0,
       modulesTotal: s?.modulesTotal ?? 0,
+      uploadsCount: s?.uploadsCount ?? 0,
       isExploreLearner: Boolean(s?.isExploreLearner),
       lastUsedMode,
       resumeModuleId:

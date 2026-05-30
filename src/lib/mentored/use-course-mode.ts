@@ -18,9 +18,12 @@ export function useCourseMode(materialId: string): {
   const [mode, setModeState] = useState<CourseMode>("mentored");
   const [loading, setLoading] = useState(true);
   const inflight = useRef<AbortController | null>(null);
+  /** When the user (or parent) sets mode locally, ignore stale GET responses. */
+  const userSetRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    userSetRef.current = false;
     setLoading(true);
     inflight.current?.abort();
     const ac = new AbortController();
@@ -29,7 +32,7 @@ export function useCourseMode(materialId: string): {
     fetch(`/api/mentored/mode/${materialId}`, { signal: ac.signal })
       .then((r) => (r.ok ? r.json() : { mode: "mentored" }))
       .then((body: { mode?: CourseMode }) => {
-        if (cancelled) return;
+        if (cancelled || userSetRef.current) return;
         const resolved = body.mode === "free" ? "free" : "mentored";
         console.log("[mode-persist] loaded", { materialId, mode: resolved });
         setModeState(resolved);
@@ -50,6 +53,7 @@ export function useCourseMode(materialId: string): {
   const setMode = useCallback(
     (next: CourseMode) => {
       console.log("[mode-persist] saving", { materialId, mode: next });
+      userSetRef.current = true;
       setModeState(next);
       // Fire-and-forget — the local optimistic update is the source of truth
       // for UI; the server write is for cross-device sticky state.

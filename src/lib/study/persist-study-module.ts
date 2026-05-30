@@ -28,10 +28,4 @@ export function persistStudyModulePosition(
       ? { lastScrollPosition: opts.scrollPosition }
       : {}),
   });
-  fetch(`/api/mentored/session/${materialId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ moduleId }),
-    keepalive: true,
-  }).catch(() => {});
 }

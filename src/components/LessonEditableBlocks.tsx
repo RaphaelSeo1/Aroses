@@ -8,6 +8,7 @@ import { LessonMarkdownEditor } from "@/components/LessonMarkdownEditor";
 import { LessonQuoteCaptureRegion } from "@/components/LessonQuoteCaptureRegion";
 import { LessonRichContent } from "@/components/LessonRichContent";
 import { TypewriterText, useTypewriterString } from "@/components/TypewriterText";
+import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
 import type { CourseLesson, KeyTerm } from "@/types/course";
 
 function KeyTermReadOnlyCard({
@@ -80,6 +81,8 @@ export function LessonEditableBlocks({
   const [draftExamples, setDraftExamples] = useState<string[]>(() => [
     ...lesson.examples,
   ]);
+
+  const hasSourceImages = lessonMarkdownHasImages(lesson.content);
 
   const streamedBody = useTypewriterString(lesson.content ?? "", {
     mode: "chars",
@@ -191,11 +194,13 @@ export function LessonEditableBlocks({
           {/* Lazily-loaded licensed image from Wikimedia Commons.
               Renders nothing when the classifier said this lesson
               doesn't need one or no usable match was found. */}
-          <LessonImage
-            materialId={materialId}
-            moduleId={moduleId}
-            lessonIndex={lessonIndex}
-          />
+          {!hasSourceImages ? (
+            <LessonImage
+              materialId={materialId}
+              moduleId={moduleId}
+              lessonIndex={lessonIndex}
+            />
+          ) : null}
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
               Lesson content
@@ -301,11 +306,13 @@ export function LessonEditableBlocks({
         }
       />
 
-      <LessonImage
-        materialId={materialId}
-        moduleId={moduleId}
-        lessonIndex={lessonIndex}
-      />
+      {!hasSourceImages ? (
+        <LessonImage
+          materialId={materialId}
+          moduleId={moduleId}
+          lessonIndex={lessonIndex}
+        />
+      ) : null}
 
       <EditableSection
         label="Lesson content"

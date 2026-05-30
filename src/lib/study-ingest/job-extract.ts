@@ -7,6 +7,9 @@ import {
 } from "@/lib/study-ingest/formats";
 import { combineExtractedSources } from "@/lib/study-ingest/combine";
 import { extractStudyMaterialFromBuffer } from "@/lib/study-ingest/extract";
+import { extractSourceImagesFromBuffer } from "@/lib/study-ingest/source-images/extract-from-buffer";
+import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
+import { uploadIngestSourceImages } from "@/lib/study-ingest/source-images/upload";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 
 const DL_DELAYS_MS = [1_500, 3_000, 6_000];
@@ -30,6 +33,7 @@ export type JobExtractSuccess = {
     transcriptSegments?: Array<{ startSec: number; endSec: number; text: string }>;
   } | null;
   sourcePaths: string[];
+  sourceImages: IngestSourceImageRecord[];
 };
 
 function formatBytesLimit(kind: IngestFormatKind, bytes: number): string {
@@ -66,6 +70,7 @@ async function downloadIngestObject(
 export async function extractContentForIngestJob(input: {
   admin: SupabaseClient;
   jobId: string;
+  userId: string;
   primaryStoragePath: string;
   primaryFileName: string | null;
   sourceFiles: IngestSourceFileRef[] | null;
@@ -83,6 +88,7 @@ export async function extractContentForIngestJob(input: {
         ];
 
   const extractedParts = [];
+  const rawImages = [];
   let retainStorage = false;
   let mediaMeta: JobExtractSuccess["ingestMedia"] = null;
 
@@ -123,6 +129,13 @@ export async function extractContentForIngestJob(input: {
     });
     extractedParts.push(part);
 
+    const figures = await extractSourceImagesFromBuffer({
+      buffer: buf,
+      fileName,
+      kind,
+    });
+    rawImages.push(...figures);
+
     if (part.meta.retainStorage || shouldRetainStorageAfterIngest(kind)) {
       retainStorage = true;
       if (kind === "audio" || kind === "video") {
@@ -141,21 +154,41 @@ export async function extractContentForIngestJob(input: {
     combineExtractedSources(extractedParts);
   if (combinedRetain) retainStorage = true;
 
-  if (plainText.length < 80) {
-    throw new Error(
-      "Not enough content extracted from these files. Try materials with more text or a clearer recording."
-    );
+  let textForCourse = plainText;
+  if (textForCourse.length < 80) {
+    if (rawImages.length === 0) {
+      throw new Error(
+        "Not enough content extracted from these files. Try materials with more text or a clearer recording."
+      );
+    }
+    const figureSummary = rawImages
+      .map(
+        (img) =>
+          `[Figure: ${img.label}${img.anchorType === "slide" ? ` (slide ${img.anchorIndex})` : img.anchorType === "page" ? ` (page ${img.anchorIndex})` : ""}]`
+      )
+      .join("\n");
+    textForCourse = [plainText.trim(), figureSummary]
+      .filter((s) => s.length > 0)
+      .join("\n\n");
   }
 
   const pdfMeta = extractedParts.find((p) => p.meta.kind === "pdf")?.meta;
 
+  const sourceImages = await uploadIngestSourceImages({
+    admin: input.admin,
+    userId: input.userId,
+    jobId: input.jobId,
+    images: rawImages,
+  });
+
   return {
-    text: plainText,
+    text: textForCourse,
     numpages: pdfMeta?.pageCount ?? 0,
     skippedMiddle: false,
     retainStorage,
     ingestMedia: mediaMeta,
     sourcePaths: refs.map((r) => r.storagePath),
+    sourceImages,
   };
 }
 
