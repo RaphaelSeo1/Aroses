@@ -17,7 +17,7 @@ import { detectIngestFormat } from "@/lib/study-ingest/formats";
  * cached `reference_summary` so the next turn's prompt includes it.
  *
  * Accepts multipart form-data:
- *   files: File | File[]  (up to 5, ≤12 MB each)
+ *   files: File | File[]  (up to 20, ≤12 MB each)
  *
  * Returns: { uploads: TutorSessionUpload[], referenceSummary }
  *
