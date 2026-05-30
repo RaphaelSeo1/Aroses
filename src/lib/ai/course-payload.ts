@@ -356,6 +356,74 @@ function normalizeOutlineStub(raw: unknown): CourseOutlineStub {
   return { id, title: o.title.trim(), lesson_titles };
 }
 
+export type CourseStructurePlanLesson = {
+  title: string;
+  summary: string;
+  source_chunk_ids: string[];
+};
+
+export type CourseStructurePlanModule = {
+  title: string;
+  summary: string;
+  lessons: CourseStructurePlanLesson[];
+};
+
+export type CourseStructurePlan = {
+  title?: string;
+  description?: string;
+  modules: CourseStructurePlanModule[];
+};
+
+function normalizePlanLesson(raw: unknown): CourseStructurePlanLesson {
+  if (!raw || typeof raw !== "object") throw new Error("Invalid plan lesson");
+  const o = raw as Record<string, unknown>;
+  const title =
+    typeof o.title === "string" ? o.title.trim() : "";
+  if (title.length === 0) throw new Error("Plan lesson missing title");
+  const summary =
+    typeof o.summary === "string" ? o.summary.trim() : "";
+  const idsRaw = o.source_chunk_ids ?? o.sourceChunkIds;
+  const source_chunk_ids = Array.isArray(idsRaw)
+    ? idsRaw
+        .map((x) => (typeof x === "string" ? x.trim() : String(x ?? "")))
+        .filter((s) => s.length > 0)
+    : [];
+  return { title, summary, source_chunk_ids };
+}
+
+function normalizePlanModule(raw: unknown): CourseStructurePlanModule {
+  if (!raw || typeof raw !== "object") throw new Error("Invalid plan module");
+  const o = raw as Record<string, unknown>;
+  const title = typeof o.title === "string" ? o.title.trim() : "";
+  if (title.length === 0) throw new Error("Plan module missing title");
+  const summary = typeof o.summary === "string" ? o.summary.trim() : "";
+  const lessonsRaw = o.lessons;
+  if (!Array.isArray(lessonsRaw) || lessonsRaw.length === 0) {
+    throw new Error("Plan module needs at least one lesson");
+  }
+  const lessons = lessonsRaw.map(normalizePlanLesson);
+  return { title, summary, lessons };
+}
+
+/** Validate the content-driven structure plan JSON (STRUCTURE_PLANNING). */
+export function parseCourseStructurePlan(parsed: unknown): CourseStructurePlan {
+  const obj = parsed as Record<string, unknown>;
+  if (!obj || typeof obj !== "object") {
+    throw new Error("Invalid plan: not an object");
+  }
+  if (!Array.isArray(obj.modules) || obj.modules.length === 0) {
+    throw new Error("Invalid plan: need at least one module");
+  }
+  const modules = obj.modules.map(normalizePlanModule);
+  const title =
+    typeof obj.title === "string" && obj.title.trim() ? obj.title.trim() : undefined;
+  const description =
+    typeof obj.description === "string" && obj.description.trim()
+      ? obj.description.trim()
+      : undefined;
+  return { title, description, modules };
+}
+
 /** Validate outline JSON for phase 1 of chunked ingest. */
 export function parseCourseOutlinePayload(parsed: unknown): CourseOutlinePayload {
   const obj = parsed as Record<string, unknown>;

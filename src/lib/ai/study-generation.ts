@@ -6,11 +6,17 @@ import {
 } from "@anthropic-ai/sdk";
 import {
   type CourseOutlinePayload,
+  type CourseStructurePlan,
   parseCourseModule,
   parseCourseOutlinePayload,
   parseCoursePayload,
+  parseCourseStructurePlan,
   stripJsonFence,
 } from "@/lib/ai/course-payload";
+import type {
+  IngestChunk,
+  IngestChunkSummary,
+} from "@/lib/study-ingest/chunking";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import type { CourseModule, CoursePayload } from "@/types/course";
 
@@ -939,6 +945,205 @@ async function ensureModuleLessonFields(
     out = await repairModuleMissingLessonFields(anthropic, out, profile);
   }
   return out;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Content-driven structure planning (feature flag STRUCTURE_PLANNING).
+// One Claude call groups extracted chunks into modules/lessons regardless of
+// file boundaries. Input is chunk summaries only (no full text) to save tokens.
+// ────────────────────────────────────────────────────────────────────────
+
+function structurePlanInstruction(
+  chunkSummaries: IngestChunkSummary[],
+  studyContext?: string
+): string {
+  const chunkJson = JSON.stringify(chunkSummaries, null, 0);
+  return `You are an expert course architect. You are given a list of CONTENT CHUNKS extracted from one or more uploaded files. Group them into a coherent course structure based on the CONTENT, not on which file they came from.
+
+CRITICAL GROUPING RULES:
+- File boundaries do NOT equal lesson boundaries.
+- A single lesson MAY span multiple files (e.g. "Lecture 3 Part 1", "Part 2", "Part 3" almost certainly belong to the same lesson or module).
+- One file MAY contain multiple lessons (a long PDF with several chapters/sections becomes several lessons).
+- Some files/chunks may be SUPPLEMENTARY to a lesson (examples, appendices, problem sets) rather than their own lesson — attach them to the most relevant lesson instead of giving them a standalone lesson.
+- Decide grouping using: chunk titles/headings, topic continuity, chunk length (approxChars), and filename patterns (e.g. "Part 1/2/3", "Week N", "Chapter N").
+${studyContext ? selfStudyBlock(studyContext) : ""}
+Every chunk id that carries real teaching content should be referenced by exactly one lesson via source_chunk_ids (a chunk may be referenced by more than one lesson only if genuinely shared). Do not invent chunk ids that are not in the list.
+
+${titleStyleRules()}
+
+Output ONLY this strict JSON (no markdown, no commentary):
+{
+  "title": "short course title (2 to 5 words)",
+  "description": "one short sentence describing the course",
+  "modules": [
+    {
+      "title": "module title",
+      "summary": "one-sentence description of the module",
+      "lessons": [
+        {
+          "title": "lesson title",
+          "summary": "one-sentence description of the lesson",
+          "source_chunk_ids": ["c001", "c002"]
+        }
+      ]
+    }
+  ]
+}
+
+--- CONTENT CHUNKS (JSON) ---
+${chunkJson}
+--- END CONTENT CHUNKS ---`;
+}
+
+async function repairStructurePlanJson(
+  anthropic: Anthropic,
+  brokenAssistantText: string,
+  profile: CourseBuildProfile
+): Promise<CourseStructurePlan> {
+  const prompt = `You returned JSON that could not be parsed as a course structure plan. Output ONLY one valid JSON object of the shape { "modules": [ { "title", "summary", "lessons": [ { "title", "summary", "source_chunk_ids": [] } ] } ] }. No markdown.
+
+Broken output (repair):
+${brokenAssistantText.slice(0, 60_000)}`;
+
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: resolveOutlineModel(profile),
+      max_tokens: planMaxTokens(profile),
+      temperature: 0.1,
+      messages: [{ role: "user", content: prompt }],
+    },
+    { maxAttempts: profile === "full" ? 3 : 1 }
+  );
+
+  const text = extractTextBlock(msg);
+  let repaired: unknown;
+  try {
+    repaired = JSON.parse(stripJsonFence(text));
+  } catch {
+    throw new Error("Claude did not return valid JSON after plan repair");
+  }
+  return parseCourseStructurePlan(repaired);
+}
+
+function planMaxTokens(profile: CourseBuildProfile): number {
+  if (profile === "express") {
+    return clampInt(envInt("COURSE_PLAN_MAX_TOKENS", 3072), 1024, 6144);
+  }
+  if (profile === "fast" || profile === "balanced") {
+    return clampInt(envInt("COURSE_PLAN_MAX_TOKENS", 5120), 2048, 10_240);
+  }
+  return clampInt(envInt("COURSE_PLAN_MAX_TOKENS", 8192), 4096, 16_384);
+}
+
+/**
+ * Plan a course structure from chunk summaries (one Claude call). Returns a
+ * plan whose lessons reference chunk ids; file boundaries are ignored.
+ * Routed through the same SDK setup as the outline; callers should still wrap
+ * this in `withAnthropicRateLimitRetries` like other ingest AI calls.
+ */
+export async function planCourseStructureFromChunks(
+  chunkSummaries: IngestChunkSummary[],
+  streamSink?: PdfIngestStreamSink,
+  studyContext?: string
+): Promise<CourseStructurePlan> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing ANTHROPIC_API_KEY");
+  }
+  if (chunkSummaries.length === 0) {
+    throw new Error("No chunks to plan a course structure from");
+  }
+
+  const profile = resolveCourseBuildProfile();
+  const anthropic = new Anthropic({
+    apiKey,
+    timeout: getPdfAnthropicTimeoutMs(),
+    maxRetries: 0,
+  });
+
+  const instruction = structurePlanInstruction(chunkSummaries, studyContext);
+  const maxAttempts = profile === "express" || profile === "fast" ? 1 : 2;
+
+  const rawText = await invokeUserMessageForPdfText(
+    anthropic,
+    {
+      model: resolveOutlineModel(profile),
+      max_tokens: planMaxTokens(profile),
+      temperature: 0.15,
+      messages: [{ role: "user", content: instruction }],
+    },
+    streamSink,
+    maxAttempts
+  );
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonFence(rawText));
+  } catch {
+    return repairStructurePlanJson(anthropic, rawText, profile);
+  }
+  try {
+    return parseCourseStructurePlan(parsed);
+  } catch (e) {
+    console.warn("[study-generation] plan validation failed; repairing", e);
+    return repairStructurePlanJson(anthropic, rawText, profile);
+  }
+}
+
+/** Convert a structure plan into the existing outline shape (expand/finalize unchanged). */
+export function structurePlanToOutline(
+  plan: CourseStructurePlan,
+  fallbackTitle?: string
+): CourseOutlinePayload {
+  const modules = plan.modules.map((m, i) => ({
+    id: i + 1,
+    title: m.title,
+    lesson_titles: m.lessons.map((l) => l.title),
+  }));
+  const title =
+    plan.title?.trim() ||
+    fallbackTitle?.trim() ||
+    modules[0]?.title ||
+    "Course";
+  const description =
+    plan.description?.trim() || "A course built from your uploaded materials.";
+  return { title, description, modules };
+}
+
+/**
+ * Assemble index-aligned per-module source text from each module's lessons'
+ * source_chunk_ids. A module's text is the concatenation (in chunk order) of
+ * every chunk its lessons reference, truncated to the module char budget.
+ * Modules with no resolvable chunk ids get an empty string (caller falls back
+ * to the whole combined source text).
+ */
+export function assembleModuleSourcesFromPlan(
+  plan: CourseStructurePlan,
+  chunks: IngestChunk[]
+): string[] {
+  const profile = resolveCourseBuildProfile();
+  const cap = materialCharLimit(profile);
+  const byId = new Map<string, IngestChunk>();
+  for (const c of chunks) byId.set(c.id, c);
+  const orderOf = new Map<string, number>();
+  chunks.forEach((c, i) => orderOf.set(c.id, i));
+
+  return plan.modules.map((m) => {
+    const ids = new Set<string>();
+    for (const lesson of m.lessons) {
+      for (const id of lesson.source_chunk_ids) ids.add(id);
+    }
+    const ordered = [...ids]
+      .filter((id) => byId.has(id))
+      .sort((a, b) => (orderOf.get(a) ?? 0) - (orderOf.get(b) ?? 0));
+    if (ordered.length === 0) return "";
+    const blocks = ordered.map((id) => {
+      const c = byId.get(id)!;
+      return `[from ${c.sourceFileName} — ${c.position}]\n${c.text}`;
+    });
+    return truncateMaterial(blocks.join("\n\n"), cap);
+  });
 }
 
 /** Phase 1 of chunked PDF ingest — small JSON, usually finishes quickly. */

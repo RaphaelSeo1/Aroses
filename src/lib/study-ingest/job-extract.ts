@@ -7,6 +7,7 @@ import {
 } from "@/lib/study-ingest/formats";
 import { combineExtractedSources } from "@/lib/study-ingest/combine";
 import { extractStudyMaterialFromBuffer } from "@/lib/study-ingest/extract";
+import { buildIngestChunks, type IngestChunk } from "@/lib/study-ingest/chunking";
 import { extractSourceImagesFromBuffer } from "@/lib/study-ingest/source-images/extract-from-buffer";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 import { uploadIngestSourceImages } from "@/lib/study-ingest/source-images/upload";
@@ -34,6 +35,8 @@ export type JobExtractSuccess = {
   } | null;
   sourcePaths: string[];
   sourceImages: IngestSourceImageRecord[];
+  /** Natural-boundary chunks across all files (for content-driven structure planning). */
+  chunks: IngestChunk[];
 };
 
 function formatBytesLimit(kind: IngestFormatKind, bytes: number): string {
@@ -174,6 +177,8 @@ export async function extractContentForIngestJob(input: {
 
   const pdfMeta = extractedParts.find((p) => p.meta.kind === "pdf")?.meta;
 
+  const chunks = buildIngestChunks(extractedParts);
+
   const sourceImages = await uploadIngestSourceImages({
     admin: input.admin,
     userId: input.userId,
@@ -183,6 +188,7 @@ export async function extractContentForIngestJob(input: {
 
   return {
     text: textForCourse,
+    chunks,
     numpages: pdfMeta?.pageCount ?? 0,
     skippedMiddle: false,
     retainStorage,

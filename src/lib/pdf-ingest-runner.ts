@@ -9,6 +9,11 @@ import {
   removeIngestObjects,
   type IngestSourceFileRef,
 } from "@/lib/study-ingest/job-extract";
+import {
+  isStructurePlanningEnabled,
+  summarizeChunksForPlanner,
+  type IngestChunk,
+} from "@/lib/study-ingest/chunking";
 import { embedSourceImagesInModules } from "@/lib/study-ingest/source-images/embed-in-course";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 import { parseIngestSourceImages } from "@/lib/study-ingest/source-images/upload";
@@ -21,9 +26,12 @@ import type { CourseModule } from "@/types/course";
 import type { CourseOutlinePayload } from "@/lib/ai/course-payload";
 import type { CoursePayload } from "@/types/course";
 import {
+  assembleModuleSourcesFromPlan,
   generateCourseModuleFromMaterial,
   generateCourseOutlineFromMaterial,
   materialTextForPdfIngest,
+  planCourseStructureFromChunks,
+  structurePlanToOutline,
   type PdfIngestStreamSink,
 } from "@/lib/ai/study-generation";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -556,6 +564,23 @@ export async function runPdfIngestExpandOne(
       typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
   }
 
+  // STRUCTURE_PLANNING: per-module source text assembled from each module's
+  // lessons' chunk ids. Separate defensive query so DBs without migration 045
+  // still expand normally (missing-column error is swallowed).
+  let moduleSources: string[] | null = null;
+  if (job?.id) {
+    const { data: msRow } = await admin
+      .from("pdf_ingest_jobs")
+      .select("ingest_module_sources")
+      .eq("id", job.id)
+      .maybeSingle();
+    const raw = (msRow as { ingest_module_sources?: unknown } | null | undefined)
+      ?.ingest_module_sources;
+    if (Array.isArray(raw)) {
+      moduleSources = raw.map((x) => (typeof x === "string" ? x : ""));
+    }
+  }
+
   if (loadErr || !job) {
     return { kind: "failed", message: "Job not found." };
   }
@@ -745,14 +770,20 @@ export async function runPdfIngestExpandOne(
         withAnthropicRateLimitRetries(
           jobId,
           batchCount === 1 ? "module" : `module-${moduleIndex + 1}`,
-          () =>
-            generateCourseModuleFromMaterial(
-              job.ingest_source_text,
+          () => {
+            const planned = moduleSources?.[moduleIndex];
+            const materialForModule =
+              typeof planned === "string" && planned.trim().length > 0
+                ? planned
+                : job.ingest_source_text;
+            return generateCourseModuleFromMaterial(
+              materialForModule,
               outline,
               moduleIndex,
               offset === 0 ? createPdfStreamSink(admin, jobId) : undefined,
               expandStudyContext ?? undefined
-            ),
+            );
+          },
           // 6 attempts × 90 s exp-backoff cap = ~126 s worst-case retry +
           // ~30 s generation = ~156 s. Comfortably under Vercel's 300 s
           // maxDuration so /expand always returns cleanly to the client
@@ -969,6 +1000,7 @@ export async function runPdfIngestJob(
     skippedMiddle: boolean;
     retainStorage: boolean;
     ingestMedia: Record<string, unknown> | null;
+    chunks: IngestChunk[];
   };
 
   try {
@@ -998,6 +1030,7 @@ export async function runPdfIngestJob(
       skippedMiddle: extracted.skippedMiddle,
       retainStorage: extracted.retainStorage,
       ingestMedia: extracted.ingestMedia,
+      chunks: extracted.chunks ?? [],
     };
 
     await admin
@@ -1086,6 +1119,7 @@ export async function runPdfIngestJob(
     cleanupPaths,
     sourceTextForOutline,
     courseStudyContext,
+    chunks: previewResult.chunks,
     driveModules: options?.driveModules,
     t0,
   });
@@ -1154,6 +1188,8 @@ export async function runPdfIngestContinueAfterTranscript(
     cleanupPaths,
     sourceTextForOutline: transcript,
     courseStudyContext,
+    // Transcript-resume has no per-file chunks here; use the legacy outline path.
+    chunks: [],
     driveModules: options?.driveModules,
     t0: Date.now(),
   });
@@ -1171,6 +1207,7 @@ async function runPdfIngestOutlinePhase(
     cleanupPaths: string[];
     sourceTextForOutline: string;
     courseStudyContext: string | null;
+    chunks: IngestChunk[];
     driveModules?: boolean;
     t0: number;
   }
@@ -1182,6 +1219,7 @@ async function runPdfIngestOutlinePhase(
     cleanupPaths,
     sourceTextForOutline,
     courseStudyContext,
+    chunks,
     driveModules,
     t0,
   } = input;
@@ -1267,19 +1305,50 @@ async function runPdfIngestOutlinePhase(
   const heartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
   }, 8_000);
+
+  // STRUCTURE_PLANNING: when enabled and we have content chunks, let the AI
+  // decide module/lesson grouping from content (not file count). Falls back
+  // to the legacy outline call when the flag is off or no chunks are present.
+  const useStructurePlanning =
+    isStructurePlanningEnabled() && chunks.length > 0;
+
   let outline: CourseOutlinePayload;
+  let planModuleSources: string[] | null = null;
+  let planJson: unknown = null;
   try {
-    outline = await withAnthropicRateLimitRetries(
-      jobId,
-      "outline",
-      () =>
-        generateCourseOutlineFromMaterial(
-          sourceTextForOutline,
-          streamSink,
-          courseStudyContext ?? undefined
-        ),
-      { maxAttempts: 14 }
-    );
+    if (useStructurePlanning) {
+      const plan = await withAnthropicRateLimitRetries(
+        jobId,
+        "structure-plan",
+        () =>
+          planCourseStructureFromChunks(
+            summarizeChunksForPlanner(chunks),
+            streamSink,
+            courseStudyContext ?? undefined
+          ),
+        { maxAttempts: 14 }
+      );
+      outline = structurePlanToOutline(plan);
+      planModuleSources = assembleModuleSourcesFromPlan(plan, chunks);
+      planJson = plan;
+      console.info("[pdf-ingest] structure plan ok", {
+        jobId,
+        modules: outline.modules.length,
+        chunks: chunks.length,
+      });
+    } else {
+      outline = await withAnthropicRateLimitRetries(
+        jobId,
+        "outline",
+        () =>
+          generateCourseOutlineFromMaterial(
+            sourceTextForOutline,
+            streamSink,
+            courseStudyContext ?? undefined
+          ),
+        { maxAttempts: 14 }
+      );
+    }
   } catch (e) {
     if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
       return;
@@ -1291,21 +1360,55 @@ async function runPdfIngestOutlinePhase(
     clearInterval(heartbeat);
   }
 
-  const { data: outlineRow, error: outlineErr } = await admin
+  const outlineUpdate: Record<string, unknown> = {
+    ingest_source_text: storedMaterial,
+    ingest_outline: outline,
+    ingest_modules: [],
+    ingest_preview_outline: null,
+    stream_preview: null,
+    ingest_phase: "writing_modules",
+    updated_at: new Date().toISOString(),
+  };
+  if (useStructurePlanning) {
+    outlineUpdate.ingest_plan = planJson;
+    outlineUpdate.ingest_module_sources = planModuleSources;
+  }
+
+  let { data: outlineRow, error: outlineErr } = await admin
     .from("pdf_ingest_jobs")
-    .update({
-      ingest_source_text: storedMaterial,
-      ingest_outline: outline,
-      ingest_modules: [],
-      ingest_preview_outline: null,
-      stream_preview: null,
-      ingest_phase: "writing_modules",
-      updated_at: new Date().toISOString(),
-    })
+    .update(outlineUpdate)
     .eq("id", jobId)
     .eq("ingest_epoch", claimedEpoch)
     .select("id")
     .maybeSingle();
+
+  // Graceful fallback: structure-planning columns not migrated yet (045).
+  if (
+    outlineErr &&
+    isMissingDbColumnError(
+      outlineErr,
+      "ingest_plan",
+      "ingest_module_sources"
+    )
+  ) {
+    const retry = await admin
+      .from("pdf_ingest_jobs")
+      .update({
+        ingest_source_text: storedMaterial,
+        ingest_outline: outline,
+        ingest_modules: [],
+        ingest_preview_outline: null,
+        stream_preview: null,
+        ingest_phase: "writing_modules",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .eq("ingest_epoch", claimedEpoch)
+      .select("id")
+      .maybeSingle();
+    outlineRow = retry.data;
+    outlineErr = retry.error;
+  }
 
   if (outlineErr) {
     console.error("[pdf-ingest] persist outline", jobId, outlineErr);
