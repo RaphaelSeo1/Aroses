@@ -309,19 +309,18 @@ function storagePathsForJob(job: {
 
 
 function pdfIngestModuleBatchSize(remaining: number, peerCount: number): number {
-  // Module concurrency vs Anthropic TPM trade-off:
-  //   - Solo PDF (peerCount=0): write 2 modules in parallel — Tier 1 Haiku
-  //     output TPM (~16 k/min) comfortably absorbs 2× ~5 k-token streams. ~2×
-  //     speedup on module writing for a typical 4-module course.
-  //   - 1+ peers: fall back to 1 per call so concurrent calls = number of PDFs.
-  //     Without this, N PDFs × batch≥2 = ≥2N concurrent streams → instant TPM
-  //     ceiling → 60-90 s 429 backoffs that erase any speedup.
-  //   - Env override (`PDF_INGEST_MODULE_BATCH_SIZE`) bypasses the heuristic
-  //     when you've upgraded to Tier 2/3/4 and want to crank concurrency.
+  // Module concurrency. TPM is now guarded globally by the DB-backed Claude
+  // rate limiter (`acquireClaudeBudget`), so we no longer have to clamp to 1
+  // when peers exist — the global budget absorbs the combined stream load and
+  // backs off precisely when the org limit is near, instead of this heuristic
+  // guessing. We still parallelize a couple of modules per call for speed.
+  //   - Solo PDF (peerCount=0): 3 modules in parallel.
+  //   - With peers: 2 per call (the limiter throttles if the org budget is hit).
+  //   - Env override (`PDF_INGEST_MODULE_BATCH_SIZE`) wins when set.
   const raw = process.env.PDF_INGEST_MODULE_BATCH_SIZE?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   const fromEnv = Number.isFinite(parsed) ? Math.trunc(parsed) : null;
-  const target = fromEnv != null ? fromEnv : peerCount === 0 ? 2 : 1;
+  const target = fromEnv != null ? fromEnv : peerCount === 0 ? 3 : 2;
   return Math.max(1, Math.min(remaining, target));
 }
 
@@ -691,17 +690,18 @@ export async function runPdfIngestExpandOne(
   }
 
   // FIFO queue for module generation, same shape as the outline queue in
-  // `runPdfIngestJob`. Cap concurrent Anthropic module streams per user to
-  // protect Tier 1 TPM. Earliest `created_at` goes first so the user sees
-  // tabs finish in upload order (matches the UI's numbered list).
+  // `runPdfIngestJob`. The cap is now generous (TPM is enforced globally by the
+  // DB-backed Claude rate limiter, not by this per-user job count) and mostly
+  // exists to keep finish order = upload order. Earliest `created_at` goes
+  // first so tabs finish in upload order (matches the UI's numbered list).
   const moduleConcurrencyEnv =
     process.env.PDF_INGEST_MODULE_CONCURRENCY?.trim();
   const moduleConcurrencyParsed = moduleConcurrencyEnv
     ? Number.parseInt(moduleConcurrencyEnv, 10)
     : Number.NaN;
   const MODULE_CONCURRENCY = Number.isFinite(moduleConcurrencyParsed)
-    ? Math.max(1, Math.min(20, moduleConcurrencyParsed))
-    : 3;
+    ? Math.max(1, Math.min(40, moduleConcurrencyParsed))
+    : 10;
   const QUEUE_POLL_MS = 3_500;
   const QUEUE_MAX_WAIT_MS = 4 * 60 * 1000;
 
@@ -876,6 +876,81 @@ export async function runPdfIngestExpandOne(
     modulesBuilt: nextModules.length,
     modulesTotal: n,
   };
+}
+
+/**
+ * Server-side reaper: advance jobs that have stalled.
+ *
+ * In the chunked pipeline, module writing (phase 2) is normally driven by the
+ * browser's `/expand` polling loop. If the user closes the tab — or a serverless
+ * invocation is killed mid-flight — a job can sit in `writing_modules` (or never
+ * leave `pending`) with no one to push it. Each running job heartbeats
+ * `updated_at` every ~8–22 s, so a `running` row that hasn't updated in a while
+ * has no live driver and is safe to re-kick. `runPdfIngestExpandOne` /
+ * `runPdfIngestJob` both claim atomically, so re-kicking a job that *does* have a
+ * live driver is a harmless no-op.
+ *
+ * Intended to be called on a schedule (Vercel Cron) and/or self-chained. Returns
+ * how many jobs were kicked and how many remain active (for chaining decisions).
+ */
+export async function reapStaleIngestJobs(options?: {
+  maxJobs?: number;
+  staleRunningMs?: number;
+  stalePendingMs?: number;
+}): Promise<{ kicked: number; remaining: number }> {
+  const admin = createAdminClient();
+  if (!admin) return { kicked: 0, remaining: 0 };
+
+  const maxJobs = options?.maxJobs ?? 16;
+  const staleRunning = new Date(
+    Date.now() - (options?.staleRunningMs ?? 75_000)
+  ).toISOString();
+  const stalePending = new Date(
+    Date.now() - (options?.stalePendingMs ?? 25_000)
+  ).toISOString();
+
+  const [{ data: runningJobs }, { data: pendingJobs }] = await Promise.all([
+    admin
+      .from("pdf_ingest_jobs")
+      .select("id")
+      .eq("status", "running")
+      .lt("updated_at", staleRunning)
+      .order("updated_at", { ascending: true })
+      .limit(maxJobs),
+    admin
+      .from("pdf_ingest_jobs")
+      .select("id")
+      .eq("status", "pending")
+      .lt("created_at", stalePending)
+      .order("created_at", { ascending: true })
+      .limit(maxJobs),
+  ]);
+
+  const tasks: Promise<unknown>[] = [];
+  for (const j of pendingJobs ?? []) {
+    tasks.push(
+      runPdfIngestJob((j as { id: string }).id).catch((e) =>
+        console.warn("[pdf-ingest] reaper pending kick failed", e)
+      )
+    );
+  }
+  for (const j of runningJobs ?? []) {
+    // Safe for any phase: expand returns "not ready" cheaply if the job isn't
+    // in writing_modules yet, and advances one batch when it is.
+    tasks.push(
+      runPdfIngestExpandOne((j as { id: string }).id).catch((e) =>
+        console.warn("[pdf-ingest] reaper expand kick failed", e)
+      )
+    );
+  }
+  await Promise.allSettled(tasks);
+
+  const { count: remaining } = await admin
+    .from("pdf_ingest_jobs")
+    .select("id", { count: "exact", head: true })
+    .in("status", ["pending", "running"]);
+
+  return { kicked: tasks.length, remaining: remaining ?? 0 };
 }
 
 /**
@@ -1254,8 +1329,8 @@ async function runPdfIngestOutlinePhase(
     ? Number.parseInt(concurrencyEnv, 10)
     : Number.NaN;
   const OUTLINE_CONCURRENCY = Number.isFinite(concurrencyParsed)
-    ? Math.max(1, Math.min(20, concurrencyParsed))
-    : 3;
+    ? Math.max(1, Math.min(40, concurrencyParsed))
+    : 10;
   const QUEUE_POLL_MS = 3_500;
   const QUEUE_MAX_WAIT_MS = 6 * 60 * 1000;
 

@@ -398,76 +398,63 @@ export function CourseUploadForm({
         bar: "indeterminate",
       });
 
-      // One build per file: each upload becomes its own study material and
-      // builds in parallel (the build page polls all job ids at once).
-      const jobIds: string[] = [];
-      let firstMaterialId: string | null = null;
-
-      for (let i = 0; i < apiFiles.length; i++) {
-        const f = apiFiles[i];
-        if (apiFiles.length > 1) {
-          setBuildProgress({
-            line: `Starting build ${i + 1}/${apiFiles.length}…`,
-            bar: "indeterminate",
-          });
-        }
-
-        let res: Response;
-        try {
-          res = await fetch("/api/process-pdf", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              courseId,
-              examGroupId,
-              files: [f],
-              studyContext: studyGoal.trim() || undefined,
-            }),
-          });
-        } catch {
-          // Only clean up storage if no build has claimed these files yet.
-          if (jobIds.length === 0) {
-            await supabase.storage
-              .from(STUDY_PDF_INGEST_BUCKET)
-              .remove(uploadedPaths)
-              .catch(() => {});
+      // One build per file, kicked off in parallel so all jobs are created at
+      // once and the build page opens with every tab building simultaneously.
+      type StartOutcome = {
+        file: { originalFileName: string };
+        jobId?: string;
+        materialId?: string;
+        error?: string;
+      };
+      const startOutcomes: StartOutcome[] = await Promise.all(
+        apiFiles.map(async (f): Promise<StartOutcome> => {
+          try {
+            const res = await fetch("/api/process-pdf", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                courseId,
+                examGroupId,
+                files: [f],
+                studyContext: studyGoal.trim() || undefined,
+              }),
+            });
+            const raw = await res.text();
+            if (!res.ok) {
+              return { file: f, error: messageFromUploadResponse(res, raw) };
+            }
+            const body = JSON.parse(raw) as {
+              materialId?: string;
+              jobId?: string;
+            };
+            return {
+              file: f,
+              jobId: typeof body.jobId === "string" ? body.jobId : undefined,
+              materialId:
+                typeof body.materialId === "string" ? body.materialId : undefined,
+            };
+          } catch {
+            return { file: f, error: "Network error while starting build." };
           }
-          setError(`${f.originalFileName}: Network error while starting build.`);
-          setLoading(false);
-          return;
-        }
+        })
+      );
 
-        const raw = await res.text();
-        if (!res.ok) {
-          if (jobIds.length === 0) {
-            await supabase.storage
-              .from(STUDY_PDF_INGEST_BUCKET)
-              .remove(uploadedPaths)
-              .catch(() => {});
-          }
-          setError(`${f.originalFileName}: ${messageFromUploadResponse(res, raw)}`);
-          setLoading(false);
-          return;
-        }
+      // Preserve upload order so tab numbering matches the file list.
+      const jobIds = startOutcomes
+        .map((o) => o.jobId)
+        .filter((id): id is string => Boolean(id));
+      const firstMaterialId =
+        startOutcomes.find((o) => o.materialId)?.materialId ?? null;
+      const failure = startOutcomes.find((o) => o.error);
 
-        let body: { materialId?: string; jobId?: string };
-        try {
-          body = JSON.parse(raw) as { materialId?: string; jobId?: string };
-        } catch {
-          setError("Invalid response from server.");
-          setLoading(false);
-          return;
-        }
-
-        if (typeof body.jobId === "string" && body.jobId) {
-          jobIds.push(body.jobId);
-        } else if (
-          typeof body.materialId === "string" &&
-          body.materialId &&
-          !firstMaterialId
-        ) {
-          firstMaterialId = body.materialId;
-        }
+      if (failure && jobIds.length === 0 && !firstMaterialId) {
+        await supabase.storage
+          .from(STUDY_PDF_INGEST_BUCKET)
+          .remove(uploadedPaths)
+          .catch(() => {});
+        setError(`${failure.file.originalFileName}: ${failure.error}`);
+        setLoading(false);
+        return;
       }
 
       setBuildProgress(null);

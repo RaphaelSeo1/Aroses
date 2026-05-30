@@ -18,6 +18,7 @@ import type {
   IngestChunkSummary,
 } from "@/lib/study-ingest/chunking";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
+import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 import type { CourseModule, CoursePayload } from "@/types/course";
 
 export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
@@ -384,6 +385,10 @@ async function createMessageWithRetries(
   const maxAttempts = opts?.maxAttempts ?? 5;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
+      await acquireClaudeBudget({
+        estOutputTokens: params.max_tokens,
+        messages: params.messages as { content: unknown }[],
+      });
       return await anthropic.messages.create({ ...params, stream: false });
     } catch (err) {
       lastErr = err;
@@ -427,6 +432,10 @@ async function readPdfIngestStreamOnce(
   },
   streamSink: PdfIngestStreamSink
 ): Promise<string> {
+  await acquireClaudeBudget({
+    estOutputTokens: params.max_tokens,
+    messages: params.messages as { content: unknown }[],
+  });
   const stream = anthropic.messages.stream({
     model: params.model,
     max_tokens: params.max_tokens,

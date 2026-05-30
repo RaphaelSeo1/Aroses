@@ -363,6 +363,19 @@ export function CourseBuildTheater({
     return () => clearTimeout(t);
   }, [jobIds]);
 
+  // Kick the server-side worker once so module building self-heals even if this
+  // tab is closed mid-build (the worker self-chains until all jobs finish).
+  useEffect(() => {
+    if (jobIds.length === 0) return;
+    void fetch("/api/process-pdf/worker", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ depth: 0 }),
+      cache: "no-store",
+      keepalive: true,
+    }).catch(() => {});
+  }, [jobIds]);
+
   useEffect(() => {
     if (jobIds.length === 0) return;
 
