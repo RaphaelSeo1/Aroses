@@ -21,6 +21,14 @@ import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 import type { CourseModule, CoursePayload } from "@/types/course";
 
+/**
+ * Outline / structure-plan calls wait only briefly for global Claude budget so
+ * the "planning" phase isn't starved by concurrent module writing (which holds
+ * the bulk of the per-minute token budget). These calls are tiny, so a short
+ * overshoot is safe and the reactive 429 backoff backstops it.
+ */
+const OUTLINE_BUDGET_WAIT_MS = 6_000;
+
 export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
 
 /**
@@ -379,7 +387,7 @@ async function createMessageWithRetries(
   params: Omit<Parameters<Anthropic["messages"]["create"]>[0], "stream"> & {
     stream?: false;
   },
-  opts?: { maxAttempts?: number }
+  opts?: { maxAttempts?: number; acquireMaxWaitMs?: number }
 ): Promise<Anthropic.Message> {
   let lastErr: unknown;
   const maxAttempts = opts?.maxAttempts ?? 5;
@@ -388,6 +396,9 @@ async function createMessageWithRetries(
       await acquireClaudeBudget({
         estOutputTokens: params.max_tokens,
         messages: params.messages as { content: unknown }[],
+        ...(opts?.acquireMaxWaitMs !== undefined
+          ? { maxWaitMs: opts.acquireMaxWaitMs }
+          : {}),
       });
       return await anthropic.messages.create({ ...params, stream: false });
     } catch (err) {
@@ -430,11 +441,13 @@ async function readPdfIngestStreamOnce(
     temperature?: number;
     messages: Anthropic.MessageCreateParams["messages"];
   },
-  streamSink: PdfIngestStreamSink
+  streamSink: PdfIngestStreamSink,
+  acquireMaxWaitMs?: number
 ): Promise<string> {
   await acquireClaudeBudget({
     estOutputTokens: params.max_tokens,
     messages: params.messages as { content: unknown }[],
+    ...(acquireMaxWaitMs !== undefined ? { maxWaitMs: acquireMaxWaitMs } : {}),
   });
   const stream = anthropic.messages.stream({
     model: params.model,
@@ -484,7 +497,14 @@ async function invokeUserMessageForPdfText(
     messages: Anthropic.MessageCreateParams["messages"];
   },
   streamSink: PdfIngestStreamSink | undefined,
-  maxAttemptsWhenNotStreaming: number
+  maxAttemptsWhenNotStreaming: number,
+  /**
+   * Max time to wait for global Claude budget before proceeding. Pass a small
+   * value for the outline / structure-plan phase so "planning" never stalls
+   * behind module writing (those calls are tiny, so a brief overshoot is safe
+   * and the reactive 429 backoff backstops it). Modules use the default.
+   */
+  acquireMaxWaitMs?: number
 ): Promise<string> {
   if (!streamSink) {
     const msg = await createMessageWithRetries(
@@ -497,13 +517,18 @@ async function invokeUserMessageForPdfText(
           : {}),
         messages: params.messages,
       },
-      { maxAttempts: maxAttemptsWhenNotStreaming }
+      { maxAttempts: maxAttemptsWhenNotStreaming, acquireMaxWaitMs }
     );
     return extractTextBlock(msg);
   }
 
   try {
-    return await readPdfIngestStreamOnce(anthropic, params, streamSink);
+    return await readPdfIngestStreamOnce(
+      anthropic,
+      params,
+      streamSink,
+      acquireMaxWaitMs
+    );
   } catch (err) {
     console.warn(
       "[study-generation] PDF ingest stream failed; falling back to non-streaming",
@@ -521,7 +546,7 @@ async function invokeUserMessageForPdfText(
           : {}),
         messages: params.messages,
       },
-      { maxAttempts: fallbackAttempts }
+      { maxAttempts: fallbackAttempts, acquireMaxWaitMs }
     );
     return extractTextBlock(msg);
   }
@@ -1083,7 +1108,8 @@ export async function planCourseStructureFromChunks(
       messages: [{ role: "user", content: instruction }],
     },
     streamSink,
-    maxAttempts
+    maxAttempts,
+    OUTLINE_BUDGET_WAIT_MS
   );
 
   let parsed: unknown;
@@ -1193,7 +1219,8 @@ export async function generateCourseOutlineFromMaterial(
       messages: [{ role: "user", content: instruction }],
     },
     streamSink,
-    maxAttempts
+    maxAttempts,
+    OUTLINE_BUDGET_WAIT_MS
   );
   let parsed: unknown;
   try {
