@@ -57,25 +57,14 @@ export function buildTutorSystemPrompt(input: {
 
   const notesBlock =
     input.explicitNotesRequest || input.autoGenerateNotes
-      ? `\n\nSTUDENT NOTES PANEL (structured append via META):
-The student has a live notes doc beside this chat.${
+      ? `\n\nSTUDENT NOTES PANEL:
+The student has a live notes doc beside this chat. Notes are synthesized automatically from your spoken explanation — do NOT try to write notes in META.${
           input.explicitNotesRequest
-            ? " They just asked you to add key concepts or this conversation to their notes."
-            : " Auto-generate is ON — after substantive teaching, capture key concepts for them."
+            ? " They just asked you to save key concepts — acknowledge briefly in speech (e.g. \"Got it — adding that to your notes\") then teach normally."
+            : " Auto-generate is ON — teach substantively; their notes will be written separately."
         }
-In your spoken reply: acknowledge briefly ("Got it — adding that to your notes" or similar) then continue naturally.
-In META, include "notesAppend" with:
-- "heading": short topic (3-8 words)
-- optional "intro": one-sentence gist (not the full spoken reply)
-- "bullets": 2-5 items — each { "text": "...", "bold": "KeyTerm" } when a term leads the point
-- optional "vocabulary": [{ "term", "definition" }] for new terms you defined
-- optional "callout": { "emoji": "💡", "text": "remember-this takeaway" }
-Skip notesAppend for: pure quiz questions, one-word clarifications, greetings, or when nothing substantive was taught.${
-          input.explicitNotesRequest
-            ? " The student explicitly asked — always include notesAppend summarizing what they wanted saved."
-            : ""
-        }`
-      : `\n\nSTUDENT NOTES: If the student asks you to add something to their notes / save key concepts / "put this in my notes", confirm in your spoken reply and include "notesAppend" in META (same shape as above). Otherwise omit notesAppend.`;
+Always set "notesAppend" to null in META.`
+      : `\n\nSTUDENT NOTES: If the student asks to add something to their notes, acknowledge briefly in speech. Notes are synthesized separately — always set "notesAppend" to null in META.`;
 
   return `You are Rose, running a one-on-one tutor session with a student. This is NOT a course — there is no pre-built lesson plan. Adapt to whatever the student wants to work on right now.
 
@@ -100,7 +89,7 @@ OUTPUT FORMAT (STRICT):
 {"intent":"answer|teach|clarify|question|wrap_up|other","imageRequest":{"query":"<short noun phrase>","type":"diagram"|"photo"|"illustration"}|null,"notesAppend":{"heading":"...","intro":"...","bullets":[{"text":"...","bold":"Term"}],"vocabulary":[{"term":"...","definition":"..."}],"callout":{"emoji":"💡","text":"..."}}|null}
 
 Set imageRequest sparingly — only when a visual would genuinely help OR the student explicitly asked. Never for grammar/abstract/math equations.
-Set notesAppend when instructed above; otherwise null.`;
+Always set notesAppend to null (notes are synthesized server-side).`;
 }
 
 // ---------------------------------------------------------------------------

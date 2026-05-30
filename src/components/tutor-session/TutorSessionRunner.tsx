@@ -13,7 +13,6 @@ import {
   studentRequestedNotesSave,
 } from "@/lib/mentored/build-auto-notes-from-tutor-turn";
 import { autoGenLog } from "@/lib/mentored/auto-generate-log";
-import type { TutorNotesAppend } from "@/lib/ai/tutor-session";
 import type {
   TutorSessionRecord,
   TutorSessionUpload,
@@ -229,28 +228,6 @@ export function TutorSessionRunner({
     setAutoGenerateNotes(next);
   }, []);
 
-  const notesAppendToBlock = useCallback(
-    (notes: TutorNotesAppend): AutoGenerateBlock | null => {
-      const bullets = notes.bullets ?? [];
-      if (
-        !notes.heading &&
-        bullets.length === 0 &&
-        !(notes.vocabulary?.length ?? 0) &&
-        !notes.callout
-      ) {
-        return null;
-      }
-      return {
-        heading: notes.heading,
-        intro: notes.intro,
-        bullets,
-        vocabulary: notes.vocabulary,
-        callout: notes.callout,
-      };
-    },
-    []
-  );
-
   const appendNotesBlock = useCallback(
     (
       block: AutoGenerateBlock,
@@ -274,24 +251,81 @@ export function TutorSessionRunner({
     [notesEditorReady]
   );
 
+  const synthesizeAndAppendNotes = useCallback(
+    async (
+      turnKey: string,
+      roseReply: string,
+      studentUtterance?: string,
+      opts?: { skipDedupe?: boolean }
+    ) => {
+      autoGenLog("tutor synthesize notes start", {
+        turnKey,
+        roseLen: roseReply.length,
+      });
+      try {
+        const res = await fetch(
+          `/api/tutor-session/${initial.id}/synthesize-notes`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ roseReply, studentUtterance }),
+          }
+        );
+        if (!res.ok) {
+          autoGenLog("tutor synthesize failed", {
+            turnKey,
+            status: res.status,
+          });
+          const fallback = buildAutoNotesFromTutorTurn(roseReply, {
+            headingHint: initial.title,
+          });
+          if (fallback) {
+            return appendNotesBlock(fallback, turnKey, opts);
+          }
+          return false;
+        }
+        const data = (await res.json()) as { block?: AutoGenerateBlock };
+        if (!data.block) return false;
+        return appendNotesBlock(data.block, turnKey, opts);
+      } catch (e) {
+        console.error("[TutorSessionRunner synthesizeNotes]", e);
+        autoGenLog("tutor synthesize error", { turnKey });
+        const fallback = buildAutoNotesFromTutorTurn(roseReply, {
+          headingHint: initial.title,
+        });
+        if (fallback) {
+          return appendNotesBlock(fallback, turnKey, opts);
+        }
+        return false;
+      }
+    },
+    [appendNotesBlock, initial.id, initial.title]
+  );
+
   const handleAutoGenerateUserToggle = useCallback(
     (next: boolean) => {
       autoGenLog("tutor user toggle auto-generate", { next });
       if (!next) return;
-      const lastAssistant = [...messagesRef.current]
+      const msgs = messagesRef.current;
+      const lastAssistant = [...msgs]
         .reverse()
         .find((m) => m.role === "assistant" && !m.streaming && m.content.trim());
       if (!lastAssistant) return;
-      const block = buildAutoNotesFromTutorTurn(lastAssistant.content, {
-        headingHint: initial.title,
-      });
-      if (block) {
-        appendNotesBlock(block, `toggle-${lastAssistant.id}`, {
-          skipDedupe: true,
-        });
-      }
+      const assistantIdx = msgs.findIndex((m) => m.id === lastAssistant.id);
+      const priorStudent =
+        assistantIdx > 0
+          ? [...msgs.slice(0, assistantIdx)]
+              .reverse()
+              .find((m) => m.role === "user" && m.content.trim())
+          : undefined;
+      void synthesizeAndAppendNotes(
+        `toggle-${lastAssistant.id}`,
+        lastAssistant.content,
+        priorStudent?.content,
+        { skipDedupe: true }
+      );
     },
-    [appendNotesBlock, initial.title]
+    [synthesizeAndAppendNotes]
   );
 
   // ----- mid-session uploads -----
@@ -586,7 +620,6 @@ export function TutorSessionRunner({
       }
 
       let turnIntent = "other";
-      let notesAppendedFromMeta = false;
 
       try {
         const res = await fetch(
@@ -646,7 +679,6 @@ export function TutorSessionRunner({
                     query?: string;
                     type?: string;
                   } | null;
-                  notesAppend?: TutorNotesAppend | null;
                 };
                 if (typeof parsed.intent === "string") {
                   turnIntent = parsed.intent;
@@ -658,12 +690,6 @@ export function TutorSessionRunner({
                       ? ir.type
                       : "illustration";
                   void fetchImageForMessage(assistantId, ir.query, t);
-                }
-                const block = parsed.notesAppend
-                  ? notesAppendToBlock(parsed.notesAppend)
-                  : null;
-                if (block) {
-                  notesAppendedFromMeta = appendNotesBlock(block, assistantId);
                 }
               } catch {
                 /* ignore malformed meta */
@@ -692,7 +718,6 @@ export function TutorSessionRunner({
         }
         if (
           !isSystem &&
-          !notesAppendedFromMeta &&
           finalContent.length > 40 &&
           (explicitNotesRequest ||
             (autoGenerateNotes &&
@@ -700,12 +725,12 @@ export function TutorSessionRunner({
                 turnIntent === "answer" ||
                 turnIntent === "clarify")))
         ) {
-          const fallback = buildAutoNotesFromTutorTurn(finalContent, {
-            headingHint: initial.title,
-          });
-          if (fallback) {
-            appendNotesBlock(fallback, assistantId);
-          }
+          const studentUtterance = isSystem ? undefined : text.trim();
+          void synthesizeAndAppendNotes(
+            assistantId,
+            finalContent,
+            studentUtterance || undefined
+          );
         }
       } catch (e) {
         console.error("[TutorSessionRunner submitTurn]", e);
@@ -738,9 +763,9 @@ export function TutorSessionRunner({
       fetchImageForMessage,
       initial.id,
       initial.title,
-      notesAppendToBlock,
       resumeSessionQuiet,
       submitting,
+      synthesizeAndAppendNotes,
       voice,
     ]
   );
@@ -813,43 +838,39 @@ export function TutorSessionRunner({
     [initial.id, submitTurn, uploading]
   );
 
-  // ----- "+ Add to notes" — push a message into the notes panel -----
+  // ----- "+ Add to notes" — synthesize structured notes from Rose's reply -----
   const addMessageToNotes = useCallback(
-    (msg: LocalMessage) => {
-      const handle = notesPanelRef.current;
-      if (!handle) return;
-      // We split the message text into a short heading + body. If
-      // the message has a natural lead sentence under ~70 chars we
-      // use it as the heading; otherwise we just use "From Rose".
+    async (msg: LocalMessage) => {
       const trimmed = msg.content.trim();
       if (!trimmed) return;
-      const firstSentence = trimmed.split(/(?<=[.!?])\s+/)[0] ?? trimmed;
-      const heading =
-        firstSentence.length > 0 && firstSentence.length <= 80
-          ? firstSentence.replace(/[.!?]$/, "")
-          : "From Rose";
-      const rest =
-        firstSentence === trimmed
-          ? undefined
-          : trimmed.slice(firstSentence.length).trim() || undefined;
-      const bulletCandidates = trimmed
-        .split(/(?<=[.!?])\s+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 24 && s.length < 280)
-        .slice(0, 4);
-      handle.appendBlock({
-        heading,
-        intro: rest,
-        bullets:
-          bulletCandidates.length > 1
-            ? bulletCandidates.map((line) => ({ text: line }))
-            : [],
-      });
-      setAddedNoteIds((prev) => {
-        const next = new Set(prev);
-        next.add(msg.id);
-        return next;
-      });
+
+      const msgs = messagesRef.current;
+      const msgIdx = msgs.findIndex((m) => m.id === msg.id);
+      const priorStudent =
+        msgIdx > 0
+          ? [...msgs.slice(0, msgIdx)]
+              .reverse()
+              .find((m) => m.role === "user" && m.content.trim())
+          : undefined;
+
+      setAddedNoteIds((prev) => new Set(prev).add(msg.id));
+
+      const ok = await synthesizeAndAppendNotes(
+        `manual-${msg.id}`,
+        trimmed,
+        priorStudent?.content,
+        { skipDedupe: true }
+      );
+
+      if (!ok) {
+        setAddedNoteIds((prev) => {
+          const next = new Set(prev);
+          next.delete(msg.id);
+          return next;
+        });
+        return;
+      }
+
       window.setTimeout(() => {
         setAddedNoteIds((prev) => {
           const next = new Set(prev);
@@ -858,7 +879,7 @@ export function TutorSessionRunner({
         });
       }, 2000);
     },
-    []
+    [synthesizeAndAppendNotes]
   );
 
   // ----- inactivity check-ins + auto-end -----
@@ -1133,9 +1154,9 @@ export function TutorSessionRunner({
   ]);
 
   return (
-    <main className="bg-app-gradient flex min-h-[calc(100vh-4rem)] flex-col">
+    <main className="bg-app-gradient flex h-[calc(100dvh-4rem)] flex-col overflow-hidden">
       {/* Sub-header: title + timer + end button */}
-      <div className="border-b border-white/60 bg-white/70 px-4 py-3 backdrop-blur-md sm:px-6">
+      <div className="shrink-0 border-b border-white/60 bg-white/70 px-4 py-3 backdrop-blur-md sm:px-6">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-700">
@@ -1198,12 +1219,12 @@ export function TutorSessionRunner({
           the conversation feed and the notes panel match width
           exactly. Below xl the notes panel hides and the chat takes
           the full width (notes are reachable later from the recap). */}
-      <div className="mx-auto grid w-full max-w-[84rem] flex-1 grid-cols-1 gap-4 px-3 py-4 xl:grid-cols-2 xl:gap-8 xl:px-6">
+      <div className="mx-auto grid w-full max-w-[84rem] min-h-0 flex-1 grid-cols-1 gap-4 px-3 py-4 xl:grid-cols-2 xl:gap-8 xl:px-6">
         {/* Left — conversation */}
-        <div className="flex min-h-[60vh] min-w-0 flex-col rounded-3xl border border-white/60 bg-white/85 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md">
+        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/85 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md">
           <div
             ref={scrollRef}
-            className="flex-1 space-y-3 overflow-y-auto px-4 py-5 sm:px-6 sm:py-7"
+            className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-5 sm:px-6 sm:py-7"
           >
             {(initial.referenceSummary || uploads.length > 0) ? (
               <UploadsRibbon
@@ -1414,9 +1435,9 @@ export function TutorSessionRunner({
           </div>
         </div>
 
-        {/* Right — notes panel */}
-        <div className="hidden min-w-0 xl:block">
-          <div className="sticky top-4">
+        {/* Right — notes panel (fills column height; transcript scrolls independently) */}
+        <div className="hidden min-h-0 min-w-0 xl:block">
+          <div className="h-full min-h-0">
             <NotesPanel
               notesEndpoint={`/api/tutor-session/${initial.id}/notes`}
               lessonTitle={initial.title}
@@ -1432,7 +1453,7 @@ export function TutorSessionRunner({
               onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
               onEditorReady={() => setNotesEditorReady(true)}
               editorRef={notesPanelRef}
-              className="h-[calc(100vh-200px)] min-h-[34rem]"
+              className="h-full min-h-0"
             />
           </div>
         </div>

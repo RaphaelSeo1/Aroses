@@ -765,7 +765,7 @@ export function NotesPanel({
           Extra horizontal padding at xl so on the 50/50 desktop
           layout the "Edited just now" stamp and the Auto-generate
           toggle don't sit pinned against the panel edges. */}
-      <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-5 py-2.5 xl:px-7">
+      <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-3 border-b border-zinc-100 bg-white/95 px-5 py-2.5 backdrop-blur-sm xl:px-7">
         <span
           className={`flex items-center gap-1.5 text-[11px] font-medium transition-opacity ${
             saving === "error"
