@@ -18,7 +18,7 @@ function parsePdfJobIds(raw: string | undefined): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter((id) => UUID_RE.test(id))
-    .slice(0, 12);
+    .slice(0, 20);
 }
 
 export default async function CourseStudyBuildPage({ params, searchParams }: Props) {

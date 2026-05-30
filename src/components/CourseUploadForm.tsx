@@ -325,7 +325,7 @@ export function CourseUploadForm({
     setBuildProgress({
       line:
         files.length > 1
-          ? `Uploading ${files.length} files for one course…`
+          ? `Uploading ${files.length} files…`
           : `${files[0].name} — Uploading…`,
       bar: "indeterminate",
     });
@@ -391,58 +391,91 @@ export function CourseUploadForm({
       }
 
       setBuildProgress({
-        line: "Starting course build…",
+        line:
+          apiFiles.length > 1
+            ? `Starting ${apiFiles.length} course builds…`
+            : "Starting course build…",
         bar: "indeterminate",
       });
 
-      let res: Response;
-      try {
-        res = await fetch("/api/process-pdf", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            courseId,
-            examGroupId,
-            files: apiFiles,
-            studyContext: studyGoal.trim() || undefined,
-          }),
-        });
-      } catch {
-        await supabase.storage
-          .from(STUDY_PDF_INGEST_BUCKET)
-          .remove(uploadedPaths)
-          .catch(() => {});
-        setError("Network error while starting build.");
-        setLoading(false);
-        return;
-      }
+      // One build per file: each upload becomes its own study material and
+      // builds in parallel (the build page polls all job ids at once).
+      const jobIds: string[] = [];
+      let firstMaterialId: string | null = null;
 
-      const raw = await res.text();
-      if (!res.ok) {
-        await supabase.storage
-          .from(STUDY_PDF_INGEST_BUCKET)
-          .remove(uploadedPaths)
-          .catch(() => {});
-        setError(messageFromUploadResponse(res, raw));
-        setLoading(false);
-        return;
-      }
+      for (let i = 0; i < apiFiles.length; i++) {
+        const f = apiFiles[i];
+        if (apiFiles.length > 1) {
+          setBuildProgress({
+            line: `Starting build ${i + 1}/${apiFiles.length}…`,
+            bar: "indeterminate",
+          });
+        }
 
-      let body: { materialId?: string; jobId?: string };
-      try {
-        body = JSON.parse(raw) as { materialId?: string; jobId?: string };
-      } catch {
-        setError("Invalid response from server.");
-        setLoading(false);
-        return;
+        let res: Response;
+        try {
+          res = await fetch("/api/process-pdf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              courseId,
+              examGroupId,
+              files: [f],
+              studyContext: studyGoal.trim() || undefined,
+            }),
+          });
+        } catch {
+          // Only clean up storage if no build has claimed these files yet.
+          if (jobIds.length === 0) {
+            await supabase.storage
+              .from(STUDY_PDF_INGEST_BUCKET)
+              .remove(uploadedPaths)
+              .catch(() => {});
+          }
+          setError(`${f.originalFileName}: Network error while starting build.`);
+          setLoading(false);
+          return;
+        }
+
+        const raw = await res.text();
+        if (!res.ok) {
+          if (jobIds.length === 0) {
+            await supabase.storage
+              .from(STUDY_PDF_INGEST_BUCKET)
+              .remove(uploadedPaths)
+              .catch(() => {});
+          }
+          setError(`${f.originalFileName}: ${messageFromUploadResponse(res, raw)}`);
+          setLoading(false);
+          return;
+        }
+
+        let body: { materialId?: string; jobId?: string };
+        try {
+          body = JSON.parse(raw) as { materialId?: string; jobId?: string };
+        } catch {
+          setError("Invalid response from server.");
+          setLoading(false);
+          return;
+        }
+
+        if (typeof body.jobId === "string" && body.jobId) {
+          jobIds.push(body.jobId);
+        } else if (
+          typeof body.materialId === "string" &&
+          body.materialId &&
+          !firstMaterialId
+        ) {
+          firstMaterialId = body.materialId;
+        }
       }
 
       setBuildProgress(null);
       setFiles([]);
 
-      if (typeof body.jobId === "string" && body.jobId) {
+      if (jobIds.length > 0) {
         const qs = new URLSearchParams();
-        qs.set("pdfJobs", body.jobId);
+        qs.set("pdfJobs", jobIds.join(","));
         qs.set("section", examGroupId);
         router.push(
           `/dashboard/courses/${courseId}/study/build?${qs.toString()}`
@@ -451,9 +484,9 @@ export function CourseUploadForm({
         return;
       }
 
-      if (typeof body.materialId === "string" && body.materialId) {
+      if (firstMaterialId) {
         router.push(
-          `/dashboard/courses/${courseId}/study?material=${encodeURIComponent(body.materialId)}`
+          `/dashboard/courses/${courseId}/study?material=${encodeURIComponent(firstMaterialId)}`
         );
         router.refresh();
         setLoading(false);
@@ -621,8 +654,8 @@ export function CourseUploadForm({
               : "Drag and drop your study material here"}
           </span>
           <span className="pointer-events-none mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-            PDFs, Word docs, slides, videos, audio, or images — multiple files
-            build one course
+            PDFs, Word docs, slides, videos, audio, or images — each file
+            builds its own course
           </span>
           <span className="pointer-events-none mt-1 text-xs text-zinc-400 dark:text-zinc-500">
             Limits: {INGEST_SIZE_HINT}
