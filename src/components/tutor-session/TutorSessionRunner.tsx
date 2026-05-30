@@ -13,7 +13,7 @@ import {
   studentRequestedNotesSave,
 } from "@/lib/mentored/build-auto-notes-from-tutor-turn";
 import { autoGenLog } from "@/lib/mentored/auto-generate-log";
-import { isLikelyNoiseTranscript } from "@/lib/mentored/is-likely-noise-transcript";
+import { isLikelyNoiseTranscript, isEchoOfAssistantSpeech } from "@/lib/mentored/is-likely-noise-transcript";
 import { isTutorTurnEligibleForNotes } from "@/lib/ai/synthesize-tutor-notes";
 import type {
   TutorSessionRecord,
@@ -84,6 +84,9 @@ const GENTLE_CHECK_IN_TEXT =
 const FINAL_CHECK_IN_TEXT =
   "I'll pause our session here for now — just press resume whenever you want to pick back up!";
 
+/** Wait after Rose stops speaking before live mode opens the mic. */
+const POST_SPEECH_COOLDOWN_MS = 1800;
+
 function inactivityLog(step: string, payload?: Record<string, unknown>): void {
   if (payload !== undefined) {
     console.log(`[tutor-inactivity] ${step}`, payload);
@@ -128,6 +131,7 @@ export function TutorSessionRunner({
   const [sessionBooting, setSessionBooting] = useState(
     () => (initial.transcript ?? []).length === 0
   );
+  const [liveListenDelayToken, setLiveListenDelayToken] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // ----- session timer -----
@@ -446,9 +450,39 @@ export function TutorSessionRunner({
   const activeTurnVoiceRef = useRef<ActiveTurnVoice | null>(null);
   const turnVoiceGenerationRef = useRef(0);
   const resumeTurnPlaybackRef = useRef<(() => Promise<void>) | null>(null);
-  const interruptedContextRef = useRef<string | null>(null);
+  const interruptedContextRef = useRef<{
+    spokenBefore: string;
+    notYetSpoken: string;
+  } | null>(null);
+  const activeTurnStreamRef = useRef<AbortController | null>(null);
+  const activeAssistantIdRef = useRef<string | null>(null);
+  const lastSpeechEndedAtRef = useRef(0);
 
-  // ----- auto-scroll the feed on new content -----
+  useEffect(() => {
+    if (!voice.state.speaking) {
+      lastSpeechEndedAtRef.current = Date.now();
+    }
+  }, [voice.state.speaking]);
+
+  const getRecentAssistantSpeech = useCallback((): string => {
+    const msgs = messagesRef.current;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m?.role === "assistant" && m.content.trim()) {
+        return m.content.trim();
+      }
+    }
+    return "";
+  }, []);
+
+  const shouldIgnoreLiveTranscript = useCallback(
+    (text: string): boolean => {
+      if (isLikelyNoiseTranscript(text)) return true;
+      if (isEchoOfAssistantSpeech(text, getRecentAssistantSpeech())) return true;
+      return false;
+    },
+    [getRecentAssistantSpeech]
+  );
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -602,7 +636,14 @@ export function TutorSessionRunner({
   const submitTurn = useCallback(
     async (utterance: string, opts?: { system?: boolean }) => {
       const text = utterance.trim();
-      if (!text || submitting) return;
+      if (!text) return;
+
+      if (submitting) {
+        activeTurnStreamRef.current?.abort();
+        turnVoiceGenerationRef.current += 1;
+        activeTurnVoiceRef.current = null;
+      }
+
       if (sessionPausedRef.current && !opts?.system) {
         await resumeSessionQuiet();
       }
@@ -611,6 +652,21 @@ export function TutorSessionRunner({
         !isSystem && studentRequestedNotesSave(text);
       const autoGenerateNotes = autoGenerateNotesRef.current;
       setComposer("");
+
+      const prevAssistantId = activeAssistantIdRef.current;
+      if (prevAssistantId && submitting) {
+        const partial = revealedSentencesRef.current.join(" ").trim();
+        if (partial) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === prevAssistantId
+                ? { ...m, streaming: false, content: partial }
+                : m
+            )
+          );
+        }
+      }
+
       setSubmitting(true);
       if (!isSystem) {
         lastStudentActivityRef.current = Date.now();
@@ -624,6 +680,7 @@ export function TutorSessionRunner({
         content: text,
       };
       const assistantId = `a-${Date.now()}`;
+      activeAssistantIdRef.current = assistantId;
       const assistantMsg: LocalMessage = {
         id: assistantId,
         role: "assistant",
@@ -738,8 +795,12 @@ export function TutorSessionRunner({
 
       let turnIntent = "other";
 
-      const interruptedAfter = interruptedContextRef.current;
-      if (interruptedAfter) interruptedContextRef.current = null;
+      const interruption = interruptedContextRef.current;
+      if (interruption) interruptedContextRef.current = null;
+
+      const streamAc = new AbortController();
+      activeTurnStreamRef.current?.abort();
+      activeTurnStreamRef.current = streamAc;
 
       try {
         const res = await fetch(
@@ -752,8 +813,11 @@ export function TutorSessionRunner({
               autoGenerateNotes: autoGenerateNotes && !isSystem,
               explicitNotesRequest,
               systemTurn: isSystem,
-              interruptedAfter: interruptedAfter ?? undefined,
+              interruptedAfter: interruption?.spokenBefore || undefined,
+              notYetSpoken: interruption?.notYetSpoken || undefined,
+              truncateLastAssistantTo: interruption?.spokenBefore || undefined,
             }),
+            signal: streamAc.signal,
           }
         );
         if (!res.ok || !res.body) {
@@ -824,13 +888,12 @@ export function TutorSessionRunner({
         }
         flushSentences(true);
         turnVoice.streamDone = true;
-        const finalContent =
-          revealedSentencesRef.current.length > 0
-            ? revealedSentencesRef.current.join(" ")
-            : buffered.trim();
+        const finalContent = buffered.trim() || revealedSentencesRef.current.join(" ");
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId ? { ...m, streaming: false } : m
+            m.id === assistantId
+              ? { ...m, streaming: false, content: finalContent }
+              : m
           )
         );
         if (isSystem) {
@@ -854,6 +917,10 @@ export function TutorSessionRunner({
           );
         }
       } catch (e) {
+        if (streamAc.signal.aborted) {
+          turnVoice.streamDone = true;
+          return;
+        }
         console.error("[TutorSessionRunner submitTurn]", e);
         turnVoice.streamDone = true;
         // Fallback: if we never revealed anything (TTS never fired
@@ -876,6 +943,9 @@ export function TutorSessionRunner({
         );
         if (isSystem) setSessionBooting(false);
       } finally {
+        if (activeTurnStreamRef.current === streamAc) {
+          activeTurnStreamRef.current = null;
+        }
         setSubmitting(false);
       }
     },
@@ -1058,20 +1128,26 @@ export function TutorSessionRunner({
       const text = await voice.transcribe(blob);
       if (epoch !== voiceCaptureEpochRef.current) return;
       if (voiceModeRef.current !== "live") return;
-      if (!text || isLikelyNoiseTranscript(text)) {
+      if (!text || shouldIgnoreLiveTranscript(text)) {
         interruptedContextRef.current = null;
-        await resumeTurnPlaybackRef.current?.();
+        if (opts?.fromBargeIn) {
+          await resumeTurnPlaybackRef.current?.();
+        }
         return;
       }
       if (opts?.fromBargeIn) {
+        const turn = activeTurnVoiceRef.current;
         const spokenBefore = revealedSentencesRef.current.join(" ").trim();
         if (spokenBefore.length >= 8) {
-          interruptedContextRef.current = spokenBefore;
+          const notYetSpoken = turn
+            ? turn.sentences.slice(turn.spokenCount).join(" ").trim()
+            : "";
+          interruptedContextRef.current = { spokenBefore, notYetSpoken };
         }
       }
       void submitTurn(text);
     },
-    [submitTurn, voice]
+    [shouldIgnoreLiveTranscript, submitTurn, voice]
   );
 
   const startLiveCapture = useCallback(async () => {
@@ -1098,8 +1174,8 @@ export function TutorSessionRunner({
     const blob = await promise;
     if (!blob) return;
     const text = await voice.transcribe(blob);
-    if (text) void submitTurn(text);
-  }, [submitTurn, voice]);
+    if (text && !shouldIgnoreLiveTranscript(text)) void submitTurn(text);
+  }, [shouldIgnoreLiveTranscript, submitTurn, voice]);
 
   // Single mic-button handler — branches on voiceMode. Live = tap to
   // record-till-silence. Push = used as a fallback "tap to start" but
@@ -1170,6 +1246,14 @@ export function TutorSessionRunner({
     if (voice.state.transcribing) return;
     if (submitting) return;
     if (liveCycleGuardRef.current) return;
+    const speechCooldownRemaining =
+      POST_SPEECH_COOLDOWN_MS - (Date.now() - lastSpeechEndedAtRef.current);
+    if (speechCooldownRemaining > 0) {
+      const t = window.setTimeout(() => {
+        setLiveListenDelayToken((n) => n + 1);
+      }, speechCooldownRemaining + 40);
+      return () => window.clearTimeout(t);
+    }
     // Don't auto-listen until Rose has had a chance to greet at
     // least once — otherwise we kick the mic open before greetedRef
     // even runs.
@@ -1185,8 +1269,7 @@ export function TutorSessionRunner({
         const text = await voice.transcribe(blob);
         if (epoch !== voiceCaptureEpochRef.current) return;
         if (voiceModeRef.current !== "live") return;
-        if (!text || isLikelyNoiseTranscript(text)) {
-          await resumeTurnPlaybackRef.current?.();
+        if (!text || shouldIgnoreLiveTranscript(text)) {
           return;
         }
         void submitTurn(text);
@@ -1199,6 +1282,7 @@ export function TutorSessionRunner({
       }
     })();
   }, [
+    shouldIgnoreLiveTranscript,
     submitting,
     voice,
     voice.state.recording,
@@ -1207,6 +1291,7 @@ export function TutorSessionRunner({
     voiceMode,
     submitTurn,
     sessionBooting,
+    liveListenDelayToken,
   ]);
 
   const resumeSessionWithWelcome = useCallback(async () => {

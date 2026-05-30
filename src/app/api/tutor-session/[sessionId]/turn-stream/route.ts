@@ -51,6 +51,10 @@ export async function POST(request: Request, ctx: Params) {
     systemTurn?: unknown;
     /** Rose text already spoken before a voice barge-in. */
     interruptedAfter?: unknown;
+    /** Rose text generated but not yet spoken when interrupted. */
+    notYetSpoken?: unknown;
+    /** When set, replace the last assistant transcript row before this turn. */
+    truncateLastAssistantTo?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -75,6 +79,14 @@ export async function POST(request: Request, ctx: Params) {
   const interruptedAfter =
     typeof body.interruptedAfter === "string"
       ? body.interruptedAfter.trim().slice(0, 800)
+      : undefined;
+  const notYetSpoken =
+    typeof body.notYetSpoken === "string"
+      ? body.notYetSpoken.trim().slice(0, 800)
+      : undefined;
+  const truncateLastAssistantTo =
+    typeof body.truncateLastAssistantTo === "string"
+      ? body.truncateLastAssistantTo.trim().slice(0, 4000)
       : undefined;
 
   const supabase = await createClient();
@@ -116,11 +128,35 @@ export async function POST(request: Request, ctx: Params) {
     );
   }
 
-  const history: TutorSessionMessage[] = Array.isArray(
+  let history: TutorSessionMessage[] = Array.isArray(
     sessionRow.conversation_transcript
   )
     ? (sessionRow.conversation_transcript as TutorSessionMessage[])
     : [];
+
+  if (
+    truncateLastAssistantTo &&
+    history.length > 0 &&
+    history[history.length - 1]?.role === "assistant"
+  ) {
+    history = [
+      ...history.slice(0, -1),
+      {
+        ...history[history.length - 1]!,
+        content: truncateLastAssistantTo,
+      },
+    ];
+    await supabase
+      .from("tutor_sessions")
+      .update({
+        conversation_transcript: history,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", sessionId)
+      .eq("user_id", user.id);
+  }
+
+  const transcriptLenAtStart = history.length;
 
   const userMessage: TutorSessionMessage = {
     role: "user",
@@ -170,6 +206,7 @@ export async function POST(request: Request, ctx: Params) {
           autoGenerateNotes,
           explicitNotesRequest,
           interruptedAfter,
+          notYetSpoken,
         })) {
           if (evt.type === "text") {
             assistantText += evt.delta;
@@ -183,6 +220,11 @@ export async function POST(request: Request, ctx: Params) {
           }
         }
 
+        if (request.signal.aborted) {
+          send("error", { message: "stream aborted" });
+          return;
+        }
+
         // 2. Append assistant turn. Then schedule a summary refresh
         //    every 6 messages — cheap Haiku call, doesn't block the
         //    response back to the client.
@@ -191,8 +233,33 @@ export async function POST(request: Request, ctx: Params) {
           content: assistantText.trim() || "(no response)",
           ts: Date.now(),
         };
+        const { data: freshRow } = await supabase
+          .from("tutor_sessions")
+          .select("conversation_transcript")
+          .eq("id", sessionId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        const freshHistory: TutorSessionMessage[] = Array.isArray(
+          freshRow?.conversation_transcript
+        )
+          ? (freshRow.conversation_transcript as TutorSessionMessage[])
+          : [];
+
+        const expectedLen = transcriptLenAtStart + (systemTurn ? 0 : 1);
+        if (freshHistory.length !== expectedLen) {
+          console.warn("[tutor turn-stream] stale stream — skipping persist", {
+            sessionId,
+            expectedLen,
+            actualLen: freshHistory.length,
+          });
+          send("done", { ok: true, skippedPersist: true });
+          return;
+        }
+
+        const baseTranscript = freshHistory;
         const transcriptAfterAssistant = [
-          ...transcriptAfterUser,
+          ...baseTranscript,
           assistantMessage,
         ];
 

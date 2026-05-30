@@ -45,6 +45,8 @@ export function buildTutorSystemPrompt(input: {
   explicitNotesRequest?: boolean;
   /** Verbatim text Rose had spoken before a barge-in interruption. */
   interruptedAfter?: string;
+  /** Remaining reply Rose had generated but not spoken yet. */
+  notYetSpoken?: string;
 }): string {
   const modeBlock = input.modeTag ? MODE_INSTRUCTIONS[input.modeTag] : "";
   const topicBlock = input.topic.trim()
@@ -72,12 +74,26 @@ Always set "notesAppend" to null in META.`
     input.interruptedAfter && input.interruptedAfter.trim().length > 0
       ? `
 
-INTERRUPTION: The student cut you off mid-sentence. Below is exactly what you had already said aloud. Briefly acknowledge them, answer what they said, then offer to pick up where you left off — do NOT restart the whole explanation from scratch.
+INTERRUPTION: The student cut you off mid-sentence. You had already said part of your reply out loud; the rest was generated but NOT spoken yet.
 
-ALREADY SPOKEN (verbatim — do not repeat unless they ask):
+ALREADY SPOKEN (they heard this — do NOT repeat any of it):
 """
 ${input.interruptedAfter.trim().slice(0, 800)}
+"""${
+          input.notYetSpoken && input.notYetSpoken.trim().length > 0
+            ? `
+
+NOT YET SPOKEN (they did NOT hear this — you may continue from here ONLY if they ask to resume; otherwise move on):
+"""
+${input.notYetSpoken.trim().slice(0, 800)}
 """`
+            : ""
+        }
+
+How to respond:
+1. Briefly acknowledge the interruption, then address their new message.
+2. Do NOT re-explain concepts from ALREADY SPOKEN or from earlier in this session unless they explicitly ask you to repeat.
+3. Only offer to resume the NOT YET SPOKEN portion if they clearly want you to continue — never loop the same offer every turn.`
       : "";
 
   return `You are Rose, running a one-on-one tutor session with a student. This is NOT a course — there is no pre-built lesson plan. Adapt to whatever the student wants to work on right now.
@@ -90,6 +106,7 @@ CORE BEHAVIOR:
 - Periodically check understanding — every 2-3 explanations, not every sentence.
 - You can ask questions, present problems, run mini-quizzes, or just explain — whichever fits.
 - ALWAYS be encouraging. Never make the student feel stupid for not knowing something.
+- MEMORY: Read the conversation history and discussion summary. Do NOT re-teach concepts you already explained in this session unless the student asks you to repeat or clearly did not understand.
 
 QUESTION SCOPE RULES (strict):
 - Only ask about content YOU have just explained OR that's in the uploaded reference materials. Don't pop quiz on random adjacent topics.
@@ -124,6 +141,8 @@ export type TutorTurnInput = {
   explicitNotesRequest?: boolean;
   /** What Rose had already spoken aloud before the student barged in. */
   interruptedAfter?: string;
+  /** Generated text Rose had not spoken yet when interrupted. */
+  notYetSpoken?: string;
 };
 
 export type TutorTurnImageRequest = {
@@ -267,6 +286,7 @@ export async function* runTutorTurnStream(
     autoGenerateNotes: input.autoGenerateNotes,
     explicitNotesRequest: input.explicitNotesRequest,
     interruptedAfter: input.interruptedAfter,
+    notYetSpoken: input.notYetSpoken,
   });
 
   const trimmedHistory = input.history.slice(-20);
