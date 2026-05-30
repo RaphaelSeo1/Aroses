@@ -28,7 +28,14 @@ export function DashboardHomeContent({
   omitHeader?: boolean;
 }) {
   const hasOwned = ownedCourses.length > 0;
-  const empty = !hasOwned && studyingCourses.length === 0;
+  // The "Continue studying" carousel is driven by `progress.recentPractice`,
+  // which can have entries even when `studyingCourses` is empty (the two come
+  // from different queries). Treat the dashboard as empty only when ALL three
+  // sources are empty, so we never render "Nothing here yet" directly below
+  // courses the user is actively studying.
+  const isStudyingSomething =
+    studyingCourses.length > 0 || (progress.recentPractice?.length ?? 0) > 0;
+  const empty = !hasOwned && !isStudyingSomething;
 
   return (
     <>
