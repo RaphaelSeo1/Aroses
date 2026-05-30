@@ -345,50 +345,80 @@ export function CourseUploadForm({
       }
 
       const userId = user.id;
-      const apiFiles: { storagePath: string; originalFileName: string }[] = [];
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+      // Validate + resolve a storage path for every file first (fail fast on an
+      // unsupported format before we start uploading anything).
+      type PreparedUpload = {
+        file: File;
+        pathInfo: NonNullable<ReturnType<typeof ingestStoragePathForFile>>;
+      };
+      const prepared: PreparedUpload[] = [];
+      for (const file of files) {
         const pathInfo = ingestStoragePathForFile(userId, file);
         if (!pathInfo) {
           setError(`${file.name}: unsupported format.`);
           setLoading(false);
           return;
         }
-
-        setBuildProgress({
-          line: `Uploading ${i + 1}/${files.length}: ${file.name}…`,
-          bar: "indeterminate",
-        });
-
-        const { error: upErr } = await supabase.storage
-          .from(STUDY_PDF_INGEST_BUCKET)
-          .upload(pathInfo.storagePath, file, {
-            contentType: pathInfo.contentType,
-            cacheControl: "3600",
-            upsert: false,
-          });
-
-        if (upErr) {
-          const detail =
-            typeof upErr === "object" && upErr && "message" in upErr
-              ? String((upErr as { message: unknown }).message)
-              : String(upErr);
-          await supabase.storage
-            .from(STUDY_PDF_INGEST_BUCKET)
-            .remove(uploadedPaths)
-            .catch(() => {});
-          setError(`${file.name}: ${describePdfIngestUploadFailure(detail)}`);
-          setLoading(false);
-          return;
-        }
-
-        uploadedPaths.push(pathInfo.storagePath);
-        apiFiles.push({
-          storagePath: pathInfo.storagePath,
-          originalFileName: file.name,
-        });
+        prepared.push({ file, pathInfo });
       }
+
+      // Upload all files to storage in parallel so they land together instead
+      // of counting up one-by-one.
+      type UploadResult = {
+        storagePath: string;
+        originalFileName: string;
+        error?: string;
+      };
+      const uploadResults: UploadResult[] = await Promise.all(
+        prepared.map(async ({ file, pathInfo }): Promise<UploadResult> => {
+          const { error: upErr } = await supabase.storage
+            .from(STUDY_PDF_INGEST_BUCKET)
+            .upload(pathInfo.storagePath, file, {
+              contentType: pathInfo.contentType,
+              cacheControl: "3600",
+              upsert: false,
+            });
+          if (upErr) {
+            const detail =
+              typeof upErr === "object" && upErr && "message" in upErr
+                ? String((upErr as { message: unknown }).message)
+                : String(upErr);
+            return {
+              storagePath: pathInfo.storagePath,
+              originalFileName: file.name,
+              error: describePdfIngestUploadFailure(detail),
+            };
+          }
+          return {
+            storagePath: pathInfo.storagePath,
+            originalFileName: file.name,
+          };
+        })
+      );
+
+      // Track everything that actually landed so we can clean up on failure.
+      for (const r of uploadResults) {
+        if (!r.error) uploadedPaths.push(r.storagePath);
+      }
+
+      const uploadFailure = uploadResults.find((r) => r.error);
+      if (uploadFailure) {
+        await supabase.storage
+          .from(STUDY_PDF_INGEST_BUCKET)
+          .remove(uploadedPaths)
+          .catch(() => {});
+        setError(
+          `${uploadFailure.originalFileName}: ${uploadFailure.error}`
+        );
+        setLoading(false);
+        return;
+      }
+
+      const apiFiles = uploadResults.map((r) => ({
+        storagePath: r.storagePath,
+        originalFileName: r.originalFileName,
+      }));
 
       setBuildProgress({
         line:
