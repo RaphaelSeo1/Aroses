@@ -224,7 +224,10 @@ export function NotesPanel({
   );
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const titleSaveTimerRef = useRef<number | null>(null);
   const initialDocRef = useRef<unknown | null>(null);
+  const notesHydratedRef = useRef(false);
+  const docChromeDirtyRef = useRef(false);
   const defaultTitle = courseTitle || lessonTitle || "Notes";
   const [docTitle, setDocTitle] = useState(defaultTitle);
   const [docEmoji, setDocEmoji] = useState(() =>
@@ -552,6 +555,7 @@ export function NotesPanel({
         }
         if (!cancelled) {
           autoGenLog("notes panel ready — firing onEditorReady");
+          notesHydratedRef.current = true;
           onEditorReady?.();
         }
       } catch (e) {
@@ -575,14 +579,25 @@ export function NotesPanel({
     return () => window.removeEventListener("mousedown", onPointer);
   }, [emojiPickerOpen]);
 
-  const saveNow = useCallback(async () => {
-    if (!editor || editor.isDestroyed) return;
+  const buildSavePayload = useCallback((): {
+    contentJson: unknown;
+    contentText: string;
+  } | null => {
+    if (!editor || editor.isDestroyed) return null;
     editor.commands.updateAttributes("doc", {
       roseDocTitle: docTitle.trim(),
       roseDocEmoji: docEmoji,
     });
-    const jsonWithMeta = editor.getJSON();
-    const text = docToPlainText(jsonWithMeta);
+    const contentJson = editor.getJSON();
+    return {
+      contentJson,
+      contentText: docToPlainText(contentJson),
+    };
+  }, [docEmoji, docTitle, editor]);
+
+  const saveNow = useCallback(async () => {
+    const payload = buildSavePayload();
+    if (!payload) return;
     setSaving("saving");
     const attempt = async (): Promise<boolean> => {
       try {
@@ -590,8 +605,8 @@ export function NotesPanel({
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contentJson: jsonWithMeta,
-            contentText: text,
+            contentJson: payload.contentJson,
+            contentText: payload.contentText,
           }),
         });
         return res.ok;
@@ -605,6 +620,7 @@ export function NotesPanel({
       ok = await attempt();
     }
     if (ok) {
+      docChromeDirtyRef.current = false;
       const now = Date.now();
       setLastSavedAt(now);
       setSaving("saved");
@@ -614,7 +630,7 @@ export function NotesPanel({
     } else {
       setSaving("error");
     }
-  }, [docEmoji, docTitle, editor, endpoint]);
+  }, [buildSavePayload, endpoint]);
 
   const persistDocChrome = useCallback(() => {
     void saveNow();
@@ -637,6 +653,43 @@ export function NotesPanel({
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
   }, [editor, saveNow]);
+
+  // Title + emoji live outside the TipTap doc — debounce-save when they change.
+  useEffect(() => {
+    if (!notesHydratedRef.current || !docChromeDirtyRef.current) return;
+    if (!editor || editor.isDestroyed) return;
+    if (titleSaveTimerRef.current) {
+      window.clearTimeout(titleSaveTimerRef.current);
+    }
+    titleSaveTimerRef.current = window.setTimeout(() => {
+      void saveNow();
+    }, 600);
+    return () => {
+      if (titleSaveTimerRef.current) {
+        window.clearTimeout(titleSaveTimerRef.current);
+      }
+    };
+  }, [docEmoji, docTitle, editor, saveNow]);
+
+  // Best-effort flush before navigation so title edits aren't lost on refresh.
+  useEffect(() => {
+    const flush = () => {
+      if (!docChromeDirtyRef.current) return;
+      const payload = buildSavePayload();
+      if (!payload) return;
+      void fetch(endpoint, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contentJson: payload.contentJson,
+          contentText: payload.contentText,
+        }),
+        keepalive: true,
+      });
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [buildSavePayload, endpoint]);
 
   // Auto-generate toggle: persist immediately via a payload-only PUT.
   const onToggleAutoGenerate = useCallback(
@@ -662,22 +715,22 @@ export function NotesPanel({
         autoGenLog("persist skipped — no editor for PUT");
         return;
       }
-      const json = editor.getJSON();
-      const text = docToPlainText(json);
-      const payload = {
-        contentJson: json,
-        contentText: text,
+      const payload = buildSavePayload();
+      if (!payload) return;
+      const body = {
+        contentJson: payload.contentJson,
+        contentText: payload.contentText,
         autoGenerate: next,
       };
       autoGenLog("sending request to persist toggle", {
         endpoint,
-        payload: { autoGenerate: next, contentTextLength: text.length },
+        payload: { autoGenerate: next, contentTextLength: payload.contentText.length },
       });
       try {
         const res = await fetch(endpoint, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(body),
         });
         const bodyText = await res.text();
         autoGenLog("persist toggle response received", {
@@ -697,6 +750,7 @@ export function NotesPanel({
     [
       autoGenerate,
       autoGenerateBackfillOnlyWhenEmpty,
+      buildSavePayload,
       editor,
       endpoint,
       onAutoGenerateChange,
@@ -844,6 +898,7 @@ export function NotesPanel({
                       type="button"
                       onClick={() => {
                         setDocEmoji(emoji);
+                        docChromeDirtyRef.current = true;
                         setEmojiPickerOpen(false);
                         persistDocChrome();
                       }}
@@ -860,7 +915,10 @@ export function NotesPanel({
             <input
               type="text"
               value={docTitle}
-              onChange={(e) => setDocTitle(e.target.value)}
+              onChange={(e) => {
+                docChromeDirtyRef.current = true;
+                setDocTitle(e.target.value);
+              }}
               onBlur={() => persistDocChrome()}
               placeholder="Untitled notes"
               className="w-full border-none bg-transparent text-2xl font-semibold tracking-tight text-zinc-900 placeholder:text-zinc-300 focus:outline-none focus:ring-0"
