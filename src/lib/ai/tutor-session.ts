@@ -56,7 +56,13 @@ export function buildTutorSystemPrompt(input: {
     ? `\n\nREFERENCE MATERIALS THE STUDENT UPLOADED (CONTEXT — not a course you need to teach systematically; use to ground your explanations, match the professor's framing, and reference specific parts when relevant):\n"""\n${input.referenceSummary.trim().slice(0, 4000)}\n"""`
     : "";
   const discussionBlock = input.discussionSummary.trim()
-    ? `\n\nWHAT YOU HAVE ALREADY COVERED IN THIS SESSION (running summary — don't repeat these explanations from scratch):\n${input.discussionSummary.trim().slice(0, 2000)}`
+    ? `\n\nWHAT YOU HAVE ALREADY COVERED IN THIS SESSION (running summary — treat as ground truth for session memory):
+${input.discussionSummary.trim().slice(0, 2800)}
+
+CONTINUITY RULES (strict):
+- If a concept is listed above or appears in recent transcript, the student ALREADY heard your explanation. Do NOT re-teach it from scratch.
+- When a new topic connects to something earlier, reference it briefly ("remember Sarbanes-Oxley from earlier?") and build forward — one sentence max, then new material.
+- Only re-explain a prior concept if the student explicitly asks ("can you explain X again?", "I forgot that part") or clearly shows they don't understand.`
     : "";
 
   const notesBlock =
@@ -106,7 +112,7 @@ CORE BEHAVIOR:
 - Periodically check understanding — every 2-3 explanations, not every sentence.
 - You can ask questions, present problems, run mini-quizzes, or just explain — whichever fits.
 - ALWAYS be encouraging. Never make the student feel stupid for not knowing something.
-- MEMORY: Read the conversation history and discussion summary. Do NOT re-teach concepts you already explained in this session unless the student asks you to repeat or clearly did not understand.
+- MEMORY: Read the conversation history and discussion summary. Do NOT re-teach concepts you already explained in this session unless the student asks you to repeat or clearly did not understand. When revisiting an earlier topic, assume they remember it and connect forward — don't restart the lecture.
 
 QUESTION SCOPE RULES (strict):
 - Only ask about content YOU have just explained OR that's in the uploaded reference materials. Don't pop quiz on random adjacent topics.
@@ -289,7 +295,7 @@ export async function* runTutorTurnStream(
     notYetSpoken: input.notYetSpoken,
   });
 
-  const trimmedHistory = input.history.slice(-20);
+  const trimmedHistory = input.history.slice(-32);
   const messages = [
     ...trimmedHistory.map((m) => ({
       role: m.role,
@@ -507,9 +513,22 @@ export async function refreshDiscussionSummary(input: {
     const anthropic = new Anthropic({ apiKey, timeout: 15_000, maxRetries: 0 });
     const msg = await anthropic.messages.create({
       model: FAST_MODEL,
-      max_tokens: 250,
+      max_tokens: 500,
       temperature: 0.2,
-      system: `You maintain a running summary of what an AI tutor and their student have discussed so far. Given the previous summary and the most recent exchanges, output an updated summary (4-8 short bullet points, dash-prefixed, no markdown headings). Focus on CONCEPTS COVERED, not pleasantries.`,
+      system: `You maintain a running summary of what an AI tutor and their student have discussed in a tutor session.
+
+Output format (plain text, no markdown headings):
+CONCEPTS COVERED (do not re-teach these):
+- bullet list of every substantive concept, law, mechanism, or definition explained so far
+
+RECENT FLOW:
+- 2-4 bullets on what topics were discussed most recently and where the conversation left off
+
+RULES:
+- MERGE with the previous summary — never drop concepts from earlier in the session.
+- Add new concepts from recent exchanges; keep prior ones unless the student explicitly replaced them.
+- Ignore pleasantries, check-ins, and session logistics.
+- Be specific (e.g. "Sarbanes-Oxley CEO/CFO certification" not "accounting rules").`,
       messages: [
         {
           role: "user",
@@ -519,7 +538,7 @@ export async function refreshDiscussionSummary(input: {
     });
     const block = msg.content.find((b) => b.type === "text");
     return block && block.type === "text"
-      ? block.text.trim().slice(0, 1600)
+      ? block.text.trim().slice(0, 2800)
       : input.previousSummary;
   } catch (e) {
     console.error("[refreshDiscussionSummary]", e);

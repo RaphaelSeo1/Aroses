@@ -265,9 +265,12 @@ export async function POST(request: Request, ctx: Params) {
 
         const totalMessages = transcriptAfterAssistant.length;
         let nextDiscussionSummary = sessionRow.discussion_summary ?? "";
-        if (totalMessages % 6 === 0) {
+        const shouldRefreshSummary =
+          totalMessages % 4 === 0 ||
+          (!nextDiscussionSummary.trim() && totalMessages >= 4);
+        if (shouldRefreshSummary) {
           try {
-            const recent = transcriptAfterAssistant.slice(-6);
+            const recent = transcriptAfterAssistant.slice(-8);
             nextDiscussionSummary = await refreshDiscussionSummary({
               previousSummary: nextDiscussionSummary,
               recentMessages: recent,
