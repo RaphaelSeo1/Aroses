@@ -3,12 +3,14 @@
 /**
  * Soft animated cloud background for the immersive Mentored Learning view.
  *
- * Six radial-gradient "puffs" drift across the viewport at very slow speeds
- * over a pale blue-to-white base. Pure CSS keyframes (defined inline so the
- * component is self-contained) — no canvas, no JS animation frames.
+ * Six radial-gradient "puffs" over a pale blue-to-white base.
  *
- * The puffs are positioned with negative offsets so they enter and exit the
- * viewport edges without revealing the gradient seam.
+ * PERFORMANCE: the puffs are intentionally STATIC (no drift animation).
+ * Animating large `filter: blur()` elements forces the GPU to re-rasterize
+ * them every frame, and because the immersive glass panels sit on top with a
+ * `backdrop-filter`, that blur was being recomputed continuously too — the
+ * main driver of the "fans spin up / everything lags" problem. Keeping the
+ * clouds still lets the browser cache the blurred backdrop once.
  */
 export function CloudBackground() {
   return (
@@ -41,7 +43,8 @@ export function CloudBackground() {
           border-radius: 9999px;
           filter: blur(34px);
           opacity: 0.7;
-          will-change: transform;
+          /* Static: no will-change (it would needlessly pin a compositor
+             layer) and no animation — see the performance note above. */
           transform: translateZ(0);
           contain: layout paint;
         }
@@ -65,7 +68,6 @@ export function CloudBackground() {
             rgba(255, 255, 255, 0.95),
             rgba(255, 255, 255, 0)
           );
-          animation: drift-a 38s ease-in-out infinite alternate;
         }
         .cb-puff-b {
           width: 32rem;
@@ -77,7 +79,6 @@ export function CloudBackground() {
             rgba(244, 207, 233, 0.85),
             rgba(244, 207, 233, 0)
           );
-          animation: drift-b 46s ease-in-out infinite alternate;
         }
         .cb-puff-c {
           width: 44rem;
@@ -89,7 +90,6 @@ export function CloudBackground() {
             rgba(220, 235, 255, 0.9),
             rgba(220, 235, 255, 0)
           );
-          animation: drift-c 52s ease-in-out infinite alternate;
         }
         .cb-puff-d {
           width: 28rem;
@@ -101,7 +101,6 @@ export function CloudBackground() {
             rgba(232, 217, 255, 0.7),
             rgba(232, 217, 255, 0)
           );
-          animation: drift-d 60s ease-in-out infinite alternate;
         }
         .cb-puff-e {
           width: 24rem;
@@ -113,7 +112,6 @@ export function CloudBackground() {
             rgba(255, 240, 245, 0.55),
             rgba(255, 240, 245, 0)
           );
-          animation: drift-e 70s ease-in-out infinite alternate;
         }
         .cb-puff-f {
           width: 30rem;
@@ -125,60 +123,6 @@ export function CloudBackground() {
             rgba(255, 255, 255, 0.55),
             rgba(255, 255, 255, 0)
           );
-          animation: drift-f 56s ease-in-out infinite alternate;
-        }
-        @keyframes drift-a {
-          0% {
-            transform: translate(0, 0);
-          }
-          100% {
-            transform: translate(4rem, 2rem);
-          }
-        }
-        @keyframes drift-b {
-          0% {
-            transform: translate(0, 0);
-          }
-          100% {
-            transform: translate(-3rem, 3rem);
-          }
-        }
-        @keyframes drift-c {
-          0% {
-            transform: translate(0, 0);
-          }
-          100% {
-            transform: translate(5rem, -3rem);
-          }
-        }
-        @keyframes drift-d {
-          0% {
-            transform: translate(0, 0);
-          }
-          100% {
-            transform: translate(-4rem, -2rem);
-          }
-        }
-        @keyframes drift-e {
-          0% {
-            transform: translate(0, 0);
-          }
-          100% {
-            transform: translate(-2rem, 4rem);
-          }
-        }
-        @keyframes drift-f {
-          0% {
-            transform: translate(0, 0);
-          }
-          100% {
-            transform: translate(3rem, -4rem);
-          }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .cb-puff {
-            animation: none;
-          }
         }
       `}</style>
     </div>

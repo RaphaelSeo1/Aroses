@@ -63,7 +63,11 @@ export function AnimatedWaveform({
       rect.setAttribute("height", String(h));
     };
 
-    if (reducedMotion) {
+    // Freeze the bars (no rAF loop) when reduced-motion is requested OR when
+    // idle. The waveform only needs to animate while Rose is actually speaking
+    // or the mic is listening — running a 60fps loop the entire session was
+    // burning CPU/GPU for a barely-visible idle pulse.
+    if (reducedMotion || mode === "idle") {
       const staticHeight =
         mode === "speaking" ? 32 : mode === "listening" ? 18 : 8;
       for (let i = 0; i < BARS; i++) {
@@ -147,17 +151,11 @@ export function AnimatedWaveform({
             <stop offset="55%" stopColor="#c084fc" />
             <stop offset="100%" stopColor="#818cf8" />
           </linearGradient>
-          {/* Tight filter region — just enough room for the blur without
-              spilling outside the SVG's own bounds. */}
-          <filter id="wf-glow" x="-5%" y="-5%" width="110%" height="110%">
-            <feGaussianBlur stdDeviation="1.6" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
         </defs>
-        <g filter="url(#wf-glow)">{initialBars}</g>
+        {/* No SVG blur filter: an feGaussianBlur re-runs on every animated
+            frame (the bars change height each tick), which was needlessly
+            expensive. The gradient bars read fine on their own. */}
+        <g>{initialBars}</g>
       </svg>
     </div>
   );

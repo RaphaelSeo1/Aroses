@@ -4,9 +4,14 @@ import {
   loadCourseProgress,
   upsertCourseProgress,
 } from "@/lib/course-progress/db";
+import { orderMaterialIds } from "@/lib/study/order-material-ids";
 import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
-import { fetchStudyMaterialForPublicExplore } from "@/lib/supabase/fetch-explore-study-material";
+import {
+  fetchExamGroupIdsOrderForPublicExplore,
+  fetchStudyMaterialForPublicExplore,
+  fetchStudyMaterialsOutlineRowsForPublicExplore,
+} from "@/lib/supabase/fetch-explore-study-material";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
 import type {
@@ -269,6 +274,18 @@ export default async function ExploreLearnPage({
     lastMode: "mentored",
   });
 
+  // Ordered material ids (section, then position) so the runner can advance
+  // into the next material once this one is finished. Uses the explore helpers
+  // that fall back to the admin client when RLS hides rows from anon learners.
+  const [outlineRows, groupOrderIds] = await Promise.all([
+    fetchStudyMaterialsOutlineRowsForPublicExplore(supabase, courseRow.id),
+    fetchExamGroupIdsOrderForPublicExplore(supabase, courseRow.id),
+  ]);
+  const materialIds = orderMaterialIds(
+    outlineRows,
+    groupOrderIds.map((id, i) => ({ id, sort_order: i }))
+  );
+
   return (
     <ImmersiveLearnClient
       courseId={courseId}
@@ -277,6 +294,7 @@ export default async function ExploreLearnPage({
       initialModuleId={initialModuleId}
       initialOnboarding={initialOnboarding}
       initialMode={initialMode}
+      materialIds={materialIds}
       surface="explore"
     />
   );

@@ -4,6 +4,7 @@ import {
   loadCourseProgress,
   upsertCourseProgress,
 } from "@/lib/course-progress/db";
+import { orderMaterialIds } from "@/lib/study/order-material-ids";
 import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
@@ -246,6 +247,21 @@ export default async function LearnPage({ params, searchParams }: Props) {
     lastMode: "mentored",
   });
 
+  // All materials in this course, in learning order (by section, then position),
+  // so the runner can roll the student into the next section once they finish
+  // the current material.
+  const [{ data: courseMaterials }, { data: examGroups }] = await Promise.all([
+    supabase
+      .from("study_materials")
+      .select("id, exam_group_id, sort_order, created_at")
+      .eq("course_id", courseRow.id),
+    supabase
+      .from("exam_groups")
+      .select("id, sort_order, created_at")
+      .eq("course_id", courseRow.id),
+  ]);
+  const materialIds = orderMaterialIds(courseMaterials ?? [], examGroups ?? []);
+
   return (
     <ImmersiveLearnClient
       courseId={courseId}
@@ -254,6 +270,7 @@ export default async function LearnPage({ params, searchParams }: Props) {
       initialModuleId={initialModuleId}
       initialOnboarding={initialOnboarding}
       initialMode={initialMode}
+      materialIds={materialIds}
     />
   );
 }

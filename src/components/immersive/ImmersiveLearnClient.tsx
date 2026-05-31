@@ -35,6 +35,7 @@ export function ImmersiveLearnClient({
   initialModuleId,
   initialOnboarding,
   initialMode,
+  materialIds = [],
   surface = "dashboard",
 }: {
   courseId: string;
@@ -43,6 +44,12 @@ export function ImmersiveLearnClient({
   initialModuleId: number;
   initialOnboarding: MentoredOnboardingRecord | null;
   initialMode: CourseMode | null;
+  /**
+   * All study material ids in this course, in learning order. Lets mentored
+   * learning roll the student into the next material/section once they finish
+   * the last module of the current one.
+   */
+  materialIds?: string[];
   /**
    * Where the runner was launched from. Determines the Free-Exploration
    * / Exit destinations so an explore-side learner doesn't get bounced
@@ -63,6 +70,18 @@ export function ImmersiveLearnClient({
     surface === "explore"
       ? `/explore/${courseId}`
       : `/dashboard/courses/${courseId}`;
+  const learnBase =
+    surface === "explore"
+      ? `/explore/${courseId}/learn`
+      : `/dashboard/courses/${courseId}/learn`;
+
+  // The next study material in the course (if any) so finishing the last
+  // section of this material can roll straight into the next one.
+  const nextMaterialId = useMemo(() => {
+    const idx = materialIds.indexOf(materialId);
+    if (idx < 0) return null;
+    return materialIds[idx + 1] ?? null;
+  }, [materialIds, materialId]);
 
   type Stage =
     | "picker"
@@ -146,6 +165,14 @@ export function ImmersiveLearnClient({
   const onExit = useCallback(() => {
     router.push(courseHomeHref);
   }, [courseHomeHref, router]);
+
+  const onAdvanceToNextMaterial = useCallback(() => {
+    if (!nextMaterialId) return;
+    persistMode("mentored");
+    // Navigate into the next material's mentored learning at its first module.
+    // `?material=` (no `module=`) lets the learn page resolve the right start.
+    router.push(`${learnBase}?material=${nextMaterialId}`);
+  }, [learnBase, nextMaterialId, persistMode, router]);
 
   const onSwitchToFreeFromRunner = useCallback(() => {
     persistMode("free");
@@ -270,6 +297,8 @@ export function ImmersiveLearnClient({
       onSwitchToFree={onSwitchToFreeFromRunner}
       onExit={onExit}
       onAdvanceModule={(nextId) => setActiveModuleId(nextId)}
+      hasNextMaterial={!!nextMaterialId}
+      onAdvanceToNextMaterial={onAdvanceToNextMaterial}
     />
   );
 }

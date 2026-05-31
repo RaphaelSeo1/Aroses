@@ -186,10 +186,22 @@ export function useMentoredVoice(opts: {
       bargeFiredRef.current = false;
       bargeStartAtRef.current = 0;
 
+      // Sample at ~30fps instead of every animation frame — voice-activity
+      // detection doesn't need 60fps, and this halves the analyser work that
+      // runs the entire time Rose is speaking.
+      const SAMPLE_INTERVAL_MS = 33;
+      let lastSampleAt = 0;
+
       const loop = () => {
         const a = bargeAnalyserRef.current;
         const buf = bargeBufRef.current;
         if (!a || !buf) return;
+        const sampleNow = performance.now();
+        if (sampleNow - lastSampleAt < SAMPLE_INTERVAL_MS) {
+          bargeRafRef.current = requestAnimationFrame(loop);
+          return;
+        }
+        lastSampleAt = sampleNow;
         // TS lib.dom mismatch: AnalyserNode accepts Uint8Array, narrow at call site.
         a.getByteTimeDomainData(buf as unknown as Uint8Array<ArrayBuffer>);
         let sum = 0;

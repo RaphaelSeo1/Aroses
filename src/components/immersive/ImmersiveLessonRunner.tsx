@@ -58,6 +58,8 @@ export function ImmersiveLessonRunner({
   onSwitchToFree,
   onExit,
   onAdvanceModule,
+  hasNextMaterial,
+  onAdvanceToNextMaterial,
 }: {
   courseId: string;
   materialId: string;
@@ -68,6 +70,10 @@ export function ImmersiveLessonRunner({
   /** Hard exit from the immersive view (back to course detail). */
   onExit: () => void;
   onAdvanceModule: (nextModuleId: number) => void;
+  /** True when another study material follows this one in the course. */
+  hasNextMaterial?: boolean;
+  /** Jump into the next study material's mentored learning (start of it). */
+  onAdvanceToNextMaterial?: () => void;
 }) {
   // ---- session / plan ----
   const [phase, setPhase] = useState<Phase>("loading-session");
@@ -269,6 +275,11 @@ export function ImmersiveLessonRunner({
   // doesn't talk over the welcome line.
   const [greetingPlayed, setGreetingPlayed] = useState(false);
   const greetingFiredRef = useRef(false);
+  // True when this mount is resuming a returning student into the chunk they
+  // left off on. Consumed by the chunk-speak effect so we surface the check
+  // question (popup + voice) again instead of silently replaying the whole
+  // explanation — which is why the question bubble used to vanish on return.
+  const isResumeRef = useRef(false);
 
   // ---- question popup (the centered "Rose asks" modal) ----
   //
@@ -467,13 +478,14 @@ export function ImmersiveLessonRunner({
       (phase === "module-complete" && session != null);
     if (!ready) return;
 
-    // Welcome-back uses its own Resume panel first; greeting runs after
-    // the student taps Resume (see resumeFromRecap).
-    if (phase === "welcome-back") {
-      return;
-    }
-
     greetingFiredRef.current = true;
+
+    // On the dedicated Welcome-back SCREEN we now speak the greeting in voice
+    // (it used to be silent text, which — combined with the teaching-phase
+    // greeting after Resume — produced two welcome messages). The screen's
+    // Resume button is the acknowledgement, so we DON'T also set
+    // awaitingContinue here, and `resumeFromRecap` skips the second greeting.
+    const onWelcomeBackScreen = phase === "welcome-back";
 
     // True first-time signal: either no session row exists OR the
     // session row is brand new (no history entries AND chunk index
@@ -496,8 +508,15 @@ export function ImmersiveLessonRunner({
         ? "first_time"
         : "returning";
 
+    // Returning into a mid-lesson chunk: flag a resume so the chunk-speak
+    // effect re-surfaces the check question instead of replaying everything.
+    if (scenario === "returning" || scenario === "all_complete") {
+      isResumeRef.current = true;
+    }
+
     const needsAcknowledgement =
-      scenario === "returning" || scenario === "all_complete";
+      !onWelcomeBackScreen &&
+      (scenario === "returning" || scenario === "all_complete");
     if (needsAcknowledgement) {
       awaitingContinueRef.current = true;
       setAwaitingContinue(true);
@@ -547,9 +566,6 @@ export function ImmersiveLessonRunner({
                 : `Welcome back. Ready to keep going?`;
       }
 
-      const needsAcknowledgement =
-        scenario === "returning" || scenario === "all_complete";
-
       if (interactionMode === "voice") {
         try {
           await voice.speak(text, {
@@ -567,8 +583,14 @@ export function ImmersiveLessonRunner({
         lastSpokenRef.current = text;
       }
 
-      // Returning / all-complete: Continue button. First-time: auto-start.
-      if (needsAcknowledgement) {
+      // Three cases:
+      //  • Welcome-back screen → Resume button handles the hand-off; nothing
+      //    more to do here (resumeFromRecap sets greetingPlayed).
+      //  • Returning/all-complete in teaching → keep the Continue button.
+      //  • First-time → auto-start the lesson.
+      if (onWelcomeBackScreen) {
+        /* Resume button drives the transition into teaching */
+      } else if (needsAcknowledgement) {
         /* keep greetingPlayed false until Continue */
       } else {
         setGreetingPlayed(true);
@@ -716,6 +738,29 @@ export function ImmersiveLessonRunner({
     const checkQuestion = chunk.checkQuestion;
     const captured = chunk.id;
 
+    // Resuming where the student left off: don't replay the whole explanation.
+    // Show the lesson text, surface the check-question bubble immediately, and
+    // just re-ask the question in voice. This is what fixes the "question
+    // bubble doesn't come back" bug.
+    if (isResumeRef.current) {
+      isResumeRef.current = false;
+      setTutorReply(explanation);
+      setNarrationText(explanation);
+      lastSpokenRef.current = explanation;
+      if (checkQuestion && checkQuestion.trim().length > 0) {
+        setQuestionAudioStartedFor(captured);
+        setQuestionPopupMinimized(false);
+        lastCheckAtRef.current = Date.now();
+        void voice.speak(checkQuestion, {
+          onPlay: () => {
+            lastSpokenRef.current = `${explanation}\n\n${checkQuestion}`;
+          },
+        });
+        return;
+      }
+      // No check question on this chunk — fall through to normal narration.
+    }
+
     void (async () => {
       await voice.speak(explanation, {
         onPlay: () => {
@@ -742,6 +787,9 @@ export function ImmersiveLessonRunner({
     if (interactionMode !== "text") return;
     if (!greetingPlayed) return;
     if (awaitingContinueRef.current) return;
+    // Text mode reveals the question immediately, so a resume is naturally
+    // handled — just clear the flag so it can't affect a later voice switch.
+    isResumeRef.current = false;
     setQuestionAudioStartedFor(chunk.id);
     setQuestionPopupMinimized(false);
   }, [
@@ -897,13 +945,21 @@ export function ImmersiveLessonRunner({
           }
         }
 
-        // Sentence splitter: yields complete sentences as they appear in
-        // the text stream. Final tail (no trailing terminator) is flushed
-        // on `done`. We also keep an ordered `sentences` array — this is
-        // the source of truth for transcript reveal, which happens only
-        // when each sentence's audio actually starts playing (voice
-        // mode) so the text never races ahead of Rose's voice.
+        // Sentence splitter → TTS BATCHER. We split the stream into complete
+        // sentences, but rather than firing one TTS request per sentence
+        // (choppy prosody, lots of round-trips, audible gaps at every comma /
+        // period) we GROUP sentences into larger chunks (~`MIN_TTS_CHARS`).
+        // ElevenLabs then sees a full phrase and produces natural pauses, and
+        // there are far fewer network round-trips between segments — the main
+        // cause of the "laggy, pauses in the wrong places" voice.
+        //
+        // Exception: the FIRST chunk is emitted as soon as one sentence is
+        // ready, so Rose starts talking quickly. `sentences` holds the spoken
+        // CHUNKS (source of truth for transcript reveal, gated on audio).
+        const MIN_TTS_CHARS = 200;
         let pendingBuf = "";
+        let chunkAccum = "";
+        let firstChunkEmitted = false;
         const sentences: string[] = [];
 
         const sentenceStream = (async function* (): AsyncGenerator<
@@ -928,8 +984,18 @@ export function ImmersiveLessonRunner({
               while ((m = re.exec(pendingBuf)) !== null) {
                 const sentence = m[1].trim();
                 if (sentence.length >= 3) {
-                  sentences.push(sentence);
-                  yield sentence;
+                  chunkAccum = chunkAccum
+                    ? `${chunkAccum} ${sentence}`
+                    : sentence;
+                  // First chunk: flush after a single sentence (fast start).
+                  // After that, accumulate until we have a meaty phrase.
+                  const threshold = firstChunkEmitted ? MIN_TTS_CHARS : 1;
+                  if (chunkAccum.length >= threshold) {
+                    sentences.push(chunkAccum);
+                    yield chunkAccum;
+                    chunkAccum = "";
+                    firstChunkEmitted = true;
+                  }
                 }
                 lastIdx = re.lastIndex;
               }
@@ -950,11 +1016,17 @@ export function ImmersiveLessonRunner({
                 void fetchMentoredImage(ir.query, t);
               }
             } else if (ev.type === "done") {
-              const tail = pendingBuf.trim();
+              // Flush any buffered sentences + the incomplete tail as one
+              // final chunk so nothing is dropped.
+              const tail = [chunkAccum.trim(), pendingBuf.trim()]
+                .filter(Boolean)
+                .join(" ")
+                .trim();
               if (tail.length >= 1) {
                 sentences.push(tail);
                 yield tail;
               }
+              chunkAccum = "";
               pendingBuf = "";
               return;
             } else if (ev.type === "error") {
@@ -1303,8 +1375,11 @@ export function ImmersiveLessonRunner({
   ]);
 
   const resumeFromRecap = useCallback(() => {
-    greetingFiredRef.current = false;
-    setGreetingPlayed(false);
+    // The welcome-back greeting was already spoken on this screen, so DON'T
+    // re-fire it in the teaching phase (that was the duplicate welcome). Mark
+    // the greeting done and keep the single-fire guard set.
+    greetingFiredRef.current = true;
+    setGreetingPlayed(true);
     awaitingContinueRef.current = false;
     setAwaitingContinue(false);
     setTutorReply(null);
@@ -1593,10 +1668,22 @@ export function ImmersiveLessonRunner({
               >
                 Next section →
               </button>
+            ) : hasNextMaterial && onAdvanceToNextMaterial ? (
+              <button
+                type="button"
+                onClick={onAdvanceToNextMaterial}
+                className="rounded-full bg-fuchsia-500 px-5 py-2 text-sm font-semibold text-white shadow-md hover:bg-fuchsia-400"
+              >
+                Next section →
+              </button>
             ) : (
-              <span className="rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-white">
-                You finished the course
-              </span>
+              <button
+                type="button"
+                onClick={onExit}
+                className="rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-white shadow-md hover:bg-emerald-400"
+              >
+                You finished the course · Done
+              </button>
             )}
             <button
               type="button"
