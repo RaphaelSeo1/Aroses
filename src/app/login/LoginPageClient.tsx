@@ -10,6 +10,7 @@ import { BrandLogo } from "@/components/BrandLogo";
 import { LegalFooterLinks } from "@/components/LegalFooterLinks";
 import { APP_NAME } from "@/lib/brand";
 import { parseSafeInternalNext } from "@/lib/internal-next-path";
+import { reportClientActivity } from "@/lib/activity-log-client";
 import { GoogleSignInButton } from "@/components/GoogleSignInButton";
 import {
   emailMatchesAllowedDomains,
@@ -57,6 +58,7 @@ function LoginForm({
       setError(signError.message);
       return;
     }
+    void reportClientActivity("sign_in");
     router.replace(nextPath);
     router.refresh();
   }

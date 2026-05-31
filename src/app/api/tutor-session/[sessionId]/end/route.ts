@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { logActivity } from "@/lib/activity-log";
 import { generateRecap } from "@/lib/ai/tutor-session";
 import type {
   TutorSessionMessage,
@@ -77,6 +78,13 @@ export async function POST(_req: Request, ctx: Params) {
     })
     .eq("id", sessionId)
     .eq("user_id", user.id);
+
+  await logActivity({
+    userId: user.id,
+    type: "voice_tutor_ended",
+    summary: sessionRow.title || "Tutor session",
+    metadata: { sessionId, durationSeconds },
+  });
 
   // Bypass recap entirely if the session was empty.
   if (transcript.length < 2) {

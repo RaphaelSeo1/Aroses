@@ -1,12 +1,55 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 
+export type AdminActivityKind =
+  | "course_created"
+  | "user_signed_up"
+  | "sign_in"
+  | "sign_out"
+  | "course_built"
+  | "course_deleted"
+  | "voice_tutor_started"
+  | "voice_tutor_ended"
+  | "module_completed"
+  | "quiz_submitted"
+  | "onboarding_completed"
+  | "other";
+
 export type AdminActivityItem = {
   id: string;
-  kind: "course_created" | "user_signed_up";
+  kind: AdminActivityKind;
+  /** Sub-line: who did it (+ optional context). */
   title: string;
+  /** Bold line: human-readable action label. */
   detail: string;
   at: string;
 };
+
+/** Human label shown (bold) for each recorded event type. */
+const EVENT_LABELS: Record<string, string> = {
+  course_created: "Course created",
+  user_signed_up: "User signed up",
+  sign_in: "Logged in",
+  sign_out: "Logged out",
+  course_built: "Built a course from upload",
+  course_deleted: "Deleted a course",
+  voice_tutor_started: "Started voice tutor",
+  voice_tutor_ended: "Ended voice tutor",
+  module_completed: "Completed a module",
+  quiz_submitted: "Submitted a quiz answer",
+  onboarding_completed: "Completed onboarding",
+};
+
+function labelForEvent(type: string): string {
+  return (
+    EVENT_LABELS[type] ??
+    type
+      .replace(/_/g, " ")
+      .replace(/^\w/, (c) => c.toUpperCase())
+  );
+}
+
+/** Max events returned to the admin timeline (client renders them in a scroll box). */
+const ACTIVITY_LIMIT = 200;
 
 export async function countAllAuthUsers(admin: SupabaseClient): Promise<number> {
   let total = 0;
@@ -27,50 +70,109 @@ export async function countAllAuthUsers(admin: SupabaseClient): Promise<number> 
   return total;
 }
 
+type ActivityEventRow = {
+  id: string;
+  user_id: string | null;
+  type: string;
+  summary: string | null;
+  created_at: string;
+};
+
 /**
- * Recent platform events derived from `courses` and Auth users (no audit table).
- * Sorted by time, most recent first.
+ * Full platform audit log for the admin dashboard.
+ *
+ * Combines two sources, newest first:
+ *   1. The real `activity_events` table — logins, logouts, voice-tutor
+ *      sessions, module completions, quiz attempts, course builds/deletes, …
+ *   2. Derived events (course creations + sign-ups) read straight from the
+ *      `courses` table and the Auth user list, so their full history shows up
+ *      even for activity that happened before the audit table existed.
+ *
+ * Actor emails are resolved from the Auth user list so each row reads
+ * "<email> · <context>".
  */
 export async function fetchRecentAdminActivity(
   admin: SupabaseClient
 ): Promise<AdminActivityItem[]> {
-  const [{ data: recentCourses }, { data: userList, error: userErr }] =
+  const [{ data: recentCourses }, { data: userList, error: userErr }, eventsRes] =
     await Promise.all([
       admin
         .from("courses")
-        .select("id, title, created_at")
+        .select("id, title, created_at, user_id")
         .order("created_at", { ascending: false })
-        .limit(24),
+        .limit(ACTIVITY_LIMIT),
       admin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
+      admin
+        .from("activity_events")
+        .select("id, user_id, type, summary, created_at")
+        .order("created_at", { ascending: false })
+        .limit(ACTIVITY_LIMIT),
     ]);
 
   if (userErr) {
     console.error("[admin] listUsers activity", userErr);
   }
 
+  // Map user id → display email so logged events can show who did them.
+  const emailById = new Map<string, string>();
+  for (const u of userList?.users ?? []) {
+    const email = typeof u.email === "string" ? u.email.trim() : "";
+    if (email) emailById.set(u.id, email);
+  }
+
   const items: AdminActivityItem[] = [];
 
+  // 1. Real audit events. The `activity_events` table may not exist yet (before
+  //    migration 047) — treat any read error as "no events" and fall back to
+  //    the derived history below so the timeline never hard-fails.
+  if (eventsRes.error) {
+    if (!/relation .*activity_events.* does not exist/i.test(eventsRes.error.message ?? "")) {
+      console.error("[admin] activity_events", eventsRes.error);
+    }
+  } else {
+    for (const ev of (eventsRes.data ?? []) as ActivityEventRow[]) {
+      if (!ev?.id || !ev.created_at) continue;
+      const actor = ev.user_id ? emailById.get(ev.user_id) : null;
+      const summary =
+        typeof ev.summary === "string" && ev.summary.trim().length > 0
+          ? ev.summary.trim()
+          : "";
+      const title = [actor ?? "A user", summary].filter(Boolean).join(" · ");
+      items.push({
+        id: `event-${ev.id}`,
+        kind: (ev.type as AdminActivityKind) ?? "other",
+        title,
+        detail: labelForEvent(ev.type),
+        at: ev.created_at,
+      });
+    }
+  }
+
+  // 2. Derived: course creations (full history from the courses table).
   for (const c of recentCourses ?? []) {
     if (!c?.id || !c.created_at) continue;
-    const title =
+    const courseTitle =
       typeof c.title === "string" && c.title.trim().length > 0
         ? c.title.trim()
         : "Untitled course";
+    const actor =
+      typeof c.user_id === "string" ? emailById.get(c.user_id) : null;
+    const title = [actor, courseTitle].filter(Boolean).join(" · ");
     items.push({
       id: `course-${c.id}-${c.created_at}`,
       kind: "course_created",
-      title,
+      title: title || courseTitle,
       detail: "Course created",
       at: c.created_at,
     });
   }
 
+  // 3. Derived: sign-ups (account creation) from the Auth user list.
   const usersSorted = [...(userList?.users ?? [])].sort(
     (a, b) =>
       new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
-
-  for (const u of usersSorted.slice(0, 24)) {
+  for (const u of usersSorted.slice(0, ACTIVITY_LIMIT)) {
     if (!u.created_at) continue;
     const email = typeof u.email === "string" ? u.email.trim() : "";
     items.push({
@@ -83,7 +185,7 @@ export async function fetchRecentAdminActivity(
   }
 
   items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-  return items.slice(0, 10);
+  return items.slice(0, ACTIVITY_LIMIT);
 }
 
 /** One row for the admin “User directory” table (Auth email + profile fields). */

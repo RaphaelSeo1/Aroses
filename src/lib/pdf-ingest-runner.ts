@@ -37,6 +37,7 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
+import { logActivity, pruneActivityEvents } from "@/lib/activity-log";
 import {
   deriveFileStemFromPayload,
   finalizeMaterialSectionLabel,
@@ -503,6 +504,16 @@ async function finalizePdfIngest(
       : null;
   }
 
+  await logActivity(
+    {
+      userId: materialOwnerId,
+      type: "course_built",
+      summary: payload.title || storedFileName,
+      metadata: { courseId, materialId: row.id, jobId },
+    },
+    admin
+  );
+
   await removeIngestObject(admin, storagePath, {
     retainStorage: options?.retainStorage,
   });
@@ -902,6 +913,9 @@ export async function reapStaleIngestJobs(options?: {
 }): Promise<{ kicked: number; remaining: number }> {
   const admin = createAdminClient();
   if (!admin) return { kicked: 0, remaining: 0 };
+
+  // Piggyback audit-log retention on the cron-backed reaper (runs every minute).
+  await pruneActivityEvents(admin);
 
   const maxJobs = options?.maxJobs ?? 16;
   const staleRunning = new Date(

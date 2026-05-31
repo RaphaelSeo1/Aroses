@@ -11,7 +11,7 @@ const TABLE_BODY_SCROLL =
   "max-h-[min(17rem,38vh)] overflow-y-auto overflow-x-auto overscroll-contain [scrollbar-gutter:stable] sm:max-h-[min(21rem,42vh)] lg:max-h-[min(26rem,46vh)]";
 
 const ACTIVITY_SCROLL =
-  "max-h-[min(12rem,32vh)] overflow-y-auto overscroll-contain sm:max-h-[min(15rem,36vh)] [scrollbar-gutter:stable]";
+  "max-h-[min(28rem,60vh)] overflow-y-auto overscroll-contain sm:max-h-[min(32rem,64vh)] [scrollbar-gutter:stable]";
 
 export type AdminCourseRow = {
   id: string;
@@ -632,7 +632,9 @@ export function AdminDashboardClient({
               Activity timeline
             </h2>
             <p className="mt-1 max-w-xl text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Recent course creations and sign-ups — not a full audit log.
+              Full activity log — logins, logouts, voice-tutor sessions, module
+              completions, quiz attempts, course builds, and more. Kept for 30
+              days, newest first.
             </p>
             <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200/90 bg-white shadow-sm dark:border-zinc-700/90 dark:bg-zinc-900/60 dark:shadow-black/30">
               <ul

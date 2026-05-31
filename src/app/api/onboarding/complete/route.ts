@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { logActivity } from "@/lib/activity-log";
 import {
   looksLikeJwtExpired,
   looksLikeMissingProfilesOnboardingMigration,
@@ -216,6 +217,13 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
+
+  await logActivity({
+    userId: user.id,
+    type: "onboarding_completed",
+    summary: usernameParsed,
+    metadata: { persona: p },
+  });
 
   return NextResponse.json({ ok: true });
 }

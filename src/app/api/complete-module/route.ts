@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { lessonKey } from "@/lib/course-progress/validate-position";
+import { logActivity } from "@/lib/activity-log";
 import { syncCourseProgressFromMaterial } from "@/lib/course-progress/sync-from-material";
 import type { CoursePayload } from "@/types/course";
 
@@ -90,6 +91,16 @@ export async function POST(request: Request) {
     lastModuleId: moduleId,
     lastMode: "free",
     appendCompletedLessonKeys: lessonKeys,
+  });
+
+  await logActivity({
+    userId: user.id,
+    type: "module_completed",
+    summary:
+      typeof mod?.title === "string" && mod.title.trim().length > 0
+        ? mod.title.trim()
+        : `Module ${moduleId}`,
+    metadata: { materialId: b.materialId, moduleId, courseId: row.course_id },
   });
 
   return NextResponse.json({ ok: true, saved: true });

@@ -11,6 +11,7 @@ import {
   TUTOR_SESSION_MAX_TOTAL_BYTES,
 } from "@/lib/tutor-session/upload-limits";
 import { detectIngestFormat } from "@/lib/study-ingest/formats";
+import { logActivity } from "@/lib/activity-log";
 import type {
   TutorSessionModeTag,
   TutorSessionRecord,
@@ -229,6 +230,13 @@ export async function POST(request: Request) {
     })
     .eq("id", sessionRow.id)
     .eq("user_id", user.id);
+
+  await logActivity({
+    userId: user.id,
+    type: "voice_tutor_started",
+    summary: title || topic || "Tutor session",
+    metadata: { sessionId: sessionRow.id, modeTag },
+  });
 
   const record: TutorSessionRecord = {
     id: sessionRow.id,

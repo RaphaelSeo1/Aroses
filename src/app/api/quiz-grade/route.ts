@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { gradeFreeResponseWithAi } from "@/lib/ai/grade-free-response";
+import { logActivity } from "@/lib/activity-log";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -64,6 +65,17 @@ export async function POST(request: Request) {
       referenceAnswer,
       studentAnswer,
     });
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      await logActivity({
+        userId: user.id,
+        type: "quiz_submitted",
+        summary: question.slice(0, 120),
+        metadata: { materialId: b.materialId },
+      });
+    }
     return NextResponse.json(result);
   } catch (e) {
     console.error(e);

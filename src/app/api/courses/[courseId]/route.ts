@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { logActivity } from "@/lib/activity-log";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -117,7 +118,7 @@ export async function DELETE(_request: Request, ctx: Params) {
     .from("courses")
     .delete()
     .eq("id", courseId)
-    .select("id")
+    .select("id, title")
     .maybeSingle();
 
   if (error) {
@@ -131,6 +132,16 @@ export async function DELETE(_request: Request, ctx: Params) {
       { status: 403 }
     );
   }
+
+  await logActivity({
+    userId: user.id,
+    type: "course_deleted",
+    summary:
+      typeof deleted.title === "string" && deleted.title.trim().length > 0
+        ? deleted.title.trim()
+        : "Untitled course",
+    metadata: { courseId },
+  });
 
   return NextResponse.json({ ok: true });
 }

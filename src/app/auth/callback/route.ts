@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { parseSafeInternalNext } from "@/lib/internal-next-path";
+import { logActivity } from "@/lib/activity-log";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -27,7 +28,11 @@ export async function GET(request: Request) {
         },
       }
     );
-    await supabase.auth.exchangeCodeForSession(code);
+    const { data } = await supabase.auth.exchangeCodeForSession(code);
+    const signedInUser = data?.user;
+    if (signedInUser) {
+      await logActivity({ userId: signedInUser.id, type: "sign_in" });
+    }
   }
 
   return NextResponse.redirect(new URL(next, url.origin));
