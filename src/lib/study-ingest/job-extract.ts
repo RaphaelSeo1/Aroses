@@ -95,7 +95,18 @@ export async function extractContentForIngestJob(input: {
   let retainStorage = false;
   let mediaMeta: JobExtractSuccess["ingestMedia"] = null;
 
-  for (let i = 0; i < refs.length; i++) {
+  // Extract files concurrently (bounded) so a big stack — e.g. a dozen photos,
+  // each needing its own vision call — doesn't run serially and blow past the
+  // serverless wall-clock (which leaves the job wedged on "step 1/2"). Order is
+  // preserved so chunking/attribution still follows the upload order.
+  type PerFileResult = {
+    part: Awaited<ReturnType<typeof extractStudyMaterialFromBuffer>>;
+    figures: Awaited<ReturnType<typeof extractSourceImagesFromBuffer>>;
+    retain: boolean;
+    media: JobExtractSuccess["ingestMedia"];
+  };
+
+  async function extractOne(i: number): Promise<PerFileResult> {
     const ref = refs[i];
     const fileName =
       ref.originalFileName?.trim() ||
@@ -130,19 +141,19 @@ export async function extractContentForIngestJob(input: {
       imageIndex,
       onHeartbeat: input.onHeartbeat,
     });
-    extractedParts.push(part);
 
     const figures = await extractSourceImagesFromBuffer({
       buffer: buf,
       fileName,
       kind,
     });
-    rawImages.push(...figures);
 
+    let retain = false;
+    let media: JobExtractSuccess["ingestMedia"] = null;
     if (part.meta.retainStorage || shouldRetainStorageAfterIngest(kind)) {
-      retainStorage = true;
+      retain = true;
       if (kind === "audio" || kind === "video") {
-        mediaMeta = {
+        media = {
           kind,
           bucket: STUDY_PDF_INGEST_BUCKET,
           storagePath: ref.storagePath,
@@ -150,6 +161,43 @@ export async function extractContentForIngestJob(input: {
           transcriptSegments: part.meta.transcript?.segments,
         };
       }
+    }
+    return { part, figures, retain, media };
+  }
+
+  const concurrencyEnv = process.env.PDF_INGEST_EXTRACT_CONCURRENCY?.trim();
+  const concurrencyParsed = concurrencyEnv
+    ? Number.parseInt(concurrencyEnv, 10)
+    : Number.NaN;
+  const EXTRACT_CONCURRENCY = Number.isFinite(concurrencyParsed)
+    ? Math.max(1, Math.min(8, concurrencyParsed))
+    : 4;
+
+  const results: (PerFileResult | undefined)[] = new Array(refs.length);
+  let cursor = 0;
+  async function pump(): Promise<void> {
+    for (;;) {
+      const i = cursor++;
+      if (i >= refs.length) return;
+      results[i] = await extractOne(i);
+    }
+  }
+  // First rejection (e.g. an unreadable image) propagates and fails the job,
+  // matching the previous serial behaviour.
+  await Promise.all(
+    Array.from({ length: Math.min(EXTRACT_CONCURRENCY, refs.length) }, () =>
+      pump()
+    )
+  );
+
+  for (let i = 0; i < refs.length; i++) {
+    const r = results[i];
+    if (!r) continue;
+    extractedParts.push(r.part);
+    rawImages.push(...r.figures);
+    if (r.retain) {
+      retainStorage = true;
+      if (r.media) mediaMeta = r.media;
     }
   }
 

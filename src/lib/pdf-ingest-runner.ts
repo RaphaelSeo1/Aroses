@@ -4,6 +4,7 @@ import {
   APIUserAbortError,
   RateLimitError,
 } from "@anthropic-ai/sdk";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   extractContentForIngestJob,
   removeIngestObjects,
@@ -906,6 +907,36 @@ export async function runPdfIngestExpandOne(
  * Intended to be called on a schedule (Vercel Cron) and/or self-chained. Returns
  * how many jobs were kicked and how many remain active (for chaining decisions).
  */
+/**
+ * Re-run extraction for a job whose lambda died mid-`reading_pdf`/`transcribing`.
+ * Atomically flips it back to `pending` (guarded by the epoch we observed so
+ * only one reaper wins the race) and re-dispatches the full phase-1 worker.
+ */
+async function resumeStalledExtraction(
+  admin: SupabaseClient,
+  row: { id: string; ingest_epoch?: number | null }
+): Promise<void> {
+  const prevEpoch =
+    typeof row.ingest_epoch === "number" && Number.isFinite(row.ingest_epoch)
+      ? row.ingest_epoch
+      : 0;
+  const { data: claimed } = await admin
+    .from("pdf_ingest_jobs")
+    .update({
+      status: "pending",
+      ingest_phase: null,
+      ingest_epoch: prevEpoch + 1,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", row.id)
+    .eq("status", "running")
+    .eq("ingest_epoch", prevEpoch)
+    .select("id")
+    .maybeSingle();
+  if (!claimed) return; // another reaper already grabbed it
+  await runPdfIngestJob(row.id);
+}
+
 export async function reapStaleIngestJobs(options?: {
   maxJobs?: number;
   staleRunningMs?: number;
@@ -928,7 +959,7 @@ export async function reapStaleIngestJobs(options?: {
   const [{ data: runningJobs }, { data: pendingJobs }] = await Promise.all([
     admin
       .from("pdf_ingest_jobs")
-      .select("id")
+      .select("id, ingest_phase, ingest_epoch")
       .eq("status", "running")
       .lt("updated_at", staleRunning)
       .order("updated_at", { ascending: true })
@@ -951,10 +982,30 @@ export async function reapStaleIngestJobs(options?: {
     );
   }
   for (const j of runningJobs ?? []) {
-    // Safe for any phase: expand returns "not ready" cheaply if the job isn't
-    // in writing_modules yet, and advances one batch when it is.
+    const row = j as {
+      id: string;
+      ingest_phase?: string | null;
+      ingest_epoch?: number | null;
+    };
+    const phase = row.ingest_phase ?? null;
+    // The extraction phases (`reading_pdf` / `transcribing`) can't be resumed
+    // by `expand` — if the lambda was killed mid-extraction the job would sit
+    // wedged on "step 1/2" forever. Reset it to `pending` (bumping the epoch so
+    // any zombie writes from the dead run are ignored) and re-run extraction.
+    // The 8s heartbeat means a live extraction is never stale, so this only
+    // fires for genuinely dead runs. `reviewing_transcript` stays paused.
+    if (phase === "reading_pdf" || phase === "transcribing") {
+      tasks.push(
+        resumeStalledExtraction(admin, row).catch((e) =>
+          console.warn("[pdf-ingest] reaper extraction resume failed", e)
+        )
+      );
+      continue;
+    }
+    // Safe for any other phase: expand returns "not ready" cheaply if the job
+    // isn't in writing_modules yet, and advances one batch when it is.
     tasks.push(
-      runPdfIngestExpandOne((j as { id: string }).id).catch((e) =>
+      runPdfIngestExpandOne(row.id).catch((e) =>
         console.warn("[pdf-ingest] reaper expand kick failed", e)
       )
     );
