@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
-import { transcribeWithWhisper } from "@/lib/voice-tutor/transcribe-openai";
+import {
+  transcribeWithWhisper,
+  WhisperError,
+} from "@/lib/voice-tutor/transcribe-openai";
 import { canReadStudyMaterial } from "@/lib/voice-tutor/material-access";
 import { getVoiceTutorGate } from "@/lib/voice-tutor/policy";
 import { isUuid } from "@/lib/voice-tutor/uuid";
@@ -98,7 +101,42 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ text });
   } catch (e) {
-    console.error(e);
+    console.error("[voice-tutor/transcribe]", e);
+
+    if (e instanceof WhisperError) {
+      // Map the upstream OpenAI status to an actionable message + status so
+      // failures aren't all an opaque 502. The provider reason is appended in
+      // dev only (it never contains secrets, but keep prod messaging clean).
+      const reason =
+        process.env.NODE_ENV !== "production" && e.provider
+          ? ` (${e.provider})`
+          : "";
+      if (e.status === 401 || e.status === 403) {
+        return NextResponse.json(
+          {
+            error: `Voice transcription is misconfigured — OpenAI rejected the request (check OPENAI_API_KEY / billing).${reason}`,
+          },
+          { status: 502 }
+        );
+      }
+      if (e.status === 429) {
+        return NextResponse.json(
+          {
+            error: `Voice transcription is rate-limited or out of OpenAI quota. Try again shortly.${reason}`,
+          },
+          { status: 429 }
+        );
+      }
+      if (e.status === 400) {
+        return NextResponse.json(
+          {
+            error: `That recording couldn't be transcribed (unsupported or empty audio). Try again.${reason}`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     return NextResponse.json(
       { error: "Transcription failed. Try again." },
       { status: 502 }
