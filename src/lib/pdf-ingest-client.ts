@@ -410,13 +410,16 @@ export async function pollPdfIngestJob(
       // Keep the timer ticking while we block on the expand fetch.
       // Without this the text (including elapsed) is frozen for the entire
       // duration of the server call (up to ~5 min under heavy rate-limiting).
+      // Modules are written in batches (several per expand call), so the count
+      // advances in jumps. Show how many are built rather than a single module
+      // number that would look "stuck" while a batch generates in parallel.
       const liveTimer = setInterval(() => {
         if (signal?.aborted) return;
         const elapsed = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
-        onProgress?.({ line: `Writing module ${next} of ${total}${elapsed}…`, bar });
+        onProgress?.({ line: `Writing modules… · ${built}/${total} built${elapsed}`, bar });
       }, 1_000);
       const elapsed0 = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
-      onProgress?.({ line: `Writing module ${next} of ${total}${elapsed0}…`, bar });
+      onProgress?.({ line: `Writing modules… · ${built}/${total} built${elapsed0}`, bar });
 
       const expandResult = await postProcessPdfExpand(jobId, signal);
       clearInterval(liveTimer);
@@ -425,7 +428,7 @@ export async function pollPdfIngestJob(
         if (signal?.aborted) return { error: "Cancelled." };
         const elapsed = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
         onProgress?.({
-          line: `Writing module ${next} of ${total}${elapsed} — reconnecting…`,
+          line: `Writing modules… · ${built}/${total} built${elapsed} — reconnecting…`,
           bar: "indeterminate",
         });
         await sleep(3_200);
@@ -457,7 +460,7 @@ export async function pollPdfIngestJob(
             ? ` · ${formatElapsedShort(Date.now() - startedMid)}`
             : "";
         onProgress?.({
-          line: `Finished module ${expJson.modulesBuilt} of ${expJson.modulesTotal}${elapsedMid}. Preparing the next…`,
+          line: `Built ${expJson.modulesBuilt}/${expJson.modulesTotal} modules${elapsedMid}. Continuing…`,
           bar: Math.min(
             100,
             (expJson.modulesBuilt / expJson.modulesTotal) * 100
