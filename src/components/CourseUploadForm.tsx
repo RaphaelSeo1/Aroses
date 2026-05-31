@@ -125,7 +125,105 @@ export function CourseUploadForm({
     Record<string, { durationSec?: number; hint?: string }>
   >({});
 
+  // ---- lecture grouping ("stacks") ----
+  // Each group becomes ONE combined lecture build. By default every file is
+  // its own group (the original 1-file-1-lecture behaviour); the student can
+  // drag files together to combine related material into a single lecture.
+  type Stack = { id: string; name: string; keys: string[] };
+  const [groups, setGroups] = useState<Stack[]>([]);
+  const stackSeq = useRef(0);
+  // Drag state: which file chip is being dragged + the group hovered over.
+  const [draggedKey, setDraggedKey] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
   const fileKey = (f: File) => `${f.name}:${f.size}`;
+
+  const fileByKey = useMemo(() => {
+    const m = new Map<string, File>();
+    for (const f of files) m.set(fileKey(f), f);
+    return m;
+  }, [files]);
+
+  // Keep `groups` reconciled with `files`: drop removed files, retire empty
+  // groups, and give each newly-added file its own group.
+  useEffect(() => {
+    setGroups((prev) => {
+      const present = new Set(files.map(fileKey));
+      let next = prev
+        .map((g) => ({ ...g, keys: g.keys.filter((k) => present.has(k)) }))
+        .filter((g) => g.keys.length > 0);
+      const assigned = new Set(next.flatMap((g) => g.keys));
+      for (const f of files) {
+        const k = fileKey(f);
+        if (assigned.has(k)) continue;
+        stackSeq.current += 1;
+        next = [
+          ...next,
+          { id: `stk-${stackSeq.current}`, name: "", keys: [k] },
+        ];
+        assigned.add(k);
+      }
+      return next;
+    });
+  }, [files]);
+
+  const moveKeyToGroup = useCallback((key: string, targetId: string) => {
+    setGroups((prev) => {
+      if (prev.find((g) => g.id === targetId)?.keys.includes(key)) return prev;
+      const next = prev
+        .map((g) =>
+          g.id === targetId
+            ? { ...g, keys: [...g.keys, key] }
+            : { ...g, keys: g.keys.filter((k) => k !== key) }
+        )
+        .filter((g) => g.keys.length > 0);
+      return next;
+    });
+  }, []);
+
+  const splitKeyToNewGroup = useCallback((key: string) => {
+    setGroups((prev) => {
+      const fromGroup = prev.find((g) => g.keys.includes(key));
+      // No-op when the file is already alone in its group.
+      if (fromGroup && fromGroup.keys.length === 1) return prev;
+      stackSeq.current += 1;
+      const fresh = {
+        id: `stk-${stackSeq.current}`,
+        name: "",
+        keys: [key],
+      };
+      return prev
+        .map((g) => ({ ...g, keys: g.keys.filter((k) => k !== key) }))
+        .filter((g) => g.keys.length > 0)
+        .concat(fresh);
+    });
+  }, []);
+
+  const renameGroup = useCallback((id: string, name: string) => {
+    setGroups((prev) => prev.map((g) => (g.id === id ? { ...g, name } : g)));
+  }, []);
+
+  const combineAllGroups = useCallback(() => {
+    setGroups((prev) => {
+      if (prev.length <= 1) return prev;
+      const first = prev[0];
+      const allKeys = prev.flatMap((g) => g.keys);
+      return [{ ...first, keys: allKeys }];
+    });
+  }, []);
+
+  const splitAllGroups = useCallback(() => {
+    setGroups(() =>
+      files.map((f) => {
+        stackSeq.current += 1;
+        return {
+          id: `stk-${stackSeq.current}`,
+          name: "",
+          keys: [fileKey(f)],
+        };
+      })
+    );
+  }, [files]);
 
   useEffect(() => {
     let cancelled = false;
@@ -244,59 +342,46 @@ export function CourseUploadForm({
     []
   );
 
-  function removeFile(index: number) {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
+  function removeFileByKey(key: string) {
+    setFiles((prev) => prev.filter((f) => fileKey(f) !== key));
     setError(null);
     setSuccess(null);
   }
 
-  // Drag-to-reorder state for the pending-file list.
-  const [dragFrom, setDragFrom] = useState<number | null>(null);
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
-
-  const previewFiles = useMemo(() => {
-    if (dragFrom === null || dragOverIdx === null || dragFrom === dragOverIdx) {
-      return files;
-    }
-    const next = [...files];
-    const [removed] = next.splice(dragFrom, 1);
-    next.splice(dragOverIdx, 0, removed);
-    return next;
-  }, [files, dragFrom, dragOverIdx]);
-
-  function handleFileDragStart(e: React.DragEvent, index: number) {
+  // Drag a file chip onto a lecture group to combine, or onto the "new
+  // lecture" zone to split it back out.
+  function handleChipDragStart(e: React.DragEvent, key: string) {
     if (loading) return;
-    setDragFrom(index);
+    setDraggedKey(key);
     e.dataTransfer.effectAllowed = "move";
+    try {
+      e.dataTransfer.setData("text/plain", key);
+    } catch {
+      /* some browsers throw on setData during certain events */
+    }
   }
 
-  function handleFileDragOver(e: React.DragEvent, index: number) {
-    if (dragFrom === null) return;
+  function handleGroupDragOver(e: React.DragEvent, groupId: string | null) {
+    if (draggedKey === null) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = "move";
-    if (dragOverIdx !== index) setDragOverIdx(index);
+    if (dropTarget !== groupId) setDropTarget(groupId);
   }
 
-  function handleFileDrop(e: React.DragEvent, toIndex: number) {
-    if (dragFrom === null) return;
+  function handleGroupDrop(e: React.DragEvent, groupId: string | null) {
+    if (draggedKey === null) return;
     e.preventDefault();
     e.stopPropagation();
-    if (dragFrom !== toIndex) {
-      setFiles((prev) => {
-        const next = [...prev];
-        const [removed] = next.splice(dragFrom, 1);
-        next.splice(toIndex, 0, removed);
-        return next;
-      });
-    }
-    setDragFrom(null);
-    setDragOverIdx(null);
+    if (groupId === null) splitKeyToNewGroup(draggedKey);
+    else moveKeyToGroup(draggedKey, groupId);
+    setDraggedKey(null);
+    setDropTarget(null);
   }
 
-  function handleFileDragEnd() {
-    setDragFrom(null);
-    setDragOverIdx(null);
+  function handleChipDragEnd() {
+    setDraggedKey(null);
+    setDropTarget(null);
   }
 
   async function onSubmit(e: FormEvent) {
@@ -312,13 +397,25 @@ export function CourseUploadForm({
       return;
     }
 
-    const descriptors = files
-      .map((f) => describeIngestFile(f))
-      .filter((d): d is NonNullable<typeof d> => d !== null);
-    const batchErr = validateIngestBatch(descriptors);
-    if (batchErr) {
-      setError(batchErr);
-      return;
+    // Each group becomes its own ingest job, so the per-job limits (file count
+    // + combined size) must hold within each group, not across the whole upload.
+    const lectureGroups = groups
+      .filter((g) => g.keys.length > 0)
+      .map((g, i) => ({
+        ...g,
+        displayName: g.name.trim() || `Lecture ${i + 1}`,
+      }));
+    for (const g of lectureGroups) {
+      const descriptors = g.keys
+        .map((k) => fileByKey.get(k))
+        .filter((f): f is File => Boolean(f))
+        .map((f) => describeIngestFile(f))
+        .filter((d): d is NonNullable<typeof d> => d !== null);
+      const batchErr = validateIngestBatch(descriptors);
+      if (batchErr) {
+        setError(`${g.displayName}: ${batchErr}`);
+        return;
+      }
     }
 
     setLoading(true);
@@ -415,29 +512,56 @@ export function CourseUploadForm({
         return;
       }
 
-      const apiFiles = uploadResults.map((r) => ({
-        storagePath: r.storagePath,
-        originalFileName: r.originalFileName,
-      }));
+      // Map every uploaded file back to its API payload by key so we can group
+      // them into the lecture builds the student arranged. Upload results are
+      // index-aligned with `files` (and `prepared`), so we zip by position.
+      const apiFileByKey = new Map<
+        string,
+        { storagePath: string; originalFileName: string }
+      >();
+      files.forEach((f, i) => {
+        const r = uploadResults[i];
+        if (r && !r.error) {
+          apiFileByKey.set(fileKey(f), {
+            storagePath: r.storagePath,
+            originalFileName: r.originalFileName,
+          });
+        }
+      });
+
+      // Build one ingest job per lecture group. Files inside a group are
+      // combined into a single course; the AI decides the lesson/module split
+      // across them (file boundaries are not lesson boundaries).
+      const buildGroups = lectureGroups
+        .map((g) => ({
+          name: g.displayName,
+          files: g.keys
+            .map((k) => apiFileByKey.get(k))
+            .filter(
+              (f): f is { storagePath: string; originalFileName: string } =>
+                Boolean(f)
+            ),
+        }))
+        .filter((g) => g.files.length > 0);
 
       setBuildProgress({
         line:
-          apiFiles.length > 1
-            ? `Starting ${apiFiles.length} course builds…`
+          buildGroups.length > 1
+            ? `Starting ${buildGroups.length} lecture builds…`
             : "Starting course build…",
         bar: "indeterminate",
       });
 
-      // One build per file, kicked off in parallel so all jobs are created at
-      // once and the build page opens with every tab building simultaneously.
+      // Kicked off in parallel so all jobs are created at once and the build
+      // page opens with every lecture building simultaneously.
       type StartOutcome = {
-        file: { originalFileName: string };
+        group: { name: string };
         jobId?: string;
         materialId?: string;
         error?: string;
       };
       const startOutcomes: StartOutcome[] = await Promise.all(
-        apiFiles.map(async (f): Promise<StartOutcome> => {
+        buildGroups.map(async (g): Promise<StartOutcome> => {
           try {
             const res = await fetch("/api/process-pdf", {
               method: "POST",
@@ -445,26 +569,26 @@ export function CourseUploadForm({
               body: JSON.stringify({
                 courseId,
                 examGroupId,
-                files: [f],
+                files: g.files,
                 studyContext: studyGoal.trim() || undefined,
               }),
             });
             const raw = await res.text();
             if (!res.ok) {
-              return { file: f, error: messageFromUploadResponse(res, raw) };
+              return { group: g, error: messageFromUploadResponse(res, raw) };
             }
             const body = JSON.parse(raw) as {
               materialId?: string;
               jobId?: string;
             };
             return {
-              file: f,
+              group: g,
               jobId: typeof body.jobId === "string" ? body.jobId : undefined,
               materialId:
                 typeof body.materialId === "string" ? body.materialId : undefined,
             };
           } catch {
-            return { file: f, error: "Network error while starting build." };
+            return { group: g, error: "Network error while starting build." };
           }
         })
       );
@@ -482,7 +606,7 @@ export function CourseUploadForm({
           .from(STUDY_PDF_INGEST_BUCKET)
           .remove(uploadedPaths)
           .catch(() => {});
-        setError(`${failure.file.originalFileName}: ${failure.error}`);
+        setError(`${failure.group.name}: ${failure.error}`);
         setLoading(false);
         return;
       }
@@ -588,8 +712,8 @@ export function CourseUploadForm({
                 <span aria-hidden className="mr-1">🎯</span>
                 Goal for this upload
                 <span className="ml-2 text-xs font-normal text-zinc-500">
-                  ({files.length > 1
-                    ? `applies to all ${files.length} files`
+                  ({groups.length > 1
+                    ? `applies to all ${groups.length} lectures`
                     : "applies to this lecture"}
                   )
                 </span>
@@ -671,8 +795,8 @@ export function CourseUploadForm({
               : "Drag and drop your study material here"}
           </span>
           <span className="pointer-events-none mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-            PDFs, Word docs, slides, videos, audio, or images — each file
-            builds its own course
+            PDFs, Word docs, slides, videos, audio, or images — group related
+            files into one lecture
           </span>
           <span className="pointer-events-none mt-1 text-xs text-zinc-400 dark:text-zinc-500">
             Limits: {INGEST_SIZE_HINT}
@@ -680,86 +804,172 @@ export function CourseUploadForm({
         </button>
 
         {files.length > 0 && (
-          <>
-            {files.length > 1 ? (
-              <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-                Drag to reorder — all files are combined into one course.
+          <div className="mt-3 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {files.length === 1
+                  ? "1 file → 1 lecture."
+                  : `${files.length} files → ${groups.length} lecture${
+                      groups.length > 1 ? "s" : ""
+                    }. Drag a file onto another lecture to combine them — the AI then weaves them into one course.`}
               </p>
-            ) : null}
-            <ul className="mt-2 space-y-2">
-              {previewFiles.map((file) => {
-                // Index lookup against the *real* files array so reorder + remove
-                // operate on the underlying state, not the optimistic preview.
-                const realIndex = files.findIndex(
-                  (f) => f.name === file.name && f.size === file.size
-                );
-                const isDragging =
-                  dragFrom !== null && files[dragFrom]?.name === file.name && files[dragFrom]?.size === file.size;
+              {files.length > 1 ? (
+                <div className="flex shrink-0 gap-2">
+                  <button
+                    type="button"
+                    onClick={combineAllGroups}
+                    disabled={loading || groups.length <= 1}
+                    className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    Combine into one
+                  </button>
+                  <button
+                    type="button"
+                    onClick={splitAllGroups}
+                    disabled={loading || groups.length === files.length}
+                    className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    One per file
+                  </button>
+                </div>
+              ) : null}
+            </div>
 
+            <div className="space-y-3">
+              {groups.map((group, gi) => {
+                const groupFiles = group.keys
+                  .map((k) => fileByKey.get(k))
+                  .filter((f): f is File => Boolean(f));
+                const combined = groupFiles.length > 1;
+                const isTarget = dropTarget === group.id;
                 return (
-                  <li
-                    key={`${file.name}-${file.size}-${realIndex}`}
-                    draggable={!loading && files.length > 1}
-                    onDragStart={(e) => handleFileDragStart(e, realIndex)}
-                    onDragOver={(e) => handleFileDragOver(e, realIndex)}
-                    onDrop={(e) => handleFileDrop(e, realIndex)}
-                    onDragEnd={handleFileDragEnd}
+                  <div
+                    key={group.id}
+                    onDragOver={(e) => handleGroupDragOver(e, group.id)}
+                    onDrop={(e) => handleGroupDrop(e, group.id)}
+                    onDragLeave={() => {
+                      if (dropTarget === group.id) setDropTarget(null);
+                    }}
                     className={[
-                      "flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm transition-[opacity,transform] duration-150 dark:border-zinc-700 dark:bg-zinc-950",
-                      isDragging ? "opacity-40 scale-95" : "opacity-100 scale-100",
-                      files.length > 1 && !loading ? "cursor-grab active:cursor-grabbing" : "",
+                      "rounded-2xl border p-3 transition-colors",
+                      isTarget
+                        ? "border-brand bg-brand-blush/70 dark:border-brand-soft dark:bg-brand-blush/10"
+                        : combined
+                          ? "border-zinc-300 bg-zinc-50/80 dark:border-zinc-700 dark:bg-zinc-900/50"
+                          : "border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/30",
                     ].join(" ")}
                   >
-                    {files.length > 1 ? (
-                      <span
-                        className="flex h-6 w-5 shrink-0 items-center justify-center text-zinc-300 dark:text-zinc-600"
-                        aria-hidden
-                      >
-                        <svg viewBox="0 0 10 16" fill="currentColor" className="h-3.5 w-3.5">
-                          <circle cx="2.5" cy="2" r="1.5" />
-                          <circle cx="7.5" cy="2" r="1.5" />
-                          <circle cx="2.5" cy="7" r="1.5" />
-                          <circle cx="7.5" cy="7" r="1.5" />
-                          <circle cx="2.5" cy="12" r="1.5" />
-                          <circle cx="7.5" cy="12" r="1.5" />
-                        </svg>
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="shrink-0 text-xs font-semibold text-zinc-400 dark:text-zinc-500">
+                        {gi + 1}
                       </span>
-                    ) : null}
-                    <span className="shrink-0 text-base" aria-hidden>
-                      {fileKindIcon(
-                        describeIngestFile(file)?.kind ?? "pdf"
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium text-zinc-900 dark:text-zinc-100">
-                        {file.name}
-                      </span>
-                      <span className="block text-xs text-zinc-500 dark:text-zinc-400">
-                        {formatLabel(
-                          describeIngestFile(file)?.kind ?? "pdf"
-                        )}{" "}
-                        · {formatFileSize(file.size)}
-                        {fileMeta[fileKey(file)]?.durationSec != null
-                          ? ` · ${Math.round(fileMeta[fileKey(file)]!.durationSec! / 60)} min`
-                          : ""}
-                        {fileMeta[fileKey(file)]?.hint
-                          ? ` · ${fileMeta[fileKey(file)]!.hint}`
-                          : ""}
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onClick={() => removeFile(realIndex)}
-                      className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                    >
-                      Remove
-                    </button>
-                  </li>
+                      <input
+                        type="text"
+                        value={group.name}
+                        disabled={loading}
+                        onChange={(e) => renameGroup(group.id, e.target.value)}
+                        placeholder={`Lecture ${gi + 1}`}
+                        className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-zinc-900 outline-none hover:border-zinc-200 focus:border-brand focus:bg-white dark:text-zinc-100 dark:hover:border-zinc-700 dark:focus:bg-zinc-950"
+                      />
+                      {combined ? (
+                        <span className="shrink-0 rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-bold text-brand dark:bg-brand-soft/15 dark:text-brand-soft">
+                          {groupFiles.length} files combined
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <ul className="space-y-2">
+                      {groupFiles.map((file) => {
+                        const key = fileKey(file);
+                        const isDragging = draggedKey === key;
+                        return (
+                          <li
+                            key={key}
+                            draggable={!loading && files.length > 1}
+                            onDragStart={(e) => handleChipDragStart(e, key)}
+                            onDragEnd={handleChipDragEnd}
+                            className={[
+                              "flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm transition-[opacity,transform] duration-150 dark:border-zinc-700 dark:bg-zinc-950",
+                              isDragging
+                                ? "opacity-40 scale-95"
+                                : "opacity-100 scale-100",
+                              files.length > 1 && !loading
+                                ? "cursor-grab active:cursor-grabbing"
+                                : "",
+                            ].join(" ")}
+                          >
+                            {files.length > 1 ? (
+                              <span
+                                className="flex h-6 w-5 shrink-0 items-center justify-center text-zinc-300 dark:text-zinc-600"
+                                aria-hidden
+                              >
+                                <svg
+                                  viewBox="0 0 10 16"
+                                  fill="currentColor"
+                                  className="h-3.5 w-3.5"
+                                >
+                                  <circle cx="2.5" cy="2" r="1.5" />
+                                  <circle cx="7.5" cy="2" r="1.5" />
+                                  <circle cx="2.5" cy="7" r="1.5" />
+                                  <circle cx="7.5" cy="7" r="1.5" />
+                                  <circle cx="2.5" cy="12" r="1.5" />
+                                  <circle cx="7.5" cy="12" r="1.5" />
+                                </svg>
+                              </span>
+                            ) : null}
+                            <span className="shrink-0 text-base" aria-hidden>
+                              {fileKindIcon(describeIngestFile(file)?.kind ?? "pdf")}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium text-zinc-900 dark:text-zinc-100">
+                                {file.name}
+                              </span>
+                              <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                                {formatLabel(describeIngestFile(file)?.kind ?? "pdf")}{" "}
+                                · {formatFileSize(file.size)}
+                                {fileMeta[key]?.durationSec != null
+                                  ? ` · ${Math.round(fileMeta[key]!.durationSec! / 60)} min`
+                                  : ""}
+                                {fileMeta[key]?.hint
+                                  ? ` · ${fileMeta[key]!.hint}`
+                                  : ""}
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              disabled={loading}
+                              onClick={() => removeFileByKey(key)}
+                              className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 );
               })}
-            </ul>
-          </>
+
+              {draggedKey !== null && files.length > 1 ? (
+                <div
+                  onDragOver={(e) => handleGroupDragOver(e, null)}
+                  onDrop={(e) => handleGroupDrop(e, null)}
+                  onDragLeave={() => {
+                    if (dropTarget === null) setDropTarget(null);
+                  }}
+                  className={[
+                    "flex items-center justify-center rounded-2xl border-2 border-dashed px-4 py-6 text-center text-xs font-medium transition-colors",
+                    dropTarget === null
+                      ? "border-brand bg-brand-blush/70 text-brand dark:border-brand-soft dark:bg-brand-blush/10 dark:text-brand-soft"
+                      : "border-zinc-300 text-zinc-500 dark:border-zinc-700 dark:text-zinc-400",
+                  ].join(" ")}
+                >
+                  Drop here to split into its own lecture
+                </div>
+              ) : null}
+            </div>
+          </div>
         )}
 
         <p className="mt-2 text-xs text-zinc-500">
@@ -820,8 +1030,8 @@ export function CourseUploadForm({
       >
         {loading
           ? "Building…"
-          : files.length > 1
-            ? `Upload & build course (${files.length} files)`
+          : groups.length > 1
+            ? `Upload & build ${groups.length} lectures`
             : "Upload & build course"}
       </button>
     </form>

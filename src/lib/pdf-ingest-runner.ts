@@ -1400,8 +1400,18 @@ async function runPdfIngestOutlinePhase(
   // STRUCTURE_PLANNING: when enabled and we have content chunks, let the AI
   // decide module/lesson grouping from content (not file count). Falls back
   // to the legacy outline call when the flag is off or no chunks are present.
+  //
+  // We ALSO auto-enable it whenever a job combines more than one source file
+  // (a manually-grouped "lecture"). That's precisely the case the planner was
+  // built for — it weaves related files into shared lessons instead of one
+  // lesson per file — so grouped uploads get the smart split even when the
+  // global STRUCTURE_PLANNING flag is off.
+  const distinctSourceFiles = new Set(
+    chunks.map((c) => c.sourceFileName).filter((n) => Boolean(n))
+  ).size;
   const useStructurePlanning =
-    isStructurePlanningEnabled() && chunks.length > 0;
+    chunks.length > 0 &&
+    (isStructurePlanningEnabled() || distinctSourceFiles > 1);
 
   let outline: CourseOutlinePayload;
   let planModuleSources: string[] | null = null;
