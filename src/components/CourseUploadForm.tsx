@@ -132,6 +132,10 @@ export function CourseUploadForm({
   type Stack = { id: string; name: string; keys: string[] };
   const [groups, setGroups] = useState<Stack[]>([]);
   const stackSeq = useRef(0);
+  // When a file is dropped directly onto a lecture card, remember which group
+  // it should join so the reconcile effect places it there instead of giving
+  // it a fresh lecture of its own.
+  const pendingAssignRef = useRef<Record<string, string>>({});
   // Drag state: which file chip is being dragged + the group hovered over.
   const [draggedKey, setDraggedKey] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -156,11 +160,19 @@ export function CourseUploadForm({
       for (const f of files) {
         const k = fileKey(f);
         if (assigned.has(k)) continue;
-        stackSeq.current += 1;
-        next = [
-          ...next,
-          { id: `stk-${stackSeq.current}`, name: "", keys: [k] },
-        ];
+        const target = pendingAssignRef.current[k];
+        if (target && next.some((g) => g.id === target)) {
+          next = next.map((g) =>
+            g.id === target ? { ...g, keys: [...g.keys, k] } : g
+          );
+          delete pendingAssignRef.current[k];
+        } else {
+          stackSeq.current += 1;
+          next = [
+            ...next,
+            { id: `stk-${stackSeq.current}`, name: "", keys: [k] },
+          ];
+        }
         assigned.add(k);
       }
       return next;
@@ -306,7 +318,10 @@ export function CourseUploadForm({
   }, [studyGoal]);
 
   const addIngestFiles = useCallback(
-    (list: FileList | File[] | null | undefined) => {
+    (
+      list: FileList | File[] | null | undefined,
+      targetGroupId?: string
+    ) => {
       const incoming = Array.from(list ?? []);
       const accepted: File[] = [];
       const rejected: string[] = [];
@@ -334,7 +349,12 @@ export function CourseUploadForm({
         const next = [...prev];
         for (const f of accepted) {
           const dup = next.some((x) => x.name === f.name && x.size === f.size);
-          if (!dup) next.push(f);
+          if (!dup) {
+            next.push(f);
+            if (targetGroupId) {
+              pendingAssignRef.current[fileKey(f)] = targetGroupId;
+            }
+          }
         }
         return next;
       });
@@ -362,21 +382,35 @@ export function CourseUploadForm({
   }
 
   function handleGroupDragOver(e: React.DragEvent, groupId: string | null) {
-    if (draggedKey === null) return;
+    const draggingExternalFiles = e.dataTransfer.types.includes("Files");
+    // Accept either an internal chip move or files dragged in from the OS.
+    if (draggedKey === null && !draggingExternalFiles) return;
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = "move";
+    e.dataTransfer.dropEffect =
+      draggedKey === null && draggingExternalFiles ? "copy" : "move";
     if (dropTarget !== groupId) setDropTarget(groupId);
   }
 
   function handleGroupDrop(e: React.DragEvent, groupId: string | null) {
-    if (draggedKey === null) return;
+    const external = e.dataTransfer.files;
+    const droppingExternalFiles =
+      draggedKey === null && external && external.length > 0;
+    if (draggedKey === null && !droppingExternalFiles) return;
     e.preventDefault();
     e.stopPropagation();
-    if (groupId === null) splitKeyToNewGroup(draggedKey);
-    else moveKeyToGroup(draggedKey, groupId);
+    if (droppingExternalFiles) {
+      // Files from the desktop dropped straight onto a lecture join that
+      // lecture (the "new lecture" zone isn't shown for external drags).
+      addIngestFiles(external, groupId ?? undefined);
+    } else if (draggedKey !== null) {
+      if (groupId === null) splitKeyToNewGroup(draggedKey);
+      else moveKeyToGroup(draggedKey, groupId);
+    }
     setDraggedKey(null);
     setDropTarget(null);
+    dragDepthRef.current = 0;
+    setDragOver(false);
   }
 
   function handleChipDragEnd() {
@@ -868,7 +902,7 @@ export function CourseUploadForm({
                         value={group.name}
                         disabled={loading}
                         onChange={(e) => renameGroup(group.id, e.target.value)}
-                        placeholder={`Lecture ${gi + 1}`}
+                        placeholder="Name this lecture (optional)"
                         className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-zinc-900 outline-none hover:border-zinc-200 focus:border-brand focus:bg-white dark:text-zinc-100 dark:hover:border-zinc-700 dark:focus:bg-zinc-950"
                       />
                       {combined ? (
