@@ -7,6 +7,7 @@ import {
   splitLeadParagraph,
   stripMarkdownFigures,
 } from "@/lib/lesson-content-layout";
+import { escapeCurrencyDollars } from "@/lib/markdown-math";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -102,7 +103,7 @@ function MarkdownBlock({ markdown }: { markdown: string }) {
       rehypePlugins={[rehypeKatex]}
       components={markdownComponents}
     >
-      {markdown}
+      {escapeCurrencyDollars(markdown)}
     </ReactMarkdown>
   );
 }
