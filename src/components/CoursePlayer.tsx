@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
+import { confirmDialog } from "@/components/AppDialogs";
 import { CourseModeToggle } from "@/components/CourseModeToggle";
 import { LessonEditableBlocks } from "@/components/LessonEditableBlocks";
 import { LessonNotesCapture } from "@/components/LessonNotesCapture";
@@ -796,9 +797,12 @@ export function CoursePlayer({
   async function deleteModule(modId: number) {
     if (course.modules.length <= 1) return;
 
-    const ok = window.confirm(
-      "Delete this module? Remaining modules will be renumbered. Progress and quiz attempts for this upload will be reset."
-    );
+    const ok = await confirmDialog({
+      title: "Delete this module?",
+      body: "Remaining modules will be renumbered. Progress and quiz attempts for this upload will be reset.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
     if (!ok) return;
 
     setBusyModuleId(modId);

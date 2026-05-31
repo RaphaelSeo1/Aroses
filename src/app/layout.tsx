@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import { AppAdminNavGate } from "@/components/AppAdminNavGate";
+import { AppDialogs } from "@/components/AppDialogs";
 import { ScrollRestoration } from "@/components/ScrollRestoration";
 import { ThemeHydration } from "@/components/ThemeHydration";
 import { APP_NAME } from "@/lib/brand";
@@ -50,6 +51,7 @@ export default function RootLayout({
         <ScrollRestoration />
         <ThemeHydration />
         <AppAdminNavGate>{children}</AppAdminNavGate>
+        <AppDialogs />
       </body>
     </html>
   );

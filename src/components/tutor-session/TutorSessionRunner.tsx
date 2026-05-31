@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { confirmDialog } from "@/components/AppDialogs";
 import {
   NotesPanel,
   type NotesPanelHandle,
@@ -1346,10 +1347,12 @@ export function TutorSessionRunner({
   const endSession = useCallback(async () => {
     if (endingSession) return;
     if (messages.length < 2) {
-      const confirm = window.confirm(
-        "You just got started — sure you want to end already?"
-      );
-      if (!confirm) return;
+      const ok = await confirmDialog({
+        title: "End this session?",
+        body: "You just got started — sure you want to end already?",
+        confirmLabel: "End session",
+      });
+      if (!ok) return;
     }
     await abortVoiceCapture();
     setEndingSession(true);

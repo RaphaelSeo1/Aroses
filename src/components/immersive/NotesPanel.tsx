@@ -13,6 +13,7 @@ import TaskItem from "@tiptap/extension-task-item";
 import Typography from "@tiptap/extension-typography";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
+import { promptDialog } from "@/components/AppDialogs";
 import {
   readRoseDocAttrs,
   RoseDocument,
@@ -277,25 +278,33 @@ export function NotesPanel({
         // Cmd+K for link insertion — match Notion's default.
         if ((event.metaKey || event.ctrlKey) && event.key === "k") {
           event.preventDefault();
-          const url = window.prompt("Paste link URL");
-          if (!url) return true;
-          const { state, dispatch } = view;
-          const { from, to } = state.selection;
-          const text = state.doc.textBetween(from, to, "");
-          if (text.length === 0) {
-            const linkNode = state.schema.text(url, [
-              state.schema.marks.link.create({ href: url }),
-            ]);
-            dispatch(state.tr.replaceSelectionWith(linkNode, false));
-          } else {
-            dispatch(
-              state.tr.addMark(
-                from,
-                to,
-                state.schema.marks.link.create({ href: url })
-              )
-            );
-          }
+          // Async dialog: capture the selection now, apply the link when the
+          // user confirms (the EditorView ref stays live across the await).
+          const { from, to } = view.state.selection;
+          const hadSelection =
+            view.state.doc.textBetween(from, to, "").length > 0;
+          void promptDialog({
+            title: "Insert link",
+            label: "Link URL",
+            placeholder: "https://example.com",
+          }).then((url) => {
+            if (!url) return;
+            const { state, dispatch } = view;
+            if (!hadSelection) {
+              const linkNode = state.schema.text(url, [
+                state.schema.marks.link.create({ href: url }),
+              ]);
+              dispatch(state.tr.replaceSelectionWith(linkNode, false));
+            } else {
+              dispatch(
+                state.tr.addMark(
+                  from,
+                  to,
+                  state.schema.marks.link.create({ href: url })
+                )
+              );
+            }
+          });
           return true;
         }
         return false;
@@ -998,18 +1007,25 @@ export function NotesPanel({
                   const prev = editor.getAttributes("link").href as
                     | string
                     | undefined;
-                  const url = window.prompt("Link URL", prev ?? "");
-                  if (url === null) return;
-                  if (url === "") {
-                    editor.chain().focus().unsetLink().run();
-                  } else {
-                    editor
-                      .chain()
-                      .focus()
-                      .extendMarkRange("link")
-                      .setLink({ href: url })
-                      .run();
-                  }
+                  void promptDialog({
+                    title: "Edit link",
+                    label: "Link URL",
+                    placeholder: "https://example.com",
+                    body: "Leave blank to remove the link.",
+                    defaultValue: prev ?? "",
+                  }).then((url) => {
+                    if (url === null) return;
+                    if (url === "") {
+                      editor.chain().focus().unsetLink().run();
+                    } else {
+                      editor
+                        .chain()
+                        .focus()
+                        .extendMarkRange("link")
+                        .setLink({ href: url })
+                        .run();
+                    }
+                  });
                 }}
               >
                 <span>🔗</span>

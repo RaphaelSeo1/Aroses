@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
+import { alertDialog, confirmDialog } from "@/components/AppDialogs";
 import type { AdminActivityItem, AdminUserRow } from "@/lib/admin-dashboard-data";
 
 /** Bounded vertical scroll for large tables — keeps the admin page compact. */
@@ -223,9 +224,12 @@ export function AdminDashboardClient({
 
   const onDelete = useCallback(
     async (courseId: string, title: string) => {
-      const ok = window.confirm(
-        `Delete “${title || "Untitled"}”? This removes the course and related data for learners.`
-      );
+      const ok = await confirmDialog({
+        title: `Delete “${title || "Untitled"}”?`,
+        body: "This removes the course and related data for learners.",
+        confirmLabel: "Delete",
+        tone: "danger",
+      });
       if (!ok) return;
       setDeletingId(courseId);
       try {
@@ -235,7 +239,11 @@ export function AdminDashboardClient({
         });
         if (!res.ok) {
           const j = (await res.json().catch(() => ({}))) as { error?: string };
-          window.alert(j.error ?? "Could not delete course.");
+          await alertDialog({
+            title: "Couldn’t delete course",
+            body: j.error ?? "Could not delete course.",
+            tone: "danger",
+          });
           return;
         }
         router.refresh();

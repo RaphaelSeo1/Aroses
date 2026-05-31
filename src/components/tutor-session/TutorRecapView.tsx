@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { confirmDialog } from "@/components/AppDialogs";
 import { LessonRichContent } from "@/components/LessonRichContent";
 import {
   TutorRecapEditor,
@@ -321,7 +322,12 @@ export function TutorRecapView({ sessionId, initial }: Props) {
   }, [converting, router, sessionId]);
 
   const deleteSession = useCallback(async () => {
-    const ok = window.confirm("Delete this session and its recap?");
+    const ok = await confirmDialog({
+      title: "Delete this session?",
+      body: "This permanently removes the session and its recap.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
     if (!ok) return;
     try {
       const res = await fetch(`/api/tutor-session/${sessionId}`, {
