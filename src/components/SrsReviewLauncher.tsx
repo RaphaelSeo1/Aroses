@@ -30,6 +30,12 @@ export type SrsReviewLauncherProps = {
   maxReviews?: number;
   /** Show course-name chip on each card (true for global review). */
   showCourseBadge?: boolean;
+  /**
+   * Practice-all / cram: ignore the spaced-repetition schedule and serve every
+   * card in scope. Used so saved focus cards always run and finished decks can
+   * be retried immediately.
+   */
+  cram?: boolean;
   /** Small label above the deck — e.g. "Module quiz review". */
   heading?: string;
   /** Stable key for localStorage namespacing. */
@@ -57,12 +63,28 @@ export function SrsReviewLauncher({
   newLimit,
   maxReviews,
   showCourseBadge = false,
+  cram = false,
   heading,
   sessionKey,
   onExit,
   onComplete,
 }: SrsReviewLauncherProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
+  // Bumping this remounts SrsReviewSession with a fresh deck for "Practice
+  // again" — without it the session would rehydrate the finished state from
+  // localStorage and immediately show the summary again.
+  const [runEpoch, setRunEpoch] = useState(0);
+
+  const practiceAgain = useCallback(() => {
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(`aroses.srs.session.${sessionKey}`);
+      } catch {
+        /* ignore */
+      }
+    }
+    setRunEpoch((e) => e + 1);
+  }, [sessionKey]);
 
   const load = useCallback(async () => {
     setState({ status: "loading" });
@@ -77,6 +99,7 @@ export function SrsReviewLauncher({
       if (typeof newLimit === "number") params.set("newLimit", String(newLimit));
       if (typeof maxReviews === "number")
         params.set("maxReviews", String(maxReviews));
+      if (cram) params.set("cram", "1");
 
       const res = await fetch(`/api/srs/session?${params.toString()}`);
       const j = (await res.json().catch(() => ({}))) as {
@@ -110,6 +133,7 @@ export function SrsReviewLauncher({
     moduleId,
     newLimit,
     maxReviews,
+    cram,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ]);
 
@@ -156,12 +180,14 @@ export function SrsReviewLauncher({
 
   return (
     <SrsReviewSession
+      key={runEpoch}
       sessionKey={sessionKey}
       cards={state.cards}
       showCourseBadge={showCourseBadge}
       heading={heading}
       onExit={onExit}
       onComplete={onComplete}
+      onPracticeAgain={state.cards.length > 0 ? practiceAgain : undefined}
     />
   );
 }

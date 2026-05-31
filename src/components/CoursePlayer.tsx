@@ -512,12 +512,6 @@ export function CoursePlayer({
     [studyBase, materialId, activeModuleId, learnMode]
   );
 
-  const focusQuizPageHref = useMemo(
-    () =>
-      `${studyBase}/quiz?${buildStudySearchParams(materialId, activeModuleId, learnMode, "focus")}`,
-    [studyBase, materialId, activeModuleId, learnMode]
-  );
-
   const lecturePageHref = useMemo(
     () =>
       `${studyBase}?${buildStudySearchParams(materialId, activeModuleId, learnMode)}`,
@@ -1448,8 +1442,8 @@ export function CoursePlayer({
                   Practice & review
                 </h3>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  Jump to the practice room with either tab below—the lecture
-                  page stays uncluttered.
+                  Head to the practice room to run the module quiz or your focus
+                  cards — switch between them with the tabs there.
                 </p>
                 {completed.has(activeModule.id) ? (
                   <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/90 px-4 py-2.5 text-sm font-medium text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-100">
@@ -1462,18 +1456,12 @@ export function CoursePlayer({
                     href={moduleQuizPageHref}
                     className="inline-flex items-center justify-center rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
                   >
-                    Module quiz
+                    Go to practice room
                     {moduleQuizBank.length > 0 ? (
                       <span className="ml-2 inline-flex items-center justify-center rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums">
                         {moduleQuizBank.length}
                       </span>
                     ) : null}
-                  </Link>
-                  <Link
-                    href={focusQuizPageHref}
-                    className="inline-flex items-center justify-center rounded-full border border-zinc-200 bg-white px-6 py-3 text-sm font-semibold text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
-                  >
-                    Focus quiz
                   </Link>
                 </div>
               </div>

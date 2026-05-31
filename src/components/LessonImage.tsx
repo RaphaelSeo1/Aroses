@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Licensed lesson image (Wikimedia Commons) rendered inline above
@@ -33,11 +33,14 @@ export function LessonImage({
   moduleId,
   lessonIndex,
   className,
+  canManage = false,
 }: {
   materialId: string;
   moduleId: number;
   lessonIndex: number;
   className?: string;
+  /** Creator-only edit controls (replace / remove / add). */
+  canManage?: boolean;
 }) {
   const [state, setState] = useState<
     | { status: "loading" }
@@ -45,6 +48,69 @@ export function LessonImage({
     | { status: "ready"; image: LessonImagePayload }
   >({ status: "loading" });
   const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const imageApi = `/api/study-materials/${materialId}/modules/${moduleId}/lessons/${lessonIndex}/image`;
+
+  async function handleUpload(file: File) {
+    setBusy(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const up = await fetch(`/api/study-materials/${materialId}/images`, {
+        method: "POST",
+        body: form,
+      });
+      const upBody = (await up.json().catch(() => ({}))) as {
+        url?: string;
+        error?: string;
+      };
+      if (!up.ok || !upBody.url) {
+        throw new Error(upBody.error || "Upload failed.");
+      }
+      const res = await fetch(imageApi, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "replace", imageUrl: upBody.url }),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        image?: LessonImagePayload | null;
+        error?: string;
+      };
+      if (!res.ok || !body.image) {
+        throw new Error(body.error || "Could not save image.");
+      }
+      setState({ status: "ready", image: body.image });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRemove() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(imageApi, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "hide" }),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(b.error || "Could not remove image.");
+      }
+      setState({ status: "hidden" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -81,7 +147,42 @@ export function LessonImage({
     };
   }, [materialId, moduleId, lessonIndex]);
 
-  if (state.status === "hidden") return null;
+  const hiddenFileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
+      className="hidden"
+      onChange={(e) => {
+        const f = e.target.files?.[0];
+        if (f) void handleUpload(f);
+        e.target.value = "";
+      }}
+    />
+  );
+
+  if (state.status === "hidden") {
+    // For non-creators we render nothing (the original behaviour). Creators
+    // get an "Add image" affordance so they can attach their own image to a
+    // lesson the auto-pipeline skipped or that they previously cleared.
+    if (!canManage) return null;
+    return (
+      <div className={className ?? ""}>
+        {hiddenFileInput}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => fileInputRef.current?.click()}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/60 px-4 py-6 text-sm font-medium text-zinc-500 transition hover:border-brand hover:text-brand disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-400"
+        >
+          {busy ? "Uploading…" : "+ Add an image to this lesson"}
+        </button>
+        {error ? (
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>
+        ) : null}
+      </div>
+    );
+  }
 
   if (state.status === "loading") {
     return (
@@ -128,6 +229,33 @@ export function LessonImage({
           </a>
         ) : null}
       </figcaption>
+
+      {canManage ? (
+        <div className="flex flex-wrap items-center gap-3 border-t border-zinc-200/70 px-3 py-2 dark:border-zinc-700/60">
+          {hiddenFileInput}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => fileInputRef.current?.click()}
+            className="text-[11px] font-semibold text-brand underline-offset-2 hover:underline disabled:opacity-50"
+          >
+            {busy ? "Working…" : "Replace image"}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void handleRemove()}
+            className="text-[11px] font-semibold text-red-600 underline-offset-2 hover:underline disabled:opacity-50 dark:text-red-400"
+          >
+            Remove image
+          </button>
+          {error ? (
+            <span className="text-[11px] text-red-600 dark:text-red-400">
+              {error}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       {expanded ? (
         <div

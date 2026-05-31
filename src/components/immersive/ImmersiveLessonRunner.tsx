@@ -551,9 +551,14 @@ export function ImmersiveLessonRunner({
       isResumeRef.current = true;
     }
 
+    // First-time greetings end with a question ("Ready to dive in?"). Gate
+    // the start on the student tapping Continue (same as returning students)
+    // so the lesson doesn't barrel ahead before they've answered.
     const needsAcknowledgement =
       !onWelcomeBackScreen &&
-      (scenario === "returning" || scenario === "all_complete");
+      (scenario === "returning" ||
+        scenario === "all_complete" ||
+        scenario === "first_time");
     if (needsAcknowledgement) {
       awaitingContinueRef.current = true;
       setAwaitingContinue(true);
@@ -775,28 +780,14 @@ export function ImmersiveLessonRunner({
     const checkQuestion = chunk.checkQuestion;
     const captured = chunk.id;
 
-    // Resuming where the student left off: don't replay the whole explanation.
-    // Show the lesson text, surface the check-question bubble immediately, and
-    // just re-ask the question in voice. This is what fixes the "question
-    // bubble doesn't come back" bug.
-    if (isResumeRef.current) {
-      isResumeRef.current = false;
-      setTutorReply(explanation);
-      setNarrationText(explanation);
-      lastSpokenRef.current = explanation;
-      if (checkQuestion && checkQuestion.trim().length > 0) {
-        setQuestionAudioStartedFor(captured);
-        setQuestionPopupMinimized(false);
-        lastCheckAtRef.current = Date.now();
-        void voice.speak(checkQuestion, {
-          onPlay: () => {
-            lastSpokenRef.current = `${explanation}\n\n${checkQuestion}`;
-          },
-        });
-        return;
-      }
-      // No check question on this chunk — fall through to normal narration.
-    }
+    // Clear the resume flag. We used to special-case resume by SKIPPING the
+    // explanation and re-asking only the check question. That was wrong for
+    // any chunk the student hadn't actually heard explained yet (e.g. a
+    // freshly-advanced section, or a resume that lands on a new chunk) — the
+    // new section would start by speaking the question with no explanation.
+    // Always narrate the explanation first; the question bubble still
+    // surfaces below when the question audio starts.
+    isResumeRef.current = false;
 
     void (async () => {
       await voice.speak(explanation, {
@@ -805,7 +796,10 @@ export function ImmersiveLessonRunner({
           setNarrationText(explanation);
         },
       });
+      // Bail if the chunk changed under us (advance / resume) so we never
+      // speak this chunk's question after the student has moved on.
       if (lastSpokenChunkIdRef.current !== captured) return;
+      if (!checkQuestion || checkQuestion.trim().length === 0) return;
       await voice.speak(checkQuestion, {
         onPlay: () => {
           lastSpokenRef.current = `${explanation}\n\n${checkQuestion}`;
@@ -1973,8 +1967,7 @@ export function ImmersiveLessonRunner({
         text={chunk.checkQuestion}
         open={
           questionAudioStartedFor === chunk.id &&
-          questionPopupDismissedFor !== chunk.id &&
-          attempts === 0
+          questionPopupDismissedFor !== chunk.id
         }
         minimized={questionPopupMinimized}
         onMinimize={() => setQuestionPopupMinimized(true)}

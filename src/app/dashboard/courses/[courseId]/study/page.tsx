@@ -39,6 +39,7 @@ type Props = {
     mode?: string;
     lesson?: string;
     scroll?: string;
+    manage?: string;
   }>;
 };
 
@@ -50,8 +51,12 @@ export default async function StudyPage({ params, searchParams }: Props) {
     mode: modeParam,
     lesson: lessonParam,
     scroll: scrollParam,
+    manage: manageParam,
   } = await searchParams;
-  const learnMode = modeParam === "learn";
+  // Explicit edit intent (from "Edit course"). When managing we never fall
+  // into learn mode, even if saved progress says the last session was "free".
+  const manageMode = manageParam === "1";
+  const learnMode = !manageMode && modeParam === "learn";
 
   const moduleNum =
     typeof moduleParam === "string" ? Number(moduleParam) : Number.NaN;
@@ -130,7 +135,13 @@ export default async function StudyPage({ params, searchParams }: Props) {
       if (target.scrollPosition != null && target.scrollPosition > 0) {
         qs.set("scroll", String(target.scrollPosition));
       }
-      if (learnMode || target.mode === "free") qs.set("mode", "learn");
+      if (manageMode) {
+        // Preserve edit intent across the resume redirect; do NOT coerce to
+        // learn mode.
+        qs.set("manage", "1");
+      } else if (learnMode || target.mode === "free") {
+        qs.set("mode", "learn");
+      }
       redirect(`/dashboard/courses/${courseId}/study?${qs.toString()}`);
     }
   }

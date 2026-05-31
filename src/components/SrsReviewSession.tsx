@@ -86,6 +86,8 @@ type Props = {
   onComplete?: (summary: SrsSessionSummary) => void;
   /** Called when user clicks Exit early. */
   onExit?: () => void;
+  /** When provided, shows a "Practice again" button on the summary screen. */
+  onPracticeAgain?: () => void;
 };
 
 /**
@@ -143,6 +145,7 @@ export function SrsReviewSession({
   heading,
   onComplete,
   onExit,
+  onPracticeAgain,
 }: Props) {
   const storageKey = `aroses.srs.session.${sessionKey}`;
 
@@ -494,6 +497,15 @@ export function SrsReviewSession({
           ))}
         </dl>
         <div className="mt-6 flex flex-wrap gap-3">
+          {onPracticeAgain ? (
+            <button
+              type="button"
+              onClick={onPracticeAgain}
+              className="inline-flex items-center justify-center rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white shadow-md shadow-red-600/20 hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
+            >
+              Practice again
+            </button>
+          ) : null}
           {onExit ? (
             <button
               type="button"

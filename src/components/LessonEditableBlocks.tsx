@@ -199,6 +199,7 @@ export function LessonEditableBlocks({
               materialId={materialId}
               moduleId={moduleId}
               lessonIndex={lessonIndex}
+              canManage={!readOnly}
             />
           ) : null}
           <div>
@@ -311,6 +312,7 @@ export function LessonEditableBlocks({
           materialId={materialId}
           moduleId={moduleId}
           lessonIndex={lessonIndex}
+          canManage={!readOnly}
         />
       ) : null}
 

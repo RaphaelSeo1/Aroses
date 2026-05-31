@@ -79,6 +79,11 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const scope = parseScope(url.searchParams.get("scope")) ?? "both";
+  // Cram / "Practice all": ignore the spaced-repetition schedule and serve
+  // every card in scope. Without this, a finished deck schedules its cards
+  // into the future, so a re-run (or revisiting saved focus cards) returns an
+  // empty session — which looked like "my stored questions don't come up".
+  const cram = url.searchParams.get("cram") === "1";
   const materialIdParam = url.searchParams.get("materialId") ?? "";
   const materialIdsParam = url.searchParams.get("materialIds") ?? "";
   const moduleIdParam = url.searchParams.get("moduleId");
@@ -148,9 +153,13 @@ export async function GET(request: Request) {
         "material_id, question_index, srs_ease, srs_interval_days, srs_reps, due_at, review_history"
       )
       .eq("user_id", user.id)
-      .lte("due_at", nowIso)
       .order("due_at", { ascending: true })
-      .limit(Math.max(1, maxReviews));
+      .limit(cram ? 5000 : Math.max(1, maxReviews));
+    // In cram mode we want every card that has SRS state regardless of when
+    // it's next due.
+    if (!cram) {
+      dueQuery = dueQuery.lte("due_at", nowIso);
+    }
 
     if (allowedMaterialIds && allowedMaterialIds.size > 0) {
       dueQuery = dueQuery.in("material_id", [...allowedMaterialIds]);
@@ -190,7 +199,7 @@ export async function GET(request: Request) {
     }
     // Shuffle new candidates a little so multiple courses interleave.
     shuffleInPlace(newCandidates);
-    moduleNew.push(...newCandidates.slice(0, newLimit));
+    moduleNew.push(...newCandidates.slice(0, cram ? newCandidates.length : newLimit));
   }
 
   // -------- Personal source ---------------------------------------------
@@ -248,13 +257,19 @@ export async function GET(request: Request) {
         reviewCount,
       };
 
-      if (isNew) personalNew.push(card);
-      else if (isDue) personalDue.push(card);
+      if (cram) {
+        // Practice-all: every saved card is eligible, no new/due split.
+        personalDue.push(card);
+      } else if (isNew) {
+        personalNew.push(card);
+      } else if (isDue) {
+        personalDue.push(card);
+      }
     }
     // Cap new personal cards by remaining new-card budget. Module new cards
     // already took some of the budget; share it across both sources fairly.
     const personalNewCap = Math.max(0, newLimit - moduleNew.length);
-    if (personalNew.length > personalNewCap) {
+    if (!cram && personalNew.length > personalNewCap) {
       shuffleInPlace(personalNew);
       personalNew.length = personalNewCap;
     }
@@ -270,7 +285,7 @@ export async function GET(request: Request) {
   // Cap total deck by maxReviews (due never gets capped — those are the
   // ones the user actually owes today). If we still have budget after due,
   // pour new cards in.
-  const remaining = Math.max(0, maxReviews - due.length);
+  const remaining = cram ? fresh.length : Math.max(0, maxReviews - due.length);
   const cards = [...due, ...fresh.slice(0, remaining)];
 
   const scopesMaterials = [...materialById.values()].map((m) => ({

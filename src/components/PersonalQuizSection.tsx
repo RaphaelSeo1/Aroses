@@ -637,12 +637,17 @@ export function PersonalQuizSection({
             }
             className="transition-none inline-flex items-center justify-center gap-2 rounded-full border border-brand-border bg-brand-blush/90 px-8 py-3.5 text-sm font-semibold text-brand-ink shadow-sm hover:bg-brand-blush disabled:cursor-not-allowed disabled:opacity-50 dark:border-brand-border/50 dark:bg-[#1e1616]/90 dark:text-brand-soft dark:hover:bg-[#2a2020]"
           >
-            {focusDue > 0
-              ? `Review ${focusDue} due card${focusDue === 1 ? "" : "s"}`
-              : "Start my focus review"}
+            {/* Always practices ALL saved focus cards (cram), so they never
+                "disappear" once they've been reviewed and rescheduled. */}
+            {quizList.length > 0
+              ? `Practice all ${quizList.length} focus card${quizList.length === 1 ? "" : "s"}`
+              : "Generate focus questions first"}
             {focusDue > 0 ? (
-              <span className="inline-flex items-center justify-center rounded-full bg-brand/15 px-2 py-0.5 text-[11px] font-bold tabular-nums">
-                {focusDue}
+              <span
+                className="inline-flex items-center justify-center rounded-full bg-brand/15 px-2 py-0.5 text-[11px] font-bold tabular-nums"
+                title={`${focusDue} due for spaced review`}
+              >
+                {focusDue} due
               </span>
             ) : null}
           </button>
@@ -665,6 +670,7 @@ export function PersonalQuizSection({
               scope="personal"
               materialId={materialId}
               moduleId={moduleId}
+              cram
               sessionKey={`personal-${materialId}-${moduleId}`}
               heading="Focus quiz review"
               onExit={() => {

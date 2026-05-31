@@ -14,7 +14,11 @@ export function CourseCreatorOverview({
   uploadsCount: number;
   modulesTotal: number;
 }) {
-  const studyHref = `/dashboard/courses/${courseId}/study`;
+  // `manage=1` forces the study page into edit/manage mode. Without it, the
+  // study page's "resume where you left off" redirect can append `mode=learn`
+  // (when the last session was Free Exploration), which silently drops the
+  // creator into the read-only learn view instead of the editor.
+  const studyHref = `/dashboard/courses/${courseId}/study?manage=1`;
 
   return (
     <section className="mt-10 rounded-3xl border border-brand-border bg-brand-blush p-6 shadow-lg shadow-red-900/5 dark:border-brand-border/40 dark:bg-[#1e1616]/95 sm:p-8">
