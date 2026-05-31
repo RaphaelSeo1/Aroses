@@ -320,7 +320,9 @@ function pdfIngestModuleBatchSize(remaining: number, peerCount: number): number 
   const raw = process.env.PDF_INGEST_MODULE_BATCH_SIZE?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   const fromEnv = Number.isFinite(parsed) ? Math.trunc(parsed) : null;
-  const target = fromEnv != null ? fromEnv : peerCount === 0 ? 3 : 2;
+  // Tier 2/3+ headroom (the global limiter gates real TPM): write several
+  // modules per /expand call so a course needs fewer client round-trips.
+  const target = fromEnv != null ? fromEnv : peerCount === 0 ? 4 : 3;
   return Math.max(1, Math.min(remaining, target));
 }
 
