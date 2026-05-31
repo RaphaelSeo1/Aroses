@@ -783,6 +783,14 @@ export function useMentoredVoice(opts: {
 
   const transcribe = useCallback(
     async (blob: Blob): Promise<string> => {
+      // Guard against unusably short clips (silence, a stray click, or a
+      // barge-in blip). Whisper rejects these with a 400 "unsupported or
+      // empty audio", which used to surface as a scary error pill even though
+      // nothing was actually wrong. Treat them as "nothing said" — callers
+      // already handle an empty string gracefully. ~1.5KB of opus ≈ <0.5s.
+      if (!blob || blob.size < 1500) {
+        return "";
+      }
       setState((s) => ({ ...s, transcribing: true, error: null }));
       try {
         // /api/voice-tutor/transcribe expects multipart fields named
@@ -790,12 +798,23 @@ export function useMentoredVoice(opts: {
         // here used `audio` and no materialId, which made every Mentored
         // Learning transcription fail with HTTP 400. Keep these in sync
         // with `src/app/api/voice-tutor/transcribe/route.ts`.
+        //
+        // The filename extension must match the real container — Whisper
+        // sniffs it to pick a decoder. Safari/iOS record mp4/aac while
+        // Chrome/Firefox record webm/opus; mislabeling caused 400s.
         const form = new FormData();
-        const filename = blob.type.includes("webm")
+        const t = (blob.type || "").toLowerCase();
+        const filename = t.includes("webm")
           ? "answer.webm"
-          : blob.type.includes("ogg")
+          : t.includes("ogg")
             ? "answer.ogg"
-            : "answer.bin";
+            : t.includes("wav")
+              ? "answer.wav"
+              : t.includes("mp4") || t.includes("m4a") || t.includes("aac")
+                ? "answer.mp4"
+                : t.includes("mpeg") || t.includes("mp3")
+                  ? "answer.mp3"
+                  : "answer.webm";
         const file =
           blob instanceof File
             ? blob

@@ -387,14 +387,51 @@ export function ImmersiveLessonRunner({
         cached: boolean;
       };
       setPlan(body.plan);
-      if (chunkIdx >= body.plan.chunks.length) setChunkIdx(0);
+
+      // The restored position is at/after the last chunk → this module was
+      // already finished on a previous visit. Don't dump the student back
+      // into content they've completed (the old behavior reset to chunk 0
+      // and replayed the whole section). Move them FORWARD instead:
+      //   1) next module in this material, else
+      //   2) next study material (section) in the course, else
+      //   3) the completion screen (truly the end).
+      if (chunkIdx >= body.plan.chunks.length) {
+        const mIdx = course.modules.findIndex((m) => m.id === activeModule.id);
+        const nextModule = mIdx >= 0 ? course.modules[mIdx + 1] : undefined;
+        if (nextModule) {
+          // Switching the active module re-runs loadSession for it, which
+          // resets the chunk position to 0 for the new section. We flip the
+          // phase out of "loading-plan" first so this effect doesn't re-fire
+          // with the stale (completed) chunk index before loadSession resets
+          // it — otherwise we could wrongly skip past the next section too.
+          setPhase("loading-session");
+          onAdvanceModule(nextModule.id);
+          return;
+        }
+        if (hasNextMaterial && onAdvanceToNextMaterial) {
+          setPhase("loading-session");
+          onAdvanceToNextMaterial();
+          return;
+        }
+        setPhase("module-complete");
+        return;
+      }
+
       setPhase("teaching");
     } catch (e) {
       console.error("[imm runner loadOrGeneratePlan]", e);
       setError(e instanceof Error ? e.message : "Could not build lesson plan");
       setPhase("error");
     }
-  }, [activeModule.id, chunkIdx, materialId]);
+  }, [
+    activeModule.id,
+    chunkIdx,
+    course.modules,
+    hasNextMaterial,
+    materialId,
+    onAdvanceModule,
+    onAdvanceToNextMaterial,
+  ]);
 
   useEffect(() => {
     if (phase === "loading-plan") void loadOrGeneratePlan();
@@ -2622,9 +2659,19 @@ function AnswerComposer({
           value={text}
           onChange={(e) => onTextChange(e.target.value)}
           onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && canSubmit) {
+            // Enter sends; Shift+Enter (or Alt/Ctrl/Cmd+Enter) inserts a new
+            // line. Guard against IME composition (Korean/Japanese/Chinese)
+            // so confirming a candidate with Enter doesn't fire a send.
+            const composing =
+              e.nativeEvent.isComposing || e.keyCode === 229;
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey &&
+              !e.altKey &&
+              !composing
+            ) {
               e.preventDefault();
-              onSubmitText();
+              if (canSubmit) onSubmitText();
             }
           }}
           placeholder={
@@ -2632,7 +2679,7 @@ function AnswerComposer({
               ? voiceMode === "live"
                 ? "Speak whenever — or type here…"
                 : "Press and hold M or the mic button to speak · or type here…"
-              : "Type your answer (⌘↵ to submit)…"
+              : "Type your answer (↵ to send · ⇧↵ for a new line)…"
           }
           className="block min-h-[2.5rem] flex-1 resize-none rounded-2xl border border-white/60 bg-white/70 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-500 focus:border-fuchsia-300 focus:bg-white/90 focus:outline-none focus:ring-2 focus:ring-fuchsia-200/60"
         />

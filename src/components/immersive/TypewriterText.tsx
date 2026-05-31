@@ -1,141 +1,147 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
- * Reveals a block of text word-by-word with a soft fade-in.
+ * Reveals text CHARACTER-by-character (like a live typing stream), matching
+ * the feel of the course-generation build.
  *
- * Each word is rendered as an inline span. When the source text grows by
- * APPENDING (the new text starts with the previously-shown text), the
- * already-revealed words stay put and only the new suffix animates in.
- * When the text changes completely (different content), the component
- * resets and walks through the new word list on an interval.
+ * When the source text grows by APPENDING (the new text starts with the
+ * previously-shown text) the already-revealed characters stay put and the
+ * animation simply continues into the new suffix. When the text changes
+ * completely it resets and types out the new content from the start.
  *
- * This append-aware behavior lets the streamed Mentored transcript add
- * sentence after sentence — synced to audio playback — without the prior
- * text re-animating from the start every time.
+ * The transcript in Mentored Learning is audio-gated — the parent reveals a
+ * whole spoken chunk at once when its audio starts. To keep the typing fluid
+ * AND in sync with the voice, we "catch up" (reveal several characters per
+ * tick) when far behind, then slow to one character at a time near the end.
  *
- *   - `text`           the string to reveal
- *   - `wordIntervalMs` ms between successive words (default 65ms)
- *   - `instant`        bypass the animation (e.g. for resumed sessions)
- *   - `onComplete`     fires once all words are shown
+ * Rendering is a single growing text node (no per-character spans), which is
+ * cheap — important since this runs alongside the voice/visuals.
+ *
+ *   - `text`            the string to reveal
+ *   - `charIntervalMs`  ms between ticks (default 9, ~2 chars/tick)
+ *   - `wordIntervalMs`  legacy prop, accepted for compatibility (unused)
+ *   - `instant`         bypass the animation (e.g. for resumed sessions)
+ *   - `onComplete`      fires once all characters are shown
  */
 export function TypewriterText({
   text,
   className = "",
-  wordIntervalMs = 65,
+  charIntervalMs = 9,
+  // Accepted for backwards-compatibility with existing call sites; pacing is
+  // now uniform and character-based, so this no longer drives the speed.
+  wordIntervalMs: _wordIntervalMs,
   instant = false,
   onComplete,
 }: {
   text: string;
   className?: string;
+  charIntervalMs?: number;
   wordIntervalMs?: number;
   instant?: boolean;
   onComplete?: () => void;
 }) {
-  // Split on whitespace but keep the trailing whitespace attached so the
-  // final string preserves spacing/line breaks exactly.
-  const tokens = useMemo(() => {
-    if (!text) return [];
-    return text.match(/\S+\s*/g) ?? [];
-  }, [text]);
-
-  const [count, setCount] = useState(instant ? tokens.length : 0);
+  const full = text ?? "";
+  const [count, setCount] = useState(instant ? full.length : 0);
   const completedRef = useRef(false);
-  // We track the previous text + previously-revealed count via refs
-  // so the effect can decide whether this update is an APPEND (extend
-  // the existing animation, carry over progress) or a REPLACE (reset
-  // and re-animate from word 0). Using refs avoids putting `count` in
-  // the effect deps, which would restart the interval on every tick.
   const prevTextRef = useRef<string>("");
-  const revealedRef = useRef<number>(instant ? tokens.length : 0);
+  // Track progress via a ref so the interval callback can read/advance it
+  // without `count` being an effect dependency (which would restart the
+  // interval on every tick).
+  const countRef = useRef<number>(instant ? full.length : 0);
 
   useEffect(() => {
     const prev = prevTextRef.current;
-    const isAppend = text.length > prev.length && text.startsWith(prev);
-    prevTextRef.current = text;
-
+    const isAppend = full.length > prev.length && full.startsWith(prev);
+    prevTextRef.current = full;
     completedRef.current = false;
-    if (instant) {
-      revealedRef.current = tokens.length;
-      setCount(tokens.length);
-      if (tokens.length > 0) {
+
+    if (instant || full.length === 0) {
+      countRef.current = full.length;
+      setCount(full.length);
+      if (full.length > 0) {
         completedRef.current = true;
         onComplete?.();
       }
       return;
     }
-    if (tokens.length === 0) {
-      revealedRef.current = 0;
-      setCount(0);
-      return;
-    }
 
-    // On a true reset (different content, not an append), start over.
-    // On an append, keep the already-revealed words.
-    let i = isAppend ? Math.min(revealedRef.current, tokens.length) : 0;
-    revealedRef.current = i;
+    // On an append, keep the characters already revealed; on a true content
+    // change, start typing from the beginning.
+    let i = isAppend ? Math.min(countRef.current, full.length) : 0;
+    countRef.current = i;
     setCount(i);
 
-    if (i >= tokens.length) {
-      // Already fully revealed (rare — e.g. fast subsequent updates).
-      if (!completedRef.current) {
+    if (i >= full.length) {
+      completedRef.current = true;
+      onComplete?.();
+      return;
+    }
+
+    // Drive the reveal off requestAnimationFrame (same approach as the
+    // course-generation build) so each step actually paints — setInterval
+    // tends to batch several ticks into one frame, which looks stuttery.
+    let cancelled = false;
+    let frameId = 0;
+    const stepDelay = Math.max(6, charIntervalMs);
+    const CHARS_PER_TICK = 2;
+    let lastEmit = performance.now();
+
+    const run = (now: number) => {
+      if (cancelled) return;
+      const elapsed = now - lastEmit;
+      if (elapsed >= stepDelay) {
+        const ticks = Math.max(1, Math.floor(elapsed / stepDelay));
+        lastEmit += ticks * stepDelay;
+        i = Math.min(full.length, i + ticks * CHARS_PER_TICK);
+        countRef.current = i;
+        setCount(i);
+      }
+      if (i < full.length) {
+        frameId = requestAnimationFrame(run);
+      } else if (!completedRef.current) {
         completedRef.current = true;
         onComplete?.();
       }
-      return;
-    }
-    const id = window.setInterval(() => {
-      i += 1;
-      revealedRef.current = i;
-      setCount(i);
-      if (i >= tokens.length) {
-        window.clearInterval(id);
-        if (!completedRef.current) {
-          completedRef.current = true;
-          onComplete?.();
-        }
-      }
-    }, Math.max(20, wordIntervalMs));
+    };
+    frameId = requestAnimationFrame(run);
 
     return () => {
-      window.clearInterval(id);
+      cancelled = true;
+      cancelAnimationFrame(frameId);
     };
-    // We intentionally exclude `onComplete` from deps — restarting the
-    // typewriter every time the parent rerenders would be jarring.
+    // `onComplete` intentionally excluded — restarting the typewriter on every
+    // parent rerender would be jarring.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tokens, text, wordIntervalMs, instant]);
+  }, [full, charIntervalMs, instant]);
+
+  const done = count >= full.length;
 
   return (
     <span className={className}>
-      {tokens.slice(0, count).map((tok, i) => (
-        <span
-          key={i}
-          className="tw-word"
-          style={{ animationDelay: `${Math.min(i, 8) * 10}ms` }}
-        >
-          {tok}
-        </span>
-      ))}
+      {full.slice(0, count)}
+      {!done && full.length > 0 ? (
+        <span className="tw-caret" aria-hidden="true" />
+      ) : null}
       <style jsx>{`
-        .tw-word {
-          display: inline;
-          opacity: 0;
-          animation: tw-in 220ms ease-out forwards;
+        .tw-caret {
+          display: inline-block;
+          width: 2px;
+          height: 1em;
+          margin-left: 2px;
+          vertical-align: text-bottom;
+          background: currentColor;
+          opacity: 0.55;
+          animation: tw-blink 1s steps(2, start) infinite;
         }
-        @keyframes tw-in {
-          from {
+        @keyframes tw-blink {
+          50% {
             opacity: 0;
-            transform: translateY(2px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
           }
         }
         @media (prefers-reduced-motion: reduce) {
-          .tw-word {
-            opacity: 1;
+          .tw-caret {
             animation: none;
           }
         }
