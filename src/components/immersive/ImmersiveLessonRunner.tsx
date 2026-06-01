@@ -1126,8 +1126,23 @@ export function ImmersiveLessonRunner({
         // turn → stay + cover what they asked about). Heuristic is
         // simple on purpose: trailing "?" is a strong, reliable
         // signal that Rose is waiting on input.
+        //
+        // EXCEPT when the student has clearly finished this concept —
+        // a correct answer or an explicit "move on"/"skip". There Rose's
+        // trailing question is rhetorical ("nice, ready for the next
+        // one?") and suppressing it left the lesson stuck: the student
+        // had to say "what's next" to get unstuck. Those intents always
+        // advance.
+        const finishedConcept =
+          finalIntent === "answer_correct" ||
+          finalIntent === "move_on" ||
+          finalIntent === "skip_concept";
         const finalSpokenText = sentences.join(" ").trim();
-        if (finalAdvance && /\?\s*["')\]]*\s*$/.test(finalSpokenText)) {
+        if (
+          finalAdvance &&
+          !finishedConcept &&
+          /\?\s*["')\]]*\s*$/.test(finalSpokenText)
+        ) {
           finalAdvance = false;
         }
 
