@@ -346,6 +346,35 @@ export function CourseDashboardList({
     setBusyId(null);
   }
 
+  async function toggleExploreListing(courseId: string, makePublic: boolean) {
+    setBusyId(courseId);
+    setListError(null);
+    try {
+      const res = await fetch(`/api/courses/${courseId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isPublic: makePublic }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setListError(
+          typeof body.error === "string" ? body.error : "Could not update visibility."
+        );
+        setBusyId(null);
+        return;
+      }
+      setCourses((prev) =>
+        prev.map((c) =>
+          c.id === courseId ? { ...c, is_public: makePublic } : c
+        )
+      );
+      router.refresh();
+    } catch {
+      setListError("Network error.");
+    }
+    setBusyId(null);
+  }
+
   function handleDragStart(section: DashboardSection, index: number) {
     setDragSection(section);
     setDragFrom(index);
@@ -426,8 +455,11 @@ export function CourseDashboardList({
         {previewExplore.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-zinc-200/90 bg-zinc-50/40 px-5 py-8 text-center dark:border-zinc-700/80 dark:bg-zinc-900/30">
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Nothing on Explore yet. When a course is ready, open it and enable
-              listing so learners can find it.
+              Nothing on Explore yet. Use{" "}
+              <span className="font-medium text-zinc-800 dark:text-zinc-200">
+                Show on Explore
+              </span>{" "}
+              on a private course below, or create a new one.
             </p>
             <Link
               href="/dashboard/courses/new"
@@ -455,6 +487,7 @@ export function CourseDashboardList({
                 onSaveEdit={saveEdit}
                 onCancelEdit={cancelEdit}
                 onRemove={removeCourse}
+                onToggleExploreListing={toggleExploreListing}
                 isDragging={c.id === draggedId}
                 visualVariant="default"
                 onDragStart={() => handleDragStart("explore", index)}
@@ -576,6 +609,7 @@ export function CourseDashboardList({
                 onSaveEdit={saveEdit}
                 onCancelEdit={cancelEdit}
                 onRemove={removeCourse}
+                onToggleExploreListing={toggleExploreListing}
                 isDragging={c.id === draggedId}
                 visualVariant="selfStudy"
                 onDragStart={() => handleDragStart("self", index)}
@@ -681,6 +715,7 @@ function CourseCard({
   onSaveEdit,
   onCancelEdit,
   onRemove,
+  onToggleExploreListing,
   isDragging,
   visualVariant = "default",
   onDragStart,
@@ -702,6 +737,7 @@ function CourseCard({
   onSaveEdit: (id: string) => void;
   onCancelEdit: () => void;
   onRemove: (id: string, title: string) => void;
+  onToggleExploreListing?: (id: string, makePublic: boolean) => void;
   isDragging: boolean;
   visualVariant?: "default" | "selfStudy";
   onDragStart: () => void;
@@ -713,6 +749,11 @@ function CourseCard({
   const menuRef = useRef<HTMLDivElement>(null);
   const isEditing = editingId === c.id;
   const canManage = c.user_id === viewerUserId;
+  const listedOnExplore = isExploreListed(c);
+  const canToggleExplore =
+    canManage &&
+    onToggleExploreListing != null &&
+    !isSelfStudyCourse(c);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -803,6 +844,45 @@ function CourseCard({
                     </svg>
                     Edit title &amp; description
                   </button>
+                  {canToggleExplore ? (
+                    <>
+                      <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onToggleExploreListing!(c.id, !listedOnExplore);
+                        }}
+                        className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                      >
+                        {listedOnExplore ? (
+                          <>
+                            <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 shrink-0 text-zinc-400">
+                              <path
+                                fillRule="evenodd"
+                                d="M10 1a4.5 4.5 0 00-4.5 4.5V7H5a2 2 0 00-2 2v7a2 2 0 002 2h10a2 2 0 002-2V9a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                            Hide from Explore
+                          </>
+                        ) : (
+                          <>
+                            <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 shrink-0 text-emerald-500">
+                              <path d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" />
+                              <path
+                                fillRule="evenodd"
+                                d="M.664 10.59a1.651 1.651 0 010-.553 7.002 7.002 0 0112.672 0 1.651 1.651 0 010 .553 7.002 7.002 0 01-12.672 0zM10 14.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                            Show on Explore
+                          </>
+                        )}
+                      </button>
+                    </>
+                  ) : null}
                   <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
                   <button
                     type="button"
@@ -884,7 +964,7 @@ function CourseCard({
               >
                 {c.title}
               </Link>
-              {isExploreListed(c) ? (
+              {listedOnExplore ? (
                 <span className="rounded-full border border-emerald-200/80 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
                   On Explore
                 </span>
@@ -904,8 +984,53 @@ function CourseCard({
                   </svg>
                   Private
                 </span>
-              ) : null}
+              ) : (
+                <span className="rounded-full border border-zinc-200/90 bg-zinc-100/90 px-2.5 py-0.5 text-xs font-semibold text-zinc-600 shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90 dark:text-zinc-400">
+                  Not on Explore
+                </span>
+              )}
             </div>
+            {canToggleExplore ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  onToggleExploreListing!(c.id, !listedOnExplore)
+                }
+                className={
+                  listedOnExplore
+                    ? "inline-flex w-fit items-center gap-1.5 rounded-full border border-zinc-300/80 bg-white px-3 py-1 text-xs font-semibold text-zinc-600 transition hover:border-zinc-400 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    : "inline-flex w-fit items-center gap-1.5 rounded-full border border-emerald-300/70 bg-emerald-50/80 px-3 py-1 text-xs font-semibold text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200 dark:hover:bg-emerald-950/80"
+                }
+              >
+                {busy ? (
+                  "Updating…"
+                ) : listedOnExplore ? (
+                  <>
+                    <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
+                      <path
+                        fillRule="evenodd"
+                        d="M10 1a4.5 4.5 0 00-4.5 4.5V7H5a2 2 0 00-2 2v7a2 2 0 002 2h10a2 2 0 002-2V9a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                    Hide from Explore
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
+                      <path d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" />
+                      <path
+                        fillRule="evenodd"
+                        d="M.664 10.59a1.651 1.651 0 010-.553 7.002 7.002 0 0112.672 0 1.651 1.651 0 010 .553 7.002 7.002 0 01-12.672 0zM10 14.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                    Show on Explore
+                  </>
+                )}
+              </button>
+            ) : null}
             {c.description ? (
               <p className="line-clamp-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                 {c.description}
