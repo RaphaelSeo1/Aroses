@@ -1165,7 +1165,13 @@ export function ImmersiveLessonRunner({
             setPhase("module-complete");
           }
         } else {
-          const nextAttempts = attempts + 1;
+          // Only a genuine answer attempt (wrong or partial) burns an attempt.
+          // Questions, tangents, "say that again", pace requests, and general
+          // chatter must NOT count — otherwise just conversing with the tutor
+          // runs the counter up to "you're on attempt 4, move on".
+          const wasAnswerAttempt =
+            finalIntent === "answer_wrong" || finalIntent === "answer_partial";
+          const nextAttempts = wasAnswerAttempt ? attempts + 1 : attempts;
           setAttempts(nextAttempts);
           setAnswerText("");
           await persist({
