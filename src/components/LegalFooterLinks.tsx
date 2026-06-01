@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { APP_NAME } from "@/lib/brand";
 
 /** Inline footer links to legal documents — update `src/lib/legal-contact.ts` for contact email. */
 export function LegalFooterLinks({
@@ -7,29 +8,42 @@ export function LegalFooterLinks({
   className?: string;
 }) {
   const navClass = [
-    "flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm text-zinc-600 dark:text-zinc-400",
+    "flex flex-col items-center gap-3",
     className,
   ]
     .filter(Boolean)
     .join(" ");
 
   return (
-    <nav className={navClass} aria-label="Legal">
-      <Link href="/help" className="hover:text-brand dark:hover:text-brand-soft">
-        Help
-      </Link>
-      <Link href="/legal/terms" className="hover:text-brand dark:hover:text-brand-soft">
-        Terms of Service
-      </Link>
+    <div className={navClass}>
       <Link
-        href="/legal/privacy"
-        className="hover:text-brand dark:hover:text-brand-soft"
+        href="/help"
+        className="inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand-blush/60 px-4 py-2 text-sm font-semibold text-brand transition hover:border-brand/50 hover:bg-brand-blush dark:bg-brand-blush/10 dark:hover:bg-brand-blush/20"
       >
-        Privacy Policy
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.7" strokeLinecap="round" />
+          <circle cx="12" cy="16.5" r="0.5" fill="currentColor" />
+        </svg>
+        {`Learn how to use ${APP_NAME}`}
       </Link>
-      <Link href="/legal/dmca" className="hover:text-brand dark:hover:text-brand-soft">
-        DMCA
-      </Link>
-    </nav>
+      <nav
+        className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-zinc-600 dark:text-zinc-400"
+        aria-label="Legal"
+      >
+        <Link href="/legal/terms" className="hover:text-brand dark:hover:text-brand-soft">
+          Terms of Service
+        </Link>
+        <Link
+          href="/legal/privacy"
+          className="hover:text-brand dark:hover:text-brand-soft"
+        >
+          Privacy Policy
+        </Link>
+        <Link href="/legal/dmca" className="hover:text-brand dark:hover:text-brand-soft">
+          DMCA
+        </Link>
+      </nav>
+    </div>
   );
 }
