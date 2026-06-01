@@ -258,6 +258,165 @@ html.dark .bg-app-gradient {
   }
 }
 
+/* ─── Landing page: restrained entrance motion ──────────────────────────────── */
+
+/* Staggered fade + slide-up on load (delays set inline per element). */
+@keyframes heroRise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-hero-rise {
+  opacity: 0;
+  animation: heroRise 0.75s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Slow ambient aura drift behind the headline. */
+@keyframes auraDrift {
+  0%,
+  100% {
+    transform: translate3d(-2%, 0, 0) scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: translate3d(2%, -3%, 0) scale(1.09);
+    opacity: 1;
+  }
+}
+.animate-aura-drift {
+  animation: auraDrift 24s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-hero-rise {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+  .animate-aura-drift {
+    animation: none;
+  }
+}
+
+/* Marquee: continuous horizontal scroll (subject ticker on the landing). */
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.animate-marquee {
+  animation: marquee 38s linear infinite;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-marquee {
+    animation: none;
+  }
+}
+
+/* Slow pulse for the live "listening" glow in the hero bento. */
+@keyframes softPulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+}
+.animate-soft-pulse {
+  animation: softPulse 2.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-soft-pulse {
+    animation: none;
+  }
+}
+
+/* Word/char reveal: each unit fades + de-blurs in as it "generates". */
+.tw-word {
+  display: inline-block;
+  opacity: 0;
+}
+.tw-word.tw-go {
+  animation: twWordIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes twWordIn {
+  from {
+    opacity: 0;
+    transform: translateY(0.18em);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+/* Chars stay inline (so words never break mid-word); only opacity + blur animate. */
+.tw-char {
+  opacity: 0;
+}
+.tw-char.tw-go {
+  animation: twCharIn 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes twCharIn {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tw-word,
+  .tw-word.tw-go,
+  .tw-char,
+  .tw-char.tw-go {
+    opacity: 1;
+    transform: none;
+    filter: none;
+    animation: none;
+  }
+}
+
+/* Scroll-reveal: fade + gentle pop as elements enter the viewport. */
+.reveal-on-scroll {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* Hidden state also governs the fade-OUT (scrolling away): same speed as fade-in, no delay. */
+  .reveal-on-scroll {
+    opacity: 0;
+    transform: translateY(26px) scale(0.975);
+    transition:
+      opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: opacity, transform;
+  }
+  /* Visible state governs the fade-IN (scrolling into view): quick, with entrance stagger. */
+  .reveal-on-scroll.is-visible {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms),
+      transform 0.65s cubic-bezier(0.22, 1, 0.36, 1) var(--reveal-delay, 0ms);
+  }
+}
+
 /* Course PDF upload — indeterminate bar must not read as “almost done” (full-width pulse). */
 @keyframes course-upload-indeterminate {
   0% {
