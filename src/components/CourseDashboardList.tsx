@@ -457,7 +457,7 @@ export function CourseDashboardList({
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
               Nothing on Explore yet. Use{" "}
               <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                Show on Explore
+                Make public
               </span>{" "}
               on a private course below, or create a new one.
             </p>
@@ -538,6 +538,7 @@ export function CourseDashboardList({
                   onSaveEdit={saveEdit}
                   onCancelEdit={cancelEdit}
                   onRemove={removeCourse}
+                  onToggleExploreListing={toggleExploreListing}
                   isDragging={c.id === draggedId}
                   visualVariant="default"
                   onDragStart={() => handleDragStart("private", index)}
@@ -865,7 +866,7 @@ function CourseCard({
                                 clipRule="evenodd"
                               />
                             </svg>
-                            Hide from Explore
+                            Make private
                           </>
                         ) : (
                           <>
@@ -877,7 +878,7 @@ function CourseCard({
                                 clipRule="evenodd"
                               />
                             </svg>
-                            Show on Explore
+                            Make public
                           </>
                         )}
                       </button>
@@ -990,47 +991,6 @@ function CourseCard({
                 </span>
               )}
             </div>
-            {canToggleExplore ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() =>
-                  onToggleExploreListing!(c.id, !listedOnExplore)
-                }
-                className={
-                  listedOnExplore
-                    ? "inline-flex w-fit items-center gap-1.5 rounded-full border border-zinc-300/80 bg-white px-3 py-1 text-xs font-semibold text-zinc-600 transition hover:border-zinc-400 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                    : "inline-flex w-fit items-center gap-1.5 rounded-full border border-emerald-300/70 bg-emerald-50/80 px-3 py-1 text-xs font-semibold text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200 dark:hover:bg-emerald-950/80"
-                }
-              >
-                {busy ? (
-                  "Updating…"
-                ) : listedOnExplore ? (
-                  <>
-                    <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
-                      <path
-                        fillRule="evenodd"
-                        d="M10 1a4.5 4.5 0 00-4.5 4.5V7H5a2 2 0 00-2 2v7a2 2 0 002 2h10a2 2 0 002-2V9a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    Hide from Explore
-                  </>
-                ) : (
-                  <>
-                    <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
-                      <path d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" />
-                      <path
-                        fillRule="evenodd"
-                        d="M.664 10.59a1.651 1.651 0 010-.553 7.002 7.002 0 0112.672 0 1.651 1.651 0 010 .553 7.002 7.002 0 01-12.672 0zM10 14.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    Show on Explore
-                  </>
-                )}
-              </button>
-            ) : null}
             {c.description ? (
               <p className="line-clamp-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                 {c.description}
@@ -1038,19 +998,49 @@ function CourseCard({
             ) : (
               <p className="text-sm italic text-zinc-500">No description</p>
             )}
-            <Link
-              href={`/dashboard/courses/${c.id}`}
+            <div
               className={
                 density === "compact"
-                  ? "mt-3 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-3.5 py-1.5 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
-                  : "mt-4 inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-4 py-2 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
+                  ? "mt-3 flex flex-wrap gap-2"
+                  : "mt-4 flex flex-wrap gap-2"
               }
             >
-              Open course
-              <span aria-hidden className="transition group-hover:translate-x-0.5">
-                →
-              </span>
-            </Link>
+              <Link
+                href={`/dashboard/courses/${c.id}`}
+                className={
+                  density === "compact"
+                    ? "inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-3.5 py-1.5 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
+                    : "inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-4 py-2 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
+                }
+              >
+                Open course
+                <span aria-hidden className="transition group-hover:translate-x-0.5">
+                  →
+                </span>
+              </Link>
+              {canToggleExplore ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    onToggleExploreListing!(c.id, !listedOnExplore)
+                  }
+                  className={
+                    listedOnExplore
+                      ? "inline-flex w-fit items-center gap-1.5 rounded-full border border-zinc-300/80 bg-white px-4 py-2 text-sm font-semibold text-zinc-600 transition hover:border-zinc-400 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      : "inline-flex w-fit items-center gap-1.5 rounded-full border border-emerald-400/60 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm transition hover:border-emerald-500 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200 dark:hover:bg-emerald-950/80"
+                  }
+                >
+                  {busy ? (
+                    "Updating…"
+                  ) : listedOnExplore ? (
+                    "Make private"
+                  ) : (
+                    "Make public"
+                  )}
+                </button>
+              ) : null}
+            </div>
           </div>
         )}
       </div>
