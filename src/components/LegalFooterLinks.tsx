@@ -15,6 +15,9 @@ export function LegalFooterLinks({
 
   return (
     <nav className={navClass} aria-label="Legal">
+      <Link href="/help" className="hover:text-brand dark:hover:text-brand-soft">
+        Help
+      </Link>
       <Link href="/legal/terms" className="hover:text-brand dark:hover:text-brand-soft">
         Terms of Service
       </Link>

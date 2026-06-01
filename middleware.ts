@@ -49,7 +49,8 @@ export async function middleware(request: NextRequest) {
       p.startsWith("/onboarding/") ||
       p.startsWith("/auth/") ||
       p.startsWith("/api/") ||
-      p.startsWith("/legal/")
+      p.startsWith("/legal/") ||
+      p === "/help"
     );
   }
 
