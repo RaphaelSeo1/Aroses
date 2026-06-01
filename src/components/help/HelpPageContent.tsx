@@ -30,7 +30,6 @@ const SECTIONS = [
   { id: "explore", label: "Explore" },
   { id: "sharing", label: "Sharing" },
   { id: "progress", label: "Progress & profile" },
-  { id: "shortcuts", label: "Keyboard shortcuts" },
   { id: "faq", label: "FAQ" },
 ] as const;
 
@@ -677,49 +676,6 @@ export function HelpPageContent() {
           </ul>
         </section>
 
-        {/* ── Shortcuts ── */}
-        <section id="shortcuts" className="mt-16 scroll-mt-28">
-          <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Keyboard shortcuts
-          </h2>
-          <div className="not-prose mt-4 overflow-x-auto">
-            <table className="w-full min-w-[24rem] border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-zinc-200 dark:border-zinc-800">
-                  <th className="py-2 pr-4 font-semibold">Context</th>
-                  <th className="py-2 pr-4 font-semibold">Key</th>
-                  <th className="py-2 font-semibold">Action</th>
-                </tr>
-              </thead>
-              <tbody className="text-zinc-700 dark:text-zinc-300">
-                {[
-                  ["Voice (Hold mode)", "Hold M", "Record while held"],
-                  ["SRS review", "Space / Enter", "Reveal answer"],
-                  ["SRS review", "1 – 4", "Rate Again / Hard / Good / Easy"],
-                  ["SRS free response", "⌘/Ctrl + Enter", "Submit"],
-                  ["Notes editor", "/", "Slash commands"],
-                  ["Notes editor", "⌘B / I / U / K", "Bold / italic / underline / link"],
-                  ["Study chat / tutor text", "Enter", "Send (Shift+Enter = newline)"],
-                  ["Drawers & modals", "Esc", "Close"],
-                ].map(([ctx, key, action]) => (
-                  <tr
-                    key={`${ctx}-${key}`}
-                    className="border-b border-zinc-100 dark:border-zinc-800/80"
-                  >
-                    <td className="py-2.5 pr-4">{ctx}</td>
-                    <td className="py-2.5 pr-4">
-                      <kbd className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs dark:bg-zinc-800">
-                        {key}
-                      </kbd>
-                    </td>
-                    <td className="py-2.5">{action}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
         {/* ── FAQ ── */}
         <section id="faq" className="mt-16 scroll-mt-28 pb-8">
           <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -738,14 +694,6 @@ export function HelpPageContent() {
               {
                 q: "How do I remember what I study?",
                 a: "Use Review daily. Quizzes and personal notes feed spaced-repetition cards that resurface before you'd forget.",
-              },
-              {
-                q: "Can I combine multiple files into one lecture?",
-                a: "Yes — on upload, drag related files into the same lecture stack or tap Combine into one. The AI weaves them into shared lessons instead of one lesson per file.",
-              },
-              {
-                q: "How do I make a course public?",
-                a: "Tap Make public on the course card on your home page, or flip the Public/Private switch inside the course settings panel.",
               },
               {
                 q: "Can I use my own class material?",
