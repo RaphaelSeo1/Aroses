@@ -34,7 +34,12 @@ export function ReviewDashboardClient() {
   const [kind, setKind] = useState<ReviewKind>("both");
   // When true, we are inside a launched session and hide the picker.
   const [sessionMode, setSessionMode] = useState<
-    null | { materialIds: string[]; scope: ReviewKind; kindBefore: ReviewKind }
+    null | {
+      materialIds: string[];
+      scope: ReviewKind;
+      kindBefore: ReviewKind;
+      cram?: boolean;
+    }
   >(null);
 
   // Preselect everything once counts arrive (matches the "all" default
@@ -92,6 +97,18 @@ export function ReviewDashboardClient() {
     [materials, selectedMaterials, kind]
   );
 
+  // Free practice: cram every card across all courses, ignoring the schedule.
+  // Lets the learner keep practising even when nothing is due. Passing no
+  // materialIds tells the session API to pull from every owned course.
+  const startPractice = useCallback(() => {
+    setSessionMode({
+      materialIds: [],
+      scope: "both",
+      kindBefore: kind,
+      cram: true,
+    });
+  }, [kind]);
+
   // ----------- inside a running session -----------
   if (sessionMode) {
     return (
@@ -109,8 +126,9 @@ export function ReviewDashboardClient() {
         <SrsReviewLauncher
           scope={sessionMode.scope}
           materialIds={sessionMode.materialIds}
-          sessionKey={`global-${sessionMode.materialIds.slice(0, 4).join(",")}-${sessionMode.scope}`}
-          heading="Global review"
+          cram={sessionMode.cram}
+          sessionKey={`global-${sessionMode.materialIds.slice(0, 4).join(",")}-${sessionMode.scope}${sessionMode.cram ? "-cram" : ""}`}
+          heading={sessionMode.cram ? "Free practice" : "Global review"}
           showCourseBadge
           onExit={() => {
             setSessionMode(null);
@@ -159,6 +177,14 @@ export function ReviewDashboardClient() {
             or run a free practice on a course you&apos;ve already mastered.
           </p>
           <div className="mt-5 flex flex-wrap justify-center gap-3">
+            <button
+              type="button"
+              onClick={startPractice}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
+            >
+              Practice anyway
+              <span aria-hidden>→</span>
+            </button>
             <a
               href="/dashboard/courses/new"
               className="inline-flex items-center justify-center rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover"
@@ -201,17 +227,30 @@ export function ReviewDashboardClient() {
           Mixed review across all your courses — module bank ({moduleTotal})
           and focus cards ({personalTotal}).
         </p>
-        <button
-          type="button"
-          onClick={() => startReview({ all: true })}
-          disabled={totalDue === 0}
-          className="mt-5 inline-flex items-center justify-center gap-2 rounded-full bg-zinc-900 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-zinc-900/15 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
-        >
-          Review all
-          <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums dark:bg-zinc-900/20">
-            {totalDue}
-          </span>
-        </button>
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => startReview({ all: true })}
+            disabled={totalDue === 0}
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-zinc-900 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-zinc-900/15 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+          >
+            Review all
+            <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums dark:bg-zinc-900/20">
+              {totalDue}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={startPractice}
+            title="Practice every card across all your courses, ignoring the review schedule."
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-300 bg-white px-6 py-3 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            Practice all
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
+          Practice all ignores the schedule and serves every card — great for cramming before an exam.
+        </p>
       </div>
 
       {/* Course selection ------------------------------------------ */}
