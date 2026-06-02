@@ -22,6 +22,13 @@ export function stripMarkdownFigures(markdown: string): string {
     .trim();
 }
 
+/** Remove markdown images and HTML `<img>` tags from lesson body text. */
+export function stripAllImagesFromMarkdown(markdown: string): string {
+  let s = stripMarkdownFigures(markdown);
+  s = s.replace(/<img\b[^>]*\/?>\s*/gi, "");
+  return s.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /** Split lead paragraph from the rest of the lesson body. */
 export function splitLeadParagraph(markdown: string): {
   lead: string;

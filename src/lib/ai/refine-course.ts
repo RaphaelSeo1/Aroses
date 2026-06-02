@@ -6,17 +6,29 @@ import {
 } from "@anthropic-ai/sdk";
 import type { CoursePayload } from "@/types/course";
 import { parseCoursePayload, stripJsonFence } from "@/lib/ai/course-payload";
+import {
+  buildIntentPromptSection,
+  compressCourseForRefineInput,
+  type RefineIntent,
+} from "@/lib/ai/refine-course-intent";
+
+const REFINE_SYSTEM = `You are Rose, an expert course editor for the Aroses study platform. You revise structured course JSON generated from a student's uploaded materials.
+
+You MUST apply the student's edit request and return a modified course. Never return the input unchanged unless the request is literally impossible.
+
+Lesson "content" is Markdown (headings, lists, **bold**, inline math). Images use ![caption](url) or <img> tags.
+
+Output ONLY one valid JSON object — no markdown fences, no commentary.`;
 
 /**
  * Refine applies edits to an existing course JSON (not a cold build from PDF).
- * Default **Haiku** matches `express`/`fast`/`balanced` course generation — much lower
- * latency than Sonnet on long JSON round-trips. Set `ANTHROPIC_REFINE_MODEL` to e.g.
- * `claude-sonnet-4-6` if you prefer maximum fidelity over speed.
+ * Default **Sonnet** for instruction-following on large JSON edits. Set
+ * `ANTHROPIC_REFINE_MODEL=claude-haiku-4-5` if you prefer speed over fidelity.
  */
 function resolveRefineModel(): string {
   const override = process.env.ANTHROPIC_REFINE_MODEL?.trim();
   if (override) return override;
-  return "claude-haiku-4-5";
+  return "claude-sonnet-4-6";
 }
 
 /** Large courses need plenty of headroom for full JSON round-trip. */
@@ -97,7 +109,34 @@ ${brokenAssistantText.slice(0, 140_000)}`;
   return parseCoursePayload(parsed);
 }
 
-function buildRefineUserPrompt(current: CoursePayload, instruction: string): string {
+function mergeUntouchedModules(
+  original: CoursePayload,
+  revised: CoursePayload,
+  targetModuleIds: number[]
+): CoursePayload {
+  const targets = new Set(targetModuleIds);
+  const revisedById = new Map(revised.modules.map((m) => [m.id, m]));
+
+  return {
+    title: typeof revised.title === "string" ? revised.title : original.title,
+    description:
+      typeof revised.description === "string"
+        ? revised.description
+        : original.description,
+    modules: original.modules.map((origMod) => {
+      if (!targets.has(origMod.id)) return origMod;
+      return revisedById.get(origMod.id) ?? origMod;
+    }),
+  };
+}
+
+function buildRefineUserPrompt(
+  original: CoursePayload,
+  current: CoursePayload,
+  instruction: string,
+  intent: RefineIntent
+): string {
+  const intentSection = buildIntentPromptSection(intent);
   const serialized = JSON.stringify(current);
   const capped =
     serialized.length > 170_000
@@ -105,7 +144,7 @@ function buildRefineUserPrompt(current: CoursePayload, instruction: string): str
         "\n…[truncated for model input; preserve structure and all modules in output]"
       : serialized;
 
-  return `You are revising a structured course JSON object that was generated from the student's uploaded materials.
+  return `${intentSection}
 
 CURRENT_COURSE_JSON:
 ${capped}
@@ -113,29 +152,43 @@ ${capped}
 EDIT REQUEST FROM THE STUDENT:
 ${instruction.trim()}
 
-Your task:
-- Return the FULL revised course as one JSON object using the SAME schema as the input:
-  - "title": string
-  - "description": string
-  - "modules": array of objects with:
-      "id": number,
-      "title": string,
-      "lessons": [ { "title", "content", "key_terms": [{"term","definition"}], "examples": [strings] } ],
-      "quiz": [
-        { "type": "mcq", "question", "choices": [4 strings], "correct", "explanation" },
-        { "type": "free_response", "question", "reference_answer", "explanation" }
-      ]
+Return the FULL revised course JSON with this schema:
+- "title": string
+- "description": string
+- "modules": [{ "id", "title", "lessons": [{ "title", "content", "key_terms", "examples" }], "quiz": [ mcq | free_response items ] }]
+
+Quiz MCQ: { "type":"mcq", "question", "choices":[4 strings], "correct", "explanation" }
+Quiz free response: { "type":"free_response", "question", "reference_answer", "explanation" }
 
 Critical:
-- Your reply MUST be a single complete JSON object only — finish every string and close every bracket. If the course is large, keep edits concise but NEVER truncate mid-JSON.
+- Finish every string; never truncate mid-JSON.
+- When scope is one or more specific modules, still return ALL modules — but only change the scoped ones.
+- Preserve module ids unless merging/splitting (then renumber 1..n).
+- Keep ≥1 lesson per module unless explicitly told to remove content.`;
+}
 
-Rules:
-- Apply the edit request: remove tangents, tighten focus, fix awkward or incorrect parts, shorten verbose sections if asked, merge redundant lessons if needed.
-- Stay aligned with topics and facts already in the course.
-- Keep at least one lesson per module and a substantial quiz set when possible.
-- Preserve module ids when possible; renumber only if you split or merge modules (consecutive from 1).
+function payloadForModel(
+  original: CoursePayload,
+  intent: RefineIntent
+): CoursePayload {
+  if (
+    intent.compressUntouchedModules &&
+    intent.scope.kind === "modules"
+  ) {
+    return compressCourseForRefineInput(original, intent.scope.moduleIds);
+  }
+  return original;
+}
 
-Output ONLY valid JSON. No markdown fences. No commentary before or after the JSON.`;
+function finalizeRefinedCourse(
+  original: CoursePayload,
+  revised: CoursePayload,
+  intent: RefineIntent
+): CoursePayload {
+  if (intent.scope.kind === "modules") {
+    return mergeUntouchedModules(original, revised, intent.scope.moduleIds);
+  }
+  return revised;
 }
 
 async function coursePayloadFromAssistantText(
@@ -171,8 +224,9 @@ async function coursePayloadFromAssistantText(
 }
 
 export async function refineCourseWithInstruction(
-  current: CoursePayload,
-  instruction: string
+  original: CoursePayload,
+  instruction: string,
+  intent: RefineIntent
 ): Promise<CoursePayload> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -185,18 +239,30 @@ export async function refineCourseWithInstruction(
     maxRetries: 0,
   });
 
-  const userPrompt = buildRefineUserPrompt(current, instruction);
+  const modelInput = payloadForModel(original, intent);
+  const userPrompt = buildRefineUserPrompt(
+    original,
+    modelInput,
+    instruction,
+    intent
+  );
 
   const msg = await createMessageWithRetries(anthropic, {
     model: resolveRefineModel(),
     max_tokens: REFINE_MAX_OUTPUT_TOKENS,
     temperature: 0.15,
+    system: REFINE_SYSTEM,
     messages: [{ role: "user", content: userPrompt }],
   });
 
   const rawText = extractTextBlock(msg);
   const stopReason = (msg as { stop_reason?: string }).stop_reason;
-  return coursePayloadFromAssistantText(anthropic, rawText, stopReason);
+  const parsed = await coursePayloadFromAssistantText(
+    anthropic,
+    rawText,
+    stopReason
+  );
+  return finalizeRefinedCourse(original, parsed, intent);
 }
 
 /**
@@ -204,8 +270,9 @@ export async function refineCourseWithInstruction(
  * response so the connection stays alive on long generations (no raw token UI required).
  */
 export async function refineCourseWithInstructionStreaming(
-  current: CoursePayload,
-  instruction: string
+  original: CoursePayload,
+  instruction: string,
+  intent: RefineIntent
 ): Promise<CoursePayload> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -218,12 +285,19 @@ export async function refineCourseWithInstructionStreaming(
     maxRetries: 0,
   });
 
-  const userPrompt = buildRefineUserPrompt(current, instruction);
+  const modelInput = payloadForModel(original, intent);
+  const userPrompt = buildRefineUserPrompt(
+    original,
+    modelInput,
+    instruction,
+    intent
+  );
 
   const stream = anthropic.messages.stream({
     model: resolveRefineModel(),
     max_tokens: REFINE_MAX_OUTPUT_TOKENS,
     temperature: 0.15,
+    system: REFINE_SYSTEM,
     messages: [{ role: "user", content: userPrompt }],
   });
 
@@ -234,5 +308,10 @@ export async function refineCourseWithInstructionStreaming(
   const finalMessage = await stream.finalMessage();
   const rawText = extractTextBlock(finalMessage);
   const stopReason = (finalMessage as { stop_reason?: string }).stop_reason;
-  return coursePayloadFromAssistantText(anthropic, rawText, stopReason);
+  const parsed = await coursePayloadFromAssistantText(
+    anthropic,
+    rawText,
+    stopReason
+  );
+  return finalizeRefinedCourse(original, parsed, intent);
 }

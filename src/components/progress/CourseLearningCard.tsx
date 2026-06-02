@@ -105,7 +105,7 @@ export function CourseLearningCard({ course }: { course: CourseLearningSummary }
           <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
             {course.materials.length} lesson units · breakdown
           </summary>
-          <ul className="space-y-2 border-t border-zinc-100 px-3 py-3 dark:border-zinc-800">
+          <ul className="max-h-60 space-y-2 overflow-y-auto overscroll-y-contain border-t border-zinc-100 px-3 py-3 dark:border-zinc-800">
             {course.materials.map((m) => (
               <li
                 key={m.materialId}

@@ -9,10 +9,11 @@ import {
 } from "@/lib/refine-course-events";
 
 const PRESETS = [
+  "Remove all images from every module and lesson.",
+  "Shorten module 1 — make every lesson clearer and cut repetition.",
   "Remove tangents and stay tighter on the core topics from my slides.",
-  "Make lessons shorter and clearer; cut repetition.",
-  "Fix anything that sounds generic or off-topic compared to the rest of the course.",
-  "Improve module titles and lesson flow so it reads like one coherent course.",
+  "Fix module titles and lesson flow so it reads like one coherent course.",
+  "Rewrite the quizzes in module 2 to match the lessons more closely.",
 ] as const;
 
 /** Rotating copy in the same spirit as PDF build / module writing (no raw JSON). */
@@ -139,7 +140,11 @@ export function CourseRefineDrawer({ materialId, docked = false }: Props) {
 
           for (const row of lines) {
             if (!row || typeof row !== "object") continue;
-            const r = row as { type?: string; message?: string };
+            const r = row as {
+              type?: string;
+              message?: string;
+              applied?: string[];
+            };
             if (r.type === "phase" && typeof r.message === "string") {
               setPhaseMessage(r.message);
             } else if (r.type === "error" && typeof r.message === "string") {
@@ -148,6 +153,9 @@ export function CourseRefineDrawer({ materialId, docked = false }: Props) {
               return;
             } else if (r.type === "done") {
               sawDone = true;
+              if (Array.isArray(r.applied) && r.applied.length > 0) {
+                setPhaseMessage(r.applied.join(" "));
+              }
             }
           }
 
@@ -261,9 +269,10 @@ export function CourseRefineDrawer({ materialId, docked = false }: Props) {
                 Refine with {AI_ASSISTANT_NAME}
               </p>
               <p className="text-[11px] leading-snug text-zinc-500">
-                Describe fixes — tangents, tone, structure. Saves over your
-                current course. For large builds, one focused change at a time
-                works best.
+                Describe edits in plain language — bulk changes (remove all
+                images), one module (&ldquo;module 2&rdquo;), or the whole
+                course. Rose parses your intent, applies reliable bulk edits
+                instantly, and uses AI for rewrites.
               </p>
             </div>
             <button
@@ -302,7 +311,7 @@ export function CourseRefineDrawer({ materialId, docked = false }: Props) {
                 value={instruction}
                 onChange={(e) => setInstruction(e.target.value)}
                 disabled={loading}
-                placeholder="e.g. Module 2 goes off-topic — bring it back to what’s in my slides and shorten the intro lesson."
+                placeholder="e.g. Shorten module 2, remove all images, or fix quiz questions in module 1."
                 className="mt-2 block w-full resize-y rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               />
             </label>

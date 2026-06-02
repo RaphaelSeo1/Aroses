@@ -10,6 +10,11 @@ import {
   refineCourseWithInstruction,
   refineCourseWithInstructionStreaming,
 } from "@/lib/ai/refine-course";
+import {
+  llmInstructionAfterPrep,
+  prepareCourseForRefine,
+} from "@/lib/ai/refine-course-ops";
+import { coursePayloadChanged } from "@/lib/ai/refine-course-intent";
 import type { CoursePayload } from "@/types/course";
 
 export const runtime = "nodejs";
@@ -46,7 +51,14 @@ function refineFailureMessage(err: unknown): string {
   if (msg.includes("valid JSON after repair")) {
     return "Could not repair the model output. Try again with a smaller edit, or split into multiple refine steps.";
   }
+  if (msg === "REFINE_NO_CHANGES") {
+    return "Rose didn't change anything. Try being more specific — e.g. \"Shorten module 2 lessons\" or \"Remove all images from every lesson.\"";
+  }
   return "Could not refine the course right now. Wait a moment and try again, or ask for a more focused change (one topic or one module at a time).";
+}
+
+function noChangesMessage(): string {
+  return "Rose didn't change anything. Try being more specific — name a module (\"module 3\"), or describe a concrete edit like \"shorten every lesson\" or \"remove all images.\"";
 }
 
 export async function POST(request: Request) {
@@ -127,6 +139,15 @@ export async function POST(request: Request) {
 
   const wantStream = b.stream === true;
 
+  const prep = await prepareCourseForRefine(b.materialId, current, instruction);
+  const llmInstruction = llmInstructionAfterPrep(instruction, prep.applied);
+
+  function assertChanged(revised: CoursePayload): string | null {
+    if (coursePayloadChanged(current, revised)) return null;
+    if (prep.applied.length > 0) return null;
+    return noChangesMessage();
+  }
+
   async function saveRevised(revised: CoursePayload) {
     const { error: saveErr } = await supabase
       .from("study_materials")
@@ -153,19 +174,32 @@ export async function POST(request: Request) {
 
         send({
           type: "phase",
-          message:
-            "Step 1/2: Revising your course with AI (longer courses need more time)…",
+          message: prep.applied.length
+            ? prep.applied.join(" ")
+            : "Step 1/2: Revising your course with AI (longer courses need more time)…",
         });
 
         let revised: CoursePayload;
         try {
-          revised = await refineCourseWithInstructionStreaming(
-            current,
-            instruction
-          );
+          if (prep.skipLlm) {
+            revised = prep.course;
+          } else {
+            revised = await refineCourseWithInstructionStreaming(
+              prep.course,
+              llmInstruction,
+              prep.intent
+            );
+          }
         } catch (e) {
           console.error(e);
           send({ type: "error", message: refineFailureMessage(e) });
+          controller.close();
+          return;
+        }
+
+        const unchanged = assertChanged(revised);
+        if (unchanged) {
+          send({ type: "error", message: unchanged });
           controller.close();
           return;
         }
@@ -182,7 +216,10 @@ export async function POST(request: Request) {
           return;
         }
 
-        send({ type: "done" });
+        send({
+          type: "done",
+          applied: prep.applied.length ? prep.applied : undefined,
+        });
         controller.close();
       },
     });
@@ -197,13 +234,26 @@ export async function POST(request: Request) {
 
   let revised: CoursePayload;
   try {
-    revised = await refineCourseWithInstruction(current, instruction);
+    if (prep.skipLlm) {
+      revised = prep.course;
+    } else {
+      revised = await refineCourseWithInstruction(
+        prep.course,
+        llmInstruction,
+        prep.intent
+      );
+    }
   } catch (e) {
     console.error(e);
     return NextResponse.json(
       { error: refineFailureMessage(e) },
       { status: 502 }
     );
+  }
+
+  const unchanged = assertChanged(revised);
+  if (unchanged) {
+    return NextResponse.json({ error: unchanged }, { status: 422 });
   }
 
   const ok = await saveRevised(revised);
@@ -214,5 +264,8 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({
+    ok: true,
+    applied: prep.applied.length ? prep.applied : undefined,
+  });
 }
