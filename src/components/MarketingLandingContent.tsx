@@ -660,6 +660,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
               aria-label="Site"
             >
               <Link href="/explore" className="hover:text-brand dark:hover:text-brand-soft">Explore</Link>
+              <Link href="/forum" className="hover:text-brand dark:hover:text-brand-soft">Forum</Link>
               {isAuthenticated ? (
                 <>
                   <Link href="/" className="hover:text-brand dark:hover:text-brand-soft">Workspace</Link>

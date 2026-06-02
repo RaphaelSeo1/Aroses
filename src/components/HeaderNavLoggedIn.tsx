@@ -57,6 +57,7 @@ export function HeaderNavLoggedIn({
       </HeaderNavLink>
       <TutorSessionNavDropdown />
       <HeaderNavLink href="/explore">Explore</HeaderNavLink>
+      <HeaderNavLink href="/forum">Forum</HeaderNavLink>
       <HeaderNavLink
         href="/dashboard/review"
         activeWhen={(p) => p.startsWith("/dashboard/review")}
