@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
 import { resolveForumAuthorName } from "@/lib/forum/author-name";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
+import {
+  forumDocToPlainText,
+  sanitizeForumDoc,
+} from "@/lib/forum/rich-text";
 import { isForumCategory } from "@/types/forum";
 
 const TITLE_MAX = 140;
 const BODY_MAX = 8000;
+/** Cap on the serialized rich body so a single post can't bloat the table. */
+const BODY_RICH_MAX_BYTES = 400_000;
 
 export async function POST(request: Request) {
   const supabase = await createRouteHandlerSupabase();
@@ -23,10 +29,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const b = body as { title?: unknown; body?: unknown; category?: unknown };
+  const b = body as {
+    title?: unknown;
+    body?: unknown;
+    bodyRich?: unknown;
+    category?: unknown;
+  };
   const title = typeof b.title === "string" ? b.title.trim() : "";
-  const postBody = typeof b.body === "string" ? b.body.trim() : "";
   const category = isForumCategory(b.category) ? b.category : "discussion";
+
+  // Prefer the rich (TipTap JSON) body when present: sanitize it (strips unsafe
+  // link/image URLs) and derive the plain-text mirror used for search/previews.
+  // Fall back to a plain-text `body` for clients that don't send rich content.
+  const bodyRich = sanitizeForumDoc(b.bodyRich);
+  let postBody: string;
+  if (bodyRich) {
+    if (JSON.stringify(bodyRich).length > BODY_RICH_MAX_BYTES) {
+      return NextResponse.json(
+        { error: "Post body is too long." },
+        { status: 400 }
+      );
+    }
+    postBody = forumDocToPlainText(bodyRich);
+  } else {
+    postBody = typeof b.body === "string" ? b.body.trim() : "";
+  }
 
   if (title.length < 3) {
     return NextResponse.json(
@@ -57,8 +84,9 @@ export async function POST(request: Request) {
       category,
       title,
       body: postBody,
+      body_rich: bodyRich,
     })
-    .select("id, user_id, author_name, category, title, body, vote_count, comment_count, pinned, view_count, created_at")
+    .select("id, user_id, author_name, category, title, body, body_rich, vote_count, comment_count, pinned, view_count, created_at")
     .single();
 
   if (error || !post) {

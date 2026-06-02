@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { ForumComments } from "@/components/forum/ForumComments";
 import { ForumDeletePost } from "@/components/forum/ForumDeletePost";
+import { RichContent } from "@/components/forum/RichContent";
 import { ForumVoteButton } from "@/components/forum/ForumVoteButton";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
@@ -42,7 +43,7 @@ export default async function ForumPostPage({ params }: Props) {
   const { data: postRow } = await supabase
     .from("forum_posts")
     .select(
-      "id, user_id, author_name, category, title, body, vote_count, comment_count, pinned, view_count, created_at"
+      "id, user_id, author_name, category, title, body, body_rich, vote_count, comment_count, pinned, view_count, created_at"
     )
     .eq("id", postId)
     .maybeSingle();
@@ -127,10 +128,12 @@ export default async function ForumPostPage({ params }: Props) {
               <h1 className="mt-2 text-2xl font-semibold leading-tight tracking-tight text-zinc-900 dark:text-zinc-50">
                 {post.title}
               </h1>
-              {post.body ? (
-                <p className="mt-3 whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-700 dark:text-zinc-300">
-                  {post.body}
-                </p>
+              {post.body || post.body_rich ? (
+                <RichContent
+                  className="mt-3"
+                  json={post.body_rich}
+                  fallback={post.body}
+                />
               ) : null}
             </div>
           </article>

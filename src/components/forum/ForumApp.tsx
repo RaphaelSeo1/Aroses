@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ForumComments } from "@/components/forum/ForumComments";
 import { ForumVoteButton } from "@/components/forum/ForumVoteButton";
+import { RichContent } from "@/components/forum/RichContent";
+import { RichTextEditor } from "@/components/forum/RichTextEditor";
 import { forumTimeAgo } from "@/lib/forum/relative-time";
 import {
   FORUM_CATEGORIES,
@@ -629,10 +631,12 @@ function ThreadDetail({
           <h1 className="mt-2 text-2xl font-semibold leading-tight tracking-tight text-zinc-900 dark:text-zinc-50">
             {post.title}
           </h1>
-          {post.body ? (
-            <p className="mt-3 whitespace-pre-wrap text-[15px] leading-relaxed text-zinc-700 dark:text-zinc-300">
-              {post.body}
-            </p>
+          {post.body || post.body_rich ? (
+            <RichContent
+              className="mt-3"
+              json={post.body_rich}
+              fallback={post.body}
+            />
           ) : null}
         </div>
       </div>
@@ -686,6 +690,7 @@ function Composer({
   const [category, setCategory] = useState<ForumCategory>("course_request");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [bodyRich, setBodyRich] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -702,7 +707,7 @@ function Composer({
       const res = await fetch("/api/forum/posts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, title, body }),
+        body: JSON.stringify({ category, title, body, bodyRich }),
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -759,13 +764,13 @@ function Composer({
         placeholder="Title — e.g. “Organic Chemistry crash course”"
         className="mt-4 w-full rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
       />
-      <textarea
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        rows={8}
-        maxLength={8000}
-        placeholder="Add details (optional) — what you’d like, why it’d help, links…"
-        className="mt-3 w-full resize-y rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+      <RichTextEditor
+        className="mt-3"
+        placeholder="Add details (optional) — what you’d like, why it’d help, links, images…"
+        onChange={(json, text) => {
+          setBodyRich(json);
+          setBody(text);
+        }}
       />
       {error ? (
         <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>

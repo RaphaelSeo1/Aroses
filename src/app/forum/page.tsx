@@ -18,7 +18,7 @@ export default async function ForumPage() {
   const { data: posts } = await supabase
     .from("forum_posts")
     .select(
-      "id, user_id, author_name, category, title, body, vote_count, comment_count, pinned, view_count, created_at"
+      "id, user_id, author_name, category, title, body, body_rich, vote_count, comment_count, pinned, view_count, created_at"
     )
     .order("created_at", { ascending: false })
     .limit(200);

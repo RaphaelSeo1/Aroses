@@ -6,7 +6,10 @@ export type ForumPost = {
   author_name: string;
   category: ForumCategory;
   title: string;
+  /** Plain-text mirror of `body_rich` (also holds legacy plain-text posts). */
   body: string;
+  /** TipTap JSON for the formatted body. Null/absent for legacy plain-text posts. */
+  body_rich?: unknown;
   vote_count: number;
   comment_count: number;
   pinned: boolean;
