@@ -69,8 +69,18 @@ export function describePdfIngestUploadFailure(message: string): string {
     );
   }
 
-  if (m.includes("payload too large") || m.includes("413")) {
-    return "File is too large for the configured storage limit (150 MB max).";
+  if (
+    m.includes("payload too large") ||
+    m.includes("413") ||
+    m.includes("maximum allowed size") ||
+    m.includes("exceeded the maximum") ||
+    m.includes("entity too large")
+  ) {
+    return (
+      "This file is larger than your storage bucket allows. In Supabase SQL Editor, run migration " +
+      "`050_raise_pdf_ingest_bucket.sql` (or `039_study_ingest_multi_format.sql`) to raise the " +
+      "`study-pdf-ingest` bucket limit, then try again."
+    );
   }
 
   if (
