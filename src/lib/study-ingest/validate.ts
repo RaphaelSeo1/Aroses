@@ -66,7 +66,7 @@ export function validateIngestBatch(
 }
 
 export const INGEST_SIZE_HINT =
-  "50MB for documents · 100MB for audio · 500MB for videos · 20MB per image";
+  "100MB for PDFs · 50MB for other documents · 100MB for audio · 500MB for videos · 20MB per image";
 
 export const INGEST_LIMITS_DOC = {
   document: MAX_INGEST_DOCUMENT_BYTES,

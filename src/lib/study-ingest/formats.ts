@@ -15,6 +15,7 @@ export type IngestFormatKind =
   | "audio"
   | "video";
 
+export const MAX_INGEST_PDF_BYTES = 100 * 1024 * 1024;
 export const MAX_INGEST_DOCUMENT_BYTES = 50 * 1024 * 1024;
 export const MAX_INGEST_AUDIO_BYTES = 100 * 1024 * 1024;
 export const MAX_INGEST_VIDEO_BYTES = 500 * 1024 * 1024;
@@ -88,6 +89,8 @@ export function detectIngestFormat(
 
 export function maxBytesForKind(kind: IngestFormatKind): number {
   switch (kind) {
+    case "pdf":
+      return MAX_INGEST_PDF_BYTES;
     case "audio":
       return MAX_INGEST_AUDIO_BYTES;
     case "video":

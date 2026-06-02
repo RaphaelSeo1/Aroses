@@ -292,9 +292,9 @@ export function HelpPageContent() {
           <p className="mt-2 text-sm leading-relaxed">
             PDF, Word, PowerPoint, plain text, Markdown, RTF, images, audio, and
             video. Limits: <strong>20 files</strong> per batch,{" "}
-            <strong>1 GB</strong> combined; 50 MB documents, 100 MB audio, 500
-            MB video, 20 MB images. Audio/video is transcribed (25 MB cap for
-            transcription).
+            <strong>1 GB</strong> combined; 100 MB PDFs, 50 MB other documents,
+            100 MB audio, 500 MB video, 20 MB images. Audio/video is transcribed
+            (25 MB cap for transcription).
           </p>
 
           <HelpPreviewFrame
