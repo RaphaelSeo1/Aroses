@@ -195,44 +195,20 @@ export async function POST(request: Request, ctx: Params) {
       };
 
       let assistantText = "";
-      try {
-        for await (const evt of runTutorTurnStream({
-          modeTag: (sessionRow.mode_tag as TutorSessionModeTag) || null,
-          topic: sessionRow.topic ?? "",
-          referenceSummary: sessionRow.reference_summary ?? "",
-          discussionSummary: sessionRow.discussion_summary ?? "",
-          history,
-          studentUtterance: utterance,
-          autoGenerateNotes,
-          explicitNotesRequest,
-          interruptedAfter,
-          notYetSpoken,
-        })) {
-          if (evt.type === "text") {
-            assistantText += evt.delta;
-            send("text", { delta: evt.delta });
-          } else if (evt.type === "meta") {
-            send("meta", {
-              intent: evt.intent,
-              imageRequest: evt.imageRequest,
-              notesAppend: evt.notesAppend,
-            });
-          }
-        }
+      let persisted = false;
 
-        if (request.signal.aborted) {
-          send("error", { message: "stream aborted" });
+      // Append Rose's turn to the durable transcript. Used on normal
+      // completion AND best-effort when the client disconnects mid-reply
+      // (e.g. a page refresh) so a partial answer is never lost — keeping the
+      // transcript, and therefore the end-session recap, complete.
+      const persistAssistantTurn = async (rawText: string) => {
+        if (persisted) return;
+        const content = rawText.trim();
+        if (!content) {
+          // Nothing was generated — don't write a placeholder unless this is
+          // a clean completion (handled by the caller passing "(no response)").
           return;
         }
-
-        // 2. Append assistant turn. Then schedule a summary refresh
-        //    every 6 messages — cheap Haiku call, doesn't block the
-        //    response back to the client.
-        const assistantMessage: TutorSessionMessage = {
-          role: "assistant",
-          content: assistantText.trim() || "(no response)",
-          ts: Date.now(),
-        };
         const { data: freshRow } = await supabase
           .from("tutor_sessions")
           .select("conversation_transcript")
@@ -253,14 +229,13 @@ export async function POST(request: Request, ctx: Params) {
             expectedLen,
             actualLen: freshHistory.length,
           });
-          send("done", { ok: true, skippedPersist: true });
+          persisted = true;
           return;
         }
 
-        const baseTranscript = freshHistory;
-        const transcriptAfterAssistant = [
-          ...baseTranscript,
-          assistantMessage,
+        const transcriptAfterAssistant: TutorSessionMessage[] = [
+          ...freshHistory,
+          { role: "assistant", content, ts: Date.now() },
         ];
 
         const totalMessages = transcriptAfterAssistant.length;
@@ -289,11 +264,58 @@ export async function POST(request: Request, ctx: Params) {
           })
           .eq("id", sessionId)
           .eq("user_id", user.id);
+        persisted = true;
+      };
 
+      try {
+        for await (const evt of runTutorTurnStream({
+          modeTag: (sessionRow.mode_tag as TutorSessionModeTag) || null,
+          topic: sessionRow.topic ?? "",
+          referenceSummary: sessionRow.reference_summary ?? "",
+          discussionSummary: sessionRow.discussion_summary ?? "",
+          history,
+          studentUtterance: utterance,
+          autoGenerateNotes,
+          explicitNotesRequest,
+          interruptedAfter,
+          notYetSpoken,
+        })) {
+          if (evt.type === "text") {
+            assistantText += evt.delta;
+            send("text", { delta: evt.delta });
+          } else if (evt.type === "meta") {
+            send("meta", {
+              intent: evt.intent,
+              imageRequest: evt.imageRequest,
+              notesAppend: evt.notesAppend,
+            });
+          }
+        }
+
+        if (request.signal.aborted) {
+          // Client went away (refresh/close) but Rose finished generating —
+          // still save what she produced so the transcript is complete.
+          await persistAssistantTurn(assistantText);
+          return;
+        }
+
+        // Normal completion: persist the full reply (placeholder if empty).
+        await persistAssistantTurn(assistantText || "(no response)");
         send("done", { ok: true });
       } catch (e) {
         console.error("[tutor turn-stream]", e);
-        send("error", { message: "stream failed" });
+        // Best-effort: save the partial reply generated before the failure /
+        // disconnect so leaving mid-answer doesn't punch a hole in the recap.
+        try {
+          await persistAssistantTurn(assistantText);
+        } catch (persistErr) {
+          console.error("[tutor turn-stream partial persist]", persistErr);
+        }
+        try {
+          send("error", { message: "stream failed" });
+        } catch {
+          /* client already gone — nothing to send */
+        }
       } finally {
         controller.close();
       }
