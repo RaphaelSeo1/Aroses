@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EditorContent, useEditor } from "@tiptap/react";
+import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -19,6 +19,16 @@ import {
   RoseDocument,
 } from "./notes/RoseDocument";
 import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
+
+/** Highlighter palette offered in the selection bubble menu. */
+const HIGHLIGHT_COLORS: { label: string; value: string }[] = [
+  { label: "Yellow", value: "#fde68a" },
+  { label: "Green", value: "#bbf7d0" },
+  { label: "Blue", value: "#bfdbfe" },
+  { label: "Pink", value: "#fbcfe8" },
+  { label: "Purple", value: "#e9d5ff" },
+  { label: "Orange", value: "#fed7aa" },
+];
 
 /**
  * Premium Notion-style notes panel docked to the right side of
@@ -237,6 +247,10 @@ export function NotesPanel({
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const emojiPickerRef = useRef<HTMLDivElement | null>(null);
 
+  // Live handle to the editor so the (synchronously-defined) key handler can
+  // reach commands without a use-before-define on `editor`.
+  const editorInstanceRef = useRef<Editor | null>(null);
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -246,7 +260,7 @@ export function NotesPanel({
       }),
       RoseDocument,
       Underline,
-      Highlight.configure({ multicolor: false }),
+      Highlight.configure({ multicolor: true }),
       Typography,
       Link.configure({
         openOnClick: false,
@@ -275,6 +289,30 @@ export function NotesPanel({
           "tn-prose max-w-none focus:outline-none min-h-[18rem] caret-zinc-700",
       },
       handleKeyDown: (view, event) => {
+        // Tab / Shift-Tab nest & un-nest list items (bulleted, numbered, and
+        // to-do). This lets a student indent an item under another — e.g. a
+        // sub-point beneath a numbered step — and then change its type with
+        // the slash menu. We handle it explicitly (rather than relying solely
+        // on the list keymap) so nesting is reliable regardless of focus.
+        if (event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          const ed = editorInstanceRef.current;
+          if (ed) {
+            const itemType = ed.isActive("taskItem")
+              ? "taskItem"
+              : ed.isActive("listItem")
+                ? "listItem"
+                : null;
+            if (itemType) {
+              event.preventDefault();
+              if (event.shiftKey) {
+                ed.chain().focus().liftListItem(itemType).run();
+              } else {
+                ed.chain().focus().sinkListItem(itemType).run();
+              }
+              return true;
+            }
+          }
+        }
         // Cmd+K for link insertion — match Notion's default.
         if ((event.metaKey || event.ctrlKey) && event.key === "k") {
           event.preventDefault();
@@ -312,6 +350,7 @@ export function NotesPanel({
     },
     content: undefined,
   });
+  editorInstanceRef.current = editor;
 
   // Imperative handle for the parent — auto-generate uses this to
   // append structured "Rose just covered X" blocks directly into the
@@ -988,16 +1027,29 @@ export function NotesPanel({
               >
                 <span className="font-mono text-[11px]">{"</>"}</span>
               </BubbleBtn>
+              {HIGHLIGHT_COLORS.map((c) => (
+                <BubbleBtn
+                  key={c.value}
+                  aria-label={`Highlight ${c.label.toLowerCase()}`}
+                  title={`Highlight ${c.label.toLowerCase()}`}
+                  active={editor.isActive("highlight", { color: c.value })}
+                  onClick={() =>
+                    editor.chain().focus().setHighlight({ color: c.value }).run()
+                  }
+                >
+                  <span
+                    className="inline-block h-3 w-3 rounded-sm ring-1 ring-black/15"
+                    style={{ background: c.value }}
+                  />
+                </BubbleBtn>
+              ))}
               <BubbleBtn
-                aria-label="Highlight"
-                title="Highlight"
-                active={editor.isActive("highlight")}
-                onClick={() => editor.chain().focus().toggleHighlight().run()}
+                aria-label="Remove highlight"
+                title="Remove highlight"
+                active={false}
+                onClick={() => editor.chain().focus().unsetHighlight().run()}
               >
-                <span
-                  className="inline-block h-3 w-3 rounded-sm"
-                  style={{ background: "#fde68a" }}
-                />
+                <span className="text-[12px] leading-none">⌫</span>
               </BubbleBtn>
               <BubbleBtn
                 aria-label="Link"
