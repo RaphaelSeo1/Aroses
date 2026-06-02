@@ -180,6 +180,15 @@ export async function GET(request: Request) {
 
     // -- New module cards (no SRS row yet)
     const seenKeys = await loadSeenModuleKeys(supabase, user.id, allowedMaterialIds);
+    // Free practice (cram) should only resurface questions the learner has
+    // actually tried before — not brand-new questions from courses they
+    // haven't studied yet. "Tried" = answered in a quiz (question_attempts).
+    // SRS-reviewed cards already show up via `moduleDue` above. In scheduled
+    // review (non-cram) we still introduce genuinely new cards, since that's
+    // how the learner makes progress.
+    const attemptedKeys = cram
+      ? await loadAttemptedModuleKeys(supabase, user.id, allowedMaterialIds)
+      : null;
     const newCandidates: SessionCard[] = [];
     for (const mat of materials) {
       const modules = mat.course_payload?.modules ?? [];
@@ -189,6 +198,8 @@ export async function GET(request: Request) {
         for (let i = 0; i < quiz.length; i++) {
           const qi = mod.id * 1000 + i;
           if (seenKeys.has(`${mat.id}:${qi}`)) continue;
+          // Cram: skip questions the learner has never attempted.
+          if (attemptedKeys && !attemptedKeys.has(`${mat.id}:${qi}`)) continue;
           const question = quiz[i];
           if (!question) continue;
           newCandidates.push(
@@ -450,6 +461,28 @@ async function loadSeenModuleKeys(
 ): Promise<Set<string>> {
   let q = supabase
     .from("user_module_card_srs")
+    .select("material_id, question_index")
+    .eq("user_id", userId);
+  if (materialFilter && materialFilter.size > 0) {
+    q = q.in("material_id", [...materialFilter]);
+  }
+  const { data } = await q;
+  const out = new Set<string>();
+  for (const row of data ?? []) {
+    out.add(`${row.material_id}:${row.question_index}`);
+  }
+  return out;
+}
+
+/** `${materialId}:${questionIndex}` for every module question the user has
+ *  attempted in a quiz — the "tried before" set used to scope free practice. */
+async function loadAttemptedModuleKeys(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  materialFilter: Set<string> | null
+): Promise<Set<string>> {
+  let q = supabase
+    .from("question_attempts")
     .select("material_id, question_index")
     .eq("user_id", userId);
   if (materialFilter && materialFilter.size > 0) {

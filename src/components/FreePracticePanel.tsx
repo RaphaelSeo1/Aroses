@@ -99,10 +99,10 @@ export function FreePracticePanel({
           Choose what to practice
         </h1>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Free practice ignores the review schedule and serves every question
-          from the courses you pick — great for cramming. Question counts below
-          are the total questions in each course (module quizzes + saved focus
-          cards).
+          Free practice ignores the review schedule and re-serves questions
+          you&apos;ve already tried — quiz questions you&apos;ve answered plus
+          your saved focus cards — so you drill familiar material instead of
+          brand-new questions. Pick the courses you want to cram.
         </p>
       </header>
 
@@ -114,8 +114,8 @@ export function FreePracticePanel({
         <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
       ) : materials.length === 0 ? (
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
-          No questions to practice yet. Build a course first and its questions
-          will show up here.
+          Nothing to practice yet. Once you&apos;ve answered some quiz
+          questions or saved focus cards, they&apos;ll show up here to drill.
         </div>
       ) : (
         <>

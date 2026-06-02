@@ -5,13 +5,17 @@ import type { CoursePayload } from "@/types/course";
 /**
  * GET /api/srs/practice-scope
  *
- * Lists every course the user can free-practice on, with the TOTAL number of
- * practiceable questions per course (module-bank quiz questions + saved focus
- * cards) — i.e. the universe a cram/"free practice" session draws from,
- * regardless of the spaced-repetition schedule.
+ * Lists every course the user can free-practice on, with the number of
+ * practiceable questions per course. "Practiceable" means questions the
+ * learner has actually TRIED before — module questions they've answered in a
+ * quiz (`question_attempts`) or reviewed in SRS (`user_module_card_srs`), plus
+ * their saved focus cards. Brand-new questions from courses they haven't
+ * studied yet are intentionally excluded, so free practice resurfaces things
+ * they've seen rather than introducing unfamiliar material.
  *
  * Unlike /api/srs/due-counts (which only surfaces courses with cards *due*),
- * this returns all owned courses so the learner can pick what to cram.
+ * this returns all owned courses with tried questions so the learner can pick
+ * what to cram.
  */
 
 type MaterialRow = {
@@ -38,13 +42,16 @@ function deriveCourseTitle(m: MaterialRow): string | null {
   return Array.isArray(c) ? (c[0]?.title ?? null) : (c.title ?? null);
 }
 
-function countModuleQuestions(payload: CoursePayload | null): number {
-  if (!payload?.modules) return 0;
-  let n = 0;
+/** Set of valid `moduleId*1000+quizIndex` for a course (guards against stale
+ *  attempt rows pointing at questions that no longer exist). */
+function validQuestionIndexes(payload: CoursePayload | null): Set<number> {
+  const out = new Set<number>();
+  if (!payload?.modules) return out;
   for (const mod of payload.modules) {
-    if (Array.isArray(mod.quiz)) n += mod.quiz.length;
+    const quiz = Array.isArray(mod.quiz) ? mod.quiz : [];
+    for (let i = 0; i < quiz.length; i++) out.add(mod.id * 1000 + i);
   }
-  return n;
+  return out;
 }
 
 export async function GET() {
@@ -74,9 +81,45 @@ export async function GET() {
     personalByMaterial.set(id, (personalByMaterial.get(id) ?? 0) + 1);
   }
 
+  // "Tried before" module questions: union of quiz attempts and SRS-reviewed
+  // cards, keyed by material → set of question_index.
+  const attemptedByMaterial = new Map<string, Set<number>>();
+  const addAttempt = (materialId: string, questionIndex: number) => {
+    let set = attemptedByMaterial.get(materialId);
+    if (!set) {
+      set = new Set<number>();
+      attemptedByMaterial.set(materialId, set);
+    }
+    set.add(questionIndex);
+  };
+  const [{ data: attemptRows }, { data: srsRows }] = await Promise.all([
+    supabase
+      .from("question_attempts")
+      .select("material_id, question_index")
+      .eq("user_id", user.id),
+    supabase
+      .from("user_module_card_srs")
+      .select("material_id, question_index")
+      .eq("user_id", user.id),
+  ]);
+  for (const row of attemptRows ?? []) {
+    addAttempt(row.material_id as string, row.question_index as number);
+  }
+  for (const row of srsRows ?? []) {
+    addAttempt(row.material_id as string, row.question_index as number);
+  }
+
   const out = materials
     .map((m) => {
-      const moduleQuestions = countModuleQuestions(m.course_payload);
+      // Count only attempted questions that still exist in the course payload.
+      const valid = validQuestionIndexes(m.course_payload);
+      const attempted = attemptedByMaterial.get(m.id);
+      let moduleQuestions = 0;
+      if (attempted) {
+        for (const qi of attempted) {
+          if (valid.has(qi)) moduleQuestions += 1;
+        }
+      }
       const personalQuestions = personalByMaterial.get(m.id) ?? 0;
       return {
         materialId: m.id,
