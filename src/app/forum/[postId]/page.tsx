@@ -42,7 +42,7 @@ export default async function ForumPostPage({ params }: Props) {
   const { data: postRow } = await supabase
     .from("forum_posts")
     .select(
-      "id, user_id, author_name, category, title, body, vote_count, comment_count, created_at"
+      "id, user_id, author_name, category, title, body, vote_count, comment_count, pinned, view_count, created_at"
     )
     .eq("id", postId)
     .maybeSingle();

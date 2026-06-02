@@ -58,7 +58,7 @@ export async function POST(request: Request) {
       title,
       body: postBody,
     })
-    .select("id, user_id, author_name, category, title, body, vote_count, comment_count, created_at")
+    .select("id, user_id, author_name, category, title, body, vote_count, comment_count, pinned, view_count, created_at")
     .single();
 
   if (error || !post) {

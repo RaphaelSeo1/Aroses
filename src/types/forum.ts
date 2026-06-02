@@ -9,6 +9,8 @@ export type ForumPost = {
   body: string;
   vote_count: number;
   comment_count: number;
+  pinned: boolean;
+  view_count: number;
   created_at: string;
 };
 

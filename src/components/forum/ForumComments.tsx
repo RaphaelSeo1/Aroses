@@ -9,10 +9,13 @@ export function ForumComments({
   postId,
   initialComments,
   currentUserId,
+  onCountChange,
 }: {
   postId: string;
   initialComments: ForumComment[];
   currentUserId: string | null;
+  /** Notified with the new comment count after add/remove (keeps lists in sync). */
+  onCountChange?: (count: number) => void;
 }) {
   const isAuthed = Boolean(currentUserId);
   const [comments, setComments] = useState<ForumComment[]>(initialComments);
@@ -36,7 +39,11 @@ export function ForumComments({
         throw new Error(data.error ?? "Could not post comment.");
       }
       const data = (await res.json()) as { comment: ForumComment };
-      setComments((prev) => [...prev, data.comment]);
+      setComments((prev) => {
+        const next = [...prev, data.comment];
+        onCountChange?.(next.length);
+        return next;
+      });
       setBody("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not post comment.");
@@ -47,12 +54,15 @@ export function ForumComments({
 
   async function remove(id: string) {
     const prev = comments;
-    setComments((c) => c.filter((x) => x.id !== id));
+    const next = comments.filter((x) => x.id !== id);
+    setComments(next);
+    onCountChange?.(next.length);
     try {
       const res = await fetch(`/api/forum/comments/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("delete failed");
     } catch {
       setComments(prev);
+      onCountChange?.(prev.length);
     }
   }
 
