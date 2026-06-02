@@ -85,6 +85,13 @@ export function ImmersiveLessonRunner({
 
   // ---- per-turn ----
   const [tutorReply, setTutorReply] = useState<string | null>(null);
+  // Stable identity for the current reply so the transcript's typewriter
+  // doesn't remount as the text grows. Previously the panel keyed off the
+  // first 16 chars of `tutorReply`, so each early chunk changed the key,
+  // remounting <TypewriterText/> — which made the text flash in full, vanish,
+  // then re-type word-by-word. Bumping this only when a NEW reply starts keeps
+  // one mount per turn so growth animates as a smooth character append.
+  const [replyTurn, setReplyTurn] = useState(0);
   const [answerText, setAnswerText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(
@@ -864,6 +871,7 @@ export function ImmersiveLessonRunner({
       if (text.length < 2) return;
       setSubmitting(true);
       setTutorReply("");
+      setReplyTurn((n) => n + 1);
       // Snapshot + clear any pending interruption context so it only
       // applies to THIS turn (the one responding to the barge-in).
       const interruptedAfter = interruptedContext;
@@ -2006,7 +2014,7 @@ export function ImmersiveLessonRunner({
 
       {tutorReply ? (
         <GlassPanel
-          key={`reply-${tutorReply.slice(0, 16)}`}
+          key={`reply-${replyTurn}`}
           className="mt-4"
           tone="reply"
         >
