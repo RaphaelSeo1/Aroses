@@ -138,9 +138,9 @@ export function BillingClient({
             {statusLine(status, cancelAtPeriodEnd, periodEndLabel)}
           </p>
           <div className="mt-3 w-full max-w-xs">
-            <div className="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
-              <span>Voice this period</span>
-              <span>
+            <div className="flex w-full items-center justify-between gap-3 text-[11px] text-zinc-500 dark:text-zinc-400">
+              <span className="shrink-0">Voice this period</span>
+              <span className="shrink-0 tabular-nums">
                 {usedMinutes} / {capMinutes} min
               </span>
             </div>
