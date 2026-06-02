@@ -81,6 +81,12 @@ export function useMentoredVoice(opts: {
   bargeRms?: number;
   /** Ms of sustained voice above threshold before barge-in fires (default 220). */
   bargeSustainMs?: number;
+  /**
+   * Fired when a voice request is refused because the user has used up their
+   * monthly voice allowance (HTTP 402). The caller should switch to text mode
+   * — voice is the metered premium; everything else stays unlimited.
+   */
+  onVoiceCapReached?: () => void;
 }) {
   const playbackRate = opts.playbackRate ?? 1;
   /** Live ref so mid-utterance speed changes apply to the next sentence/chunk. */
@@ -116,6 +122,26 @@ export function useMentoredVoice(opts: {
   useEffect(() => {
     onBargeInRef.current = opts.onBargeIn;
   }, [opts.onBargeIn]);
+
+  // Fired (once per request) when a voice call returns 402 (cap reached). The
+  // caller flips to text mode. Guarded so repeated 402s don't spam the caller.
+  const onVoiceCapReachedRef = useRef<(() => void) | undefined>(
+    opts.onVoiceCapReached
+  );
+  useEffect(() => {
+    onVoiceCapReachedRef.current = opts.onVoiceCapReached;
+  }, [opts.onVoiceCapReached]);
+  const notifyVoiceCap = useCallback((status: number) => {
+    if (status === 402) {
+      try {
+        onVoiceCapReachedRef.current?.();
+      } catch {
+        /* ignore caller errors */
+      }
+      return true;
+    }
+    return false;
+  }, []);
 
   // Silence-detection plumbing (reused by `recordUntilSilence`). We tap
   // the same MediaStream the MediaRecorder is recording from.
@@ -328,6 +354,7 @@ export function useMentoredVoice(opts: {
         const res = await ttsFetch(text, undefined, ac.signal);
         if (!res.ok) {
           fireReveal(true);
+          notifyVoiceCap(res.status);
           let msg = `TTS failed (${res.status})`;
           try {
             const body = (await res.json()) as { error?: string };
@@ -359,7 +386,7 @@ export function useMentoredVoice(opts: {
         setState((s) => ({ ...s, speaking: false }));
       }
     },
-    [cancelSpeak, startBargeMonitor, stopBargeMonitor, ttsFetch]
+    [cancelSpeak, notifyVoiceCap, startBargeMonitor, stopBargeMonitor, ttsFetch]
   );
 
   /**
@@ -463,6 +490,7 @@ export function useMentoredVoice(opts: {
               }
               if (!res.ok || ac.signal.aborted) {
                 if (!res.ok) {
+                  notifyVoiceCap(res.status);
                   failures.push(new Error(`TTS failed (${res.status})`));
                   reveal(true);
                 }
@@ -506,7 +534,7 @@ export function useMentoredVoice(opts: {
         setState((s) => ({ ...s, speaking: false }));
       }
     },
-    [cancelSpeak, startBargeMonitor, stopBargeMonitor, ttsFetch]
+    [cancelSpeak, notifyVoiceCap, startBargeMonitor, stopBargeMonitor, ttsFetch]
   );
 
   // ----- record -----
@@ -832,6 +860,10 @@ export function useMentoredVoice(opts: {
           body: form,
         });
         if (!res.ok) {
+          if (notifyVoiceCap(res.status)) {
+            // Out of voice time — caller switches to text. Not an error.
+            return "";
+          }
           let detail = "";
           try {
             const b = (await res.json()) as { error?: string };
@@ -852,7 +884,7 @@ export function useMentoredVoice(opts: {
         setState((s) => ({ ...s, transcribing: false }));
       }
     },
-    [opts.materialId, opts.sessionId]
+    [opts.materialId, opts.sessionId, notifyVoiceCap]
   );
 
   // Cleanup on unmount.

@@ -107,6 +107,10 @@ export function ImmersiveLessonRunner({
   // ---- exit confirmation modal ----
   const [showExitMenu, setShowExitMenu] = useState(false);
 
+  // Set when the monthly voice allowance is exhausted (server returns 402).
+  // We softly drop to text mode — never a hard block mid-study.
+  const [voiceCapped, setVoiceCapped] = useState(false);
+
   // Barge-in handler — defined after `submitAnswer` would create a forward
   // reference, so we use a ref the hook reads at fire time. Set below.
   const onBargeInRef = useRef<() => void>(() => {});
@@ -149,6 +153,10 @@ export function ImmersiveLessonRunner({
     // to "hear" room noise / her own playback bleed and respond to
     // nothing. Gate the entire monitor on voice mode.
     bargeInEnabled: voiceMode === "live" && !awaitingContinue,
+    onVoiceCapReached: () => {
+      setVoiceCapped(true);
+      setInteractionMode("text");
+    },
   });
   const lastSpokenChunkIdRef = useRef<string | null>(null);
   const recordPromiseRef = useRef<Promise<Blob | null> | null>(null);
@@ -1823,6 +1831,21 @@ export function ImmersiveLessonRunner({
                 </span>
               ) : null}
             </div>
+
+            {voiceCapped ? (
+              <div className="mb-2 flex flex-wrap items-center justify-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-center text-[12px] text-amber-800 ring-1 ring-amber-200">
+                <span>
+                  You&apos;ve used all your voice time this month — switched to
+                  text. Everything else stays unlimited.
+                </span>
+                <a
+                  href="/dashboard/billing"
+                  className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950"
+                >
+                  Get more voice
+                </a>
+              </div>
+            ) : null}
 
             <AnswerComposer
               interactionMode={interactionMode}

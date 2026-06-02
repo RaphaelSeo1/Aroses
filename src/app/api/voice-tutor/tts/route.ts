@@ -9,6 +9,12 @@ import { canReadStudyMaterial } from "@/lib/voice-tutor/material-access";
 import { getVoiceTutorGate } from "@/lib/voice-tutor/policy";
 import { resolveTtsVoiceId } from "@/lib/voice-tutor/resolve-tts-voice";
 import { isUuid } from "@/lib/voice-tutor/uuid";
+import {
+  checkVoiceAllowance,
+  estimateTtsSeconds,
+  recordVoiceSeconds,
+} from "@/lib/billing/voice-usage";
+import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -114,6 +120,13 @@ export async function POST(request: Request) {
     );
   }
 
+  // Voice cap (applies to every surface — mentored, tutor sessions, dock).
+  // Over the monthly allowance → 402 so the client falls back to text mode.
+  const allowance = await checkVoiceAllowance(user.id);
+  if (!allowance.allowed) {
+    return NextResponse.json(voiceCapBody(), { status: 402 });
+  }
+
   let resolvedVoiceId: string;
   try {
     resolvedVoiceId = resolveTtsVoiceId(courseId);
@@ -141,7 +154,7 @@ export async function POST(request: Request) {
         previousText,
         nextText,
       });
-      if (!upstream.ok) {
+      if (!upstream.ok || !upstream.body) {
         const t = await upstream.text();
         console.error("ElevenLabs stream error", upstream.status, t.slice(0, 400));
         return NextResponse.json(
@@ -149,7 +162,20 @@ export async function POST(request: Request) {
           { status: 502 }
         );
       }
-      return new Response(upstream.body, {
+      // Meter spoken seconds by counting MP3 bytes as they stream through, then
+      // record once the stream finishes. Metering never blocks playback.
+      const userId = user.id;
+      let bytes = 0;
+      const meter = new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          bytes += chunk.byteLength;
+          controller.enqueue(chunk);
+        },
+        async flush() {
+          await recordVoiceSeconds(userId, estimateTtsSeconds(bytes));
+        },
+      });
+      return new Response(upstream.body.pipeThrough(meter), {
         status: 200,
         headers: {
           "Content-Type": "audio/mpeg",
@@ -167,6 +193,7 @@ export async function POST(request: Request) {
       previousText,
       nextText,
     });
+    await recordVoiceSeconds(user.id, estimateTtsSeconds(buf.byteLength));
     return new NextResponse(buf, {
       status: 200,
       headers: {

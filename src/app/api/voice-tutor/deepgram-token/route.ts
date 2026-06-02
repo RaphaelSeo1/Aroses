@@ -3,6 +3,8 @@ import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client"
 import { canReadStudyMaterial } from "@/lib/voice-tutor/material-access";
 import { getVoiceTutorGate } from "@/lib/voice-tutor/policy";
 import { isUuid } from "@/lib/voice-tutor/uuid";
+import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
+import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -50,6 +52,12 @@ export async function POST(request: Request) {
   });
   if (!gate.allowed) {
     return NextResponse.json({ error: gate.reason }, { status: 403 });
+  }
+
+  // Live (Deepgram) STT bypasses /transcribe, so enforce the voice cap here too.
+  const allowance = await checkVoiceAllowance(user.id);
+  if (!allowance.allowed) {
+    return NextResponse.json(voiceCapBody(), { status: 402 });
   }
 
   const ttlSeconds = 120;

@@ -202,6 +202,10 @@ export function TutorSessionRunner({
     interactionModeRef.current = interactionMode;
   }, [interactionMode]);
 
+  // Set when the monthly voice allowance is exhausted (server 402). We softly
+  // drop to text mode (handled in an effect below to avoid a forward ref).
+  const [voiceCapped, setVoiceCapped] = useState(false);
+
   const onBargeInRef = useRef<() => void>(() => {});
   const voice = useMentoredVoice({
     sessionId: initial.id,
@@ -216,6 +220,7 @@ export function TutorSessionRunner({
     // should not cut Rose off mid-sentence.
     bargeRms: 0.11,
     bargeSustainMs: 420,
+    onVoiceCapReached: () => setVoiceCapped(true),
   });
 
   const abortVoiceCapture = useCallback(async () => {
@@ -259,6 +264,11 @@ export function TutorSessionRunner({
     },
     [abortVoiceCapture]
   );
+
+  // Out of voice time → softly fall back to text mode.
+  useEffect(() => {
+    if (voiceCapped) updateInteractionMode("text");
+  }, [voiceCapped, updateInteractionMode]);
 
   // ----- notes panel handle ("+ Add to notes" buttons use this) -----
   const notesPanelRef = useRef<NotesPanelHandle | null>(null);
@@ -1484,6 +1494,20 @@ export function TutorSessionRunner({
           <p className="mx-auto mt-1.5 max-w-6xl text-[11px] text-rose-700">
             {endError}
           </p>
+        ) : null}
+        {voiceCapped ? (
+          <div className="mx-auto mt-2 flex max-w-6xl flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">
+            <span>
+              You&apos;ve used all your voice time this month — switched to text.
+              Everything else stays unlimited.
+            </span>
+            <a
+              href="/dashboard/billing"
+              className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950"
+            >
+              Get more voice
+            </a>
+          </div>
         ) : null}
         {sessionPaused ? (
           <div className="mx-auto mt-2 max-w-6xl rounded-2xl border border-amber-200 bg-amber-50/95 px-4 py-3 text-sm text-amber-950">

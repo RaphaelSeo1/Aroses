@@ -7,6 +7,8 @@ import {
 import { canReadStudyMaterial } from "@/lib/voice-tutor/material-access";
 import { getVoiceTutorGate } from "@/lib/voice-tutor/policy";
 import { isUuid } from "@/lib/voice-tutor/uuid";
+import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
+import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -88,6 +90,13 @@ export async function POST(request: Request) {
       { error: "Missing materialId or sessionId" },
       { status: 400 }
     );
+  }
+
+  // When the user is out of voice time, stop the mic too (not just playback) so
+  // the experience consistently falls back to text. 402 → client switches mode.
+  const allowance = await checkVoiceAllowance(user.id);
+  if (!allowance.allowed) {
+    return NextResponse.json(voiceCapBody(), { status: 402 });
   }
 
   try {
