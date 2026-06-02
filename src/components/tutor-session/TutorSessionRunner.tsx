@@ -8,6 +8,7 @@ import {
   type NotesPanelHandle,
   type AutoGenerateBlock,
 } from "@/components/immersive/NotesPanel";
+import { TypewriterText } from "@/components/immersive/TypewriterText";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
 import {
   buildAutoNotesFromTutorTurn,
@@ -123,6 +124,10 @@ export function TutorSessionRunner({
   messagesRef.current = messages;
   const [composer, setComposer] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Id of the message currently being revealed. Only this assistant bubble
+  // types out character-by-character; older bubbles render instantly so the
+  // transcript doesn't re-animate everything on each render.
+  const [liveAssistantId, setLiveAssistantId] = useState<string | null>(null);
   const [endError, setEndError] = useState<string | null>(null);
   const [endingSession, setEndingSession] = useState(false);
   const [sessionPaused, setSessionPaused] = useState(
@@ -181,6 +186,22 @@ export function TutorSessionRunner({
     voiceModeRef.current = voiceMode;
   }, [voiceMode]);
 
+  // Interaction mode — voice (Rose speaks aloud, mic input) vs text (silent;
+  // type and read). Mirrors Mentored Learning so the student can switch
+  // anytime. Persisted across sessions.
+  const [interactionMode, setInteractionMode] = useState<"voice" | "text">(
+    () => {
+      if (typeof window === "undefined") return "voice";
+      return window.localStorage.getItem("rose:interactionMode") === "text"
+        ? "text"
+        : "voice";
+    }
+  );
+  const interactionModeRef = useRef<"voice" | "text">("voice");
+  useEffect(() => {
+    interactionModeRef.current = interactionMode;
+  }, [interactionMode]);
+
   const onBargeInRef = useRef<() => void>(() => {});
   const voice = useMentoredVoice({
     sessionId: initial.id,
@@ -214,6 +235,23 @@ export function TutorSessionRunner({
       if (typeof window !== "undefined") {
         try {
           window.localStorage.setItem("rose:voiceMode", next);
+        } catch {
+          /* ignore — preference just won't persist */
+        }
+      }
+    },
+    [abortVoiceCapture]
+  );
+
+  const updateInteractionMode = useCallback(
+    (next: "voice" | "text") => {
+      if (next === interactionModeRef.current) return;
+      // Switching to text → silence Rose and release the mic immediately.
+      if (next === "text") void abortVoiceCapture();
+      setInteractionMode(next);
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem("rose:interactionMode", next);
         } catch {
           /* ignore — preference just won't persist */
         }
@@ -579,6 +617,7 @@ export function TutorSessionRunner({
       const trimmed = text.trim();
       if (!trimmed) return;
       const assistantId = `a-${Date.now()}`;
+      setLiveAssistantId(assistantId);
       setMessages((prev) => [
         ...prev,
         { id: assistantId, role: "assistant", content: trimmed },
@@ -597,7 +636,7 @@ export function TutorSessionRunner({
           console.error("[TutorSessionRunner deliverRoseMessage persist]", e);
         }
       }
-      if (opts?.speak !== false) {
+      if (interactionModeRef.current === "voice" && opts?.speak !== false) {
         try {
           await voice.speak(trimmed);
         } catch (e) {
@@ -682,6 +721,7 @@ export function TutorSessionRunner({
       };
       const assistantId = `a-${Date.now()}`;
       activeAssistantIdRef.current = assistantId;
+      setLiveAssistantId(assistantId);
       const assistantMsg: LocalMessage = {
         id: assistantId,
         role: "assistant",
@@ -769,7 +809,11 @@ export function TutorSessionRunner({
         await runTurnPlayback(turn.spokenCount);
       };
 
-      void runTurnPlayback(0);
+      // Text mode stays silent — skip TTS entirely; the SSE handler reveals
+      // the streaming text directly instead of in lockstep with playback.
+      if (interactionModeRef.current === "voice") {
+        void runTurnPlayback(0);
+      }
 
       // SSE stream.
       let buffered = "";
@@ -849,10 +893,19 @@ export function TutorSessionRunner({
                 const parsed = JSON.parse(data) as { delta?: string };
                 if (typeof parsed.delta === "string") {
                   buffered += parsed.delta;
-                  // §12 — Do NOT update the bubble's content here.
-                  // The onSentencePlaying callback drives reveal in
-                  // lockstep with TTS playback.
-                  flushSentences(false);
+                  if (interactionModeRef.current === "voice") {
+                    // §12 — Do NOT update the bubble's content here.
+                    // The onSentencePlaying callback drives reveal in
+                    // lockstep with TTS playback.
+                    flushSentences(false);
+                  } else {
+                    // Text mode: reveal the streaming reply as it arrives.
+                    setMessages((prev) =>
+                      prev.map((m) =>
+                        m.id === assistantId ? { ...m, content: buffered } : m
+                      )
+                    );
+                  }
                 }
               } catch {
                 /* ignore */
@@ -1194,15 +1247,15 @@ export function TutorSessionRunner({
   // mode). False positives (coughs) resume Rose where she left off.
   useEffect(() => {
     onBargeInRef.current = () => {
-      if (voiceMode !== "live") return;
+      if (interactionMode !== "voice" || voiceMode !== "live") return;
       void processLiveCapture({ fromBargeIn: true });
     };
-  }, [processLiveCapture, voiceMode]);
+  }, [interactionMode, processLiveCapture, voiceMode]);
 
   // ----- hold M to talk (push mode only) -----
   const mDownRef = useRef(false);
   useEffect(() => {
-    if (voiceMode !== "push") return;
+    if (interactionMode !== "voice" || voiceMode !== "push") return;
     const isTextTarget = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
       const tag = el.tagName;
@@ -1235,10 +1288,11 @@ export function TutorSessionRunner({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [pushFinishVoiceAnswer, pushStartVoiceAnswer, voiceMode]);
+  }, [interactionMode, pushFinishVoiceAnswer, pushStartVoiceAnswer, voiceMode]);
 
   // ----- live mode: auto-listen after Rose finishes -----
   useEffect(() => {
+    if (interactionMode !== "voice") return;
     if (voiceMode !== "live") return;
     if (sessionPausedRef.current) return;
     if (sessionBooting) return;
@@ -1283,6 +1337,7 @@ export function TutorSessionRunner({
       }
     })();
   }, [
+    interactionMode,
     shouldIgnoreLiveTranscript,
     submitting,
     voice,
@@ -1412,7 +1467,9 @@ export function TutorSessionRunner({
                 {uploads.length} material{uploads.length === 1 ? "" : "s"}
               </button>
             ) : null}
-            <SpeedPill rate={playbackRate} onChange={updatePlaybackRate} />
+            {interactionMode === "voice" ? (
+              <SpeedPill rate={playbackRate} onChange={updatePlaybackRate} />
+            ) : null}
             <button
               type="button"
               onClick={endSession}
@@ -1472,6 +1529,7 @@ export function TutorSessionRunner({
               <MessageBubble
                 key={m.id}
                 message={m}
+                live={m.role === "assistant" && m.id === liveAssistantId}
                 onAddToNotes={() => addMessageToNotes(m)}
                 addedRecently={addedNoteIds.has(m.id)}
               />
@@ -1485,47 +1543,86 @@ export function TutorSessionRunner({
 
           {/* Voice dock */}
           <div className="border-t border-white/50 bg-white/70 px-3 py-3 sm:px-5">
-            {/* Voice-mode toggle — push (hold M / mic) vs live (auto-listen). */}
+            {/* Mode toggles — Voice⇄Text, plus mic capture (push/live) in voice. */}
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div
-                className="inline-flex items-stretch rounded-2xl border border-zinc-200 bg-white p-0.5 text-[11px] font-medium text-zinc-700 shadow-sm"
-                role="group"
-                aria-label="Voice mic mode"
-              >
-                <button
-                  type="button"
-                  onClick={() => updateVoiceMode("push")}
-                  aria-pressed={voiceMode === "push"}
-                  className={
-                    voiceMode === "push"
-                      ? "rounded-xl bg-zinc-900 px-3 py-1 text-white shadow-sm"
-                      : "rounded-xl px-3 py-1 text-zinc-700 hover:bg-zinc-50"
-                  }
-                  title="Press and hold M or the mic button to speak"
+              <div className="flex items-center gap-2">
+                <div
+                  className="inline-flex items-stretch rounded-2xl border border-zinc-200 bg-white p-0.5 text-[11px] font-medium text-zinc-700 shadow-sm"
+                  role="group"
+                  aria-label="Interaction mode"
                 >
-                  Hold&nbsp;M
-                </button>
-                <button
-                  type="button"
-                  onClick={() => updateVoiceMode("live")}
-                  aria-pressed={voiceMode === "live"}
-                  className={
-                    voiceMode === "live"
-                      ? "rounded-xl bg-zinc-900 px-3 py-1 text-white shadow-sm"
-                      : "rounded-xl px-3 py-1 text-zinc-700 hover:bg-zinc-50"
-                  }
-                  title="Rose listens automatically after she finishes speaking"
-                >
-                  Live
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => updateInteractionMode("voice")}
+                    aria-pressed={interactionMode === "voice"}
+                    className={
+                      interactionMode === "voice"
+                        ? "rounded-xl bg-zinc-900 px-3 py-1 text-white shadow-sm"
+                        : "rounded-xl px-3 py-1 text-zinc-700 hover:bg-zinc-50"
+                    }
+                    title="Rose speaks aloud; talk with your mic"
+                  >
+                    🔊 Voice
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateInteractionMode("text")}
+                    aria-pressed={interactionMode === "text"}
+                    className={
+                      interactionMode === "text"
+                        ? "rounded-xl bg-zinc-900 px-3 py-1 text-white shadow-sm"
+                        : "rounded-xl px-3 py-1 text-zinc-700 hover:bg-zinc-50"
+                    }
+                    title="Silent — type and read Rose's replies"
+                  >
+                    📝 Text
+                  </button>
+                </div>
+                {interactionMode === "voice" ? (
+                  <div
+                    className="inline-flex items-stretch rounded-2xl border border-zinc-200 bg-white p-0.5 text-[11px] font-medium text-zinc-700 shadow-sm"
+                    role="group"
+                    aria-label="Voice mic mode"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => updateVoiceMode("push")}
+                      aria-pressed={voiceMode === "push"}
+                      className={
+                        voiceMode === "push"
+                          ? "rounded-xl bg-zinc-900 px-3 py-1 text-white shadow-sm"
+                          : "rounded-xl px-3 py-1 text-zinc-700 hover:bg-zinc-50"
+                      }
+                      title="Press and hold M or the mic button to speak"
+                    >
+                      Hold&nbsp;M
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateVoiceMode("live")}
+                      aria-pressed={voiceMode === "live"}
+                      className={
+                        voiceMode === "live"
+                          ? "rounded-xl bg-zinc-900 px-3 py-1 text-white shadow-sm"
+                          : "rounded-xl px-3 py-1 text-zinc-700 hover:bg-zinc-50"
+                      }
+                      title="Rose listens automatically after she finishes speaking"
+                    >
+                      Live
+                    </button>
+                  </div>
+                ) : null}
               </div>
               <span className="text-[10px] uppercase tracking-[0.14em] text-zinc-400">
-                {voiceMode === "live"
-                  ? "Auto-listen on · barge-in to interrupt"
-                  : "Press and hold M or the mic button to speak"}
+                {interactionMode === "text"
+                  ? "Text mode · Rose won't speak"
+                  : voiceMode === "live"
+                    ? "Auto-listen on · barge-in to interrupt"
+                    : "Press and hold M or the mic button to speak"}
               </span>
             </div>
             <div className="flex items-end gap-2">
+              {interactionMode === "voice" ? (
               <button
                 type="button"
                 onClick={voiceMode === "live" ? onMicTap : undefined}
@@ -1589,6 +1686,7 @@ export function TutorSessionRunner({
                   <line x1="8" y1="23" x2="16" y2="23" />
                 </svg>
               </button>
+              ) : null}
               <input
                 ref={midUploadInputRef}
                 type="file"
@@ -1645,7 +1743,9 @@ export function TutorSessionRunner({
                 placeholder={
                   sessionPaused
                     ? "Type to resume, or use the Resume button above…"
-                    : "Type or hit the mic to talk…"
+                    : interactionMode === "text"
+                      ? "Type your message…"
+                      : "Type or hit the mic to talk…"
                 }
                 rows={1}
                 className="min-h-[44px] flex-1 resize-none rounded-2xl border border-zinc-200 bg-white px-4 py-2.5 text-sm leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-violet-400 focus:ring-2 focus:ring-violet-200"
@@ -1707,10 +1807,12 @@ export function TutorSessionRunner({
 
 function MessageBubble({
   message,
+  live,
   onAddToNotes,
   addedRecently,
 }: {
   message: LocalMessage;
+  live: boolean;
   onAddToNotes: () => void;
   addedRecently: boolean;
 }) {
@@ -1736,10 +1838,14 @@ function MessageBubble({
             </p>
           ) : null}
           <p className="whitespace-pre-wrap">
-            {display}
-            {message.streaming ? (
-              <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse rounded-sm bg-zinc-400 align-middle" />
-            ) : null}
+            {isUser ? (
+              display
+            ) : (
+              // Reveal Rose's replies character-by-character (matching the
+              // course-generation feel). Only the live message animates;
+              // older bubbles render instantly via `instant`.
+              <TypewriterText text={display} instant={!live} charIntervalMs={9} />
+            )}
           </p>
 
           {message.image ? (
