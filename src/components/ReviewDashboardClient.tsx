@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { FreePracticePanel } from "@/components/FreePracticePanel";
 import { ReviewSettingsPanel } from "@/components/ReviewSettingsPanel";
 import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
 import { useSrsDueCounts, type SrsDueByMaterial } from "@/lib/srs-due";
@@ -32,6 +33,8 @@ export function ReviewDashboardClient() {
   });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [kind, setKind] = useState<ReviewKind>("both");
+  // When true, show the free-practice course chooser instead of the dashboard.
+  const [choosingPractice, setChoosingPractice] = useState(false);
   // When true, we are inside a launched session and hide the picker.
   const [sessionMode, setSessionMode] = useState<
     null | {
@@ -97,17 +100,22 @@ export function ReviewDashboardClient() {
     [materials, selectedMaterials, kind]
   );
 
-  // Free practice: cram every card across all courses, ignoring the schedule.
-  // Lets the learner keep practising even when nothing is due. Passing no
-  // materialIds tells the session API to pull from every owned course.
-  const startPractice = useCallback(() => {
-    setSessionMode({
-      materialIds: [],
-      scope: "both",
-      kindBefore: kind,
-      cram: true,
-    });
-  }, [kind]);
+  // Free practice: cram cards ignoring the spaced-repetition schedule. Lets the
+  // learner keep practising even when nothing is due. Passing no materialIds
+  // tells the session API to pull from every owned course; passing a subset
+  // limits the cram to the courses they picked.
+  const startPractice = useCallback(
+    (materialIds: string[] = []) => {
+      setChoosingPractice(false);
+      setSessionMode({
+        materialIds,
+        scope: "both",
+        kindBefore: kind,
+        cram: true,
+      });
+    },
+    [kind]
+  );
 
   // ----------- inside a running session -----------
   if (sessionMode) {
@@ -141,6 +149,16 @@ export function ReviewDashboardClient() {
           }}
         />
       </div>
+    );
+  }
+
+  // ----------- free-practice course chooser -----------
+  if (choosingPractice) {
+    return (
+      <FreePracticePanel
+        onStart={(ids) => startPractice(ids)}
+        onCancel={() => setChoosingPractice(false)}
+      />
     );
   }
 
@@ -179,11 +197,18 @@ export function ReviewDashboardClient() {
           <div className="mt-5 flex flex-wrap justify-center gap-3">
             <button
               type="button"
-              onClick={startPractice}
+              onClick={() => startPractice()}
               className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >
               Practice anyway
               <span aria-hidden>→</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setChoosingPractice(true)}
+              className="inline-flex items-center justify-center rounded-full border border-emerald-300 bg-white px-5 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:bg-zinc-950 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+            >
+              Choose courses
             </button>
             <a
               href="/dashboard/courses/new"
@@ -241,15 +266,23 @@ export function ReviewDashboardClient() {
           </button>
           <button
             type="button"
-            onClick={startPractice}
+            onClick={() => startPractice()}
             title="Practice every card across all your courses, ignoring the review schedule."
             className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-300 bg-white px-6 py-3 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
           >
             Practice all
           </button>
+          <button
+            type="button"
+            onClick={() => setChoosingPractice(true)}
+            title="Pick which courses to free-practice, ignoring the review schedule."
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-300 bg-white px-6 py-3 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+          >
+            Choose courses
+          </button>
         </div>
         <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
-          Practice all ignores the schedule and serves every card — great for cramming before an exam.
+          Practice all ignores the schedule and serves every card — great for cramming. Choose courses lets you pick which ones.
         </p>
       </div>
 
