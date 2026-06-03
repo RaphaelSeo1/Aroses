@@ -87,6 +87,52 @@ Rules:
 - editInstruction must be understandable without the original phrasing.
 - Be decisive. Never return an empty plan.`;
 
+/**
+ * Verbs that imply the model must rewrite/restructure content (not just remove).
+ * Intentionally only action verbs — scope nouns like "lesson", "module",
+ * "content", "images" must NOT appear here, or phrases like "remove all images
+ * in every module and lesson" would be misread as needing an LLM rewrite.
+ */
+const CONTENT_EDIT_RE =
+  /\b(shorten|rewrite|reword|rephrase|fix|improve|enhance|merge|combine|split|reorder|reorganiz|restructur|add|insert|append|create|rename|retitle|expand|elaborate|simplify|clarify|summari[sz]e|condense|translate|convert|make it|turn it|rework)\b/;
+
+/** True when the request is satisfied entirely by deterministic bulk removals. */
+function isPureBulk(instruction: string, bulkOps: RefineBulkOp[]): boolean {
+  if (bulkOps.length === 0) return false;
+  return !CONTENT_EDIT_RE.test(instruction.toLowerCase());
+}
+
+/**
+ * Deterministically detect "remove all X" requests from raw text. Used as a
+ * safety net so a planner miss never leaves image/term/example removals to a
+ * slow per-module LLM pass.
+ */
+function detectBulkOpsFromText(instruction: string): RefineBulkOp[] {
+  const s = instruction.toLowerCase();
+  const broad =
+    /\b(all|every|each|entire|whole|across|everywhere|in the course|in my course)\b/.test(
+      s
+    );
+  const remove =
+    /\b(remove|delete|strip|clear|drop|hide|get rid of|take out|without|no more|no)\b/.test(
+      s
+    );
+  if (!remove || !broad) return [];
+  const ops: RefineBulkOp[] = [];
+  if (
+    /\b(images?|pictures?|photos?|figures?|diagrams?|illustrations?|visuals?|graphics?)\b/.test(
+      s
+    )
+  ) {
+    ops.push("remove_images");
+  }
+  if (/\b(key terms?|vocabulary|vocab|definitions?|glossary|terms?)\b/.test(s)) {
+    ops.push("remove_key_terms");
+  }
+  if (/\bexamples?\b/.test(s)) ops.push("remove_examples");
+  return ops;
+}
+
 function coerceStrategy(v: unknown): RefineStrategy {
   return v === "bulk" || v === "per_module" || v === "whole_course" || v === "metadata"
     ? v
@@ -121,26 +167,12 @@ export function fallbackPlan(
 ): RefinePlan {
   const intent = analyzeRefineIntent(course, instruction);
   const s = instruction.toLowerCase();
-  const bulkOps: RefineBulkOp[] = [];
-  const broad =
-    /\b(all|every|each|entire|whole|across|in the course|in my course)\b/.test(s);
-  const remove = /\b(remove|delete|strip|clear|drop|hide|get rid of|without|no)\b/.test(s);
-  if (remove && broad) {
-    if (/\b(images?|pictures?|photos?|figures?|diagrams?|illustrations?|visuals?)\b/.test(s))
-      bulkOps.push("remove_images");
-    if (/\b(key terms?|vocabulary|definitions?|glossary)\b/.test(s))
-      bulkOps.push("remove_key_terms");
-    if (/\bexamples?\b/.test(s)) bulkOps.push("remove_examples");
-  }
+  const bulkOps = detectBulkOpsFromText(instruction);
 
   const targetModuleIds =
     intent.scope.kind === "modules" ? intent.scope.moduleIds : [];
 
-  const onlyBulk =
-    bulkOps.length > 0 &&
-    !/\b(shorten|rewrite|reword|fix|improve|merge|split|add|rename|retitle|quiz|tone|expand|simplify|clarify|content)\b/.test(
-      s
-    );
+  const onlyBulk = isPureBulk(instruction, bulkOps);
 
   let strategy: RefineStrategy = "per_module";
   if (onlyBulk) strategy = "bulk";
@@ -193,7 +225,12 @@ Output the plan JSON now.`;
 
     const parsed = JSON.parse(stripJsonFence(block.text)) as Record<string, unknown>;
 
-    const bulkOps = coerceBulkOps(parsed.bulkOps);
+    const bulkOps = [
+      ...new Set([
+        ...coerceBulkOps(parsed.bulkOps),
+        ...detectBulkOpsFromText(instruction),
+      ]),
+    ];
     let targetModuleIds = coerceModuleIds(parsed.targetModuleIds, validIds);
     // Safety net: if the model missed an explicit "module N", recover it.
     if (targetModuleIds.length === 0) {
@@ -211,12 +248,18 @@ Output the plan JSON now.`;
       typeof parsed.summary === "string" && parsed.summary.trim()
         ? parsed.summary.trim()
         : "Applying your edit.";
-    const needsLlm =
-      parsed.needsLlm === false && bulkOps.length > 0 ? false : strategy !== "bulk";
+    // A pure removal (images/terms/examples with no rewrite verbs) is fully
+    // deterministic — never wait on the model, regardless of what it claimed.
+    const pureBulk = isPureBulk(instruction, bulkOps);
+    const needsLlm = pureBulk
+      ? false
+      : parsed.needsLlm === false && bulkOps.length > 0
+        ? false
+        : strategy !== "bulk";
 
     return {
       summary,
-      strategy: bulkOps.length > 0 && !needsLlm ? "bulk" : strategy,
+      strategy: !needsLlm && bulkOps.length > 0 ? "bulk" : strategy,
       targetModuleIds,
       bulkOps,
       editInstruction,
