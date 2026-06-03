@@ -63,6 +63,17 @@ export async function POST(request: Request) {
     }
   );
 
+  // Require authentication, matching every other voice-tutor route. The
+  // study_materials fetch below runs through this cookie client so RLS still
+  // scopes per-material read access (owner or public course); this guard stops
+  // unauthenticated callers from driving the LLM stream at all.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   let body: unknown;
   try {
     body = await request.json();

@@ -58,6 +58,17 @@ export async function POST(request: Request) {
     }
   );
 
+  // Require authentication before any LLM work. The study_materials fetch below
+  // runs through this cookie client, so RLS still scopes read access per
+  // material (owner or public course); this guard stops anonymous callers from
+  // driving the model.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   let body: unknown;
   try {
     body = await request.json();

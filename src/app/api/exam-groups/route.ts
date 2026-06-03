@@ -68,6 +68,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Course not found" }, { status: 404 });
   }
 
+  // The cookie client can read public courses owned by other users (public-read
+  // RLS), and the insert below runs through the service-role client which
+  // bypasses RLS — so we MUST verify ownership explicitly here, or any signed-in
+  // user could add sections to someone else's public course.
+  if (course.user_id !== user.id) {
+    return NextResponse.json({ error: "Not your course" }, { status: 403 });
+  }
+
   const courseOwnerId = course.user_id;
 
   const admin = createAdminClient();

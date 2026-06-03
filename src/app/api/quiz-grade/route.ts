@@ -12,6 +12,13 @@ const UUID_RE =
 export async function POST(request: Request) {
   const supabase = await createClient();
 
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -65,17 +72,12 @@ export async function POST(request: Request) {
       referenceAnswer,
       studentAnswer,
     });
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user) {
-      await logActivity({
-        userId: user.id,
-        type: "quiz_submitted",
-        summary: question.slice(0, 120),
-        metadata: { materialId: b.materialId },
-      });
-    }
+    await logActivity({
+      userId: user.id,
+      type: "quiz_submitted",
+      summary: question.slice(0, 120),
+      metadata: { materialId: b.materialId },
+    });
     return NextResponse.json(result);
   } catch (e) {
     console.error(e);
