@@ -1,7 +1,11 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { HonestFaqItem } from "@/lib/help-honest-faq";
-import { HONEST_FAQ_INTRO, HONEST_FAQ_ITEMS, HELP_APP_FAQ_ITEMS } from "@/lib/help-honest-faq";
+import {
+  HONEST_FAQ_INTRO,
+  getHonestFaqItems,
+  getHelpAppFaqItems,
+} from "@/lib/help-honest-faq";
 
 /** Render `**bold**` and markdown links `[text](/path)` in FAQ copy. */
 function FaqRichText({ text }: { text: string }) {
@@ -99,7 +103,7 @@ export function HonestFaqSection() {
       </p>
 
       <div className="mt-8 space-y-0">
-        {HONEST_FAQ_ITEMS.map((item) => (
+        {getHonestFaqItems().map((item) => (
           <FaqBlock key={item.id} item={item} />
         ))}
       </div>
@@ -111,7 +115,7 @@ export function HonestFaqSection() {
         How features in Aroses fit together — see the sections above for walkthroughs.
       </p>
       <div className="mt-6 space-y-0">
-        {HELP_APP_FAQ_ITEMS.map((item) => (
+        {getHelpAppFaqItems().map((item) => (
           <FaqBlock key={item.id} item={item} />
         ))}
       </div>

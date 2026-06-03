@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { PLANS, type PlanTier } from "@/lib/billing/plans";
 import { getOrCreateStripeCustomer } from "@/lib/billing/subscription";
 import { getStripe, isStripeConfigured, originFromRequest } from "@/lib/stripe/client";
@@ -8,6 +9,10 @@ export const runtime = "nodejs";
 
 /** Start a Stripe-hosted Checkout Session for an upgrade. Card data never touches us. */
 export async function POST(request: Request) {
+  if (!isBillingUiEnabled()) {
+    return NextResponse.json({ error: "Billing is not available yet." }, { status: 404 });
+  }
+
   if (!isStripeConfigured()) {
     return NextResponse.json(
       { error: "Billing isn't configured yet." },

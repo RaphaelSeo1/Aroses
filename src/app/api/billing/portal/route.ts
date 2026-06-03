@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { getUserSubscription } from "@/lib/billing/subscription";
 import { getStripe, isStripeConfigured, originFromRequest } from "@/lib/stripe/client";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -7,6 +8,10 @@ export const runtime = "nodejs";
 
 /** Open the Stripe-hosted Billing Portal so users can manage or cancel. */
 export async function POST(request: Request) {
+  if (!isBillingUiEnabled()) {
+    return NextResponse.json({ error: "Billing is not available yet." }, { status: 404 });
+  }
+
   if (!isStripeConfigured()) {
     return NextResponse.json(
       { error: "Billing isn't configured yet." },

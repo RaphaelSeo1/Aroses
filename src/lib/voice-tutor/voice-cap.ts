@@ -1,3 +1,5 @@
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
+
 /**
  * Shared contract for the voice-usage cap across server routes and the client.
  *
@@ -7,10 +9,17 @@
  */
 export const VOICE_CAP_CODE = "voice_cap_reached";
 
-export const VOICE_CAP_MESSAGE =
-  "You've used all your voice time for this billing period. Switched to text — upgrade your plan for more voice hours.";
+export function voiceCapMessage(): string {
+  if (isBillingUiEnabled()) {
+    return "You've used all your voice time for this billing period. Switched to text — upgrade your plan for more voice hours.";
+  }
+  return "You've used your voice allowance for this month. Switched to text — you can keep studying everything else.";
+}
+
+/** @deprecated Use voiceCapMessage() — kept for any external imports. */
+export const VOICE_CAP_MESSAGE = voiceCapMessage();
 
 /** Shared 402 JSON body for voice-cap responses. */
 export function voiceCapBody(): { error: string; code: string } {
-  return { error: VOICE_CAP_MESSAGE, code: VOICE_CAP_CODE };
+  return { error: voiceCapMessage(), code: VOICE_CAP_CODE };
 }

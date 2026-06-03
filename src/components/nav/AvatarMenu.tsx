@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/LogoutButton";
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 
 /**
  * Top-right account menu. Click the avatar to open Profile / Admin (admins
@@ -56,7 +57,7 @@ export function AvatarMenu({
 
   const onAccountPage =
     pathname === "/dashboard/profile" ||
-    pathname === "/dashboard/billing" ||
+    (isBillingUiEnabled() && pathname === "/dashboard/billing") ||
     pathname.startsWith("/dashboard/admin");
 
   const initials = deriveInitials(displayName, email);
@@ -131,27 +132,29 @@ export function AvatarMenu({
             </svg>
             Profile
           </Link>
-          <Link
-            href="/dashboard/billing"
-            role="menuitem"
-            onClick={close}
-            className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
-          >
-            <svg
-              className="h-4 w-4 shrink-0 opacity-70"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
+          {isBillingUiEnabled() ? (
+            <Link
+              href="/dashboard/billing"
+              role="menuitem"
+              onClick={close}
+              className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
             >
-              <rect x="2" y="5" width="20" height="14" rx="2" />
-              <path d="M2 10h20" />
-            </svg>
-            Plans &amp; billing
-          </Link>
+              <svg
+                className="h-4 w-4 shrink-0 opacity-70"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <rect x="2" y="5" width="20" height="14" rx="2" />
+                <path d="M2 10h20" />
+              </svg>
+              Plans &amp; billing
+            </Link>
+          ) : null}
           {adminHubHref ? (
             <Link
               href={adminHubHref}

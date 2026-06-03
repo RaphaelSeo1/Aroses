@@ -28,6 +28,7 @@ import type {
   MentoredTurnResponse,
 } from "@/types/mentored";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
 import { buildAutoNotesFromChunk } from "@/lib/mentored/build-auto-notes";
@@ -2049,17 +2050,26 @@ export function ImmersiveLessonRunner({
             </div>
 
             {voiceCapped ? (
-              <div className="mb-2 flex flex-wrap items-center justify-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-center text-[12px] text-amber-800 ring-1 ring-amber-200">
-                <span>
-                  You&apos;ve used all your voice time this month — switched to
-                  text. Everything else stays unlimited.
-                </span>
-                <a
-                  href="/dashboard/billing"
-                  className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950"
-                >
-                  Get more voice
-                </a>
+              <div className="mb-2 rounded-xl bg-amber-50 px-3 py-2 text-center text-[12px] text-amber-800 ring-1 ring-amber-200">
+                {isBillingUiEnabled() ? (
+                  <span className="flex flex-wrap items-center justify-center gap-2">
+                    <span>
+                      You&apos;ve used all your voice time this month — switched
+                      to text. Everything else stays unlimited.
+                    </span>
+                    <a
+                      href="/dashboard/billing"
+                      className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950"
+                    >
+                      Get more voice
+                    </a>
+                  </span>
+                ) : (
+                  <span>
+                    You&apos;ve used your voice allowance for this month —
+                    switched to text. You can keep studying everything else.
+                  </span>
+                )}
               </div>
             ) : null}
 

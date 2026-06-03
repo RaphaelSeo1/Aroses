@@ -3,6 +3,7 @@
  * Keep product-specific facts (pricing, privacy links) in sync with plans + legal pages.
  */
 
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { PLANS } from "@/lib/billing/plans";
 
 export type HonestFaqItem = {
@@ -20,7 +21,7 @@ export const HONEST_FAQ_INTRO = {
     "Straight answers to the questions skeptical students actually ask. No hype.",
 };
 
-export const HONEST_FAQ_ITEMS: HonestFaqItem[] = [
+const HONEST_FAQ_ITEMS_ALL: HonestFaqItem[] = [
   {
     id: "vs-chatgpt",
     question: "What's the difference between Aroses and just using ChatGPT or Claude?",
@@ -112,8 +113,19 @@ export const HONEST_FAQ_ITEMS: HonestFaqItem[] = [
   },
 ];
 
+const BILLING_ONLY_FAQ_IDS = new Set(["why-pay", "cancel"]);
+
+/** Honest FAQ entries shown on /help (billing questions omitted when checkout is off). */
+export function getHonestFaqItems(): HonestFaqItem[] {
+  if (isBillingUiEnabled()) return HONEST_FAQ_ITEMS_ALL;
+  return HONEST_FAQ_ITEMS_ALL.filter((i) => !BILLING_ONLY_FAQ_IDS.has(i.id));
+}
+
+/** @deprecated Use getHonestFaqItems() */
+export const HONEST_FAQ_ITEMS = getHonestFaqItems();
+
 /** Shorter, app-specific FAQs that complement the honest list. */
-export const HELP_APP_FAQ_ITEMS: HonestFaqItem[] = [
+const HELP_APP_FAQ_ITEMS_ALL: HonestFaqItem[] = [
   {
     id: "mentored-vs-tutor",
     question: "What's the difference between Mentored Learning and a Tutor Session?",
@@ -125,7 +137,16 @@ export const HELP_APP_FAQ_ITEMS: HonestFaqItem[] = [
     id: "voice-vs-text",
     question: "Voice vs text — which should I use?",
     paragraphs: [
-      "Voice is best for being taught and conversational back-and-forth. Text is best for dense reading and quiet study. Switch anytime — mentored mode supports both, and when you hit your monthly voice cap you automatically fall back to text without losing access to the app.",
+      isBillingUiEnabled()
+        ? "Voice is best for being taught and conversational back-and-forth. Text is best for dense reading and quiet study. Switch anytime — mentored mode supports both, and when you hit your monthly voice cap you automatically fall back to text without losing access to the app."
+        : "Voice is best for being taught and conversational back-and-forth. Text is best for dense reading and quiet study. Switch anytime — mentored mode supports both. If you run out of voice time for the month, the app switches you to text automatically so you can keep studying.",
     ],
   },
 ];
+
+export function getHelpAppFaqItems(): HonestFaqItem[] {
+  return HELP_APP_FAQ_ITEMS_ALL;
+}
+
+/** @deprecated Use getHelpAppFaqItems() */
+export const HELP_APP_FAQ_ITEMS = getHelpAppFaqItems();

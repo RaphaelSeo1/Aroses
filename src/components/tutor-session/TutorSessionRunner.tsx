@@ -9,6 +9,7 @@ import {
   type AutoGenerateBlock,
 } from "@/components/immersive/NotesPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
 import {
   buildAutoNotesFromTutorTurn,
@@ -1496,17 +1497,26 @@ export function TutorSessionRunner({
           </p>
         ) : null}
         {voiceCapped ? (
-          <div className="mx-auto mt-2 flex max-w-6xl flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">
-            <span>
-              You&apos;ve used all your voice time this month — switched to text.
-              Everything else stays unlimited.
-            </span>
-            <a
-              href="/dashboard/billing"
-              className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950"
-            >
-              Get more voice
-            </a>
+          <div className="mx-auto mt-2 max-w-6xl rounded-xl bg-amber-50 px-3 py-2 text-[12px] text-amber-800 ring-1 ring-amber-200">
+            {isBillingUiEnabled() ? (
+              <span className="flex flex-wrap items-center gap-2">
+                <span>
+                  You&apos;ve used all your voice time this month — switched to text.
+                  Everything else stays unlimited.
+                </span>
+                <a
+                  href="/dashboard/billing"
+                  className="font-semibold text-amber-900 underline underline-offset-2 hover:text-amber-950"
+                >
+                  Get more voice
+                </a>
+              </span>
+            ) : (
+              <span>
+                You&apos;ve used your voice allowance for this month — switched to
+                text. You can keep studying everything else.
+              </span>
+            )}
           </div>
         ) : null}
         {sessionPaused ? (

@@ -4,6 +4,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { BillingClient } from "@/components/billing/BillingClient";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { APP_NAME } from "@/lib/brand";
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { getUserSubscription } from "@/lib/billing/subscription";
 import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
@@ -13,6 +14,10 @@ export const metadata = {
 };
 
 export default async function BillingPage() {
+  if (!isBillingUiEnabled()) {
+    redirect("/");
+  }
+
   const { user } = await getServerAuth();
   if (!user) {
     redirect("/login?next=/dashboard/billing");

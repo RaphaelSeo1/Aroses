@@ -2,6 +2,9 @@
  * Subscription plans — THE single source of truth for tiers, prices, Stripe
  * price IDs, and the monthly voice-tutoring allowance. Tune everything here.
  *
+ * To show/hide checkout and the billing page site-wide, see
+ * `feature-flag.ts` (`BILLING_UI_ENABLED`).
+ *
  * Voice is the only metered premium: course building, quizzes, SRS, and text
  * tutoring are unlimited on every tier because they cost almost nothing to
  * serve. Each tier includes a monthly voice-hour allowance; when it's used up,
