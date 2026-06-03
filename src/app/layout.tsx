@@ -42,6 +42,16 @@ export const metadata: Metadata = {
     title: defaultTitle,
     description: defaultDescription,
   },
+  // Google Search reads /favicon.ico first; the repo still had the default
+  // Create Next App icon until we replaced it. Explicit 48×48 helps crawlers.
+  icons: {
+    icon: [
+      { url: "/favicon-48.png", sizes: "48x48", type: "image/png" },
+      { url: "/aroses-icon.png", type: "image/png" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: "/apple-icon.png",
+  },
 };
 
 export default function RootLayout({
