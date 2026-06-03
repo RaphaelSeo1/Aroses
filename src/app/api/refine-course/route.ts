@@ -6,15 +6,7 @@ import {
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import {
-  refineCourseWithInstruction,
-  refineCourseWithInstructionStreaming,
-} from "@/lib/ai/refine-course";
-import {
-  llmInstructionAfterPrep,
-  prepareCourseForRefine,
-} from "@/lib/ai/refine-course-ops";
-import { coursePayloadChanged } from "@/lib/ai/refine-course-intent";
+import { runRefine } from "@/lib/ai/refine-course-orchestrator";
 import type { CoursePayload } from "@/types/course";
 
 export const runtime = "nodejs";
@@ -138,15 +130,7 @@ export async function POST(request: Request) {
   }
 
   const wantStream = b.stream === true;
-
-  const prep = await prepareCourseForRefine(b.materialId, current, instruction);
-  const llmInstruction = llmInstructionAfterPrep(instruction, prep.applied);
-
-  function assertChanged(revised: CoursePayload): string | null {
-    if (coursePayloadChanged(current, revised)) return null;
-    if (prep.applied.length > 0) return null;
-    return noChangesMessage();
-  }
+  const materialId = b.materialId;
 
   async function saveRevised(revised: CoursePayload) {
     const { error: saveErr } = await supabase
@@ -155,7 +139,7 @@ export async function POST(request: Request) {
         course_payload: revised,
         summary: revised.description,
       })
-      .eq("id", b.materialId);
+      .eq("id", materialId);
 
     if (saveErr) {
       console.error(saveErr);
@@ -172,24 +156,11 @@ export async function POST(request: Request) {
           controller.enqueue(encoder.encode(`${JSON.stringify(obj)}\n`));
         };
 
-        send({
-          type: "phase",
-          message: prep.applied.length
-            ? prep.applied.join(" ")
-            : "Step 1/2: Revising your course with AI (longer courses need more time)…",
-        });
-
-        let revised: CoursePayload;
+        let result;
         try {
-          if (prep.skipLlm) {
-            revised = prep.course;
-          } else {
-            revised = await refineCourseWithInstructionStreaming(
-              prep.course,
-              llmInstruction,
-              prep.intent
-            );
-          }
+          result = await runRefine(materialId, current, instruction, (message) =>
+            send({ type: "phase", message })
+          );
         } catch (e) {
           console.error(e);
           send({ type: "error", message: refineFailureMessage(e) });
@@ -197,19 +168,15 @@ export async function POST(request: Request) {
           return;
         }
 
-        const unchanged = assertChanged(revised);
-        if (unchanged) {
-          send({ type: "error", message: unchanged });
+        if (!result.changed && result.applied.length === 0) {
+          send({ type: "error", message: noChangesMessage() });
           controller.close();
           return;
         }
 
-        send({
-          type: "phase",
-          message: "Step 2/2: Saving your updated study set…",
-        });
+        send({ type: "phase", message: "Saving your updated study set…" });
 
-        const ok = await saveRevised(revised);
+        const ok = await saveRevised(result.course);
         if (!ok) {
           send({ type: "error", message: "Could not save revised course." });
           controller.close();
@@ -218,7 +185,7 @@ export async function POST(request: Request) {
 
         send({
           type: "done",
-          applied: prep.applied.length ? prep.applied : undefined,
+          applied: result.applied.length ? result.applied : undefined,
         });
         controller.close();
       },
@@ -232,17 +199,9 @@ export async function POST(request: Request) {
     });
   }
 
-  let revised: CoursePayload;
+  let result;
   try {
-    if (prep.skipLlm) {
-      revised = prep.course;
-    } else {
-      revised = await refineCourseWithInstruction(
-        prep.course,
-        llmInstruction,
-        prep.intent
-      );
-    }
+    result = await runRefine(materialId, current, instruction);
   } catch (e) {
     console.error(e);
     return NextResponse.json(
@@ -251,12 +210,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const unchanged = assertChanged(revised);
-  if (unchanged) {
-    return NextResponse.json({ error: unchanged }, { status: 422 });
+  if (!result.changed && result.applied.length === 0) {
+    return NextResponse.json({ error: noChangesMessage() }, { status: 422 });
   }
 
-  const ok = await saveRevised(revised);
+  const ok = await saveRevised(result.course);
   if (!ok) {
     return NextResponse.json(
       { error: "Could not save revised course." },
@@ -266,6 +224,6 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    applied: prep.applied.length ? prep.applied : undefined,
+    applied: result.applied.length ? result.applied : undefined,
   });
 }

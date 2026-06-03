@@ -4,8 +4,12 @@ import {
   APIError,
   RateLimitError,
 } from "@anthropic-ai/sdk";
-import type { CoursePayload } from "@/types/course";
-import { parseCoursePayload, stripJsonFence } from "@/lib/ai/course-payload";
+import type { CourseModule, CoursePayload } from "@/types/course";
+import {
+  parseCourseModuleLoose,
+  parseCoursePayload,
+  stripJsonFence,
+} from "@/lib/ai/course-payload";
 import {
   buildIntentPromptSection,
   compressCourseForRefineInput,
@@ -314,4 +318,204 @@ export async function refineCourseWithInstructionStreaming(
     stopReason
   );
   return finalizeRefinedCourse(original, parsed, intent);
+}
+
+// ===========================================================================
+// Per-module editing (agentic strategy)
+// ===========================================================================
+//
+// Editing one module at a time is the reliability lever for big courses: each
+// call is a small JSON round-trip (no 64k truncation), they run in parallel,
+// and a failed module can be retried in isolation without redoing the course.
+
+const MODULE_MAX_OUTPUT_TOKENS = 16_000;
+
+const MODULE_EDIT_SYSTEM = `You are Rose, an expert course editor. You receive ONE module from a larger course as JSON, plus an edit request. Apply the request to THIS module only and return the revised module as a single JSON object.
+
+Module schema:
+{ "id": number, "title": string, "lessons": [{ "title", "content", "key_terms": [{"term","definition"}], "examples": [string] }], "quiz": [ mcq | free_response ] }
+
+- "content" is Markdown; images are ![caption](url) or <img> tags.
+- Keep the SAME "id". Keep ≥1 lesson unless told to remove content.
+- Quiz mcq: {"type":"mcq","question","choices":[4 strings],"correct","explanation"}; free response: {"type":"free_response","question","reference_answer","explanation"}.
+- Apply the request fully. Do NOT return the module unchanged unless impossible.
+
+Output ONLY the module JSON — no fences, no commentary.`;
+
+function buildModuleEditPrompt(
+  module: CourseModule,
+  editInstruction: string,
+  courseTitle: string,
+  sharpen: boolean
+): string {
+  return `COURSE: "${courseTitle}"
+MODULE TO EDIT (apply the request to this module only):
+${JSON.stringify(module)}
+
+EDIT REQUEST:
+${editInstruction.trim()}
+${sharpen ? "\nIMPORTANT: A previous attempt returned the module unchanged. You MUST make concrete edits that satisfy the request this time." : ""}
+
+Return the revised module JSON now.`;
+}
+
+async function moduleFromAssistantText(
+  rawText: string,
+  fallbackQuiz: CourseModule["quiz"]
+): Promise<CourseModule> {
+  const parsed = JSON.parse(stripJsonFence(rawText));
+  const mod = parseCourseModuleLoose(parsed);
+  // The editor occasionally drops the quiz when the edit didn't touch it.
+  if (mod.quiz.length === 0 && fallbackQuiz.length > 0) {
+    return { ...mod, quiz: fallbackQuiz };
+  }
+  return mod;
+}
+
+/**
+ * Edit a single module. Verifies the result actually changed when a change was
+ * expected; retries once with a sharper instruction if the model no-oped.
+ */
+export async function refineModule(
+  module: CourseModule,
+  editInstruction: string,
+  courseTitle: string,
+  opts?: { expectChange?: boolean }
+): Promise<CourseModule> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+
+  const anthropic = new Anthropic({
+    apiKey,
+    timeout: 180_000,
+    maxRetries: 0,
+  });
+
+  const run = async (sharpen: boolean): Promise<CourseModule> => {
+    const msg = await createMessageWithRetries(anthropic, {
+      model: resolveRefineModel(),
+      max_tokens: MODULE_MAX_OUTPUT_TOKENS,
+      temperature: 0.2,
+      system: MODULE_EDIT_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content: buildModuleEditPrompt(
+            module,
+            editInstruction,
+            courseTitle,
+            sharpen
+          ),
+        },
+      ],
+    });
+    const rawText = extractTextBlock(msg);
+    const next = await moduleFromAssistantText(rawText, module.quiz);
+    return { ...next, id: module.id };
+  };
+
+  let result = await run(false);
+
+  const expectChange = opts?.expectChange !== false;
+  const unchanged = JSON.stringify(result) === JSON.stringify(module);
+  if (expectChange && unchanged) {
+    try {
+      result = await run(true);
+    } catch {
+      /* keep first result if the retry fails */
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Edit many modules concurrently (bounded) and return them in original order.
+ * Modules that error keep their original content so one failure never nukes
+ * the whole course.
+ */
+export async function refineModulesConcurrently(
+  modules: CourseModule[],
+  editInstruction: string,
+  courseTitle: string,
+  opts?: { concurrency?: number; onModuleDone?: (done: number, total: number) => void }
+): Promise<{ modules: CourseModule[]; failures: number }> {
+  const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 4, 6));
+  const results = new Array<CourseModule>(modules.length);
+  let failures = 0;
+  let done = 0;
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < modules.length) {
+      const idx = cursor++;
+      const mod = modules[idx];
+      try {
+        results[idx] = await refineModule(mod, editInstruction, courseTitle);
+      } catch (e) {
+        console.warn(`[refine] module ${mod.id} edit failed; keeping original`, e);
+        results[idx] = mod;
+        failures++;
+      } finally {
+        done++;
+        opts?.onModuleDone?.(done, modules.length);
+      }
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, modules.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
+
+  return { modules: results, failures };
+}
+
+/** Lightweight pass that only rewrites course title/description. */
+export async function refineCourseMetadata(
+  course: CoursePayload,
+  editInstruction: string
+): Promise<CoursePayload> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+
+  const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
+  const outline = course.modules
+    .map((m) => `- ${m.title}`)
+    .join("\n");
+
+  const msg = await createMessageWithRetries(anthropic, {
+    model: resolveRefineModel(),
+    max_tokens: 1024,
+    temperature: 0.3,
+    system:
+      'You edit a course\'s title and description. Output ONLY {"title": string, "description": string} as JSON — no fences.',
+    messages: [
+      {
+        role: "user",
+        content: `CURRENT TITLE: ${course.title}\nCURRENT DESCRIPTION: ${course.description}\n\nMODULES:\n${outline}\n\nEDIT REQUEST:\n${editInstruction.trim()}\n\nReturn the new title and description JSON.`,
+      },
+    ],
+  });
+
+  try {
+    const parsed = JSON.parse(stripJsonFence(extractTextBlock(msg))) as {
+      title?: unknown;
+      description?: unknown;
+    };
+    return {
+      ...course,
+      title:
+        typeof parsed.title === "string" && parsed.title.trim()
+          ? parsed.title.trim()
+          : course.title,
+      description:
+        typeof parsed.description === "string" && parsed.description.trim()
+          ? parsed.description.trim()
+          : course.description,
+    };
+  } catch {
+    return course;
+  }
 }

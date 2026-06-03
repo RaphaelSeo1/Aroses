@@ -4,6 +4,7 @@ import {
   analyzeRefineIntent,
   type RefineIntent,
 } from "@/lib/ai/refine-course-intent";
+import type { RefineBulkOp } from "@/lib/ai/refine-course-planner";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { CoursePayload } from "@/types/course";
 
@@ -247,4 +248,46 @@ export function llmInstructionAfterPrep(
 ): string {
   if (applied.length === 0) return instruction;
   return `[Already applied automatically: ${applied.join(" ")}]\n\n${instruction.trim()}`;
+}
+
+// ===========================================================================
+// Planner-driven bulk ops (used by the orchestrator)
+// ===========================================================================
+
+export type BulkOpResult = { course: CoursePayload; applied: string[] };
+
+/** Run planner-selected deterministic edits (images / key terms / examples). */
+export async function applyBulkOps(
+  materialId: string,
+  course: CoursePayload,
+  ops: RefineBulkOp[]
+): Promise<BulkOpResult> {
+  let next = course;
+  const applied: string[] = [];
+
+  for (const op of ops) {
+    if (op === "remove_images") {
+      const n = countLessonsWithImages(next);
+      next = removeAllImagesFromCourse(next);
+      const suppressed = await suppressAllLessonImageCache(materialId, next);
+      applied.push(
+        `Removed embedded images from ${n} lesson${n === 1 ? "" : "s"}.`
+      );
+      if (suppressed > 0) {
+        applied.push(
+          `Turned off ${suppressed} cached lesson image${suppressed === 1 ? "" : "s"}.`
+        );
+      }
+    } else if (op === "remove_key_terms") {
+      const n = countLessonsWithKeyTerms(next);
+      next = removeAllKeyTermsFromCourse(next);
+      applied.push(`Cleared key terms from ${n} lesson${n === 1 ? "" : "s"}.`);
+    } else if (op === "remove_examples") {
+      const n = countLessonsWithExamples(next);
+      next = removeAllExamplesFromCourse(next);
+      applied.push(`Cleared examples from ${n} lesson${n === 1 ? "" : "s"}.`);
+    }
+  }
+
+  return { course: next, applied };
 }

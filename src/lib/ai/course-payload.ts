@@ -323,6 +323,11 @@ export function parseCourseModule(raw: unknown): CourseModule {
   return normalizeModule(raw);
 }
 
+/** One module from model JSON, tolerating an empty quiz (caller backfills). */
+export function parseCourseModuleLoose(raw: unknown): CourseModule {
+  return normalizeModule(raw, { allowEmptyQuiz: true });
+}
+
 export type CourseOutlineStub = {
   id: number;
   title: string;
