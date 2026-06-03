@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { HELP_VIDEOS } from "@/lib/help-videos";
+import { HonestFaqSection } from "@/components/help/HonestFaqSection";
 import {
   CourseCardPreview,
   HelpPreviewFrame,
@@ -30,7 +31,7 @@ const SECTIONS = [
   { id: "explore", label: "Explore" },
   { id: "sharing", label: "Sharing" },
   { id: "progress", label: "Progress & profile" },
-  { id: "faq", label: "FAQ" },
+  { id: "faq", label: "Honest FAQ" },
 ] as const;
 
 function VideoGrid() {
@@ -397,8 +398,8 @@ export function HelpPageContent() {
           <h3 className="mt-6 text-base font-semibold">During a lesson</h3>
           <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm">
             <li>
-              Rose explains each chunk, then asks a check question (popup can
-              expand, minimize, or dismiss)
+              Rose explains each chunk, then checks understanding — question in
+              the dialogue strip (text) or a popup you can minimize (voice)
             </li>
             <li>
               <strong>Source panel</strong> — your original material alongside
@@ -676,41 +677,7 @@ export function HelpPageContent() {
           </ul>
         </section>
 
-        {/* ── FAQ ── */}
-        <section id="faq" className="mt-16 scroll-mt-28 pb-8">
-          <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Common questions
-          </h2>
-          <dl className="mt-6 space-y-6 text-sm">
-            {[
-              {
-                q: "What's the difference between Mentored Learning and a Tutor Session?",
-                a: "Mentored Learning follows a structured lesson plan from a course you built. A Tutor Session is open-ended help on any topic — great for a quick question or exam cram. You can convert a session into a full course afterward.",
-              },
-              {
-                q: "Voice vs text — which should I use?",
-                a: "Voice is best for being taught and conversational back-and-forth. Text is best for dense reading and quiet study. Switch anytime — mentored mode supports both.",
-              },
-              {
-                q: "How do I remember what I study?",
-                a: "Use Review daily. Quizzes and personal notes feed spaced-repetition cards that resurface before you'd forget.",
-              },
-              {
-                q: "Can I use my own class material?",
-                a: "Yes — upload lecture slides, notes, readings, or recordings. Aroses builds a course tailored to your exact class.",
-              },
-            ].map(({ q, a }) => (
-              <div key={q}>
-                <dt className="font-semibold text-zinc-900 dark:text-zinc-100">
-                  {q}
-                </dt>
-                <dd className="mt-2 leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  {a}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </section>
+        <HonestFaqSection />
       </article>
     </div>
   );

@@ -11,7 +11,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export const metadata: Metadata = {
   title: `How to Use ${APP_NAME}`,
-  description: `Complete guide to building courses, learning with Rose, quizzes, spaced repetition, and tutor sessions on ${APP_NAME}.`,
+  description: `How to use ${APP_NAME} — step-by-step guide plus an honest FAQ on how it compares to ChatGPT, Anki, and why it exists.`,
 };
 
 export default async function HelpPage() {

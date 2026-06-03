@@ -11,6 +11,10 @@ import {
   type NotesPanelHandle,
 } from "@/components/immersive/NotesPanel";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
+import {
+  TranscriptPanel,
+  type TranscriptLine,
+} from "@/components/immersive/TranscriptPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
 import type { CourseModule, CoursePayload } from "@/types/course";
 import type {
@@ -155,6 +159,8 @@ export function ImmersiveLessonRunner({
     bargeInEnabled: voiceMode === "live" && !awaitingContinue,
     onVoiceCapReached: () => {
       setVoiceCapped(true);
+      voice.cancelSpeak();
+      void voice.stopRecording();
       setInteractionMode("text");
     },
   });
@@ -327,6 +333,56 @@ export function ImmersiveLessonRunner({
   >(null);
   const [questionPopupMinimized, setQuestionPopupMinimized] = useState(false);
 
+  // ---- scrollable dialogue (persists across turns) ----
+  const [transcriptLines, setTranscriptLines] = useState<TranscriptLine[]>([]);
+  const activeRoseLineIdRef = useRef<string | null>(null);
+  const transcriptIdRef = useRef(0);
+  const nextTranscriptId = useCallback(() => {
+    transcriptIdRef.current += 1;
+    return `t-${transcriptIdRef.current}`;
+  }, []);
+
+  // Text-only pacing: question + advance are manual, not popup / auto-skip.
+  const [textCheckRevealed, setTextCheckRevealed] = useState(false);
+  const [textPendingAdvance, setTextPendingAdvance] = useState(false);
+
+  const patchActiveRoseLine = useCallback((text: string, streaming: boolean) => {
+    setTutorReply(text.length > 0 ? text : null);
+    const id = activeRoseLineIdRef.current;
+    if (!id) return;
+    setTranscriptLines((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, text, streaming } : l))
+    );
+  }, []);
+
+  const appendTranscriptLine = useCallback(
+    (line: Omit<TranscriptLine, "id">) => {
+      const id = nextTranscriptId();
+      setTranscriptLines((prev) => [...prev, { ...line, id }]);
+      return id;
+    },
+    [nextTranscriptId]
+  );
+
+  /** Append only if this exact text+kind isn't already in the strip. */
+  const appendTranscriptLineOnce = useCallback(
+    (line: Omit<TranscriptLine, "id">) => {
+      let addedId: string | null = null;
+      setTranscriptLines((prev) => {
+        const kind = line.kind ?? "default";
+        if (
+          prev.some((l) => l.text === line.text && (l.kind ?? "default") === kind)
+        ) {
+          return prev;
+        }
+        const id = nextTranscriptId();
+        addedId = id;
+        return [...prev, { ...line, id }];
+      });
+      return addedId;
+    },
+    [nextTranscriptId]
+  );
 
   // ----- load session -----
   const loadSession = useCallback(async () => {
@@ -623,21 +679,15 @@ export function ImmersiveLessonRunner({
                 : `Welcome back. Ready to keep going?`;
       }
 
+      appendTranscriptLine({ role: "rose", text });
+      setTutorReply(text);
+      lastSpokenRef.current = text;
       if (interactionMode === "voice") {
         try {
-          await voice.speak(text, {
-            onPlay: () => {
-              setTutorReply(text);
-              lastSpokenRef.current = text;
-            },
-          });
+          await voice.speak(text);
         } catch (e) {
           console.error("[imm runner greeting speak]", e);
-          setTutorReply((prev) => prev ?? text);
         }
-      } else {
-        setTutorReply(text);
-        lastSpokenRef.current = text;
       }
 
       // Three cases:
@@ -775,7 +825,17 @@ export function ImmersiveLessonRunner({
     setQuestionPopupDismissedFor(null);
     setQuestionPopupMinimized(false);
     setQuestionAudioStartedFor(null);
+    setTextCheckRevealed(false);
+    setTextPendingAdvance(false);
+    activeRoseLineIdRef.current = null;
   }, [chunk?.id]);
+
+  useEffect(() => {
+    setTranscriptLines([]);
+    setTextCheckRevealed(false);
+    setTextPendingAdvance(false);
+    activeRoseLineIdRef.current = null;
+  }, [activeModule.id]);
 
   useEffect(() => {
     if (phase !== "teaching") return;
@@ -809,6 +869,7 @@ export function ImmersiveLessonRunner({
         onPlay: () => {
           lastSpokenRef.current = explanation;
           setNarrationText(explanation);
+          appendTranscriptLineOnce({ role: "rose", text: explanation });
         },
       });
       // Bail if the chunk changed under us (advance / resume) so we never
@@ -820,27 +881,45 @@ export function ImmersiveLessonRunner({
           lastSpokenRef.current = `${explanation}\n\n${checkQuestion}`;
           lastCheckAtRef.current = Date.now();
           setQuestionAudioStartedFor(captured);
+          appendTranscriptLineOnce({
+            role: "rose",
+            text: checkQuestion,
+            kind: "question",
+          });
         },
       });
     })();
-  }, [awaitingContinue, chunk, interactionMode, phase, voice, greetingPlayed]);
+  }, [
+    appendTranscriptLineOnce,
+    awaitingContinue,
+    chunk,
+    interactionMode,
+    phase,
+    voice,
+    greetingPlayed,
+  ]);
 
-  // Text mode: show the check-question popup as soon as the chunk is
-  // active (no TTS onPlay hook to drive it).
+  // Text mode: seed the dialogue strip with this chunk's teaching + check question.
   useEffect(() => {
     if (phase !== "teaching") return;
     if (!chunk) return;
     if (interactionMode !== "text") return;
     if (!greetingPlayed) return;
     if (awaitingContinueRef.current) return;
-    // Text mode reveals the question immediately, so a resume is naturally
-    // handled — just clear the flag so it can't affect a later voice switch.
     isResumeRef.current = false;
-    setQuestionAudioStartedFor(chunk.id);
-    setQuestionPopupMinimized(false);
+    if (chunk.explanation.trim()) {
+      appendTranscriptLineOnce({ role: "rose", text: chunk.explanation });
+    }
+    const q = chunk.checkQuestion?.trim();
+    if (q) {
+      setTextCheckRevealed(true);
+      appendTranscriptLineOnce({ role: "rose", text: q, kind: "question" });
+    }
   }, [
-    awaitingContinue,
+    appendTranscriptLineOnce,
     chunk,
+    chunk?.checkQuestion,
+    chunk?.explanation,
     chunk?.id,
     greetingPlayed,
     interactionMode,
@@ -878,8 +957,14 @@ export function ImmersiveLessonRunner({
       }
       if (text.length < 2) return;
       setSubmitting(true);
-      setTutorReply("");
       setReplyTurn((n) => n + 1);
+      appendTranscriptLine({ role: "student", text });
+      activeRoseLineIdRef.current = appendTranscriptLine({
+        role: "rose",
+        text: "",
+        streaming: true,
+      });
+      patchActiveRoseLine("", true);
       // Snapshot + clear any pending interruption context so it only
       // applies to THIS turn (the one responding to the barge-in).
       const interruptedAfter = interruptedContext;
@@ -1018,8 +1103,16 @@ export function ImmersiveLessonRunner({
             if (ev.type === "text") {
               pendingBuf += ev.delta;
               if (interactionMode !== "voice") {
-                // Text-only mode: no audio to sync against, reveal
-                // tokens as they arrive (original behavior).
+                // Text-only mode: reveal tokens in the dialogue strip.
+                setTranscriptLines((prev) => {
+                  const id = activeRoseLineIdRef.current;
+                  if (!id) return prev;
+                  return prev.map((l) =>
+                    l.id === id
+                      ? { ...l, text: (l.text ?? "") + ev.delta, streaming: true }
+                      : l
+                  );
+                });
                 setTutorReply((prev) => (prev ?? "") + ev.delta);
               }
               // Flush complete sentences (ending in . ! ? or newline).
@@ -1101,7 +1194,7 @@ export function ImmersiveLessonRunner({
               if (index < revealedUpTo) return;
               revealedUpTo = index + 1;
               const spoken = sentences.slice(0, revealedUpTo).join(" ");
-              setTutorReply(spoken);
+              patchActiveRoseLine(spoken, true);
               // Keep the "what Rose has said out loud" snapshot
               // current — used as `interruptedAfter` if the student
               // barges in next.
@@ -1161,19 +1254,55 @@ export function ImmersiveLessonRunner({
         ) {
           finalAdvance = false;
         }
+        // Model sometimes treats "ok / got it" as correct and advances without
+        // a real answer — keep the student on the chunk until they respond.
+        if (
+          finalAdvance &&
+          attempts === 0 &&
+          isVagueAffirmative(text) &&
+          finalIntent !== "move_on" &&
+          finalIntent !== "skip_concept"
+        ) {
+          finalAdvance = false;
+        }
 
-        if (finalAdvance) {
+        const roseFinal = finalSpokenText;
+        if (activeRoseLineIdRef.current) {
+          patchActiveRoseLine(roseFinal, false);
+          activeRoseLineIdRef.current = null;
+        }
+
+        if (finalAdvance && interactionMode === "text") {
+          // Text mode: student reads feedback, then taps to advance.
+          setTextPendingAdvance(true);
+          setAttempts(0);
+          setAnswerText("");
+          await persist({
+            attemptState: {
+              chunkIndex: chunkIdx,
+              attempts: 0,
+              lastEval: attemptEval,
+            },
+            lastRecap: `Module ${activeModule.id} — last covered "${chunk.concept}".`,
+            appendHistory: {
+              at: new Date().toISOString(),
+              moduleId: activeModule.id,
+              chunkIndex: chunkIdx,
+              concept: chunk.concept,
+              evaluation: historyEval,
+            },
+          });
+        } else if (finalAdvance) {
           const nextIdx = chunkIdx + 1;
           setChunkIdx(nextIdx);
           setAttempts(0);
           setAnswerText("");
-          // Clear walk-through highlight + tutor reply so the new
-          // chunk starts visually fresh. Same for the on-demand
-          // image — each new chunk gets its own visual context.
           setNarrationText("");
           setTutorReply(null);
           setMentoredImage(null);
           setMentoredImageLoading(false);
+          setTextCheckRevealed(false);
+          setTextPendingAdvance(false);
 
           await persist({
             chunkIndex: nextIdx,
@@ -1194,6 +1323,14 @@ export function ImmersiveLessonRunner({
 
           if (nextIdx >= plan.chunks.length) {
             setPhase("module-complete");
+          } else {
+            const nextChunk = plan.chunks[nextIdx];
+            if (nextChunk) {
+              appendTranscriptLine({
+                role: "system",
+                text: `Next: ${nextChunk.concept}`,
+              });
+            }
           }
         } else {
           // Only a genuine answer attempt (wrong or partial) burns an attempt.
@@ -1215,14 +1352,21 @@ export function ImmersiveLessonRunner({
         }
       } catch (e) {
         console.error("[imm runner submitAnswer]", e);
-        setTutorReply(
-          e instanceof Error ? e.message : "Could not reach the tutor."
-        );
+        const msg =
+          e instanceof Error ? e.message : "Could not reach the tutor.";
+        if (activeRoseLineIdRef.current) {
+          patchActiveRoseLine(msg, false);
+          activeRoseLineIdRef.current = null;
+        } else {
+          appendTranscriptLine({ role: "rose", text: msg });
+        }
+        setTutorReply(msg);
       }
       setSubmitting(false);
     },
     [
       activeModule.id,
+      appendTranscriptLine,
       attempts,
       chunk,
       chunkIdx,
@@ -1231,6 +1375,7 @@ export function ImmersiveLessonRunner({
       interruptedContext,
       materialId,
       onboarding.knowledgeLevel,
+      patchActiveRoseLine,
       persist,
       plan,
       voice,
@@ -1334,6 +1479,18 @@ export function ImmersiveLessonRunner({
       window.removeEventListener("keyup", onKeyUp);
     };
   }, [finishVoiceAnswer, interactionMode, startVoiceAnswer, voiceMode]);
+
+  const switchInteractionMode = useCallback(
+    (next: InteractionMode) => {
+      if (next === "text" && interactionMode === "voice") {
+        voice.cancelSpeak();
+        void voice.stopRecording();
+        mDownRef.current = false;
+      }
+      setInteractionMode(next);
+    },
+    [interactionMode, voice]
+  );
 
   // ----- barge-in handler -----
   // Fires when the VAD detects the student talking over the AI. We auto
@@ -1471,6 +1628,10 @@ export function ImmersiveLessonRunner({
     setChunkIdx(0);
     setAttempts(0);
     setTutorReply(null);
+    setTextCheckRevealed(false);
+    setTextPendingAdvance(false);
+    setTranscriptLines([]);
+    activeRoseLineIdRef.current = null;
     lastSpokenChunkIdRef.current = null;
     await persist({
       moduleId: nextModule.id,
@@ -1479,6 +1640,61 @@ export function ImmersiveLessonRunner({
     });
     onAdvanceModule(nextModule.id);
   }, [course.modules, moduleIdx, onAdvanceModule, persist]);
+
+  const revealTextCheckQuestion = useCallback(() => {
+    if (!chunk?.checkQuestion?.trim()) return;
+    setTextCheckRevealed(true);
+    appendTranscriptLineOnce({
+      role: "rose",
+      text: chunk.checkQuestion,
+      kind: "question",
+    });
+  }, [appendTranscriptLineOnce, chunk]);
+
+  const confirmTextAdvance = useCallback(async () => {
+    if (!textPendingAdvance || !plan || !chunk) return;
+    setTextPendingAdvance(false);
+    const nextIdx = chunkIdx + 1;
+    setChunkIdx(nextIdx);
+    setAttempts(0);
+    setAnswerText("");
+    setNarrationText("");
+    setTutorReply(null);
+    setMentoredImage(null);
+    setMentoredImageLoading(false);
+    setTextCheckRevealed(false);
+    activeRoseLineIdRef.current = null;
+
+    await persist({
+      chunkIndex: nextIdx,
+      attemptState: {
+        chunkIndex: nextIdx,
+        attempts: 0,
+        lastEval: "correct",
+      },
+      lastRecap: `Module ${activeModule.id} — last covered "${chunk.concept}".`,
+    });
+
+    if (nextIdx >= plan.chunks.length) {
+      setPhase("module-complete");
+    } else {
+      const nextChunk = plan.chunks[nextIdx];
+      if (nextChunk) {
+        appendTranscriptLine({
+          role: "system",
+          text: `Next: ${nextChunk.concept}`,
+        });
+      }
+    }
+  }, [
+    activeModule.id,
+    appendTranscriptLine,
+    chunk,
+    chunkIdx,
+    persist,
+    plan,
+    textPendingAdvance,
+  ]);
 
   // ----- top bar (always rendered) -----
   // We intentionally keep the top bar minimal — just voice/text mode +
@@ -1497,7 +1713,7 @@ export function ImmersiveLessonRunner({
       <button
         type="button"
         onClick={() =>
-          setInteractionMode((m) => (m === "voice" ? "text" : "voice"))
+          switchInteractionMode(interactionMode === "voice" ? "text" : "voice")
         }
         className="rounded-full border border-white/50 bg-white/45 px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/60"
         title="Toggle voice / text"
@@ -1847,6 +2063,24 @@ export function ImmersiveLessonRunner({
               </div>
             ) : null}
 
+            {!awaitingContinue && phase === "teaching" ? (
+              <TranscriptPanel lines={transcriptLines} className="mb-2" />
+            ) : null}
+
+            {interactionMode === "text" && !awaitingContinue && phase === "teaching" ? (
+              <TextModeControls
+                checkQuestion={chunk?.checkQuestion ?? ""}
+                questionRevealed={textCheckRevealed}
+                pendingAdvance={textPendingAdvance}
+                hasNextChunk={chunkIdx + 1 < (plan?.chunks.length ?? 0)}
+                hasNextModule={moduleIdx + 1 < moduleCount}
+                onShowQuestion={revealTextCheckQuestion}
+                onContinueConcept={() => void confirmTextAdvance()}
+                onSkipModule={() => void goToNextModule()}
+                submitting={submitting}
+              />
+            ) : null}
+
             <AnswerComposer
               interactionMode={interactionMode}
               voiceMode={voiceMode}
@@ -2013,41 +2247,28 @@ export function ImmersiveLessonRunner({
           top-right corner to fully reclaim the page; tap the chip to
           expand back to center. Auto-hides after submission or on ×
           dismiss. */}
-      <QuestionCloud
-        key={`q-cloud-${chunk.id}`}
-        chunkId={chunk.id}
-        text={chunk.checkQuestion}
-        open={
-          questionAudioStartedFor === chunk.id &&
-          questionPopupDismissedFor !== chunk.id
-        }
-        minimized={questionPopupMinimized}
-        onMinimize={() => setQuestionPopupMinimized(true)}
-        onExpand={() => setQuestionPopupMinimized(false)}
-        onDismiss={() => setQuestionPopupDismissedFor(chunk.id)}
-        onRepeat={() =>
-          void voice.speak(chunk.checkQuestion, {
-            onPlay: () => {
-              lastSpokenRef.current = chunk.checkQuestion;
-              lastCheckAtRef.current = Date.now();
-            },
-          })
-        }
-      />
-
-      {tutorReply ? (
-        <GlassPanel
-          key={`reply-${replyTurn}`}
-          className="mt-4"
-          tone="reply"
-        >
-          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-fuchsia-700">
-            Tutor
-          </p>
-          <p className="mt-2 text-base leading-relaxed text-zinc-800">
-            <TypewriterText text={tutorReply} wordIntervalMs={45} />
-          </p>
-        </GlassPanel>
+      {interactionMode === "voice" ? (
+        <QuestionCloud
+          key={`q-cloud-${chunk.id}`}
+          chunkId={chunk.id}
+          text={chunk.checkQuestion}
+          open={
+            questionAudioStartedFor === chunk.id &&
+            questionPopupDismissedFor !== chunk.id
+          }
+          minimized={questionPopupMinimized}
+          onMinimize={() => setQuestionPopupMinimized(true)}
+          onExpand={() => setQuestionPopupMinimized(false)}
+          onDismiss={() => setQuestionPopupDismissedFor(chunk.id)}
+          onRepeat={() =>
+            void voice.speak(chunk.checkQuestion, {
+              onPlay: () => {
+                lastSpokenRef.current = chunk.checkQuestion;
+                lastCheckAtRef.current = Date.now();
+              },
+            })
+          }
+        />
       ) : null}
 
       {attempts >= 3 ? (
@@ -2166,6 +2387,22 @@ export function ImmersiveLessonRunner({
 // ===========================================================================
 // Pieces
 // ===========================================================================
+
+/** Short acknowledgments that are not real answers to a check question. */
+function isVagueAffirmative(utterance: string): boolean {
+  const s = utterance
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?,…]/g, "")
+    .replace(/\s+/g, " ");
+  if (s.length === 0 || s.length > 56) return false;
+  return (
+    /^(ok|okay|yeah|yes|yep|yup|sure|got it|makes sense|sounds good|i think so|alright|right|cool|continue|keep going|go on|next|uh huh|mmhm|mhm|fine|good|great|perfect|thanks|thank you)$/.test(
+      s
+    ) ||
+    /^(yes|yeah|ok|okay|sure|yep)( please| thanks)?$/.test(s)
+  );
+}
 
 function ProgressHeader({
   courseTitle,
@@ -2620,6 +2857,74 @@ function SpeedControl({
     >
       {label}
     </button>
+  );
+}
+
+function TextModeControls({
+  checkQuestion,
+  questionRevealed,
+  pendingAdvance,
+  hasNextChunk,
+  hasNextModule,
+  onShowQuestion,
+  onContinueConcept,
+  onSkipModule,
+  submitting,
+}: {
+  checkQuestion: string;
+  questionRevealed: boolean;
+  pendingAdvance: boolean;
+  hasNextChunk: boolean;
+  hasNextModule: boolean;
+  onShowQuestion: () => void;
+  onContinueConcept: () => void;
+  onSkipModule: () => void;
+  submitting: boolean;
+}) {
+  const hasQuestion = checkQuestion.trim().length > 0;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+      {hasQuestion && !questionRevealed ? (
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={onShowQuestion}
+          className="rounded-full border border-amber-300/80 bg-amber-50/90 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+        >
+          Show check question
+        </button>
+      ) : null}
+      {pendingAdvance && hasNextChunk ? (
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={onContinueConcept}
+          className="rounded-full bg-fuchsia-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-fuchsia-400 disabled:opacity-50"
+        >
+          Next concept →
+        </button>
+      ) : null}
+      {pendingAdvance && !hasNextChunk ? (
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={onContinueConcept}
+          className="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400 disabled:opacity-50"
+        >
+          Finish section
+        </button>
+      ) : null}
+      {hasNextModule ? (
+        <button
+          type="button"
+          disabled={submitting}
+          onClick={onSkipModule}
+          className="rounded-full border border-white/60 bg-white/70 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-white/90 disabled:opacity-50"
+        >
+          Skip to next module
+        </button>
+      ) : null}
+    </div>
   );
 }
 
