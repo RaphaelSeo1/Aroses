@@ -7,8 +7,13 @@ import { AppDialogs } from "@/components/AppDialogs";
 import { ScrollRestoration } from "@/components/ScrollRestoration";
 import { ThemeHydration } from "@/components/ThemeHydration";
 import { APP_NAME } from "@/lib/brand";
+import { getPublicSiteOrigin } from "@/lib/site-url";
 import { THEME_INLINE_SCRIPT } from "@/lib/theme-inline-script";
 import "./globals.css";
+
+const siteUrl = getPublicSiteOrigin() || "https://aroses.app";
+const defaultTitle = `${APP_NAME} — Built for the classes that break you`;
+const defaultDescription = `Upload your lecture slides and ${APP_NAME} builds a personalized course — lessons, quizzes, and practice from your actual material. Not generic. Yours.`;
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -21,11 +26,21 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: `${APP_NAME} — Built for the classes that break you`,
-  description: `Upload your lecture slides and ${APP_NAME} builds a personalized course — lessons, quizzes, and practice from your actual material. Not generic. Yours.`,
-  icons: {
-    icon: "/aroses-icon.png",
-    apple: "/aroses-icon.png",
+  metadataBase: new URL(siteUrl),
+  title: defaultTitle,
+  description: defaultDescription,
+  openGraph: {
+    title: defaultTitle,
+    description: defaultDescription,
+    url: siteUrl,
+    siteName: APP_NAME,
+    locale: "en_US",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: defaultTitle,
+    description: defaultDescription,
   },
 };
 
