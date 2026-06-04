@@ -3,11 +3,20 @@ export type KeyTerm = {
   definition: string;
 };
 
+/** Citation back to an uploaded file (slide/page/section when available). */
+export type SourceRef = {
+  fileName: string;
+  /** e.g. "slides 12–17", "page ~3", "section 2", "document" */
+  locator: string;
+};
+
 export type CourseLesson = {
   title: string;
   content: string;
   key_terms: KeyTerm[];
   examples: string[];
+  /** Present when ingest mapped this lesson to specific upload chunks. */
+  sources?: SourceRef[];
 };
 
 /** Parsed MCQ with resolved correct choice index */

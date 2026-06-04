@@ -11,10 +11,16 @@ import {
   type IngestSourceFileRef,
 } from "@/lib/study-ingest/job-extract";
 import {
-  isStructurePlanningEnabled,
   summarizeChunksForPlanner,
   type IngestChunk,
 } from "@/lib/study-ingest/chunking";
+import {
+  attachLessonSources,
+  parseIngestPlan,
+  parsePersistedIngestChunks,
+  persistIngestChunks,
+  type SourceIndex,
+} from "@/lib/source-attribution";
 import { embedSourceImagesInModules } from "@/lib/study-ingest/source-images/embed-in-course";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 import { parseIngestSourceImages } from "@/lib/study-ingest/source-images/upload";
@@ -328,6 +334,34 @@ function pdfIngestModuleBatchSize(remaining: number, peerCount: number): number 
   return Math.max(1, Math.min(remaining, target));
 }
 
+async function loadIngestSourceIndex(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+): Promise<SourceIndex | null> {
+  const { data, error } = await admin
+    .from("pdf_ingest_jobs")
+    .select("ingest_plan, ingest_chunks")
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (
+    error &&
+    isMissingDbColumnError(error, "ingest_chunks", "ingest_plan")
+  ) {
+    return null;
+  }
+
+  const chunks = parsePersistedIngestChunks(
+    (data as { ingest_chunks?: unknown } | null)?.ingest_chunks
+  );
+  if (chunks.length === 0) return null;
+
+  const plan = parseIngestPlan(
+    (data as { ingest_plan?: unknown } | null)?.ingest_plan
+  );
+  return plan ? { chunks, plan } : { chunks };
+}
+
 async function finalizePdfIngest(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
@@ -341,6 +375,7 @@ async function finalizePdfIngest(
     retainStorage?: boolean;
     ingestMedia?: Record<string, unknown> | null;
     sourceImages?: IngestSourceImageRecord[];
+    sourceIndex?: SourceIndex | null;
   }
 ): Promise<{ materialId: string } | null> {
   // Idempotency guard: if a concurrent expand call (e.g. from a page refresh)
@@ -355,11 +390,26 @@ async function finalizePdfIngest(
     return { materialId: alreadyDone.material_id as string };
   }
 
-  const modules = renumberModules(
+  const modulesRenumbered = renumberModules(
     options?.sourceImages?.length
       ? embedSourceImagesInModules(modulesRaw, options.sourceImages)
       : modulesRaw
   );
+
+  const fallbackFileName =
+    typeof originalFileName === "string" && originalFileName.trim().length > 0
+      ? originalFileName.trim()
+      : undefined;
+  const modules =
+    options?.sourceIndex && options.sourceIndex.chunks.length > 0
+      ? attachLessonSources(
+          modulesRenumbered,
+          options.sourceIndex.plan ?? null,
+          options.sourceIndex.chunks,
+          fallbackFileName
+        )
+      : modulesRenumbered;
+
   const payload: CoursePayload = {
     title: outline.title,
     description: outline.description,
@@ -435,6 +485,9 @@ async function finalizePdfIngest(
   if (options?.ingestMedia) {
     materialInsert.ingest_media = options.ingestMedia;
   }
+  if (options?.sourceIndex && options.sourceIndex.chunks.length > 0) {
+    materialInsert.source_index = options.sourceIndex;
+  }
 
   let { data: row, error: insErr } = await admin
     .from("study_materials")
@@ -452,6 +505,44 @@ async function finalizePdfIngest(
     const retry = await admin
       .from("study_materials")
       .insert(withoutMedia as never)
+      .select("id")
+      .single();
+    row = retry.data;
+    insErr = retry.error;
+  }
+
+  if (
+    insErr &&
+    options?.sourceIndex &&
+    isMissingDbColumnError(insErr, "source_index")
+  ) {
+    const { source_index: _s, ...withoutSourceIndex } = materialInsert;
+    void _s;
+    const retry = await admin
+      .from("study_materials")
+      .insert(withoutSourceIndex as never)
+      .select("id")
+      .single();
+    row = retry.data;
+    insErr = retry.error;
+  }
+
+  if (
+    insErr &&
+    options?.ingestMedia &&
+    options?.sourceIndex &&
+    isMissingDbColumnError(insErr, "ingest_media", "source_index")
+  ) {
+    const {
+      ingest_media: _m,
+      source_index: _s,
+      ...minimalInsert
+    } = materialInsert;
+    void _m;
+    void _s;
+    const retry = await admin
+      .from("study_materials")
+      .insert(minimalInsert as never)
       .select("id")
       .single();
     row = retry.data;
@@ -675,6 +766,7 @@ export async function runPdfIngestExpandOne(
   );
 
   if (prefix.length >= n) {
+    const sourceIndex = await loadIngestSourceIndex(admin, jobId);
     const fin = await finalizePdfIngest(
       admin,
       jobId,
@@ -684,7 +776,7 @@ export async function runPdfIngestExpandOne(
       job.original_file_name,
       outline,
       prefix,
-      { retainStorage, ingestMedia, sourceImages }
+      { retainStorage, ingestMedia, sourceImages, sourceIndex }
     );
     if (!fin) {
       return { kind: "failed", message: "Could not save study material." };
@@ -868,6 +960,7 @@ export async function runPdfIngestExpandOne(
   }
 
   if (cappedNext.length >= n) {
+    const sourceIndex = await loadIngestSourceIndex(admin, jobId);
     const fin = await finalizePdfIngest(
       admin,
       jobId,
@@ -877,7 +970,7 @@ export async function runPdfIngestExpandOne(
       job.original_file_name,
       outline,
       cappedNext,
-      { retainStorage, ingestMedia, sourceImages }
+      { retainStorage, ingestMedia, sourceImages, sourceIndex }
     );
     if (!fin) {
       return { kind: "failed", message: "Could not save study material." };
@@ -1448,21 +1541,9 @@ async function runPdfIngestOutlinePhase(
     void touchJobProgress(admin, jobId);
   }, 8_000);
 
-  // STRUCTURE_PLANNING: when enabled and we have content chunks, let the AI
-  // decide module/lesson grouping from content (not file count). Falls back
-  // to the legacy outline call when the flag is off or no chunks are present.
-  //
-  // We ALSO auto-enable it whenever a job combines more than one source file
-  // (a manually-grouped "lecture"). That's precisely the case the planner was
-  // built for — it weaves related files into shared lessons instead of one
-  // lesson per file — so grouped uploads get the smart split even when the
-  // global STRUCTURE_PLANNING flag is off.
-  const distinctSourceFiles = new Set(
-    chunks.map((c) => c.sourceFileName).filter((n) => Boolean(n))
-  ).size;
-  const useStructurePlanning =
-    chunks.length > 0 &&
-    (isStructurePlanningEnabled() || distinctSourceFiles > 1);
+  // Content-driven structure planning whenever we have chunks — maps each
+  // lesson to source_chunk_ids for per-lesson attribution at finalize.
+  const useStructurePlanning = chunks.length > 0;
 
   let outline: CourseOutlinePayload;
   let planModuleSources: string[] | null = null;
@@ -1519,6 +1600,7 @@ async function runPdfIngestOutlinePhase(
     ingest_preview_outline: null,
     stream_preview: null,
     ingest_phase: "writing_modules",
+    ingest_chunks: persistIngestChunks(chunks),
     updated_at: new Date().toISOString(),
   };
   if (useStructurePlanning) {
@@ -1540,7 +1622,8 @@ async function runPdfIngestOutlinePhase(
     isMissingDbColumnError(
       outlineErr,
       "ingest_plan",
-      "ingest_module_sources"
+      "ingest_module_sources",
+      "ingest_chunks"
     )
   ) {
     const retry = await admin

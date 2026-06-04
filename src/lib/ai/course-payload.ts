@@ -6,6 +6,7 @@ import type {
   CourseQuizItem,
   CourseQuizMcqItem,
   KeyTerm,
+  SourceRef,
 } from "@/types/course";
 
 export function stripJsonFence(raw: string): string {
@@ -280,11 +281,35 @@ function normalizeLesson(raw: unknown): CourseLesson {
         .filter((s) => s.length > 0)
     : [];
   const keyTermsRaw = o.key_terms ?? o.keyTerms ?? o.KeyTerms ?? o["Key terms"];
+  const sourcesRaw = o.sources ?? o.Sources;
+  let sources: SourceRef[] | undefined;
+  if (Array.isArray(sourcesRaw)) {
+    const parsed: SourceRef[] = [];
+    for (const item of sourcesRaw) {
+      if (!item || typeof item !== "object") continue;
+      const s = item as Record<string, unknown>;
+      const fileName =
+        typeof s.fileName === "string"
+          ? s.fileName.trim()
+          : typeof s.file_name === "string"
+            ? s.file_name.trim()
+            : "";
+      const locator =
+        typeof s.locator === "string"
+          ? s.locator.trim()
+          : typeof s.position === "string"
+            ? s.position.trim()
+            : "document";
+      if (fileName.length > 0) parsed.push({ fileName, locator });
+    }
+    if (parsed.length > 0) sources = parsed;
+  }
   return {
     title: o.title,
     content: o.content,
     key_terms: normalizeKeyTerms(keyTermsRaw),
     examples,
+    ...(sources ? { sources } : {}),
   };
 }
 

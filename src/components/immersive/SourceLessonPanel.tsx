@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useMemo, useRef } from "react";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
+import { LessonSourceAttribution } from "@/components/LessonSourceAttribution";
 import type { CourseLesson } from "@/types/course";
 
 /**
@@ -102,6 +103,11 @@ function SourceLessonPanelImpl({
         </p>
         <p className="text-[11px] font-medium text-zinc-500">{lesson.title}</p>
       </div>
+      {lesson.sources && lesson.sources.length > 0 ? (
+        <div className="mt-2">
+          <LessonSourceAttribution sources={lesson.sources} />
+        </div>
+      ) : null}
       <div
         ref={containerRef}
         className="source-lesson-body mt-3 max-h-72 overflow-y-auto pr-1 text-sm leading-relaxed text-zinc-800"

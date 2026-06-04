@@ -6,6 +6,7 @@ import { EditableSection } from "@/components/EditableSection";
 import { LessonImage } from "@/components/LessonImage";
 import { LessonMarkdownEditor } from "@/components/LessonMarkdownEditor";
 import { LessonQuoteCaptureRegion } from "@/components/LessonQuoteCaptureRegion";
+import { LessonSourceAttribution } from "@/components/LessonSourceAttribution";
 import { LessonRichContent } from "@/components/LessonRichContent";
 import { TypewriterText, useTypewriterString } from "@/components/TypewriterText";
 import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
@@ -169,6 +170,11 @@ export function LessonEditableBlocks({
       </h3>
     );
 
+    const sourcesEl =
+      lesson.sources && lesson.sources.length > 0 ? (
+        <LessonSourceAttribution sources={lesson.sources} />
+      ) : null;
+
     const bodyEl = animateReveal ? (
       <div className="mt-3">
         <LessonRichContent markdown={streamedBody} />
@@ -190,6 +196,7 @@ export function LessonEditableBlocks({
               Lesson title
             </p>
             {titleEl}
+            {sourcesEl}
           </div>
           {/* Lazily-loaded licensed image from Wikimedia Commons.
               Renders nothing when the classifier said this lesson
@@ -306,6 +313,10 @@ export function LessonEditableBlocks({
           </div>
         }
       />
+
+      {lesson.sources && lesson.sources.length > 0 ? (
+        <LessonSourceAttribution sources={lesson.sources} />
+      ) : null}
 
       {!hasSourceImages ? (
         <LessonImage
