@@ -23,8 +23,8 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: projectRoot,
   },
-  /** pdf-parse@1.x bundles its own PDF.js build; keep external so the server bundle matches Node resolution. */
-  serverExternalPackages: ["pdf-parse"],
+  /** Native / bundled deps that must stay external in the server bundle. */
+  serverExternalPackages: ["pdf-parse", "@napi-rs/canvas"],
   /**
    * Larger payloads for Server Actions (if you use them for uploads later).
    * App Router **Route Handlers** do not use the old Pages `api.bodyParser` option; PDF bytes go
