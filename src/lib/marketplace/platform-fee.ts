@@ -1,3 +1,5 @@
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
+
 /** Platform take on marketplace sales (percent of list price). Default 15%. */
 export function marketplacePlatformFeePercent(): number {
   const raw = process.env.MARKETPLACE_PLATFORM_FEE_PERCENT?.trim();
@@ -15,5 +17,8 @@ export function computePlatformFeeCents(priceCents: number): number {
 }
 
 export function isMarketplacePaymentsEnabled(): boolean {
-  return Boolean(process.env.STRIPE_SECRET_KEY?.trim());
+  return (
+    isMarketplaceUiEnabled() &&
+    Boolean(process.env.STRIPE_SECRET_KEY?.trim())
+  );
 }

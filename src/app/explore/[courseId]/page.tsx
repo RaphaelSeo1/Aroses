@@ -14,6 +14,7 @@ import {
   formatPrice,
   resolveExploreCourse,
 } from "@/lib/marketplace/listing-access";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { isMarketplacePaymentsEnabled } from "@/lib/marketplace/platform-fee";
 import { hasPurchasedCourse } from "@/lib/marketplace/purchases";
 import { createClient } from "@/lib/supabase/server";
@@ -66,7 +67,8 @@ export default async function ExploreCoursePage({ params }: Props) {
       ? await hasPurchasedCourse(supabase, user.id, courseId)
       : false;
   const canStudy = isOwner || !isForSale || hasPurchased;
-  const paymentsEnabled = isMarketplacePaymentsEnabled();
+  const paymentsEnabled =
+    isMarketplaceUiEnabled() && isMarketplacePaymentsEnabled();
   const studyHref = `/explore/${courseId}/learn`;
 
   const { data: sellerProfile } = await supabase

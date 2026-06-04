@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { marketplaceApiUnavailable } from "@/lib/marketplace/api-guard";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import {
   fetchSellerPayoutAccount,
   getOrCreateConnectAccount,
@@ -15,7 +17,10 @@ export const runtime = "nodejs";
 
 /** Start or resume Stripe Connect Express onboarding for marketplace sellers. */
 export async function POST(request: Request) {
-  if (!isMarketplacePaymentsEnabled() || !isStripeConfigured()) {
+  const blocked = marketplaceApiUnavailable();
+  if (blocked) return blocked;
+
+  if (!isStripeConfigured()) {
     return NextResponse.json(
       { error: "Marketplace payments are not configured yet." },
       { status: 503 }
@@ -97,7 +102,7 @@ export async function GET() {
 
   const account = await fetchSellerPayoutAccount(supabase, user.id);
   return NextResponse.json({
-    configured: isMarketplacePaymentsEnabled(),
+    configured: isMarketplaceUiEnabled() && isMarketplacePaymentsEnabled(),
     account: account
       ? {
           chargesEnabled: account.chargesEnabled,

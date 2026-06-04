@@ -51,7 +51,7 @@ function applyFilter(
   }
 }
 
-const SIDEBAR: {
+const SIDEBAR_ALL: {
   id: ExploreFilter;
   label: string;
   hint: string;
@@ -62,13 +62,22 @@ const SIDEBAR: {
   { id: "featured", label: "Featured", hint: "Recent spotlight" },
 ];
 
+const SIDEBAR_FREE_ONLY: typeof SIDEBAR_ALL = [
+  { id: "all", label: "All courses", hint: "Community-shared courses" },
+  { id: "free", label: "Free", hint: "Open to everyone signed in" },
+  { id: "featured", label: "Featured", hint: "Recent spotlight" },
+];
+
 export function ExploreCoursesBoard({
   courses,
   currentUserId,
+  marketplaceEnabled = true,
 }: {
   courses: ExploreCourseCard[];
   currentUserId?: string;
+  marketplaceEnabled?: boolean;
 }) {
+  const sidebar = marketplaceEnabled ? SIDEBAR_ALL : SIDEBAR_FREE_ONLY;
   const [filter, setFilter] = useState<ExploreFilter>("all");
 
   const visible = useMemo(
@@ -150,7 +159,7 @@ export function ExploreCoursesBoard({
             Browse
           </p>
           <nav className="mt-3 flex flex-col gap-1" aria-label="Explore filters">
-            {SIDEBAR.map((item) => {
+            {sidebar.map((item) => {
               const active = filter === item.id;
               return (
                 <button

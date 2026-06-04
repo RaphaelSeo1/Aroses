@@ -28,6 +28,7 @@ export type AdminCourseRow = {
 type Props = {
   courses: AdminCourseRow[];
   pendingListings: PendingListingRow[];
+  showMarketplaceListings?: boolean;
   stats: {
     totalCourses: number;
     totalUsers: number;
@@ -189,6 +190,7 @@ function CopyTextButton({
 export function AdminDashboardClient({
   courses: initialCourses,
   pendingListings,
+  showMarketplaceListings = false,
   stats,
   users: initialUsers,
   usersError,
@@ -315,7 +317,7 @@ export function AdminDashboardClient({
           </div>
         ) : null}
 
-        {!fatalConfigError ? (
+        {!fatalConfigError && showMarketplaceListings ? (
           <section className="mt-8 rounded-xl border border-zinc-200/80 bg-white p-5 shadow-sm dark:border-zinc-700/90 dark:bg-zinc-900/70">
             <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
               Pending marketplace listings

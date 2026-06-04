@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ListingStatus } from "@/lib/marketplace/types";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { hasPurchasedCourse } from "@/lib/marketplace/purchases";
 
 export type CourseExploreMode =
@@ -119,6 +120,9 @@ export async function resolveExploreCourse(
   };
 
   if (listing?.status === "approved") {
+    if (!isMarketplaceUiEnabled()) {
+      return null;
+    }
     return {
       kind: "for_sale",
       courseId: course.id,

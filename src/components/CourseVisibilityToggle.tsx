@@ -46,11 +46,13 @@ export function CourseVisibilityToggle({
   courseId,
   initialPublic,
   listingBlocksExplore = false,
+  marketplaceEnabled = true,
 }: {
   courseId: string;
   initialPublic: boolean;
   /** When a marketplace listing exists (draft/review/live). */
   listingBlocksExplore?: boolean;
+  marketplaceEnabled?: boolean;
 }) {
   const router = useRouter();
   const [isPublic, setIsPublic] = useState(initialPublic);
@@ -89,14 +91,23 @@ export function CourseVisibilityToggle({
         Public Explore listing
       </h3>
       <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-        Free Explore and paid marketplace listings are mutually exclusive. Use{" "}
-        <span className="font-medium text-zinc-800 dark:text-zinc-200">
-          Sell this course
-        </span>{" "}
-        below for paid listings, or this switch for free community sharing.
+        {marketplaceEnabled ? (
+          <>
+            Free Explore and paid marketplace listings are mutually exclusive. Use{" "}
+            <span className="font-medium text-zinc-800 dark:text-zinc-200">
+              Sell this course
+            </span>{" "}
+            below for paid listings, or this switch for free community sharing.
+          </>
+        ) : (
+          <>
+            When public, anyone signed in can discover and study this course on
+            Explore. When private, only you can access it from your dashboard.
+          </>
+        )}
       </p>
 
-      {listingBlocksExplore ? (
+      {marketplaceEnabled && listingBlocksExplore ? (
         <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
           A marketplace listing is active or in progress. Delist or wait for
           review before enabling free Explore.
@@ -129,7 +140,7 @@ export function CourseVisibilityToggle({
           <VisibilitySwitch
             id={switchId}
             checked={isPublic}
-            disabled={pending || listingBlocksExplore}
+            disabled={pending || (marketplaceEnabled && listingBlocksExplore)}
             onChange={(next) => void apply(next)}
           />
         </div>

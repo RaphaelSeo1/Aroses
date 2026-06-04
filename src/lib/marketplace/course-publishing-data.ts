@@ -6,6 +6,7 @@ import {
 import { formatPrice } from "@/lib/marketplace/listing-access";
 import { isMarketplacePaymentsEnabled } from "@/lib/marketplace/platform-fee";
 import type { ListingStatus } from "@/lib/marketplace/types";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 
 export type CoursePublishingSummary = {
   isPublic: boolean;
@@ -37,6 +38,9 @@ export type CoursePublishingPanels = CoursePublishingSummary & {
 };
 
 export function publishingStatusLabel(summary: CoursePublishingSummary): string {
+  if (!isMarketplaceUiEnabled()) {
+    return summary.isPublic ? "Free on Explore" : "Private workspace";
+  }
   if (summary.listingStatus === "approved" && summary.priceLabel) {
     return `Live for sale · ${summary.priceLabel}`;
   }

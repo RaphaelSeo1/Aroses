@@ -1,26 +1,30 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ExploreListingCard } from "@/lib/marketplace/types";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 
 export async function fetchExploreCatalog(
   supabase: SupabaseClient
 ): Promise<{ courses: ExploreListingCard[]; error: string | null }> {
-  const [freeRes, paidRes] = await Promise.all([
-    supabase
-      .from("courses")
-      .select("id, title, description, created_at, user_id")
-      .eq("is_public", true)
-      .eq("is_self_study", false)
-      .order("created_at", { ascending: false })
-      .limit(200),
-    supabase
-      .from("course_listings")
-      .select(
-        "price_cents, currency, courses!inner(id, title, description, created_at, user_id, is_self_study)"
-      )
-      .eq("status", "approved")
-      .order("approved_at", { ascending: false })
-      .limit(200),
-  ]);
+  const includePaid = isMarketplaceUiEnabled();
+
+  const freeRes = await supabase
+    .from("courses")
+    .select("id, title, description, created_at, user_id")
+    .eq("is_public", true)
+    .eq("is_self_study", false)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  const paidRes = includePaid
+    ? await supabase
+        .from("course_listings")
+        .select(
+          "price_cents, currency, courses!inner(id, title, description, created_at, user_id, is_self_study)"
+        )
+        .eq("status", "approved")
+        .order("approved_at", { ascending: false })
+        .limit(200)
+    : { data: [], error: null };
 
   if (freeRes.error && paidRes.error) {
     return { courses: [], error: freeRes.error.message };

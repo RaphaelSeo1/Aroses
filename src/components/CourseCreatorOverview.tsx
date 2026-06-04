@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { APP_NAME } from "@/lib/brand";
 import { courseSettingsHref } from "@/lib/marketplace/course-publishing-data";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 
 /**
  * Dashboard course page — owner tools only. Personal study metrics live under
@@ -97,7 +98,9 @@ export function CourseCreatorOverview({
             >
               Course settings
             </Link>{" "}
-            — free Explore, paid marketplace listing, and Stripe payouts.
+            {isMarketplaceUiEnabled()
+              ? "— free Explore, paid marketplace listing, and Stripe payouts."
+              : "— share this course on Explore or keep it private."}
           </li>
           <li>
             Drag source files between sections and rename them below.

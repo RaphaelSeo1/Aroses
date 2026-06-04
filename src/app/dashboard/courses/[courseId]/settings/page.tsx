@@ -14,6 +14,7 @@ import {
   fetchSellerPayoutAccount,
   refreshConnectAccountFromStripe,
 } from "@/lib/marketplace/connect";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
 
@@ -46,9 +47,11 @@ export default async function CourseSettingsPage({ params, searchParams }: Props
   }
 
   if (sp.connect === "return" || sp.connect === "refresh") {
-    const existing = await fetchSellerPayoutAccount(supabase, user.id);
-    if (existing?.stripeAccountId) {
-      await refreshConnectAccountFromStripe(existing.stripeAccountId);
+    if (isMarketplaceUiEnabled()) {
+      const existing = await fetchSellerPayoutAccount(supabase, user.id);
+      if (existing?.stripeAccountId) {
+        await refreshConnectAccountFromStripe(existing.stripeAccountId);
+      }
     }
   }
 
@@ -72,6 +75,7 @@ export default async function CourseSettingsPage({ params, searchParams }: Props
 
   const settingsPath = `/dashboard/courses/${courseId}/settings`;
   const statusLabel = publishingStatusLabel(publishing);
+  const marketplaceEnabled = isMarketplaceUiEnabled();
 
   return (
     <>
@@ -109,9 +113,9 @@ export default async function CourseSettingsPage({ params, searchParams }: Props
           </p>
 
           <p className="mt-8 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-            Control who can discover and access this course. Free Explore and
-            paid marketplace listings are mutually exclusive — pick one path
-            for learners outside your workspace.
+            {marketplaceEnabled
+              ? "Control who can discover and access this course. Free Explore and paid marketplace listings are mutually exclusive — pick one path for learners outside your workspace."
+              : "Control whether this course appears on Explore for signed-in learners, or stays private to your workspace."}
           </p>
 
           <div className="mt-8">
@@ -119,19 +123,24 @@ export default async function CourseSettingsPage({ params, searchParams }: Props
               courseId={course.id}
               initialPublic={publishing.isPublic}
               listingBlocksExplore={publishing.listingBlocksExplore}
+              marketplaceEnabled={marketplaceEnabled}
             />
           </div>
 
-          <SellerConnectPanel
-            initialState={publishing.sellerConnectState}
-            returnPath={settingsPath}
-          />
+          {marketplaceEnabled ? (
+            <>
+              <SellerConnectPanel
+                initialState={publishing.sellerConnectState}
+                returnPath={settingsPath}
+              />
 
-          <CourseListingPanel
-            courseId={course.id}
-            initialListing={publishing.initialListing}
-            hasMaterials={publishing.hasMaterials}
-          />
+              <CourseListingPanel
+                courseId={course.id}
+                initialListing={publishing.initialListing}
+                hasMaterials={publishing.hasMaterials}
+              />
+            </>
+          ) : null}
         </div>
       </main>
     </>

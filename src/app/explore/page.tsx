@@ -7,12 +7,14 @@ import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { APP_NAME } from "@/lib/brand";
 import { fetchExploreCatalog } from "@/lib/marketplace/fetch-explore-catalog";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 
 export const metadata = {
   title: `Explore — ${APP_NAME}`,
-  description:
-    "Browse free community courses and student-created courses for sale.",
+  description: isMarketplaceUiEnabled()
+    ? "Browse free community courses and student-created courses for sale."
+    : "Browse free community courses shared on Explore.",
 };
 
 export default async function ExplorePage() {
@@ -44,6 +46,7 @@ export default async function ExplorePage() {
 
 async function ExploreCoursesSection() {
   const { supabase, user } = await getServerAuth();
+  const marketplaceEnabled = isMarketplaceUiEnabled();
   const { courses, error: coursesError } = await fetchExploreCatalog(supabase);
 
   return (
@@ -56,8 +59,9 @@ async function ExploreCoursesSection() {
           Explore courses
         </h1>
         <p className="mt-3 max-w-2xl text-zinc-600 dark:text-zinc-400">
-          Browse free community courses or student-created courses listed for
-          sale. Paid courses unlock full lessons after Stripe checkout.
+          {marketplaceEnabled
+            ? "Browse free community courses or student-created courses listed for sale. Paid courses unlock full lessons after Stripe checkout."
+            : "Browse free community courses shared by creators on Explore."}
         </p>
 
         {coursesError ? (
@@ -71,8 +75,9 @@ async function ExploreCoursesSection() {
               Nothing listed yet
             </p>
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              Creators can share courses for free or list originals for sale
-              from their course dashboard.
+              {marketplaceEnabled
+                ? "Creators can share courses for free or list originals for sale from their course dashboard."
+                : "Creators can share courses for free from their course dashboard."}
             </p>
             <Link
               href={user ? "/" : "/signup"}
@@ -82,7 +87,11 @@ async function ExploreCoursesSection() {
             </Link>
           </div>
         ) : (
-          <ExploreCoursesBoard courses={courses} currentUserId={user?.id} />
+          <ExploreCoursesBoard
+            courses={courses}
+            currentUserId={user?.id}
+            marketplaceEnabled={marketplaceEnabled}
+          />
         )}
       </div>
     </main>

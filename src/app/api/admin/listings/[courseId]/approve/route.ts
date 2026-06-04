@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { marketplaceApiUnavailable } from "@/lib/marketplace/api-guard";
 import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { logActivity } from "@/lib/activity-log";
 import {
@@ -15,6 +16,9 @@ const UUID_RE =
 type Params = { params: Promise<{ courseId: string }> };
 
 export async function POST(_req: Request, ctx: Params) {
+  const blocked = marketplaceApiUnavailable();
+  if (blocked) return blocked;
+
   const { courseId } = await ctx.params;
   if (!UUID_RE.test(courseId)) {
     return NextResponse.json({ error: "Invalid course id." }, { status: 400 });
