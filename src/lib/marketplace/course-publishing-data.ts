@@ -77,10 +77,11 @@ export async function fetchCoursePublishingPanels(
     .maybeSingle();
 
   const listingStatus = (listingRow?.status as ListingStatus | undefined) ?? null;
-  const listingBlocksExplore =
-    listingStatus === "draft" ||
-    listingStatus === "pending_review" ||
-    listingStatus === "approved";
+  const listingBlocksExplore = isMarketplaceUiEnabled()
+    ? listingStatus === "draft" ||
+      listingStatus === "pending_review" ||
+      listingStatus === "approved"
+    : false;
 
   const sellerPayout = await fetchSellerPayoutAccount(supabase, input.userId);
 

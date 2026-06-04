@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { createClient } from "@/lib/supabase/server";
 import { logActivity } from "@/lib/activity-log";
 
@@ -47,14 +48,32 @@ export async function PATCH(request: Request, ctx: Params) {
       .eq("course_id", courseId)
       .maybeSingle();
     const st = listing?.status as string | undefined;
-    if (st === "draft" || st === "pending_review" || st === "approved") {
-      return NextResponse.json(
-        {
-          error:
-            "This course has a marketplace listing. Delist or remove the listing before enabling free Explore.",
-        },
-        { status: 409 }
-      );
+
+    if (
+      st === "draft" ||
+      st === "pending_review" ||
+      st === "approved"
+    ) {
+      if (!isMarketplaceUiEnabled()) {
+        // Marketplace is hidden — suspend any in-progress listing so free Explore works.
+        await supabase
+          .from("course_listings")
+          .update({
+            status: "draft",
+            approved_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("course_id", courseId)
+          .in("status", ["draft", "pending_review", "approved"]);
+      } else {
+        return NextResponse.json(
+          {
+            error:
+              "This course has a marketplace listing. Delist or remove the listing before enabling free Explore.",
+          },
+          { status: 409 }
+        );
+      }
     }
   }
 
