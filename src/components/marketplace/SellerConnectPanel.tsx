@@ -133,7 +133,22 @@ export function SellerConnectPanel({
       </div>
 
       {err ? (
-        <p className="mt-4 text-sm text-red-600 dark:text-red-400">{err}</p>
+        <p className="mt-4 text-sm leading-relaxed text-red-600 dark:text-red-400">
+          {err}
+          {/Connect is not enabled/i.test(err) ? (
+            <>
+              {" "}
+              <a
+                href="https://dashboard.stripe.com/connect"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold underline underline-offset-2"
+              >
+                Open Stripe Connect setup
+              </a>
+            </>
+          ) : null}
+        </p>
       ) : null}
     </div>
   );

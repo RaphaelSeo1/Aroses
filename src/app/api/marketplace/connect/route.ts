@@ -5,7 +5,9 @@ import {
   refreshConnectAccountFromStripe,
   sellerCanReceivePayments,
 } from "@/lib/marketplace/connect";
+import { connectOnboardErrorMessage } from "@/lib/marketplace/connect-errors";
 import { isMarketplacePaymentsEnabled } from "@/lib/marketplace/platform-fee";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getStripe, isStripeConfigured, originFromRequest } from "@/lib/stripe/client";
 import { createClient } from "@/lib/supabase/server";
 
@@ -16,6 +18,16 @@ export async function POST(request: Request) {
   if (!isMarketplacePaymentsEnabled() || !isStripeConfigured()) {
     return NextResponse.json(
       { error: "Marketplace payments are not configured yet." },
+      { status: 503 }
+    );
+  }
+
+  if (!createAdminClient()) {
+    return NextResponse.json(
+      {
+        error:
+          "Server is missing SUPABASE_SERVICE_ROLE_KEY — required to save payout accounts.",
+      },
       { status: 503 }
     );
   }
@@ -67,7 +79,7 @@ export async function POST(request: Request) {
   } catch (err) {
     console.error("[marketplace] connect onboard failed", err);
     return NextResponse.json(
-      { error: "Could not start payout setup. Try again." },
+      { error: connectOnboardErrorMessage(err) },
       { status: 500 }
     );
   }

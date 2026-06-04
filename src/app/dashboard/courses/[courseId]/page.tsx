@@ -2,9 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseCreatorOverview } from "@/components/CourseCreatorOverview";
-import { CourseListingPanel } from "@/components/CourseListingPanel";
-import { SellerConnectPanel } from "@/components/marketplace/SellerConnectPanel";
-import { CourseVisibilityToggle } from "@/components/CourseVisibilityToggle";
+import { CoursePublishingEntry } from "@/components/CoursePublishingEntry";
 import { EditableCourseTitle } from "@/components/EditableCourseTitle";
 import {
   ExamGroupsPanel,
@@ -13,13 +11,8 @@ import {
 } from "@/components/ExamGroupsPanel";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { ShareCourseButton } from "@/components/ShareCourseButton";
+import { fetchCoursePublishingPanels } from "@/lib/marketplace/course-publishing-data";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
-import {
-  fetchSellerPayoutAccount,
-  refreshConnectAccountFromStripe,
-  sellerCanReceivePayments,
-} from "@/lib/marketplace/connect";
-import { isMarketplacePaymentsEnabled } from "@/lib/marketplace/platform-fee";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
@@ -29,7 +22,7 @@ const UUID_RE =
 
 type Props = {
   params: Promise<{ courseId: string }>;
-  searchParams: Promise<{ section?: string; connect?: string }>;
+  searchParams: Promise<{ section?: string }>;
 };
 
 export default async function CourseDetailPage({ params, searchParams }: Props) {
@@ -49,13 +42,6 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
   } = await supabase.auth.getUser();
   if (!user) {
     redirect(`/login?next=${encodeURIComponent(`/dashboard/courses/${courseId}`)}`);
-  }
-
-  if (sp.connect === "return" || sp.connect === "refresh") {
-    const existing = await fetchSellerPayoutAccount(supabase, user.id);
-    if (existing?.stripeAccountId) {
-      await refreshConnectAccountFromStripe(existing.stripeAccountId);
-    }
   }
 
   const course = await fetchCourseForDashboard(supabase, courseId, user.id);
@@ -128,52 +114,14 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
 
   const uploadsCount = materialsRaw?.length ?? 0;
 
-  const { data: listingRow } = await supabase
-    .from("course_listings")
-    .select(
-      "course_id, price_cents, currency, status, rejection_reason, quality_review, originality_review"
-    )
-    .eq("course_id", course.id)
-    .maybeSingle();
-
-  const listingBlocksExplore =
-    listingRow?.status === "draft" ||
-    listingRow?.status === "pending_review" ||
-    listingRow?.status === "approved";
-
-  const initialListing = listingRow
-    ? {
-        courseId: listingRow.course_id,
-        priceCents: listingRow.price_cents,
-        currency: listingRow.currency,
-        status: listingRow.status as
-          | "draft"
-          | "pending_review"
-          | "approved"
-          | "rejected",
-        rejectionReason: listingRow.rejection_reason,
-        qualityReview: listingRow.quality_review as {
-          passed: boolean;
-          score: number;
-          flags: string[];
-        } | null,
-        originalityReview: listingRow.originality_review as {
-          flagged: boolean;
-          reasons: string[];
-        } | null,
-      }
+  const publishing = !course.is_self_study
+    ? await fetchCoursePublishingPanels(supabase, {
+        courseId: course.id,
+        userId: user.id,
+        isPublic: Boolean(course.is_public),
+        uploadsCount,
+      })
     : null;
-
-  const sellerPayout =
-    !course.is_self_study
-      ? await fetchSellerPayoutAccount(supabase, user.id)
-      : null;
-  const sellerConnectState = {
-    configured: isMarketplacePaymentsEnabled(),
-    ready: sellerCanReceivePayments(sellerPayout),
-    chargesEnabled: sellerPayout?.chargesEnabled ?? false,
-    detailsSubmitted: sellerPayout?.detailsSubmitted ?? false,
-  };
 
   type FailedJob = { id: string; original_file_name: string | null; exam_group_id: string | null; error_message: string | null };
   const failedJobs: FailedJob[] = (failedJobsRaw ?? []).map((j) => ({
@@ -313,34 +261,19 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                 modulesTotal={modulesTotal}
               />
 
-              <div className="mt-10">
-                <CourseVisibilityToggle
-                  courseId={course.id}
-                  initialPublic={Boolean(course.is_public)}
-                  listingBlocksExplore={listingBlocksExplore}
-                />
-              </div>
-
-              {!course.is_self_study ? (
-                <SellerConnectPanel
-                  initialState={sellerConnectState}
-                  returnPath={`/dashboard/courses/${course.id}`}
-                />
+              {publishing ? (
+                <CoursePublishingEntry courseId={course.id} summary={publishing} />
               ) : null}
 
-              <CourseListingPanel
-                courseId={course.id}
-                initialListing={initialListing}
-                hasMaterials={uploadsCount > 0}
-              />
-
-              <ExamGroupsPanel
-                courseId={course.id}
-                groups={groups}
-                materials={materials}
-                failedJobs={failedJobs}
-                initialSectionId={sectionFromUrl ?? undefined}
-              />
+              <div className="mt-12">
+                <ExamGroupsPanel
+                  courseId={course.id}
+                  groups={groups}
+                  materials={materials}
+                  failedJobs={failedJobs}
+                  initialSectionId={sectionFromUrl ?? undefined}
+                />
+              </div>
             </>
           )}
         </div>

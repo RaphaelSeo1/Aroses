@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { APP_NAME } from "@/lib/brand";
+import { courseSettingsHref } from "@/lib/marketplace/course-publishing-data";
 
 /**
  * Dashboard course page — owner tools only. Personal study metrics live under
@@ -90,11 +91,16 @@ export function CourseCreatorOverview({
             study sidebar.
           </li>
           <li>
-            Drag source files between sections and rename them below.
+            <Link
+              href={courseSettingsHref(courseId)}
+              className="font-semibold underline underline-offset-2"
+            >
+              Course settings
+            </Link>{" "}
+            — free Explore, paid marketplace listing, and Stripe payouts.
           </li>
           <li>
-            Turn on Explore when you&apos;re ready for others to discover this
-            listing (toggle under this card).
+            Drag source files between sections and rename them below.
           </li>
         </ul>
       </div>
