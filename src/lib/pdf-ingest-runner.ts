@@ -22,6 +22,7 @@ import {
   type SourceIndex,
 } from "@/lib/source-attribution";
 import { embedSourceImagesInModules } from "@/lib/study-ingest/source-images/embed-in-course";
+import { supplementPdfPageFigures } from "@/lib/study-ingest/source-images/supplement-pdf-pages";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 import { parseIngestSourceImages } from "@/lib/study-ingest/source-images/upload";
 import {
@@ -390,11 +391,16 @@ async function finalizePdfIngest(
     return { materialId: alreadyDone.material_id as string };
   }
 
-  const modulesRenumbered = renumberModules(
+  const modulesRenumbered = renumberModules(modulesRaw);
+
+  const embedResult =
     options?.sourceImages?.length
-      ? embedSourceImagesInModules(modulesRaw, options.sourceImages)
-      : modulesRaw
-  );
+      ? embedSourceImagesInModules(
+          modulesRenumbered,
+          options.sourceImages,
+          options.sourceIndex ?? null
+        )
+      : { modules: modulesRenumbered, figuresIndex: null };
 
   const fallbackFileName =
     typeof originalFileName === "string" && originalFileName.trim().length > 0
@@ -403,12 +409,12 @@ async function finalizePdfIngest(
   const modules =
     options?.sourceIndex && options.sourceIndex.chunks.length > 0
       ? attachLessonSources(
-          modulesRenumbered,
+          embedResult.modules,
           options.sourceIndex.plan ?? null,
           options.sourceIndex.chunks,
           fallbackFileName
         )
-      : modulesRenumbered;
+      : embedResult.modules;
 
   const payload: CoursePayload = {
     title: outline.title,
@@ -488,6 +494,9 @@ async function finalizePdfIngest(
   if (options?.sourceIndex && options.sourceIndex.chunks.length > 0) {
     materialInsert.source_index = options.sourceIndex;
   }
+  if (embedResult.figuresIndex) {
+    materialInsert.figures_index = embedResult.figuresIndex;
+  }
 
   let { data: row, error: insErr } = await admin
     .from("study_materials")
@@ -521,6 +530,22 @@ async function finalizePdfIngest(
     const retry = await admin
       .from("study_materials")
       .insert(withoutSourceIndex as never)
+      .select("id")
+      .single();
+    row = retry.data;
+    insErr = retry.error;
+  }
+
+  if (
+    insErr &&
+    embedResult.figuresIndex &&
+    isMissingDbColumnError(insErr, "figures_index")
+  ) {
+    const { figures_index: _f, ...withoutFiguresIndex } = materialInsert;
+    void _f;
+    const retry = await admin
+      .from("study_materials")
+      .insert(withoutFiguresIndex as never)
       .select("id")
       .single();
     row = retry.data;
@@ -1236,6 +1261,7 @@ export async function runPdfIngestJob(
     retainStorage: boolean;
     ingestMedia: Record<string, unknown> | null;
     chunks: IngestChunk[];
+    sourceImages: IngestSourceImageRecord[];
   };
 
   try {
@@ -1266,6 +1292,7 @@ export async function runPdfIngestJob(
       retainStorage: extracted.retainStorage,
       ingestMedia: extracted.ingestMedia,
       chunks: extracted.chunks ?? [],
+      sourceImages: extracted.sourceImages,
     };
 
     await admin
@@ -1355,6 +1382,10 @@ export async function runPdfIngestJob(
     sourceTextForOutline,
     courseStudyContext,
     chunks: previewResult.chunks,
+    sourceImages: previewResult.sourceImages,
+    sourceFiles,
+    primaryStoragePath: storagePath,
+    primaryFileName: claimed.original_file_name,
     driveModules: options?.driveModules,
     t0,
   });
@@ -1430,6 +1461,12 @@ export async function runPdfIngestContinueAfterTranscript(
   });
 }
 
+function isPdfPageRenderEnabled(): boolean {
+  const raw = process.env.PDF_INGEST_PAGE_RENDER?.trim();
+  if (raw === "0" || raw?.toLowerCase() === "false") return false;
+  return true;
+}
+
 async function runPdfIngestOutlinePhase(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   input: {
@@ -1443,6 +1480,10 @@ async function runPdfIngestOutlinePhase(
     sourceTextForOutline: string;
     courseStudyContext: string | null;
     chunks: IngestChunk[];
+    sourceImages?: IngestSourceImageRecord[];
+    sourceFiles?: IngestSourceFileRef[] | null;
+    primaryStoragePath?: string;
+    primaryFileName?: string | null;
     driveModules?: boolean;
     t0: number;
   }
@@ -1455,6 +1496,10 @@ async function runPdfIngestOutlinePhase(
     sourceTextForOutline,
     courseStudyContext,
     chunks,
+    sourceImages: sourceImagesInput = [],
+    sourceFiles = null,
+    primaryStoragePath = "",
+    primaryFileName = null,
     driveModules,
     t0,
   } = input;
@@ -1548,6 +1593,7 @@ async function runPdfIngestOutlinePhase(
   let outline: CourseOutlinePayload;
   let planModuleSources: string[] | null = null;
   let planJson: unknown = null;
+  let sourceImages = sourceImagesInput;
   try {
     if (useStructurePlanning) {
       const plan = await withAnthropicRateLimitRetries(
@@ -1569,6 +1615,24 @@ async function runPdfIngestOutlinePhase(
         modules: outline.modules.length,
         chunks: chunks.length,
       });
+
+      if (isPdfPageRenderEnabled() && primaryStoragePath) {
+        try {
+          sourceImages = await supplementPdfPageFigures({
+            admin,
+            userId: claimed.user_id,
+            jobId,
+            chunks: persistIngestChunks(chunks),
+            plan,
+            existingImages: sourceImages,
+            sourceFiles,
+            primaryStoragePath,
+            primaryFileName,
+          });
+        } catch (e) {
+          console.warn("[pdf-ingest] supplementPdfPageFigures", jobId, e);
+        }
+      }
     } else {
       outline = await withAnthropicRateLimitRetries(
         jobId,
@@ -1606,6 +1670,9 @@ async function runPdfIngestOutlinePhase(
   if (useStructurePlanning) {
     outlineUpdate.ingest_plan = planJson;
     outlineUpdate.ingest_module_sources = planModuleSources;
+  }
+  if (sourceImages.length > 0) {
+    outlineUpdate.ingest_source_images = sourceImages;
   }
 
   let { data: outlineRow, error: outlineErr } = await admin

@@ -12,6 +12,7 @@ import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { createClient } from "@/lib/supabase/server";
+import { loadExploreStudyCourse } from "@/lib/marketplace/explore-study-guard";
 import type { CoursePayload, SidebarMaterialOutline } from "@/types/course";
 
 const UUID_RE =
@@ -66,14 +67,7 @@ export default async function ExploreStudyQuizPage({
     redirect(`/login?next=${encodeURIComponent(quizNext)}`);
   }
 
-  const { data: courseRow } = await supabase
-    .from("courses")
-    .select("id, title, description")
-    .eq("id", courseId)
-    .eq("is_public", true)
-    .maybeSingle();
-
-  if (!courseRow) notFound();
+  const courseRow = await loadExploreStudyCourse(supabase, user.id, courseId);
 
   const studyBase = `/explore/${courseId}/study`;
 

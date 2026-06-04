@@ -1,17 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { formatPrice } from "@/lib/marketplace/listing-access";
 import { useMemo, useState } from "react";
 
-export type ExploreCourseCard = {
-  id: string;
-  title: string;
-  description: string | null;
-  created_at: string;
-  user_id: string;
-};
+import type { ExploreListingCard } from "@/lib/marketplace/types";
 
-type ExploreFilter = "all" | "featured" | "popular" | "rated";
+export type ExploreCourseCard = ExploreListingCard;
+
+type ExploreFilter = "all" | "free" | "for_sale" | "featured";
 
 const CARD_GRADIENTS = [
   "from-rose-500/[0.22] via-orange-400/[0.14] to-amber-200/[0.08] dark:from-rose-600/[0.35] dark:via-red-950/[0.65] dark:to-zinc-950",
@@ -40,22 +37,15 @@ function applyFilter(
   filter: ExploreFilter
 ): ExploreCourseCard[] {
   switch (filter) {
-    case "all":
-      return sortNewestFirst(courses);
+    case "free":
+      return sortNewestFirst(courses.filter((c) => c.listingKind === "free"));
+    case "for_sale":
+      return sortNewestFirst(
+        courses.filter((c) => c.listingKind === "for_sale")
+      );
     case "featured":
       return sortNewestFirst(courses).slice(0, 6);
-    case "popular": {
-      const descLen = (s: string | null) => (s?.trim().length ?? 0);
-      return [...courses].sort((a, b) => {
-        const d = descLen(b.description) - descLen(a.description);
-        if (d !== 0) return d;
-        return (
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        );
-      });
-    }
-    case "rated":
-      return [...courses].sort((a, b) => a.title.localeCompare(b.title));
+    case "all":
     default:
       return sortNewestFirst(courses);
   }
@@ -66,18 +56,10 @@ const SIDEBAR: {
   label: string;
   hint: string;
 }[] = [
-  { id: "all", label: "All courses", hint: "Newest listings first" },
-  { id: "featured", label: "Featured", hint: "Fresh spotlight picks" },
-  {
-    id: "popular",
-    label: "Popular",
-    hint: "Richer descriptions first",
-  },
-  {
-    id: "rated",
-    label: "Top rated",
-    hint: "A–Z until star ratings ship",
-  },
+  { id: "all", label: "All courses", hint: "Free and for sale" },
+  { id: "free", label: "Free", hint: "Community-shared courses" },
+  { id: "for_sale", label: "For sale", hint: "Student-created listings" },
+  { id: "featured", label: "Featured", hint: "Recent spotlight" },
 ];
 
 export function ExploreCoursesBoard({
@@ -121,9 +103,13 @@ export function ExploreCoursesBoard({
                         <h2 className="line-clamp-2 flex-1 text-base font-semibold leading-snug text-zinc-900 dark:text-zinc-50">
                           {c.title}
                         </h2>
-                        {currentUserId && currentUserId === c.user_id ? (
-                          <span className="shrink-0 rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand dark:bg-zinc-900/90 dark:text-brand-soft">
-                            Yours
+                        {c.listingKind === "for_sale" && c.price_cents != null ? (
+                          <span className="shrink-0 rounded-full bg-zinc-900 px-2 py-0.5 text-[10px] font-bold text-white dark:bg-zinc-100 dark:text-zinc-900">
+                            {formatPrice(c.price_cents, c.currency ?? "usd")}
+                          </span>
+                        ) : c.listingKind === "free" ? (
+                          <span className="shrink-0 rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-bold uppercase text-white">
+                            Free
                           </span>
                         ) : null}
                       </div>
@@ -137,7 +123,12 @@ export function ExploreCoursesBoard({
                         </p>
                       )}
                       <p className="mt-3 text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
-                        Listed{" "}
+                        {c.seller_username
+                          ? `@${c.seller_username}`
+                          : c.seller_display_name
+                            ? c.seller_display_name
+                            : "Community creator"}
+                        {" · "}
                         {new Date(c.created_at).toLocaleDateString(undefined, {
                           month: "short",
                           day: "numeric",

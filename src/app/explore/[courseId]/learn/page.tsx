@@ -12,6 +12,7 @@ import {
   fetchStudyMaterialForPublicExplore,
   fetchStudyMaterialsOutlineRowsForPublicExplore,
 } from "@/lib/supabase/fetch-explore-study-material";
+import { loadExploreStudyCourse } from "@/lib/marketplace/explore-study-guard";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
 import type {
@@ -70,16 +71,7 @@ export default async function ExploreLearnPage({
     );
   }
 
-  // The explore listing only surfaces public courses — mirror that here so
-  // an authed user can't side-load a private course via this URL.
-  const { data: courseRow } = await supabase
-    .from("courses")
-    .select("id, title, description")
-    .eq("id", courseId)
-    .eq("is_public", true)
-    .maybeSingle();
-
-  if (!courseRow) notFound();
+  const courseRow = await loadExploreStudyCourse(supabase, user.id, courseId);
 
   const savedProgress = await loadCourseProgress(
     supabase,

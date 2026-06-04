@@ -6,6 +6,8 @@ import {
   syncFromCheckoutSession,
   syncStripeSubscription,
 } from "@/lib/billing/sync-subscription";
+import { refreshConnectAccountFromStripe } from "@/lib/marketplace/connect";
+import { completeCoursePurchaseFromCheckout } from "@/lib/marketplace/purchases";
 import { getStripe, isStripeConfigured } from "@/lib/stripe/client";
 
 export const runtime = "nodejs";
@@ -58,7 +60,15 @@ async function handleStripeEvent(event: Stripe.Event): Promise<void> {
       const session = event.data.object as Stripe.Checkout.Session;
       if (session.mode === "subscription") {
         await syncFromCheckoutSession(session);
+      } else if (session.mode === "payment") {
+        await completeCoursePurchaseFromCheckout(session);
       }
+      break;
+    }
+
+    case "account.updated": {
+      const account = event.data.object as Stripe.Account;
+      await refreshConnectAccountFromStripe(account.id);
       break;
     }
 

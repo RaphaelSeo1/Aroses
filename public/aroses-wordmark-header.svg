@@ -1,0 +1,9 @@
+<svg width="320" height="80" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aroses">
+  <title>Aroses</title>
+  <rect x="4" y="8" width="64" height="64" rx="14" fill="#DC2626"/>
+  <ellipse cx="36" cy="26" rx="18" ry="4.5" fill="none" stroke="#fecaca" stroke-width="0.9" opacity="0.6" transform="rotate(-18 36 26)"/>
+  <text x="36" y="58" font-size="52" font-weight="700" fill="white" font-family="Georgia, 'Times New Roman', serif" text-anchor="middle">A</text>
+  <circle cx="36" cy="26" r="4.5" fill="#b91c1c"/>
+  <circle cx="36" cy="26" r="1.5" fill="#fecaca"/>
+  <text x="84" y="52" font-size="36" font-weight="700" fill="#1a0505" font-family="Georgia, 'Times New Roman', serif">Aroses</text>
+</svg>

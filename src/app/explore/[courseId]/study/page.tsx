@@ -26,6 +26,7 @@ import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-m
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { createClient } from "@/lib/supabase/server";
+import { loadExploreStudyCourse } from "@/lib/marketplace/explore-study-guard";
 import {
   fetchExamGroupsForSidebar,
   fetchStudyMaterialForPublicExplore,
@@ -88,14 +89,7 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
     redirect(`/login?next=${encodeURIComponent(studyNext)}`);
   }
 
-  const { data: courseRow } = await supabase
-    .from("courses")
-    .select("id, title, description")
-    .eq("id", courseId)
-    .eq("is_public", true)
-    .maybeSingle();
-
-  if (!courseRow) notFound();
+  const courseRow = await loadExploreStudyCourse(supabase, user.id, courseId);
 
   const learnMode = sp.mode === "learn";
   const savedProgress = await loadCourseProgress(

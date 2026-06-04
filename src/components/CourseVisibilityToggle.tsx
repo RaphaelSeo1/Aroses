@@ -45,9 +45,12 @@ function VisibilitySwitch({
 export function CourseVisibilityToggle({
   courseId,
   initialPublic,
+  listingBlocksExplore = false,
 }: {
   courseId: string;
   initialPublic: boolean;
+  /** When a marketplace listing exists (draft/review/live). */
+  listingBlocksExplore?: boolean;
 }) {
   const router = useRouter();
   const [isPublic, setIsPublic] = useState(initialPublic);
@@ -86,14 +89,19 @@ export function CourseVisibilityToggle({
         Public Explore listing
       </h3>
       <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-        Opening the Explore page never publishes your courses — only this switch
-        does. Let anyone browse your{" "}
+        Free Explore and paid marketplace listings are mutually exclusive. Use{" "}
         <span className="font-medium text-zinc-800 dark:text-zinc-200">
-          course title and description
+          Sell this course
         </span>{" "}
-        on the community Explore page. Your PDFs and generated lessons stay on
-        your account unless you share study links yourself.
+        below for paid listings, or this switch for free community sharing.
       </p>
+
+      {listingBlocksExplore ? (
+        <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
+          A marketplace listing is active or in progress. Delist or wait for
+          review before enabling free Explore.
+        </p>
+      ) : null}
 
       <div className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-zinc-200/80 bg-zinc-50/60 px-4 py-3.5 dark:border-zinc-800 dark:bg-zinc-900/40">
         <label htmlFor={switchId} className="min-w-0 cursor-pointer">
@@ -121,7 +129,7 @@ export function CourseVisibilityToggle({
           <VisibilitySwitch
             id={switchId}
             checked={isPublic}
-            disabled={pending}
+            disabled={pending || listingBlocksExplore}
             onChange={(next) => void apply(next)}
           />
         </div>

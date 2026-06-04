@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { alertDialog, confirmDialog } from "@/components/AppDialogs";
 import type { AdminActivityItem, AdminUserRow } from "@/lib/admin-dashboard-data";
+import {
+  AdminPendingListings,
+  type PendingListingRow,
+} from "@/components/admin/AdminPendingListings";
 
 /** Bounded vertical scroll for large tables — keeps the admin page compact. */
 const TABLE_BODY_SCROLL =
@@ -23,6 +27,7 @@ export type AdminCourseRow = {
 
 type Props = {
   courses: AdminCourseRow[];
+  pendingListings: PendingListingRow[];
   stats: {
     totalCourses: number;
     totalUsers: number;
@@ -183,6 +188,7 @@ function CopyTextButton({
 
 export function AdminDashboardClient({
   courses: initialCourses,
+  pendingListings,
   stats,
   users: initialUsers,
   usersError,
@@ -307,6 +313,21 @@ export function AdminDashboardClient({
               iconClass="text-zinc-400 dark:text-zinc-500"
             />
           </div>
+        ) : null}
+
+        {!fatalConfigError ? (
+          <section className="mt-8 rounded-xl border border-zinc-200/80 bg-white p-5 shadow-sm dark:border-zinc-700/90 dark:bg-zinc-900/70">
+            <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              Pending marketplace listings
+            </h2>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              Review seller attestations and automated quality flags before
+              courses go live for sale.
+            </p>
+            <div className="mt-4">
+              <AdminPendingListings listings={pendingListings} />
+            </div>
+          </section>
         ) : null}
 
         {!fatalConfigError ? (

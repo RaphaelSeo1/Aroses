@@ -12,6 +12,10 @@ export type AdminActivityKind =
   | "module_completed"
   | "quiz_submitted"
   | "onboarding_completed"
+  | "listing_submitted"
+  | "listing_approved"
+  | "listing_rejected"
+  | "course_purchased"
   | "other";
 
 export type AdminActivityItem = {
@@ -37,6 +41,10 @@ const EVENT_LABELS: Record<string, string> = {
   module_completed: "Completed a module",
   quiz_submitted: "Submitted a quiz answer",
   onboarding_completed: "Completed onboarding",
+  listing_submitted: "Submitted course for sale review",
+  listing_approved: "Approved marketplace listing",
+  listing_rejected: "Rejected marketplace listing",
+  course_purchased: "Purchased a course",
 };
 
 function labelForEvent(type: string): string {

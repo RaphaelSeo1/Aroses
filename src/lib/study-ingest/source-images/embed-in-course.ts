@@ -1,104 +1,77 @@
 import type { CourseModule } from "@/types/course";
-import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
+import { assignFiguresToLessons, buildFiguresIndex, type FiguresIndex } from "@/lib/figure-attribution";
+import { lessonMarkdownHasImages, splitLeadParagraph } from "@/lib/lesson-content-layout";
+import type { SourceIndex } from "@/lib/source-attribution";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 
-function maxAnchorIndex(
-  images: IngestSourceImageRecord[],
-  type: "slide" | "page"
-): number {
-  let max = 0;
-  for (const img of images) {
-    if (img.anchorType === type && img.anchorIndex > max) {
-      max = img.anchorIndex;
-    }
-  }
-  return max;
+function figureMarkdown(img: IngestSourceImageRecord): string {
+  return `![${img.label} from ${img.sourceFileName}](${img.url})`;
 }
 
-function moduleIndexForAnchor(
-  anchorIndex: number,
-  anchorMax: number,
-  moduleCount: number
-): number {
-  if (moduleCount <= 0) return 0;
-  if (anchorMax <= 0 || anchorIndex <= 0) return 0;
-  const ratio = (anchorIndex - 1) / anchorMax;
-  return Math.min(moduleCount - 1, Math.floor(ratio * moduleCount));
-}
-
-function markdownHasImage(content: string): boolean {
-  return lessonMarkdownHasImages(content);
-}
-
-function embedImagesInLesson(
+/**
+ * Insert figures after the opening paragraph so the lead intro stays readable
+ * and visuals appear before the main body (LessonRichContent treats the first
+ * markdown image as the primary sidebar figure).
+ */
+function embedImagesAfterLeadParagraph(
   content: string,
   images: IngestSourceImageRecord[]
 ): string {
   if (images.length === 0) return content;
-  if (markdownHasImage(content)) return content;
+  if (lessonMarkdownHasImages(content)) return content;
 
-  const blocks = images.map(
-    (img) => `![${img.label} from ${img.sourceFileName}](${img.url})`
-  );
+  const blocks = images.map(figureMarkdown);
   const trimmed = content.trim();
   if (!trimmed) return blocks.join("\n\n");
-  return `${trimmed}\n\n${blocks.join("\n\n")}`;
+
+  const { lead, body } = splitLeadParagraph(trimmed);
+  if (!lead) return blocks.join("\n\n");
+  if (!body) return `${lead}\n\n${blocks.join("\n\n")}`;
+  return `${lead}\n\n${blocks.join("\n\n")}\n\n${body}`;
 }
 
+export type EmbedSourceImagesResult = {
+  modules: CourseModule[];
+  figuresIndex: FiguresIndex | null;
+};
+
 /**
- * Embeds figures extracted from the student's upload into generated lessons,
- * mapped proportionally by slide/page number to course modules.
+ * Embeds figures extracted from the student's upload into the lessons that
+ * cover the matching slides/pages (via ingest plan + chunk positions).
  */
 export function embedSourceImagesInModules(
   modules: CourseModule[],
-  sourceImages: IngestSourceImageRecord[]
-): CourseModule[] {
-  if (!sourceImages.length || !modules.length) return modules;
-
-  const slideMax = maxAnchorIndex(sourceImages, "slide");
-  const pageMax = maxAnchorIndex(sourceImages, "page");
-  const moduleCount = modules.length;
-
-  const byModule = new Map<number, IngestSourceImageRecord[]>();
-  const docImages: IngestSourceImageRecord[] = [];
-
-  for (const img of sourceImages) {
-    let modIdx = 0;
-    if (img.anchorType === "slide" && slideMax > 0) {
-      modIdx = moduleIndexForAnchor(img.anchorIndex, slideMax, moduleCount);
-    } else if (img.anchorType === "page" && pageMax > 0) {
-      modIdx = moduleIndexForAnchor(img.anchorIndex, pageMax, moduleCount);
-    } else {
-      docImages.push(img);
-      continue;
-    }
-    const arr = byModule.get(modIdx) ?? [];
-    arr.push(img);
-    byModule.set(modIdx, arr);
+  sourceImages: IngestSourceImageRecord[],
+  sourceIndex?: SourceIndex | null
+): EmbedSourceImagesResult {
+  if (!sourceImages.length || !modules.length) {
+    return { modules, figuresIndex: null };
   }
 
-  if (docImages.length > 0) {
-    const per = Math.max(1, Math.ceil(docImages.length / moduleCount));
-    for (let i = 0; i < docImages.length; i++) {
-      const modIdx = Math.min(moduleCount - 1, Math.floor(i / per));
-      const arr = byModule.get(modIdx) ?? [];
-      arr.push(docImages[i]);
-      byModule.set(modIdx, arr);
-    }
+  const assignment = assignFiguresToLessons(
+    modules,
+    sourceImages,
+    sourceIndex ?? null
+  );
+
+  if (assignment.size === 0) {
+    return { modules, figuresIndex: null };
   }
 
-  return modules.map((mod, modIdx) => {
-    const imgs = byModule.get(modIdx);
-    if (!imgs?.length || !mod.lessons?.length) return mod;
-
-    const lessons = mod.lessons.map((lesson, lessonIdx) => {
-      if (lessonIdx !== 0) return lesson;
+  const next = modules.map((mod) => {
+    const lessons = mod.lessons.map((lesson, li) => {
+      const imgs = assignment.get(`${mod.id}:${li}`);
+      if (!imgs?.length) return lesson;
       return {
         ...lesson,
-        content: embedImagesInLesson(lesson.content, imgs),
+        content: embedImagesAfterLeadParagraph(lesson.content, imgs),
       };
     });
-
     return { ...mod, lessons };
   });
+
+  return {
+    modules: next,
+    figuresIndex: buildFiguresIndex(modules, sourceImages, assignment),
+  };
 }

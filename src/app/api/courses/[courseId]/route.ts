@@ -40,6 +40,24 @@ export async function PATCH(request: Request, ctx: Params) {
   const isPublic =
     typeof b.isPublic === "boolean" ? b.isPublic : undefined;
 
+  if (isPublic === true) {
+    const { data: listing } = await supabase
+      .from("course_listings")
+      .select("status")
+      .eq("course_id", courseId)
+      .maybeSingle();
+    const st = listing?.status as string | undefined;
+    if (st === "draft" || st === "pending_review" || st === "approved") {
+      return NextResponse.json(
+        {
+          error:
+            "This course has a marketplace listing. Delist or remove the listing before enabling free Explore.",
+        },
+        { status: 409 }
+      );
+    }
+  }
+
   if (title !== undefined && title.length < 2) {
     return NextResponse.json(
       { error: "Title must be at least 2 characters." },

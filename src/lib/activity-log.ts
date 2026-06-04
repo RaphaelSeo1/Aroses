@@ -19,7 +19,11 @@ export type ActivityEventType =
   | "voice_tutor_ended"
   | "module_completed"
   | "quiz_submitted"
-  | "onboarding_completed";
+  | "onboarding_completed"
+  | "listing_submitted"
+  | "listing_approved"
+  | "listing_rejected"
+  | "course_purchased";
 
 /** Event types a signed-in browser is allowed to report via /api/activity/log. */
 export const CLIENT_LOGGABLE_EVENTS: ReadonlySet<string> = new Set<ActivityEventType>([

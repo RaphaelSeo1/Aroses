@@ -6,12 +6,13 @@ import { ExploreListBodySkeleton } from "@/components/MainRouteSkeleton";
 import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { APP_NAME } from "@/lib/brand";
+import { fetchExploreCatalog } from "@/lib/marketplace/fetch-explore-catalog";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 
 export const metadata = {
   title: `Explore — ${APP_NAME}`,
   description:
-    "Browse community-shared courses: titles and descriptions from other learners.",
+    "Browse free community courses and student-created courses for sale.",
 };
 
 export default async function ExplorePage() {
@@ -43,18 +44,7 @@ export default async function ExplorePage() {
 
 async function ExploreCoursesSection() {
   const { supabase, user } = await getServerAuth();
-  const { data: courses, error: coursesError } = await supabase
-    .from("courses")
-    .select("id, title, description, created_at, user_id")
-    .eq("is_public", true)
-    .order("created_at", { ascending: false })
-    .limit(200);
-
-  const exploreBroken = Boolean(
-    coursesError &&
-      (coursesError.code === "42703" ||
-        /is_public|schema cache/i.test(coursesError.message ?? ""))
-  );
+  const { courses, error: coursesError } = await fetchExploreCatalog(supabase);
 
   return (
     <main className="min-h-[calc(100vh-4rem)] flex-1 bg-app-gradient">
@@ -66,48 +56,23 @@ async function ExploreCoursesSection() {
           Explore courses
         </h1>
         <p className="mt-3 max-w-2xl text-zinc-600 dark:text-zinc-400">
-          Courses appear here when a creator turns on{" "}
-          <strong className="font-semibold text-zinc-800 dark:text-zinc-200">
-            Show this course on Explore
-          </strong>
-          . Sign in to open a course and study lessons and quizzes (your account
-          keeps progress across devices).
+          Browse free community courses or student-created courses listed for
+          sale. Paid courses unlock full lessons after Stripe checkout.
         </p>
 
-        {exploreBroken ? (
-          <div className="mx-auto mt-12 max-w-lg rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-            <p className="font-medium">Explore needs a quick database update</p>
-            <p className="mt-2 text-amber-900/90 dark:text-amber-100/90">
-              Run{" "}
-              <code className="rounded bg-amber-100/80 px-1.5 py-0.5 text-xs dark:bg-amber-900/60">
-                supabase/migrations/007_public_courses.sql
-              </code>{" "}
-              in the Supabase SQL Editor (adds{" "}
-              <code className="rounded bg-amber-100/80 px-1.5 py-0.5 text-xs dark:bg-amber-900/60">
-                is_public
-              </code>{" "}
-              and read access for public listings). Then reload this page.
-            </p>
-          </div>
-        ) : coursesError ? (
+        {coursesError ? (
           <p className="mt-12 text-sm text-red-600 dark:text-red-400">
-            Could not load listings. Try again in a moment.
+            Could not load listings. Apply migration{" "}
+            <code className="text-xs">057_course_listings.sql</code> if needed.
           </p>
-        ) : !courses || courses.length === 0 ? (
+        ) : courses.length === 0 ? (
           <div className="mx-auto mt-16 max-w-md rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center dark:border-zinc-800 dark:bg-zinc-950/90">
             <p className="font-medium text-zinc-900 dark:text-zinc-50">
               Nothing listed yet
             </p>
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              Each course is private until you enable it: open{" "}
-              <strong className="font-semibold text-zinc-800 dark:text-zinc-200">
-                Home
-              </strong>
-              , choose a course, then check{" "}
-              <strong className="font-semibold text-zinc-800 dark:text-zinc-200">
-                Show this course on Explore
-              </strong>{" "}
-              under Public Explore listing.
+              Creators can share courses for free or list originals for sale
+              from their course dashboard.
             </p>
             <Link
               href={user ? "/" : "/signup"}
