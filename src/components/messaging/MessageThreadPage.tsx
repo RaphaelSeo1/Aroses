@@ -1,28 +1,41 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { MessageThread } from "@/components/messaging/MessageThread";
-import {
-  conversationTitle,
-} from "@/lib/messaging/display-name";
+import { conversationTitle } from "@/lib/messaging/display-name";
 import type { ConversationMember, FriendProfile } from "@/lib/messaging/types";
 
 type Props = {
   conversationId: string;
   onBack?: () => void;
+  embedded?: boolean;
 };
 
-export function MessageThreadPage({ conversationId, onBack }: Props) {
-  const [meta, setMeta] = useState<{
+const metaCache = new Map<
+  string,
+  {
     title: string;
     courseId: string | null;
+    courseTitle: string | null;
     isGroup: boolean;
     members: ConversationMember[];
-  } | null>(null);
+  }
+>();
+
+function MessageThreadPageInner({ conversationId, onBack, embedded }: Props) {
+  const cached = metaCache.get(conversationId);
+  const [meta, setMeta] = useState(cached ?? null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const hit = metaCache.get(conversationId);
+    if (hit) {
+      setMeta(hit);
+      setError(null);
+      return;
+    }
+
     async function load() {
       try {
         const res = await fetch(`/api/conversations/${conversationId}`);
@@ -32,16 +45,20 @@ export function MessageThreadPage({ conversationId, onBack }: Props) {
             const c = body.conversation as {
               title: string | null;
               courseId: string | null;
+              courseTitle: string | null;
               isGroup: boolean;
               participants: FriendProfile[];
               members?: ConversationMember[];
             };
-            setMeta({
+            const next = {
               title: conversationTitle(c.isGroup, c.title, c.participants),
               courseId: c.courseId,
+              courseTitle: c.courseTitle ?? null,
               isGroup: c.isGroup,
               members: c.members ?? [],
-            });
+            };
+            metaCache.set(conversationId, next);
+            setMeta(next);
           } else {
             setError(typeof body.error === "string" ? body.error : "Could not load conversation.");
           }
@@ -57,7 +74,7 @@ export function MessageThreadPage({ conversationId, onBack }: Props) {
   }, [conversationId]);
 
   if (error) {
-    return <p className="text-sm text-red-600 dark:text-red-400">{error}</p>;
+    return <p className="p-4 text-sm text-red-600 dark:text-red-400">{error}</p>;
   }
 
   if (!meta) {
@@ -69,9 +86,13 @@ export function MessageThreadPage({ conversationId, onBack }: Props) {
       conversationId={conversationId}
       title={meta.title}
       courseId={meta.courseId}
+      courseTitle={meta.courseTitle}
       isGroup={meta.isGroup}
       members={meta.members}
       onBack={onBack}
+      embedded={embedded}
     />
   );
 }
+
+export const MessageThreadPage = memo(MessageThreadPageInner);

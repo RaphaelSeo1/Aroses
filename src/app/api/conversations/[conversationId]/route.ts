@@ -93,7 +93,7 @@ export async function GET(_request: Request, ctx: Params) {
       courseTitle,
       isGroup: conv.type === "group",
       participants,
-      members: conv.type === "group" ? members : undefined,
+      members,
     },
   });
 }

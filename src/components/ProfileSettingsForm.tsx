@@ -11,8 +11,7 @@ import {
 } from "react";
 import { LogoutButton } from "@/components/LogoutButton";
 import { FriendsApp } from "@/components/messaging/FriendsApp";
-import { MessageThreadPage } from "@/components/messaging/MessageThreadPage";
-import { MessagesInbox } from "@/components/messaging/MessagesInbox";
+import { MessagingWorkspace } from "@/components/messaging/MessagingWorkspace";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { createClient } from "@/lib/supabase/client";
 import { getBrowserAuthOrigin } from "@/lib/site-url";
@@ -209,6 +208,19 @@ export function ProfileSettingsForm({
     }
   }, [panel]);
 
+  const [visitedPanels, setVisitedPanels] = useState<Set<Panel>>(
+    () => new Set([initialPanel])
+  );
+
+  useEffect(() => {
+    setVisitedPanels((prev) => {
+      if (prev.has(panel)) return prev;
+      const next = new Set(prev);
+      next.add(panel);
+      return next;
+    });
+  }, [panel]);
+
   useEffect(() => {
     let cancelled = false;
     async function loadUnread() {
@@ -229,7 +241,7 @@ export function ProfileSettingsForm({
       cancelled = true;
       window.removeEventListener(MESSAGING_REFRESH_EVENT, onRefresh);
     };
-  }, [panel]);
+  }, []);
 
   function goPanel(next: Panel) {
     setPanel(next);
@@ -562,8 +574,12 @@ export function ProfileSettingsForm({
     backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2371717a'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`,
   };
 
+  const wideLayout = panel === "messages";
+
   return (
-    <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:gap-10">
+    <div
+      className={`flex flex-col gap-8 lg:flex-row lg:items-start lg:gap-10 ${wideLayout ? "mx-auto max-w-6xl" : ""}`}
+    >
       <aside className="shrink-0 lg:w-56 lg:pt-1">
         <nav
           className="flex flex-row gap-1 overflow-x-auto rounded-2xl border border-zinc-200/90 bg-white/90 p-1.5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90 lg:flex-col lg:overflow-visible lg:p-2 lg:shadow-md lg:shadow-zinc-900/5 dark:lg:shadow-black/40"
@@ -644,7 +660,8 @@ export function ProfileSettingsForm({
 
       <div className="min-w-0 flex-1">
         <div className="overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-xl shadow-zinc-900/[0.06] ring-1 ring-zinc-900/[0.04] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-black/40 dark:ring-white/[0.06]">
-          {panel === "general" ? (
+          <div className={panel === "general" ? undefined : "hidden"}>
+          {visitedPanels.has("general") && (
             <>
               <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
                 <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -905,7 +922,11 @@ export function ProfileSettingsForm({
                 </button>
               </footer>
             </>
-          ) : panel === "account" ? (
+          )}
+          </div>
+
+          <div className={panel === "account" ? undefined : "hidden"}>
+          {visitedPanels.has("account") && (
             <>
               <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
                 <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -964,7 +985,11 @@ export function ProfileSettingsForm({
                 </SettingsRow>
               </div>
             </>
-          ) : panel === "friends" ? (
+          )}
+          </div>
+
+          <div className={panel === "friends" ? undefined : "hidden"}>
+          {visitedPanels.has("friends") && (
             <>
               <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
                 <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -978,33 +1003,36 @@ export function ProfileSettingsForm({
                 <FriendsApp embedded onOpenConversation={openConversation} />
               </div>
             </>
-          ) : panel === "messages" ? (
+          )}
+          </div>
+
+          <div className={panel === "messages" ? undefined : "hidden"}>
+          {visitedPanels.has("messages") && (
             <>
-              <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
+              <header className="border-b border-zinc-100 px-6 py-5 dark:border-zinc-800">
                 <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                   Messages
                 </h1>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  Conversations with friends and study groups.
+                  Inbox, chats, and group members.
                 </p>
               </header>
-              <div className="px-4 py-6 sm:px-6">
-                {activeConversationId ? (
-                  <MessageThreadPage
-                    conversationId={activeConversationId}
-                    onBack={() => onConversationChange(null)}
-                  />
-                ) : (
-                  <MessagesInbox
-                    friendsHref="/dashboard/profile?tab=friends"
-                    onSelectConversation={openConversation}
-                  />
-                )}
+              <div className="p-3 sm:p-4">
+                <MessagingWorkspace
+                  activeConversationId={activeConversationId}
+                  onSelectConversation={openConversation}
+                  onBackToInbox={() => onConversationChange(null)}
+                />
               </div>
             </>
-          ) : panel === "progress" ? (
+          )}
+          </div>
+
+          <div className={panel === "progress" ? undefined : "hidden"}>
+          {visitedPanels.has("progress") && (
             <div className="px-4 pb-8 pt-4 sm:px-6 sm:pb-10">{progressPanel}</div>
-          ) : null}
+          )}
+          </div>
         </div>
       </div>
     </div>

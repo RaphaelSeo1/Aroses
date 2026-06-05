@@ -45,7 +45,7 @@ export default async function ProfilePage({ searchParams }: PageProps) {
     <>
       <AppHeader right={<HeaderNavLoggedInServer />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-        <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 sm:py-12 lg:py-14">
+        <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12 lg:py-14">
           <Suspense fallback={<ProfileBodySkeleton />}>
             <ProfilePageBody
               userEmail={user.email}
