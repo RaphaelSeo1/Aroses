@@ -15,6 +15,7 @@ import { MessagingWorkspace } from "@/components/messaging/MessagingWorkspace";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { createClient } from "@/lib/supabase/client";
 import { getBrowserAuthOrigin } from "@/lib/site-url";
+import { replaceProfileUrl } from "@/lib/messaging/profile-url";
 import { MESSAGING_REFRESH_EVENT } from "@/lib/messaging/realtime";
 import { parseUsername } from "@/lib/onboarding";
 import type { UserProfileRow } from "@/types/profile";
@@ -193,6 +194,9 @@ export function ProfileSettingsForm({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [panel, setPanel] = useState<Panel>(initialPanel);
+  const [conversationId, setConversationId] = useState<string | null>(() =>
+    searchParams.get("conversation")
+  );
   const [socialOpen, setSocialOpen] = useState(
     initialPanel === "friends" || initialPanel === "messages"
   );
@@ -200,6 +204,7 @@ export function ProfileSettingsForm({
 
   useEffect(() => {
     setPanel(tabToPanel(searchParams.get("tab")));
+    setConversationId(searchParams.get("conversation"));
   }, [searchParams]);
 
   useEffect(() => {
@@ -245,36 +250,26 @@ export function ProfileSettingsForm({
 
   function goPanel(next: Panel) {
     setPanel(next);
-    if (next === "progress") {
-      router.replace("/dashboard/profile?tab=progress", { scroll: false });
-    } else if (next === "account") {
-      router.replace("/dashboard/profile?tab=account", { scroll: false });
-    } else if (next === "friends") {
-      router.replace("/dashboard/profile?tab=friends", { scroll: false });
-    } else if (next === "messages") {
-      router.replace("/dashboard/profile?tab=messages", { scroll: false });
+    if (next === "messages") {
+      replaceProfileUrl({ tab: "messages", conversation: conversationId });
+    } else if (next === "general") {
+      replaceProfileUrl({ tab: undefined, conversation: null });
     } else {
-      router.replace("/dashboard/profile", { scroll: false });
+      replaceProfileUrl({ tab: next, conversation: null });
     }
   }
 
-  function openConversation(conversationId: string) {
+  function openConversation(id: string) {
     setPanel("messages");
     setSocialOpen(true);
-    router.replace(
-      `/dashboard/profile?tab=messages&conversation=${encodeURIComponent(conversationId)}`,
-      { scroll: false }
-    );
+    setConversationId(id);
+    replaceProfileUrl({ tab: "messages", conversation: id });
   }
 
   function onConversationChange(id: string | null) {
-    const params = new URLSearchParams();
-    params.set("tab", "messages");
-    if (id) params.set("conversation", id);
-    router.replace(`/dashboard/profile?${params.toString()}`, { scroll: false });
+    setConversationId(id);
+    replaceProfileUrl({ tab: "messages", conversation: id });
   }
-
-  const activeConversationId = searchParams.get("conversation");
   const unreadBadge =
     unreadMessages > 99 ? "99+" : String(unreadMessages);
   const [displayName, setDisplayName] = useState(initial?.display_name ?? "");
@@ -1019,9 +1014,8 @@ export function ProfileSettingsForm({
               </header>
               <div className="p-3 sm:p-4">
                 <MessagingWorkspace
-                  activeConversationId={activeConversationId}
-                  onSelectConversation={openConversation}
-                  onBackToInbox={() => onConversationChange(null)}
+                  conversationId={conversationId}
+                  onConversationChange={onConversationChange}
                 />
               </div>
             </>

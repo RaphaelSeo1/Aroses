@@ -12,6 +12,10 @@ import {
   MESSAGING_REFRESH_EVENT,
 } from "@/lib/messaging/realtime";
 import type { ConversationListItem } from "@/lib/messaging/types";
+import {
+  prefetchConversationMeta,
+  prefetchMessages,
+} from "@/lib/messaging/thread-cache";
 import { createClient } from "@/lib/supabase/client";
 
 function formatWhen(iso: string | null): string {
@@ -134,6 +138,14 @@ function MessagesInboxInner({
             <li key={c.id}>
               <button
                 type="button"
+                onMouseEnter={() => {
+                  void prefetchConversationMeta(c.id);
+                  void prefetchMessages(c.id);
+                }}
+                onFocus={() => {
+                  void prefetchConversationMeta(c.id);
+                  void prefetchMessages(c.id);
+                }}
                 onClick={() =>
                   onSelectConversation
                     ? onSelectConversation(c.id)

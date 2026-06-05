@@ -2,8 +2,11 @@
 
 import { memo, useEffect, useState } from "react";
 import { MessageThread } from "@/components/messaging/MessageThread";
-import { conversationTitle } from "@/lib/messaging/display-name";
-import type { ConversationMember, FriendProfile } from "@/lib/messaging/types";
+import {
+  getCachedMeta,
+  prefetchConversationMeta,
+  type ConversationMeta,
+} from "@/lib/messaging/thread-cache";
 
 type Props = {
   conversationId: string;
@@ -11,63 +14,32 @@ type Props = {
   embedded?: boolean;
 };
 
-const metaCache = new Map<
-  string,
-  {
-    title: string;
-    courseId: string | null;
-    courseTitle: string | null;
-    isGroup: boolean;
-    members: ConversationMember[];
-  }
->();
-
 function MessageThreadPageInner({ conversationId, onBack, embedded }: Props) {
-  const cached = metaCache.get(conversationId);
-  const [meta, setMeta] = useState(cached ?? null);
+  const [meta, setMeta] = useState<ConversationMeta | null>(
+    () => getCachedMeta(conversationId) ?? null
+  );
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    const hit = metaCache.get(conversationId);
+    const hit = getCachedMeta(conversationId);
     if (hit) {
       setMeta(hit);
       setError(null);
       return;
     }
 
-    async function load() {
-      try {
-        const res = await fetch(`/api/conversations/${conversationId}`);
-        const body = await res.json().catch(() => ({}));
-        if (!cancelled) {
-          if (res.ok && body.conversation) {
-            const c = body.conversation as {
-              title: string | null;
-              courseId: string | null;
-              courseTitle: string | null;
-              isGroup: boolean;
-              participants: FriendProfile[];
-              members?: ConversationMember[];
-            };
-            const next = {
-              title: conversationTitle(c.isGroup, c.title, c.participants),
-              courseId: c.courseId,
-              courseTitle: c.courseTitle ?? null,
-              isGroup: c.isGroup,
-              members: c.members ?? [],
-            };
-            metaCache.set(conversationId, next);
-            setMeta(next);
-          } else {
-            setError(typeof body.error === "string" ? body.error : "Could not load conversation.");
-          }
-        }
-      } catch {
-        if (!cancelled) setError("Network error.");
+    let cancelled = false;
+    setMeta(null);
+    void prefetchConversationMeta(conversationId).then((next) => {
+      if (cancelled) return;
+      if (next) {
+        setMeta(next);
+        setError(null);
+      } else {
+        setError("Could not load conversation.");
       }
-    }
-    void load();
+    });
+
     return () => {
       cancelled = true;
     };

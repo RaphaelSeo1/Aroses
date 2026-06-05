@@ -10,6 +10,7 @@ import {
   type DbMessageRow,
 } from "@/lib/messaging/realtime";
 import type { ConversationMember, MessageRow } from "@/lib/messaging/types";
+import { getCachedMessages, setCachedMessages } from "@/lib/messaging/thread-cache";
 import { createClient } from "@/lib/supabase/client";
 
 type Props = {
@@ -50,6 +51,7 @@ function MessageThreadInner({
   const [contextMaterialId, setContextMaterialId] = useState("");
   const [contextModuleId, setContextModuleId] = useState("");
   const [contextLessonIndex, setContextLessonIndex] = useState("");
+  const [infoOpen, setInfoOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
@@ -65,7 +67,9 @@ function MessageThreadInner({
       const res = await fetch(`/api/conversations/${conversationId}/messages`);
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        setMessages(body.messages ?? []);
+        const rows = (body.messages ?? []) as MessageRow[];
+        setMessages(rows);
+        setCachedMessages(conversationId, rows);
         await markRead();
       }
     } catch {
@@ -73,6 +77,23 @@ function MessageThreadInner({
     }
     setLoading(false);
   }, [conversationId, markRead]);
+
+  useEffect(() => {
+    setInfoOpen(false);
+    initialScrollDone.current = false;
+    atBottomRef.current = true;
+    setDraft("");
+    setError(null);
+
+    const cached = getCachedMessages(conversationId);
+    if (cached) {
+      setMessages(cached);
+      setLoading(false);
+    } else {
+      setMessages([]);
+      setLoading(true);
+    }
+  }, [conversationId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,7 +122,9 @@ function MessageThreadInner({
             const row = payload.new as DbMessageRow;
             setMessages((prev) => {
               if (prev.some((m) => m.id === row.id)) return prev;
-              return [...prev, mapDbMessageToRow(row, user.id)];
+              const next = [...prev, mapDbMessageToRow(row, user.id)];
+              setCachedMessages(conversationId, next);
+              return next;
             });
             if (row.sender_id !== user.id) {
               void markRead();
@@ -170,7 +193,12 @@ function MessageThreadInner({
         setError(typeof body.error === "string" ? body.error : "Could not send.");
       } else if (body.message) {
         const msg = body.message as MessageRow;
-        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === msg.id)) return prev;
+          const next = [...prev, msg];
+          setCachedMessages(conversationId, next);
+          return next;
+        });
         setDraft("");
         atBottomRef.current = true;
         dispatchMessagingRefresh();
@@ -189,11 +217,11 @@ function MessageThreadInner({
   }
 
   const shellClass = embedded
-    ? "flex min-h-0 flex-1 flex-col bg-white dark:bg-zinc-950"
-    : "flex min-h-[calc(100vh-12rem)] flex-col rounded-3xl border border-zinc-200/90 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-950";
+    ? `flex min-h-0 flex-1 bg-white dark:bg-zinc-950 ${infoOpen ? "flex-col lg:flex-row" : "flex-col"}`
+    : `flex min-h-[calc(100vh-12rem)] rounded-3xl border border-zinc-200/90 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-950 ${infoOpen ? "flex-col lg:flex-row" : "flex-col"}`;
 
   return (
-    <div className={`${shellClass} lg:flex-row`}>
+    <div className={shellClass}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 items-center gap-3 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800 sm:px-5">
           {onBack ? (
@@ -224,14 +252,30 @@ function MessageThreadInner({
               </p>
             ) : null}
           </div>
-          {courseId && !embedded ? (
-            <Link
-              href={`/dashboard/courses/${courseId}`}
-              className="shrink-0 text-xs font-medium text-brand hover:underline"
-            >
-              Course
-            </Link>
-          ) : null}
+          <div className="flex shrink-0 items-center gap-2">
+            {members.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setInfoOpen((v) => !v)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                  infoOpen
+                    ? "bg-zinc-200 text-zinc-900 dark:bg-zinc-700 dark:text-zinc-100"
+                    : "border border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                }`}
+                aria-expanded={infoOpen}
+              >
+                {infoOpen ? "Hide info" : "Info"}
+              </button>
+            ) : null}
+            {courseId && !embedded ? (
+              <Link
+                href={`/dashboard/courses/${courseId}`}
+                className="text-xs font-medium text-brand hover:underline"
+              >
+                Course
+              </Link>
+            ) : null}
+          </div>
         </header>
 
         <div
@@ -387,7 +431,7 @@ function MessageThreadInner({
         </footer>
       </div>
 
-      {members.length > 0 ? (
+      {infoOpen && members.length > 0 ? (
         <ConversationSidebar
           title={title}
           isGroup={!!isGroup}
