@@ -5,7 +5,7 @@ import { MessageThread } from "@/components/messaging/MessageThread";
 import {
   conversationTitle,
 } from "@/lib/messaging/display-name";
-import type { FriendProfile } from "@/lib/messaging/types";
+import type { ConversationMember, FriendProfile } from "@/lib/messaging/types";
 
 type Props = {
   conversationId: string;
@@ -17,6 +17,7 @@ export function MessageThreadPage({ conversationId, onBack }: Props) {
     title: string;
     courseId: string | null;
     isGroup: boolean;
+    members: ConversationMember[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,11 +34,13 @@ export function MessageThreadPage({ conversationId, onBack }: Props) {
               courseId: string | null;
               isGroup: boolean;
               participants: FriendProfile[];
+              members?: ConversationMember[];
             };
             setMeta({
               title: conversationTitle(c.isGroup, c.title, c.participants),
               courseId: c.courseId,
               isGroup: c.isGroup,
+              members: c.members ?? [],
             });
           } else {
             setError(typeof body.error === "string" ? body.error : "Could not load conversation.");
@@ -67,6 +70,7 @@ export function MessageThreadPage({ conversationId, onBack }: Props) {
       title={meta.title}
       courseId={meta.courseId}
       isGroup={meta.isGroup}
+      members={meta.members}
       onBack={onBack}
     />
   );

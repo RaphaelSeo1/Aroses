@@ -7,6 +7,11 @@ export type FriendProfile = {
   avatarUrl: string | null;
 };
 
+export type ConversationMember = FriendProfile & {
+  role: "member" | "admin";
+  isSelf: boolean;
+};
+
 export type FriendshipListItem = {
   id: string;
   status: FriendshipStatus;

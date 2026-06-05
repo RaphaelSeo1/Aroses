@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import {
   buildContextLabel,
   createDirectConversation,
+  createGroupConversation,
 } from "@/lib/messaging/conversations";
 import { enrichProfiles } from "@/lib/messaging/profiles";
 import type { ConversationListItem, FriendProfile } from "@/lib/messaging/types";
@@ -209,36 +209,13 @@ export async function POST(request: Request) {
     const courseId =
       typeof b.courseId === "string" && UUID_RE.test(b.courseId) ? b.courseId : null;
 
-    const { data: conv, error: convErr } = await supabase
-      .from("conversations")
-      .insert({
-        type: "group",
-        title,
-        course_id: courseId,
-        created_by: user.id,
-      })
-      .select("id")
-      .single();
-
-    if (convErr || !conv) {
-      console.error("[conversations POST group]", convErr);
+    const conv = await createGroupConversation(supabase, user.id, {
+      title,
+      memberIds: uniqueMembers,
+      courseId,
+    });
+    if (!conv) {
       return NextResponse.json({ error: "Could not create group." }, { status: 500 });
-    }
-
-    const admin = createAdminClient();
-    const writer = admin ?? supabase;
-    const rows = [
-      { conversation_id: conv.id, user_id: user.id, role: "admin" as const },
-      ...uniqueMembers.map((id) => ({
-        conversation_id: conv.id,
-        user_id: id,
-        role: "member" as const,
-      })),
-    ];
-    const { error: partErr } = await writer.from("conversation_participants").insert(rows);
-    if (partErr) {
-      console.error("[conversations POST participants]", partErr);
-      return NextResponse.json({ error: "Could not add members." }, { status: 500 });
     }
 
     return NextResponse.json({ conversationId: conv.id });

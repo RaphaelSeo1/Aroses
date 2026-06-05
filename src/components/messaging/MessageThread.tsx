@@ -8,18 +8,27 @@ import {
   mapDbMessageToRow,
   type DbMessageRow,
 } from "@/lib/messaging/realtime";
-import type { MessageRow } from "@/lib/messaging/types";
+import type { ConversationMember, MessageRow } from "@/lib/messaging/types";
 import { createClient } from "@/lib/supabase/client";
+import { GroupMembersPanel } from "@/components/messaging/GroupMembersPanel";
 
 type Props = {
   conversationId: string;
   title: string;
   courseId?: string | null;
   isGroup?: boolean;
+  members?: ConversationMember[];
   onBack?: () => void;
 };
 
-export function MessageThread({ conversationId, title, courseId, isGroup, onBack }: Props) {
+export function MessageThread({
+  conversationId,
+  title,
+  courseId,
+  isGroup,
+  members = [],
+  onBack,
+}: Props) {
   const router = useRouter();
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [draft, setDraft] = useState("");
@@ -152,7 +161,10 @@ export function MessageThread({ conversationId, title, courseId, isGroup, onBack
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold text-zinc-900 dark:text-zinc-50">{title}</h1>
           {isGroup ? (
-            <p className="text-xs text-zinc-500">Group chat</p>
+            <p className="text-xs text-zinc-500">
+              Group chat
+              {members.length > 0 ? ` · ${members.length} members` : ""}
+            </p>
           ) : null}
         </div>
         {courseId ? (
@@ -164,6 +176,8 @@ export function MessageThread({ conversationId, title, courseId, isGroup, onBack
           </Link>
         ) : null}
       </header>
+
+      {isGroup && members.length > 0 ? <GroupMembersPanel members={members} /> : null}
 
       <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
         {loading ? (

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { enrichProfiles } from "@/lib/messaging/profiles";
+import type { ConversationMember, FriendProfile } from "@/lib/messaging/types";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
@@ -36,12 +38,17 @@ export async function GET(_request: Request, ctx: Params) {
 
   const { data: parts } = await supabase
     .from("conversation_participants")
-    .select("user_id")
+    .select("user_id, role")
     .eq("conversation_id", conversationId);
 
-  const others = (parts ?? []).map((p) => p.user_id).filter((id) => id !== user.id);
-  const profileMap = await enrichProfiles(supabase, others);
-  const participants = others.map((id) => {
+  const memberRows = parts ?? [];
+  const allUserIds = memberRows.map((p) => p.user_id);
+  const others = allUserIds.filter((id) => id !== user.id);
+
+  const admin = createAdminClient();
+  const profileMap = await enrichProfiles(admin ?? supabase, allUserIds);
+
+  function toProfile(id: string): FriendProfile {
     const p = profileMap.get(id);
     return {
       id,
@@ -49,7 +56,23 @@ export async function GET(_request: Request, ctx: Params) {
       username: p?.username ?? null,
       avatarUrl: p?.avatarUrl ?? null,
     };
-  });
+  }
+
+  const participants = others.map(toProfile);
+
+  const members: ConversationMember[] = memberRows
+    .map((row) => ({
+      ...toProfile(row.user_id),
+      role: row.role === "admin" ? ("admin" as const) : ("member" as const),
+      isSelf: row.user_id === user.id,
+    }))
+    .sort((a, b) => {
+      if (a.isSelf) return -1;
+      if (b.isSelf) return 1;
+      const aName = a.displayName ?? a.username ?? "";
+      const bName = b.displayName ?? b.username ?? "";
+      return aName.localeCompare(bName);
+    });
 
   let courseTitle: string | null = null;
   if (conv.course_id) {
@@ -70,6 +93,7 @@ export async function GET(_request: Request, ctx: Params) {
       courseTitle,
       isGroup: conv.type === "group",
       participants,
+      members: conv.type === "group" ? members : undefined,
     },
   });
 }

@@ -123,7 +123,6 @@ export async function POST(request: Request) {
   let profile: ProfileLookupRow | null = null;
 
   if (targetUserId && UUID_RE.test(targetUserId)) {
-    const { createAdminClient } = await import("@/lib/supabase/admin");
     const admin = createAdminClient();
     const lookup = admin ?? supabase;
     const { data: row } = await lookup

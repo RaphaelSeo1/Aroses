@@ -6,15 +6,23 @@ import { useCallback, useEffect, useState } from "react";
 import { friendDisplayName } from "@/lib/messaging/display-name";
 import type { FriendshipListItem } from "@/lib/messaging/types";
 
-async function openDirectMessage(userId: string): Promise<string | null> {
+async function openDirectMessage(userId: string): Promise<{ conversationId: string | null; error: string | null }> {
   const res = await fetch("/api/conversations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type: "direct", userId }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) return null;
-  return typeof body.conversationId === "string" ? body.conversationId : null;
+  if (!res.ok) {
+    return {
+      conversationId: null,
+      error: typeof body.error === "string" ? body.error : "Could not open conversation.",
+    };
+  }
+  return {
+    conversationId: typeof body.conversationId === "string" ? body.conversationId : null,
+    error: null,
+  };
 }
 
 function FriendRow({
@@ -195,12 +203,15 @@ export function FriendsApp({
 
   async function messageFriend(userId: string) {
     setBusyId(userId);
-    const convId = await openDirectMessage(userId);
+    setError(null);
+    const { conversationId, error: openError } = await openDirectMessage(userId);
     setBusyId(null);
-    if (convId) {
-      if (onOpenConversation) onOpenConversation(convId);
-      else router.push(`/messages/${convId}`);
-    } else setError("Could not open conversation. Are you friends?");
+    if (conversationId) {
+      if (onOpenConversation) onOpenConversation(conversationId);
+      else router.push(`/messages/${conversationId}`);
+    } else {
+      setError(openError ?? "Could not open conversation.");
+    }
   }
 
   async function createGroup(e: React.FormEvent) {

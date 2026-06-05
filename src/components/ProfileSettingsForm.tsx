@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   useCallback,
@@ -16,6 +15,7 @@ import { MessageThreadPage } from "@/components/messaging/MessageThreadPage";
 import { MessagesInbox } from "@/components/messaging/MessagesInbox";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { createClient } from "@/lib/supabase/client";
+import { getBrowserAuthOrigin } from "@/lib/site-url";
 import { MESSAGING_REFRESH_EVENT } from "@/lib/messaging/realtime";
 import { parseUsername } from "@/lib/onboarding";
 import type { UserProfileRow } from "@/types/profile";
@@ -283,6 +283,13 @@ export function ProfileSettingsForm({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [passwordResetBusy, setPasswordResetBusy] = useState(false);
+  const [passwordResetMessage, setPasswordResetMessage] = useState<string | null>(
+    null
+  );
+  const [passwordResetError, setPasswordResetError] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     // Keep in sync when `router.refresh()` updates server-passed `initial`.
@@ -431,6 +438,32 @@ export function ProfileSettingsForm({
     usernameInput,
     usernameStatus,
   ]);
+
+  const sendPasswordReset = useCallback(async () => {
+    setPasswordResetBusy(true);
+    setPasswordResetMessage(null);
+    setPasswordResetError(null);
+    try {
+      const origin = getBrowserAuthOrigin() || window.location.origin;
+      const redirectTo = `${origin}/auth/callback?next=${encodeURIComponent("/reset-password")}`;
+      const supabase = createClient();
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+        email,
+        { redirectTo }
+      );
+      if (resetError) {
+        setPasswordResetError(resetError.message);
+        return;
+      }
+      setPasswordResetMessage(
+        `We sent a reset link to ${email}. Check your inbox to choose a new password.`
+      );
+    } catch {
+      setPasswordResetError("Network error. Try again.");
+    } finally {
+      setPasswordResetBusy(false);
+    }
+  }, [email]);
 
   const persistAvatarUrl = useCallback(
     async (nextUrl: string | null) => {
@@ -879,65 +912,56 @@ export function ProfileSettingsForm({
                   Account
                 </h1>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  Sign-in, password, and session.
+                  Email, password, and session.
                 </p>
               </header>
 
-              <div className="space-y-6 px-6 py-6">
-                <div className="flex gap-4 rounded-xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-700 dark:bg-zinc-900/50">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white shadow-sm dark:bg-zinc-800">
-                    <IconShield className="h-5 w-5 text-zinc-600 dark:text-zinc-300" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                      Secure your account
-                    </p>
-                    <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                      Use a strong, unique password. If you sign in with email,
-                      you can request a reset link anytime from the login page.
-                    </p>
-                    <Link
-                      href="/login"
-                      className="mt-3 inline-flex rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+              <div className="divide-y divide-zinc-100 px-6 dark:divide-zinc-800">
+                <SettingsRow label="Email">
+                  <p className="text-sm text-zinc-700 dark:text-zinc-300 sm:text-right">
+                    {email}
+                  </p>
+                </SettingsRow>
+
+                <SettingsRow
+                  label="Password"
+                  hint="We never store your password in plain text."
+                  alignTop
+                >
+                  <div className="flex flex-col items-start gap-2 sm:items-end">
+                    <button
+                      type="button"
+                      disabled={passwordResetBusy}
+                      onClick={() => void sendPasswordReset()}
+                      className="text-sm font-medium text-zinc-900 underline-offset-2 hover:underline disabled:opacity-50 dark:text-zinc-200"
                     >
-                      Open login & forgot password
-                    </Link>
-                  </div>
-                </div>
-
-                <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                  <SettingsRow label="Email">
-                    <p className="text-sm text-zinc-700 dark:text-zinc-300 sm:text-right">
-                      {email}
-                    </p>
-                  </SettingsRow>
-
-                  <SettingsRow
-                    label="Password"
-                    hint="We never store your password in plain text."
-                  >
-                    <p className="max-w-sm text-sm text-zinc-600 dark:text-zinc-400 sm:text-right">
-                      Reset via email from{" "}
-                      <Link
-                        href="/login"
-                        className="font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-200"
+                      {passwordResetBusy ? "Sending reset link…" : "Forgot password"}
+                    </button>
+                    {passwordResetError ? (
+                      <p
+                        role="alert"
+                        className="max-w-sm text-sm text-red-600 dark:text-red-400 sm:text-right"
                       >
-                        login → Forgot password
-                      </Link>
-                      .
-                    </p>
-                  </SettingsRow>
+                        {passwordResetError}
+                      </p>
+                    ) : null}
+                    {passwordResetMessage ? (
+                      <p className="max-w-sm text-sm text-zinc-600 dark:text-zinc-400 sm:text-right">
+                        {passwordResetMessage}
+                      </p>
+                    ) : null}
+                  </div>
+                </SettingsRow>
 
-                  <SettingsRow
-                    label="Session"
-                    hint="Sign out on this device."
-                    alignTop
-                  >
-                    <div className="flex justify-end">
-                      <LogoutButton className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900" />
-                    </div>
-                  </SettingsRow>
-                </div>
+                <SettingsRow
+                  label="Session"
+                  hint="Sign out on this device."
+                  alignTop
+                >
+                  <div className="flex justify-end">
+                    <LogoutButton className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900" />
+                  </div>
+                </SettingsRow>
               </div>
             </>
           ) : panel === "friends" ? (
