@@ -16,6 +16,7 @@ import { MessageThreadPage } from "@/components/messaging/MessageThreadPage";
 import { MessagesInbox } from "@/components/messaging/MessagesInbox";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { createClient } from "@/lib/supabase/client";
+import { MESSAGING_REFRESH_EVENT } from "@/lib/messaging/realtime";
 import { parseUsername } from "@/lib/onboarding";
 import type { UserProfileRow } from "@/types/profile";
 
@@ -222,10 +223,11 @@ export function ProfileSettingsForm({
       }
     }
     void loadUnread();
-    const t = setInterval(() => void loadUnread(), 20000);
+    const onRefresh = () => void loadUnread();
+    window.addEventListener(MESSAGING_REFRESH_EVENT, onRefresh);
     return () => {
       cancelled = true;
-      clearInterval(t);
+      window.removeEventListener(MESSAGING_REFRESH_EVENT, onRefresh);
     };
   }, [panel]);
 

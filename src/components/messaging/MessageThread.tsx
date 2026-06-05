@@ -3,8 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { friendDisplayName } from "@/lib/messaging/display-name";
+import {
+  dispatchMessagingRefresh,
+  mapDbMessageToRow,
+  type DbMessageRow,
+} from "@/lib/messaging/realtime";
 import type { MessageRow } from "@/lib/messaging/types";
+import { createClient } from "@/lib/supabase/client";
 
 type Props = {
   conversationId: string;
@@ -27,25 +32,72 @@ export function MessageThread({ conversationId, title, courseId, isGroup, onBack
   const [contextLessonIndex, setContextLessonIndex] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const markRead = useCallback(async () => {
+    await fetch(`/api/conversations/${conversationId}/read`, { method: "PATCH" });
+    dispatchMessagingRefresh();
+  }, [conversationId]);
+
   const loadMessages = useCallback(async () => {
     try {
       const res = await fetch(`/api/conversations/${conversationId}/messages`);
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         setMessages(body.messages ?? []);
-        await fetch(`/api/conversations/${conversationId}/read`, { method: "PATCH" });
+        await markRead();
       }
     } catch {
-      /* ignore poll errors */
+      /* ignore fetch errors */
     }
     setLoading(false);
-  }, [conversationId]);
+  }, [conversationId, markRead]);
 
   useEffect(() => {
-    void loadMessages();
-    const t = setInterval(() => void loadMessages(), 8000);
-    return () => clearInterval(t);
-  }, [loadMessages]);
+    let cancelled = false;
+    let removeChannel: (() => void) | undefined;
+    const supabase = createClient();
+
+    void (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (cancelled || !user) return;
+
+      await loadMessages();
+
+      const channel = supabase
+        .channel(`thread:${conversationId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "messages",
+            filter: `conversation_id=eq.${conversationId}`,
+          },
+          (payload) => {
+            const row = payload.new as DbMessageRow;
+            setMessages((prev) => {
+              if (prev.some((m) => m.id === row.id)) return prev;
+              return [...prev, mapDbMessageToRow(row, user.id)];
+            });
+            if (row.sender_id !== user.id) {
+              void markRead();
+            }
+            dispatchMessagingRefresh();
+          }
+        )
+        .subscribe();
+
+      removeChannel = () => {
+        void supabase.removeChannel(channel);
+      };
+    })();
+
+    return () => {
+      cancelled = true;
+      removeChannel?.();
+    };
+  }, [conversationId, loadMessages, markRead]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -76,8 +128,10 @@ export function MessageThread({ conversationId, title, courseId, isGroup, onBack
       if (!res.ok) {
         setError(typeof body.error === "string" ? body.error : "Could not send.");
       } else if (body.message) {
-        setMessages((prev) => [...prev, body.message as MessageRow]);
+        const msg = body.message as MessageRow;
+        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
         setDraft("");
+        dispatchMessagingRefresh();
       }
     } catch {
       setError("Network error.");

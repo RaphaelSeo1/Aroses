@@ -2,12 +2,17 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   conversationTitle,
   friendDisplayName,
 } from "@/lib/messaging/display-name";
+import {
+  dispatchMessagingRefresh,
+  MESSAGING_REFRESH_EVENT,
+} from "@/lib/messaging/realtime";
 import type { ConversationListItem } from "@/lib/messaging/types";
+import { createClient } from "@/lib/supabase/client";
 
 function formatWhen(iso: string | null): string {
   if (!iso) return "";
@@ -35,34 +40,70 @@ export function MessagesInbox({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/conversations");
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setConversations(body.conversations ?? []);
+        setError(null);
+      } else {
+        setError(typeof body.error === "string" ? body.error : "Could not load inbox.");
+      }
+    } catch {
+      setError("Network error.");
+    }
+    setLoading(false);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetch("/api/conversations");
-        const body = await res.json().catch(() => ({}));
-        if (!cancelled) {
-          if (res.ok) setConversations(body.conversations ?? []);
-          else setError(typeof body.error === "string" ? body.error : "Could not load inbox.");
-        }
-      } catch {
-        if (!cancelled) setError("Network error.");
-      }
-      if (!cancelled) setLoading(false);
-    }
+    const supabase = createClient();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
     void load();
-    const t = setInterval(load, 15000);
+
+    void (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (cancelled || !user) return;
+
+      channel = supabase
+        .channel(`inbox:${user.id}`)
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "messages" },
+          () => {
+            void load();
+            dispatchMessagingRefresh();
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "conversations" },
+          () => {
+            void load();
+          }
+        )
+        .subscribe();
+    })();
+
+    const onRefresh = () => void load();
+    window.addEventListener(MESSAGING_REFRESH_EVENT, onRefresh);
+
     return () => {
       cancelled = true;
-      clearInterval(t);
+      window.removeEventListener(MESSAGING_REFRESH_EVENT, onRefresh);
+      if (channel) void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [load]);
 
   return (
     <div>
       <div className="mb-4 flex items-center justify-between gap-3">
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          Messages with friends. Polls every 15s for new replies.
+          Messages with friends.
         </p>
         <Link
           href={friendsHref}
