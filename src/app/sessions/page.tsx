@@ -71,8 +71,10 @@ export default async function SessionsLibraryPage() {
                 Your sessions
               </h1>
               <p className="mt-2 text-sm text-zinc-600">
-                Everything you&apos;ve worked on with Rose. Click any session to
-                open its recap.
+                Everything you&apos;ve worked on with Rose. Use{" "}
+                <span className="font-medium text-violet-800">Manage</span> to
+                select sessions, delete them, or combine recaps into one study
+                guide.
               </p>
             </div>
             <Link

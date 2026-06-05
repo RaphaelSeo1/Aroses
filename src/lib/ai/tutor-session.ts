@@ -652,3 +652,95 @@ Generate the recap now. Start with the H1 title.`;
   }
   return block.text.trim();
 }
+
+// ---------------------------------------------------------------------------
+// 7. Combined notes from multiple sessions
+// ---------------------------------------------------------------------------
+
+const COMBINE_SESSIONS_SYSTEM = `You merge several tutor-session recaps into ONE polished collective study guide. Output MARKDOWN.
+
+${TUTOR_NOTES_QUALITY_RULES}
+
+STRUCTURE:
+# {Emoji} Combined study notes
+
+> *{N} sessions combined · {date range}*
+
+## Overview
+{2-4 sentences on what these sessions covered together and how they connect.}
+
+## Sessions included
+{Bullet list: **Session title** — date — one-line summary}
+
+## Unified topics
+{Merge overlapping concepts — group by theme, not by session order. Use H3 subsections with bullets, callouts, and code blocks for journal entries/formulas.}
+
+## Key terms
+{Consolidated glossary — dedupe terms that appear in multiple sessions.}
+
+## Self-check questions
+{5-8 questions spanning all sessions.}
+
+## What to study next
+{3-5 specific next steps based on gaps across sessions.}
+
+RULES:
+- Deduplicate — don't repeat the same definition twice.
+- Preserve the best worked examples from any session.
+- Skip sessions that were too short to contribute substance.
+- Polished TA voice — same quality as a single-session recap.`;
+
+export async function generateCombinedSessionNotes(input: {
+  sessions: Array<{
+    title: string;
+    modeTag: TutorSessionModeTag | null;
+    startedAt: string;
+    durationSeconds: number | null;
+    recapMarkdown: string | null;
+    liveNotesText: string | null;
+  }>;
+}): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+
+  const parts = input.sessions.map((s, i) => {
+    const dateStr = new Date(s.startedAt).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+    const mins =
+      s.durationSeconds && s.durationSeconds > 0
+        ? `${Math.round(s.durationSeconds / 60)} min`
+        : "—";
+    return `### Session ${i + 1}: ${s.title}
+Mode: ${s.modeTag?.replace(/_/g, " ") ?? "open exploration"}
+Date: ${dateStr} · ${mins}
+
+RECAP:
+${(s.recapMarkdown ?? "").trim() || "(no recap generated)"}
+
+LIVE NOTES:
+${(s.liveNotesText ?? "").trim() || "(none)"}`;
+  });
+
+  const userPrompt = `Combine ${input.sessions.length} tutor sessions into one collective study guide.
+
+${parts.join("\n\n---\n\n")}
+
+Generate the merged markdown now. Start with the H1 title.`;
+
+  const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 0 });
+  const msg = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 4000,
+    temperature: 0.4,
+    system: COMBINE_SESSIONS_SYSTEM,
+    messages: [{ role: "user", content: userPrompt }],
+  });
+  const block = msg.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") {
+    throw new Error("Empty combined notes response");
+  }
+  return block.text.trim();
+}
