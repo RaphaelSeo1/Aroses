@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ConversationSidebar } from "@/components/messaging/ConversationSidebar";
+import { friendDisplayName } from "@/lib/messaging/display-name";
 import {
   dispatchMessagingRefresh,
   mapDbMessageToRow,
@@ -29,6 +30,26 @@ function formatMessageTime(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function MessageAvatar({
+  member,
+  fallbackName,
+}: {
+  member?: ConversationMember;
+  fallbackName: string;
+}) {
+  const label = member ? friendDisplayName(member) : fallbackName;
+  return (
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+      {member?.avatarUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={member.avatarUrl} alt="" className="h-full w-full object-cover" />
+      ) : (
+        label.slice(0, 1).toUpperCase()
+      )}
+    </div>
+  );
 }
 
 function MessageThreadInner({
@@ -290,75 +311,32 @@ function MessageThreadInner({
               Say hello — your messages stay private between participants.
             </p>
           ) : (
-            <ul className="space-y-4">
+            <ul className="space-y-5">
               {messages.map((m) => {
                 const member = members.find((p) => p.id === m.senderId);
                 const name =
                   m.senderDisplayName ??
                   (m.senderUsername ? `@${m.senderUsername}` : "User");
 
-                if (isGroup && !m.isOwn) {
-                  return (
-                    <li key={m.id} className="flex gap-3">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-100 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                        {member?.avatarUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={member.avatarUrl}
-                            alt=""
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          name.slice(0, 1).toUpperCase()
-                        )}
-                      </div>
-                      <div className="min-w-0 max-w-[85%]">
-                        <div className="mb-1 flex items-baseline gap-2">
-                          <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                            {name}
-                          </span>
-                          <span className="text-[11px] text-zinc-400">
-                            {formatMessageTime(m.createdAt)}
-                          </span>
-                        </div>
-                        {m.contextLabel ? (
-                          <p className="mb-1.5 rounded-lg bg-zinc-100 px-2 py-1 text-[11px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                            Re: {m.contextLabel}
-                          </p>
-                        ) : null}
-                        <p className="whitespace-pre-wrap break-words text-sm text-zinc-800 dark:text-zinc-200">
-                          {m.body}
-                        </p>
-                      </div>
-                    </li>
-                  );
-                }
-
                 return (
-                  <li key={m.id} className={`flex ${m.isOwn ? "justify-end" : "justify-start"}`}>
-                    <div
-                      className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm ${
-                        m.isOwn
-                          ? "bg-brand text-white"
-                          : "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
-                      }`}
-                    >
+                  <li key={m.id} className="group flex gap-3">
+                    <MessageAvatar member={member} fallbackName={name} />
+                    <div className="min-w-0 flex-1 pt-0.5">
+                      <div className="mb-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0">
+                        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                          {name}
+                        </span>
+                        <span className="text-[11px] text-zinc-400">
+                          {formatMessageTime(m.createdAt)}
+                        </span>
+                      </div>
                       {m.contextLabel ? (
-                        <p
-                          className={`mb-2 rounded-lg px-2 py-1 text-[11px] ${
-                            m.isOwn ? "bg-white/15" : "bg-white/60 dark:bg-zinc-900/60"
-                          }`}
-                        >
+                        <p className="mb-1 text-xs text-zinc-500 dark:text-zinc-400">
                           Re: {m.contextLabel}
                         </p>
                       ) : null}
-                      <p className="whitespace-pre-wrap break-words">{m.body}</p>
-                      <p
-                        className={`mt-1 text-[10px] ${
-                          m.isOwn ? "text-white/70" : "text-zinc-500"
-                        }`}
-                      >
-                        {formatMessageTime(m.createdAt)}
+                      <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-zinc-800 dark:text-zinc-200">
+                        {m.body}
                       </p>
                     </div>
                   </li>
@@ -405,23 +383,26 @@ function MessageThreadInner({
           {error ? (
             <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>
           ) : null}
-          <form onSubmit={(e) => void send(e)} className="flex items-end gap-2">
+          <form
+            onSubmit={(e) => void send(e)}
+            className="flex items-end gap-2 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900/50"
+          >
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={onComposerKeyDown}
               rows={1}
-              placeholder="Message…"
-              className="max-h-32 min-h-[2.5rem] flex-1 resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              placeholder="Message the room…"
+              className="max-h-32 min-h-[2.25rem] flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-sm outline-none ring-0 placeholder:text-zinc-400"
             />
             <button
               type="submit"
               disabled={sending || !draft.trim()}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand text-white disabled:opacity-50"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition hover:bg-zinc-800 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
               aria-label="Send message"
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z" />
+                <path d="M12 5.5l5.5 5.5H14V18h-4v-7H6.5L12 5.5z" />
               </svg>
             </button>
           </form>
