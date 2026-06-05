@@ -110,6 +110,7 @@ export function ImmersiveLessonRunner({
 
   // ---- exit confirmation modal ----
   const [showExitMenu, setShowExitMenu] = useState(false);
+  const [skipModuleConfirmOpen, setSkipModuleConfirmOpen] = useState(false);
 
   // Set when the monthly voice allowance is exhausted (server returns 402).
   // We softly drop to text mode — never a hard block mid-study.
@@ -1646,9 +1647,15 @@ export function ImmersiveLessonRunner({
     voice.cancelSpeak();
   }, [voice]);
 
+  const requestSkipModule = useCallback(() => {
+    if (!course.modules[moduleIdx + 1]) return;
+    setSkipModuleConfirmOpen(true);
+  }, [course.modules, moduleIdx]);
+
   const goToNextModule = useCallback(async () => {
     const nextModule = course.modules[moduleIdx + 1];
     if (!nextModule) return;
+    setSkipModuleConfirmOpen(false);
     setPlan(null);
     setChunkIdx(0);
     setAttempts(0);
@@ -2105,7 +2112,7 @@ export function ImmersiveLessonRunner({
                 hasNextModule={moduleIdx + 1 < moduleCount}
                 onShowQuestion={revealTextCheckQuestion}
                 onContinueConcept={() => void confirmTextAdvance()}
-                onSkipModule={() => void goToNextModule()}
+                onSkipModule={requestSkipModule}
                 submitting={submitting}
               />
             ) : null}
@@ -2402,6 +2409,15 @@ export function ImmersiveLessonRunner({
           onClose={() => setShowExitMenu(false)}
           onSwitchToFree={onSwitchToFree}
           onExit={onExit}
+        />
+      ) : null}
+
+      {skipModuleConfirmOpen ? (
+        <SkipModuleConfirm
+          moduleTitle={activeModule.title}
+          nextModuleTitle={course.modules[moduleIdx + 1]?.title ?? "the next section"}
+          onClose={() => setSkipModuleConfirmOpen(false)}
+          onConfirm={() => void goToNextModule()}
         />
       ) : null}
     </ImmersiveShell>
@@ -2796,6 +2812,55 @@ function AnswerComposer({
           }
         }
       `}</style>
+    </div>
+  );
+}
+
+function SkipModuleConfirm({
+  moduleTitle,
+  nextModuleTitle,
+  onClose,
+  onConfirm,
+}: {
+  moduleTitle: string;
+  nextModuleTitle: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-zinc-900/15 backdrop-blur-sm px-4">
+      <GlassPanel className="w-full max-w-md" tone="default">
+        <p className="text-lg font-semibold text-amber-900">Warning</p>
+        <p className="mt-2 text-sm leading-relaxed text-zinc-800">
+          Are you sure you want to skip{" "}
+          <span className="font-medium">&quot;{moduleTitle}&quot;</span>?
+        </p>
+        <p className="mt-3 text-sm leading-relaxed text-zinc-700">
+          You <span className="font-semibold text-zinc-900">cannot go back</span> to
+          this section&apos;s mentored lesson once you skip. To work through this
+          material again later, you&apos;ll need to restart this module from the
+          beginning.
+        </p>
+        <p className="mt-2 text-sm text-zinc-600">
+          Next up: <span className="font-medium text-zinc-800">{nextModuleTitle}</span>
+        </p>
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-white/60 bg-white/60 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-white/80"
+          >
+            Stay on this section
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-full bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500"
+          >
+            Skip anyway
+          </button>
+        </div>
+      </GlassPanel>
     </div>
   );
 }
