@@ -200,10 +200,27 @@ export async function enrichProfiles(
   >();
   if (unique.length === 0) return map;
 
-  const { data } = await supabase
+  let data: {
+    id: string;
+    display_name: string | null;
+    username: string | null;
+    avatar_url?: string | null;
+  }[] | null = null;
+
+  const withAvatar = await supabase
     .from("profiles")
     .select("id, display_name, username, avatar_url")
     .in("id", unique);
+
+  if (withAvatar.error?.message?.includes("avatar_url")) {
+    const fallback = await supabase
+      .from("profiles")
+      .select("id, display_name, username")
+      .in("id", unique);
+    data = fallback.data;
+  } else {
+    data = withAvatar.data;
+  }
 
   for (const p of data ?? []) {
     map.set(p.id, {

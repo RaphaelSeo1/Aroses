@@ -6,6 +6,7 @@ import {
   type ProfileLookupRow,
 } from "@/lib/messaging/profiles";
 import type { FriendshipListItem, FriendProfile } from "@/lib/messaging/types";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
@@ -55,7 +56,9 @@ export async function GET() {
     userIds.add(r.requester_id);
     userIds.add(r.addressee_id);
   }
-  const profileMap = await enrichProfiles(supabase, [...userIds]);
+  // Pending requests are not "friends" yet — RLS blocks profile reads unless we use admin.
+  const admin = createAdminClient();
+  const profileMap = await enrichProfiles(admin ?? supabase, [...userIds]);
 
   const friends: FriendshipListItem[] = [];
   const incoming: FriendshipListItem[] = [];

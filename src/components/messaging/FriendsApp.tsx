@@ -422,15 +422,28 @@ export function FriendsApp({
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Pending sent</p>
             <ul className="mt-2 space-y-2">
               {outgoing.map((item) => (
-                <li key={item.id} className="text-sm text-zinc-600 dark:text-zinc-400">
-                  {friendDisplayName(item.friend)} — waiting
-                  <button
-                    type="button"
-                    className="ml-2 text-red-600 hover:underline"
-                    onClick={() => void removeFriend(item.id)}
-                  >
-                    Cancel
-                  </button>
+                <li
+                  key={item.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-200/80 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900/50"
+                >
+                  <div>
+                    <p className="font-medium text-zinc-800 dark:text-zinc-200">
+                      {friendDisplayName(item.friend)}
+                    </p>
+                    {item.friend.username ? (
+                      <p className="text-xs text-zinc-500">@{item.friend.username}</p>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2 text-zinc-500">
+                    <span className="text-xs">Waiting</span>
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-red-600 hover:underline"
+                      onClick={() => void removeFriend(item.id)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
