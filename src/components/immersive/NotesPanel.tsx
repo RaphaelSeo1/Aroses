@@ -203,6 +203,7 @@ export function NotesPanel({
   editorRef,
   onEditorReady,
   pinToolbar = true,
+  fillHeight = false,
 }: {
   /**
    * Mentored Learning path — when set, the panel reads/writes
@@ -235,6 +236,8 @@ export function NotesPanel({
   editorRef?: React.RefObject<NotesPanelHandle | null>;
   /** When false, the status bar scrolls with the page instead of sticking. */
   pinToolbar?: boolean;
+  /** Fill the parent height and scroll note content inside the panel. */
+  fillHeight?: boolean;
   /** Fired once the TipTap editor is mounted and the imperative handle is wired. */
   onEditorReady?: () => void;
 }) {
@@ -910,7 +913,7 @@ export function NotesPanel({
 
   return (
     <aside
-      className={`tn-panel relative flex flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-[0_20px_50px_-25px_rgba(60,60,90,0.18)] backdrop-blur-md ${className ?? ""}`}
+      className={`tn-panel relative flex flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-[0_20px_50px_-25px_rgba(60,60,90,0.18)] backdrop-blur-md ${fillHeight ? "h-full min-h-0" : ""} ${className ?? ""}`}
     >
       {/* Compact status bar — out of the way but always visible.
           Extra horizontal padding at xl so on the 50/50 desktop
@@ -955,8 +958,14 @@ export function NotesPanel({
       </div>
 
       {/* Document body — generous padding, max-width centered. */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-[720px] px-6 py-10 sm:px-10 lg:px-14 lg:py-14">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div
+          className={`mx-auto w-full max-w-[720px] ${
+            fillHeight
+              ? "px-5 py-5 sm:px-6 sm:py-6"
+              : "px-6 py-10 sm:px-10 lg:px-14 lg:py-14"
+          }`}
+        >
           {/* Document chrome — emoji + course metadata.
               The lesson title used to live here as a permanent H1
               that the user couldn't delete. Now it's gone — users

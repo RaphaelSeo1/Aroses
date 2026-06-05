@@ -34,11 +34,13 @@ function SourceLessonPanelImpl({
   keyTerms,
   narrationText,
   footer,
+  className = "",
 }: {
   lesson: CourseLesson | undefined;
   keyTerms: string[];
   narrationText?: string;
   footer?: ReactNode;
+  className?: string;
 }) {
   const lessonContent = lesson?.content;
   // Paragraph-level split first so we can pin highlight per paragraph.
@@ -98,7 +100,7 @@ function SourceLessonPanelImpl({
   }
 
   return (
-    <GlassPanel className="mt-4" tone="subtle" delayMs={220}>
+    <GlassPanel className={className} tone="subtle" delayMs={220}>
       <div className="flex items-baseline justify-between gap-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
           From your course

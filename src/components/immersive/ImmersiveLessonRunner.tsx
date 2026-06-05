@@ -251,6 +251,8 @@ export function ImmersiveLessonRunner({
   const [autoGenerateNotes, setAutoGenerateNotes] = useState(false);
   const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
   const notesPanelRef = useRef<NotesPanelHandle | null>(null);
+  const lessonColumnRef = useRef<HTMLDivElement>(null);
+  const [pairedColumnHeight, setPairedColumnHeight] = useState<number | null>(null);
   const notesAppendedChunkRef = useRef<string | null>(null);
   const [notesEditorReady, setNotesEditorReady] = useState(false);
   const onNotesEditorReady = useCallback(() => {
@@ -560,6 +562,31 @@ export function ImmersiveLessonRunner({
     }
     return activeModule.lessons.flatMap((l) => l.key_terms ?? []);
   }, [activeModule.lessons, chunk]);
+
+  useEffect(() => {
+    if (!showNotesPanel || !showDockedNotes) {
+      setPairedColumnHeight(null);
+      return;
+    }
+    const el = lessonColumnRef.current;
+    if (!el) return;
+    const sync = () => {
+      setPairedColumnHeight(el.getBoundingClientRect().height);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [
+    showNotesPanel,
+    showDockedNotes,
+    chunk?.id,
+    transcriptLines.length,
+    mentoredImage,
+    mentoredImageLoading,
+    attempts,
+    narrationText,
+  ]);
 
   // ----- session opening greeting (spoken + transcript) -----
   //
@@ -2185,7 +2212,7 @@ export function ImmersiveLessonRunner({
       <div
         className={`mt-2 grid grid-cols-1 gap-6 ${showNotesPanel ? "xl:grid-cols-2 xl:items-start xl:gap-8" : ""}`}
       >
-        <div className="min-w-0">
+        <div ref={lessonColumnRef} className="mt-6 flex min-w-0 flex-col gap-6">
       {!awaitingContinue && chunk ? (
         <>
 
@@ -2194,7 +2221,7 @@ export function ImmersiveLessonRunner({
           ("show me a diagram of..."). Stays visible until the
           chunk advances. Loading skeleton matches the cloud aesthetic. */}
       {mentoredImageLoading || mentoredImage ? (
-        <GlassPanel className="mt-6" tone="subtle">
+        <GlassPanel tone="subtle">
           {mentoredImage ? (
             <figure className="overflow-hidden rounded-xl">
               <a
@@ -2225,7 +2252,7 @@ export function ImmersiveLessonRunner({
       ) : null}
 
       {/* Concept + explanation */}
-      <GlassPanel key={`exp-${chunk.id}`} className="mt-6" tone="default">
+      <GlassPanel key={`exp-${chunk.id}`} tone="default">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
@@ -2292,7 +2319,7 @@ export function ImmersiveLessonRunner({
         }
 
         return (
-          <GlassPanel key={`dialogue-${chunk.id}`} className="mt-4" tone="subtle">
+          <GlassPanel key={`dialogue-${chunk.id}`} tone="subtle">
             {dialogue}
           </GlassPanel>
         );
@@ -2317,7 +2344,12 @@ export function ImmersiveLessonRunner({
             mounts at a time (docked xl+ OR mobile drawer) so the
             shared editorRef is never cleared by an unmounted twin. */}
         {showNotesPanel && showDockedNotes ? (
-        <div className="hidden min-w-0 xl:block">
+        <div
+          className="mt-6 hidden min-h-0 min-w-0 xl:block"
+          style={
+            pairedColumnHeight != null ? { height: pairedColumnHeight } : undefined
+          }
+        >
           <NotesPanel
             key="mentored-notes-panel"
             materialId={materialId}
@@ -2336,8 +2368,9 @@ export function ImmersiveLessonRunner({
             onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
             onEditorReady={onNotesEditorReady}
             editorRef={notesPanelRef}
-            pinToolbar={false}
-            className="w-full"
+            fillHeight
+            pinToolbar
+            className="h-full w-full"
           />
         </div>
         ) : null}
