@@ -10,7 +10,11 @@ import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
  */
 export function RoseDialoguePanel({ lines }: { lines: TranscriptLine[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const visible = lines.filter((l) => l.streaming || l.text.trim().length > 0);
+  // Check questions live in the Rose asks banner above — not duplicated here.
+  const visible = lines.filter(
+    (l) =>
+      l.kind !== "question" && (l.streaming || l.text.trim().length > 0)
+  );
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -30,7 +34,7 @@ export function RoseDialoguePanel({ lines }: { lines: TranscriptLine[] }) {
       </div>
       <div
         ref={scrollRef}
-        className="max-h-56 overflow-y-auto overscroll-y-contain rounded-xl bg-zinc-50/80 px-2 py-2 ring-1 ring-zinc-200/60"
+        className="max-h-56 overflow-y-auto overscroll-y-contain rounded-xl bg-zinc-50/80 px-2 py-2.5 ring-1 ring-zinc-200/60"
       >
         {visible.length === 0 ? (
           <p className="py-3 text-center text-[12px] text-zinc-500">
@@ -57,18 +61,12 @@ export function RoseDialoguePanel({ lines }: { lines: TranscriptLine[] }) {
                   <div
                     className={
                       line.role === "student"
-                        ? "max-w-[92%] rounded-xl rounded-br-sm bg-zinc-800 px-3 py-2 text-[13px] leading-snug text-white"
-                        : line.kind === "question"
-                          ? "max-w-[92%] rounded-xl rounded-bl-sm border border-amber-200/80 bg-gradient-to-br from-amber-50 via-white to-amber-100/80 px-3 py-2 text-[13px] leading-snug text-zinc-800"
-                          : "max-w-[92%] rounded-xl rounded-bl-sm border border-fuchsia-200/55 bg-fuchsia-50/90 px-3 py-2 text-[13px] leading-snug text-zinc-800"
+                        ? "max-w-[92%] rounded-xl rounded-br-sm bg-zinc-800 px-3 py-2.5 text-[13px] leading-snug text-white"
+                        : "max-w-[92%] rounded-xl rounded-bl-sm border border-fuchsia-200/55 bg-fuchsia-50/90 px-3 py-2.5 text-[13px] leading-snug text-zinc-800"
                     }
                   >
-                    <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] opacity-70">
-                      {line.role === "student"
-                        ? "You"
-                        : line.kind === "question"
-                          ? "Rose"
-                          : "Rose"}
+                    <p className="mb-1 text-[9px] font-semibold uppercase tracking-[0.14em] opacity-70">
+                      {line.role === "student" ? "You" : "Rose"}
                       {line.streaming ? " · …" : ""}
                     </p>
                     {line.text.trim() ? (

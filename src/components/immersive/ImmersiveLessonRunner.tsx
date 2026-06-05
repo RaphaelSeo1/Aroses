@@ -897,7 +897,11 @@ export function ImmersiveLessonRunner({
 
     // Restored dialogue already contains this chunk's question — don't
     // re-narrate or pop the question modal on re-entry.
-    if (checkQuestion && chunkQuestionInTranscript(transcriptLines, checkQuestion)) {
+    if (
+      checkQuestion &&
+      (questionAudioStartedFor === chunk.id ||
+        chunkQuestionInTranscript(transcriptLines, checkQuestion))
+    ) {
       lastSpokenChunkIdRef.current = chunk.id;
       return;
     }
@@ -934,11 +938,6 @@ export function ImmersiveLessonRunner({
           lastSpokenRef.current = `${explanation}\n\n${checkQuestion}`;
           lastCheckAtRef.current = Date.now();
           setQuestionAudioStartedFor(captured);
-          appendTranscriptLineOnce({
-            role: "rose",
-            text: checkQuestion,
-            kind: "question",
-          });
         },
       });
     })();
@@ -948,12 +947,13 @@ export function ImmersiveLessonRunner({
     chunk,
     interactionMode,
     phase,
+    questionAudioStartedFor,
     transcriptLines,
     voice,
     greetingPlayed,
   ]);
 
-  // Text mode: seed the dialogue strip with this chunk's teaching + check question.
+  // Text mode: seed the dialogue strip with this chunk's teaching.
   useEffect(() => {
     if (phase !== "teaching") return;
     if (!chunk) return;
@@ -971,7 +971,6 @@ export function ImmersiveLessonRunner({
     }
     if (q) {
       setTextCheckRevealed(true);
-      appendTranscriptLineOnce({ role: "rose", text: q, kind: "question" });
     }
   }, [
     appendTranscriptLineOnce,
@@ -1702,12 +1701,7 @@ export function ImmersiveLessonRunner({
   const revealTextCheckQuestion = useCallback(() => {
     if (!chunk?.checkQuestion?.trim()) return;
     setTextCheckRevealed(true);
-    appendTranscriptLineOnce({
-      role: "rose",
-      text: chunk.checkQuestion,
-      kind: "question",
-    });
-  }, [appendTranscriptLineOnce, chunk]);
+  }, [chunk]);
 
   const confirmTextAdvance = useCallback(async () => {
     if (!textPendingAdvance || !plan || !chunk) return;
@@ -2869,7 +2863,7 @@ function SkipModuleConfirm({
           <span className="font-medium">&quot;{moduleTitle}&quot;</span>?
         </p>
         <p className="mt-3 text-sm leading-relaxed text-zinc-700">
-          You <span className="font-semibold text-zinc-900">cannot go back</span> to
+          You <span className="font-semibold text-zinc-900">cannot go back to</span>{" "}
           this section&apos;s mentored lesson once you skip. To work through this
           material again later, you&apos;ll need to restart this module from the
           beginning.
