@@ -25,7 +25,16 @@ export type StudyChatAction =
       query: string;
     };
 
+/** Clickable choice — navigation or follow-up the user can tap. */
+export type StudyChatOption = {
+  id: string;
+  label: string;
+  description?: string;
+  action: StudyChatAction;
+};
+
 export type StudyChatResponse = {
   reply: string;
   action?: StudyChatAction | null;
+  options?: StudyChatOption[];
 };

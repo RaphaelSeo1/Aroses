@@ -6,13 +6,18 @@ import {
   buildStudyContextText,
   runStudyChat,
 } from "@/lib/ai/study-chat";
-import { fetchCourseMaterialsForChat, buildCourseMapFromMaterials } from "@/lib/study-chat-context";
+import { sanitizeStudyChatReply } from "@/lib/ai/study-chat-parse";
+import {
+  fetchCourseMaterialsForChat,
+  buildCourseMapFromMaterials,
+} from "@/lib/study-chat-context";
 import {
   extractNavigationQuery,
   findAllStudyLocationsForQuery,
   isUnambiguousNavigation,
 } from "@/lib/study-chat-nav";
-import type { StudyChatTurn } from "@/types/study-chat";
+import { buildNavigationOptions } from "@/lib/study-chat-options";
+import type { StudyChatOption, StudyChatTurn } from "@/types/study-chat";
 import type { CoursePayload } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
 
@@ -37,8 +42,72 @@ function looksLikeNavigationIntent(text: string): boolean {
     t.includes("which module") ||
     t.includes("what module") ||
     t.includes("find") ||
-    t.includes("search")
+    t.includes("search") ||
+    t.includes("open module") ||
+    t.includes("show me module")
   );
+}
+
+function materialLabelsFrom(
+  materials: { id: string; label: string }[]
+): Map<string, string> {
+  return new Map(materials.map((m) => [m.id, m.label]));
+}
+
+function resolveNavigateAction(
+  action: unknown,
+  navMaterials: { id: string; course_payload: CoursePayload; label: string }[]
+): unknown | null {
+  if (!action || typeof action !== "object") return null;
+  const a = action as {
+    type?: unknown;
+    query?: unknown;
+    moduleId?: unknown;
+    materialId?: unknown;
+  };
+
+  if (a.type === "navigate_by_query" && typeof a.query === "string") {
+    const matches = findAllStudyLocationsForQuery({
+      materials: navMaterials,
+      query: a.query,
+    });
+    const pick = isUnambiguousNavigation(matches);
+    return pick
+      ? {
+          type: "navigate_to_location",
+          materialId: pick.materialId,
+          moduleId: pick.moduleId,
+          reason: pick.reason,
+        }
+      : null;
+  }
+
+  if (a.type === "navigate_to_module") {
+    const modId = typeof a.moduleId === "number" ? a.moduleId : Number.NaN;
+    const host = navMaterials.find((m) =>
+      m.course_payload.modules.some((mod) => mod.id === modId)
+    );
+    if (!host || !Number.isFinite(modId)) return null;
+    return {
+      type: "navigate_to_location",
+      materialId: host.id,
+      moduleId: modId,
+      reason: (a as { reason?: string }).reason,
+    };
+  }
+
+  if (a.type === "navigate_to_location") {
+    const matId = typeof a.materialId === "string" ? a.materialId : "";
+    const modId = typeof a.moduleId === "number" ? a.moduleId : Number.NaN;
+    const host = navMaterials.find((m) => m.id === matId);
+    const ok =
+      host &&
+      Number.isFinite(modId) &&
+      host.course_payload.modules.some((mod) => mod.id === modId);
+    return ok ? action : null;
+  }
+
+  return null;
 }
 
 export async function POST(request: Request) {
@@ -60,10 +129,6 @@ export async function POST(request: Request) {
     }
   );
 
-  // Require authentication before any LLM work. The study_materials fetch below
-  // runs through this cookie client, so RLS still scopes read access per
-  // material (owner or public course); this guard stops anonymous callers from
-  // driving the model.
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -150,8 +215,7 @@ export async function POST(request: Request) {
     [];
 
   if (hasStructuredCourse) {
-    const resolvedModuleId =
-      moduleId ?? payload!.modules[0]?.id ?? 1;
+    const resolvedModuleId = moduleId ?? payload!.modules[0]?.id ?? 1;
 
     if (courseId) {
       courseMaterials = await fetchCourseMaterialsForChat(
@@ -182,9 +246,7 @@ export async function POST(request: Request) {
       ? row.key_concepts.filter((t): t is string => typeof t === "string")
       : [];
     const rawQ = row.questions;
-    const questions = Array.isArray(rawQ)
-      ? (rawQ as MCQuestion[])
-      : [];
+    const questions = Array.isArray(rawQ) ? (rawQ as MCQuestion[]) : [];
 
     if (!summary.trim() && questions.length === 0) {
       return NextResponse.json(
@@ -197,98 +259,176 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Server-side fallback: if the user is asking to navigate, try searching the full payload
-    // even if the model doesn't return an action.
-    let fallbackAction: unknown | null = null;
     const navMaterials =
       courseMaterials.length > 0
         ? courseMaterials
         : [{ id: b.materialId, course_payload: payload!, label: "Current upload" }];
+    const labels = materialLabelsFrom(navMaterials);
 
-    if (hasStructuredCourse && looksLikeNavigationIntent(last.content)) {
-      const navQuery = extractNavigationQuery(last.content);
+    let navQuery = extractNavigationQuery(last.content);
+    let navMatches = hasStructuredCourse
+      ? findAllStudyLocationsForQuery({
+          materials: navMaterials,
+          query: navQuery || last.content,
+        })
+      : [];
+
+    // User picked a numbered option from a prior turn ("2" / "module 2" / label text).
+    if (hasStructuredCourse && navMatches.length === 0) {
+      const pickMatch = last.content.match(
+        /^module\s*(\d+)\s*[:.\-]?\s*(.*)$/i
+      );
+      if (pickMatch) {
+        const modNum = Number.parseInt(pickMatch[1]!, 10);
+        if (Number.isFinite(modNum)) {
+          navMatches = findAllStudyLocationsForQuery({
+            materials: navMaterials,
+            query: pickMatch[2]?.trim() || " ",
+          }).filter((m) => m.moduleId === modNum);
+          if (navMatches.length === 0) {
+            for (const mat of navMaterials) {
+              if (mat.course_payload.modules.some((mod) => mod.id === modNum)) {
+                navMatches = [
+                  {
+                    materialId: mat.id,
+                    moduleId: modNum,
+                    moduleTitle:
+                      mat.course_payload.modules.find((mod) => mod.id === modNum)
+                        ?.title ?? `Module ${modNum}`,
+                    reason: "You picked this module.",
+                    score: 100,
+                  },
+                ];
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const navIntent =
+      hasStructuredCourse &&
+      (looksLikeNavigationIntent(last.content) || navMatches.length > 0);
+
+    if (navIntent && navMatches.length > 0) {
+      const options = buildNavigationOptions({
+        matches: navMatches,
+        materialLabels: labels,
+        currentMaterialId: b.materialId,
+        currentModuleId: moduleId,
+      });
+      const pick = isUnambiguousNavigation(navMatches);
+      const topic = navQuery || extractNavigationQuery(last.content) || "that topic";
+
+      if (pick) {
+        return NextResponse.json({
+          reply: `Taking you to **${pick.moduleTitle}**${labels.size > 1 ? ` (${labels.get(pick.materialId) ?? "course upload"})` : ""}.`,
+          action: {
+            type: "navigate_to_location",
+            materialId: pick.materialId,
+            moduleId: pick.moduleId,
+            reason: pick.reason,
+          },
+          options: options.filter(
+            (o) =>
+              o.action.type === "navigate_to_location" &&
+              o.action.materialId === pick.materialId &&
+              o.action.moduleId === pick.moduleId
+          ),
+        });
+      }
+
+      return NextResponse.json({
+        reply: `I found **${navMatches.length}** places about "${topic}" across your course (${labels.size} upload${labels.size === 1 ? "" : "s"}). Tap the one you want:`,
+        action: null,
+        options,
+      });
+    }
+
+    if (navIntent && navMatches.length === 0) {
+      navQuery = navQuery || extractNavigationQuery(last.content);
+      const uploadCount = navMaterials.length;
+      return NextResponse.json({
+        reply: sanitizeStudyChatReply(
+          `I couldn't find "${navQuery || last.content.trim()}" in your course materials (${uploadCount} upload${uploadCount === 1 ? "" : "s"} searched). Try a shorter topic or browse the sidebar.`
+        ),
+        action: null,
+        options: [],
+      });
+    }
+
+    const out = await runStudyChat(contextText, messages);
+    let reply = sanitizeStudyChatReply(out.reply);
+    let action = resolveNavigateAction(out.action, navMaterials);
+    let options: StudyChatOption[] = [];
+
+    const resolvedAction = action as {
+      type?: string;
+      materialId?: string;
+      moduleId?: number;
+      reason?: string;
+    } | null;
+
+    if (resolvedAction?.type === "navigate_to_location") {
+      const loc = resolvedAction as {
+        materialId: string;
+        moduleId: number;
+        reason?: string;
+      };
+      const mod = navMaterials
+        .find((m) => m.id === loc.materialId)
+        ?.course_payload.modules.find((m) => m.id === loc.moduleId);
+      options = buildNavigationOptions({
+        matches: [
+          {
+            materialId: loc.materialId,
+            moduleId: loc.moduleId,
+            moduleTitle: mod?.title ?? `Module ${loc.moduleId}`,
+            reason: loc.reason ?? "",
+            score: 100,
+          },
+        ],
+        materialLabels: labels,
+        currentMaterialId: b.materialId,
+        currentModuleId: moduleId,
+      });
+    } else if (
+      out.action &&
+      typeof out.action === "object" &&
+      (out.action as { type?: string }).type === "navigate_by_query" &&
+      typeof (out.action as { query?: string }).query === "string"
+    ) {
+      const q = (out.action as { query: string }).query;
       const matches = findAllStudyLocationsForQuery({
         materials: navMaterials,
-        query: navQuery || last.content,
+        query: q,
       });
       const pick = isUnambiguousNavigation(matches);
+      options = buildNavigationOptions({
+        matches,
+        materialLabels: labels,
+        currentMaterialId: b.materialId,
+        currentModuleId: moduleId,
+      });
       if (pick) {
-        fallbackAction = {
+        action = {
           type: "navigate_to_location",
           materialId: pick.materialId,
           moduleId: pick.moduleId,
           reason: pick.reason,
         };
+      } else if (matches.length > 1) {
+        action = null;
+        reply = sanitizeStudyChatReply(
+          reply || `I found ${matches.length} matches for "${q}". Pick one:`
+        );
+      } else {
+        action = null;
       }
     }
 
-    const out = await runStudyChat(contextText, messages);
-    let action: unknown | null = out.action ?? null;
-
-    if (hasStructuredCourse && action && typeof action === "object") {
-      const a = action as {
-        type?: unknown;
-        query?: unknown;
-        moduleId?: unknown;
-        materialId?: unknown;
-      };
-
-      if (a.type === "navigate_by_query" && typeof a.query === "string") {
-        const matches = findAllStudyLocationsForQuery({
-          materials: navMaterials,
-          query: a.query,
-        });
-        const pick = isUnambiguousNavigation(matches);
-        action = pick
-          ? {
-              type: "navigate_to_location",
-              materialId: pick.materialId,
-              moduleId: pick.moduleId,
-              reason: pick.reason,
-            }
-          : null;
-      }
-
-      if (a.type === "navigate_to_module") {
-        const modId = typeof a.moduleId === "number" ? a.moduleId : Number.NaN;
-        const ok =
-          Number.isFinite(modId) &&
-          navMaterials.some((m) =>
-            m.course_payload.modules.some((mod) => mod.id === modId)
-          );
-        if (ok) {
-          const host =
-            navMaterials.find((m) =>
-              m.course_payload.modules.some((mod) => mod.id === modId)
-            ) ?? navMaterials[0]!;
-          action = {
-            type: "navigate_to_location",
-            materialId: host.id,
-            moduleId: modId,
-            reason: (a as { reason?: string }).reason,
-          };
-        } else {
-          action = null;
-        }
-      }
-
-      if (a.type === "navigate_to_location") {
-        const matId = typeof a.materialId === "string" ? a.materialId : "";
-        const modId = typeof a.moduleId === "number" ? a.moduleId : Number.NaN;
-        const host = navMaterials.find((m) => m.id === matId);
-        const ok =
-          host &&
-          Number.isFinite(modId) &&
-          host.course_payload.modules.some((mod) => mod.id === modId);
-        if (!ok) action = null;
-      }
-    }
-
-    if (!action && fallbackAction) {
-      action = fallbackAction;
-    }
-
-    return NextResponse.json({ reply: out.reply, action });
+    return NextResponse.json({ reply, action, options });
   } catch (e) {
     console.error(e);
     return NextResponse.json(

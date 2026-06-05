@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/lib/supabase/admin";
 import type { StudyCourseMapEntry } from "@/lib/ai/study-chat";
 import type { CoursePayload } from "@/types/course";
 
@@ -44,7 +45,7 @@ export async function fetchCourseMaterialsForChat(
       },
     ];
 
-  const { data: otherMats } = await supabase
+  const { data: otherMats } = await (createAdminClient() ?? supabase)
     .from("study_materials")
     .select("id, course_payload, source_filename")
     .eq("course_id", courseId)

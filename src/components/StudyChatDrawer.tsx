@@ -9,9 +9,11 @@ import {
   saveStudyChatMessages,
   studyChatStorageKey,
 } from "@/lib/study-chat-storage";
-import type { StudyChatResponse, StudyChatTurn } from "@/types/study-chat";
+import type { StudyChatOption, StudyChatResponse, StudyChatTurn } from "@/types/study-chat";
 
 export const STUDY_CHAT_PREFILL_EVENT = "aroses-study-chat-prefill";
+
+type ChatMessage = StudyChatTurn & { options?: StudyChatOption[] };
 
 export type StudyChatPrefillDetail = {
   materialId?: string;
@@ -48,7 +50,7 @@ export function StudyChatDrawer({
   const router = useRouter();
   const storageKey = studyChatStorageKey(courseId, materialId);
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<StudyChatTurn[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -106,19 +108,32 @@ export function StudyChatDrawer({
     return () => window.removeEventListener(STUDY_CHAT_PREFILL_EVENT, onPrefill);
   }, [materialId, moduleId]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
+  const navigateTo = useCallback(
+    (targetMaterial: string, targetModule: number) => {
+      if (variant !== "course" || !studyHrefBase) return;
+      const p = new URLSearchParams();
+      p.set("material", targetMaterial);
+      p.set("module", String(targetModule));
+      if (learnMode) p.set("mode", "learn");
+      router.push(`${studyHrefBase}?${p.toString()}`);
+      setOpen(false);
+    },
+    [learnMode, router, studyHrefBase, variant]
+  );
+
+  const send = useCallback(async (textOverride?: string) => {
+    const text = (textOverride ?? input).trim();
     if (!text || loading) return;
 
     const prevSnapshot = messages;
-    const nextMessages: StudyChatTurn[] = [
+    const nextMessages: ChatMessage[] = [
       ...prevSnapshot,
       { role: "user", content: text },
     ];
 
     setError(null);
     setMessages(nextMessages);
-    setInput("");
+    if (!textOverride) setInput("");
     setLoading(true);
 
     try {
@@ -129,7 +144,7 @@ export function StudyChatDrawer({
           materialId,
           moduleId,
           quizOpen,
-          messages: nextMessages,
+          messages: nextMessages.map(({ role, content }) => ({ role, content })),
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -141,7 +156,7 @@ export function StudyChatDrawer({
             : "Something went wrong."
         );
         setMessages(prevSnapshot);
-        setInput(text);
+        if (!textOverride) setInput(text);
         return;
       }
 
@@ -150,50 +165,74 @@ export function StudyChatDrawer({
       if (typeof reply !== "string") {
         setError("Bad response.");
         setMessages(prevSnapshot);
-        setInput(text);
+        if (!textOverride) setInput(text);
         return;
       }
 
+      const options = Array.isArray(payload.options)
+        ? payload.options.filter(
+            (o): o is StudyChatOption =>
+              !!o &&
+              typeof o === "object" &&
+              typeof (o as StudyChatOption).label === "string" &&
+              typeof (o as StudyChatOption).id === "string"
+          )
+        : undefined;
+
       setMessages([
         ...nextMessages,
-        { role: "assistant", content: reply },
+        { role: "assistant", content: reply, options },
       ]);
 
       const action = payload.action ?? null;
       if (
         action &&
         typeof action === "object" &&
-        ((action as { type?: unknown }).type === "navigate_to_module" ||
-          (action as { type?: unknown }).type === "navigate_to_location") &&
-        variant === "course" &&
-        typeof studyHrefBase === "string" &&
-        studyHrefBase.length > 0
+        (action as { type?: unknown }).type === "navigate_to_location"
       ) {
-        const targetModule =
-          (action as { moduleId?: unknown }).moduleId;
+        const targetModule = (action as { moduleId?: unknown }).moduleId;
         const targetMaterial =
-          (action as { type?: unknown }).type === "navigate_to_location" &&
           typeof (action as { materialId?: unknown }).materialId === "string"
             ? (action as { materialId: string }).materialId
             : materialId;
-        if (typeof targetModule !== "number" || !Number.isFinite(targetModule)) {
-          return;
+        if (typeof targetModule === "number" && Number.isFinite(targetModule)) {
+          navigateTo(targetMaterial, targetModule);
         }
-        const p = new URLSearchParams();
-        p.set("material", targetMaterial);
-        p.set("module", String(targetModule));
-        if (learnMode) p.set("mode", "learn");
-        router.push(`${studyHrefBase}?${p.toString()}`);
-        setOpen(false);
       }
     } catch {
       setError("Network error.");
       setMessages(prevSnapshot);
-      setInput(text);
+      if (!textOverride) setInput(text);
     } finally {
       setLoading(false);
     }
-  }, [input, loading, materialId, moduleId, quizOpen, messages]);
+  }, [
+    input,
+    loading,
+    materialId,
+    moduleId,
+    quizOpen,
+    messages,
+    navigateTo,
+  ]);
+
+  const pickOption = useCallback(
+    (option: StudyChatOption) => {
+      if (option.action.type === "navigate_to_location") {
+        navigateTo(option.action.materialId, option.action.moduleId);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "user",
+            content: option.label,
+          },
+        ]);
+        return;
+      }
+      void send(option.label);
+    },
+    [navigateTo, send]
+  );
 
   return (
     <>
@@ -270,7 +309,7 @@ export function StudyChatDrawer({
             {messages.map((m, i) => (
               <div
                 key={i}
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}
               >
                 <div
                   className={`max-w-[95%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
@@ -285,6 +324,29 @@ export function StudyChatDrawer({
                     <StudyChatMessageMarkdown source={m.content} />
                   )}
                 </div>
+                {m.role === "assistant" && m.options && m.options.length > 0 ? (
+                  <ul className="mt-2 flex w-full max-w-[95%] flex-col gap-1.5">
+                    {m.options.map((opt) => (
+                      <li key={opt.id}>
+                        <button
+                          type="button"
+                          disabled={loading}
+                          onClick={() => pickOption(opt)}
+                          className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-left text-xs transition hover:border-brand hover:bg-brand/5 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-brand"
+                        >
+                          <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                            {opt.label}
+                          </span>
+                          {opt.description ? (
+                            <span className="mt-0.5 block text-[11px] text-zinc-500">
+                              {opt.description}
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             ))}
             {loading ? (

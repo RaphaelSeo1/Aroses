@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { AI_ASSISTANT_NAME, APP_NAME } from "@/lib/brand";
+import { parseStudyChatResponse } from "@/lib/ai/study-chat-parse";
 import type { CoursePayload } from "@/types/course";
 import { isQuizMcq } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
@@ -284,16 +285,14 @@ How to help:
 - If something truly isn't in CONTEXT, say so briefly and point to the closest related module from the course map.
 
 Navigation:
-- When the student asks to go somewhere ("take me to…", "where is…"), check the course map.
-- If exactly one module is the clear best fit, set action to navigate there.
-- If several modules mention the topic, list them in "reply" (module number + title) and ask which they want — set action to null unless they already picked one or only one is a primary focus (title match beats a passing mention).
-- Use {"type":"navigate_by_query","query":"short topic"} only when you need the server to search; keep query to the core topic (e.g. "income statement preparation").
-- For cross-upload navigation use {"type":"navigate_to_location","materialId":"uuid","moduleId":number}.
+- The server handles navigation buttons separately. Do NOT list module choices in your reply when the student asks to go somewhere — keep the reply to one short sentence like "I found a few spots — pick one below."
+- Only set action when ONE location is obvious; otherwise action must be null.
+- Never mention materialId UUIDs to the student.
 
-Output format:
-- Return ONLY valid JSON, no markdown fences.
-- Shape: {"reply": string, "action": null | {"type":"navigate_to_module","moduleId":number,"reason"?:string} | {"type":"navigate_to_location","materialId":string,"moduleId":number,"reason"?:string} | {"type":"navigate_by_query","query":string}}
-- "reply" is markdown-friendly user-visible text (short paragraphs or bullets).
+Output format (CRITICAL):
+- Return ONLY one JSON object. No markdown before or after. No duplicate JSON in the reply field.
+- Shape: {"reply": string, "action": null | {"type":"navigate_to_location","materialId":string,"moduleId":number} | {"type":"navigate_by_query","query":string}}
+- The "reply" field must be plain user-visible text only — never JSON, never code fences.
 
 CONTEXT:
 ---
@@ -318,13 +317,5 @@ ${contextText}
   }
 
   const raw = block.text.trim();
-  try {
-    const parsed = JSON.parse(raw) as { reply?: unknown; action?: unknown };
-    if (typeof parsed?.reply === "string") {
-      return { reply: parsed.reply.trim(), action: parsed.action ?? null };
-    }
-  } catch {
-    // fall through
-  }
-  return { reply: raw, action: null };
+  return parseStudyChatResponse(raw);
 }
