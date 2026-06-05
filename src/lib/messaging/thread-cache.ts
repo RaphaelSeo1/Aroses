@@ -25,6 +25,15 @@ export function setCachedMessages(conversationId: string, messages: MessageRow[]
   messagesCache.set(conversationId, messages);
 }
 
+export function invalidateConversationMeta(conversationId: string): void {
+  metaCache.delete(conversationId);
+  inflightMeta.delete(conversationId);
+}
+
+export function setCachedMeta(conversationId: string, meta: ConversationMeta): void {
+  metaCache.set(conversationId, meta);
+}
+
 export function appendCachedMessage(conversationId: string, message: MessageRow): void {
   const prev = messagesCache.get(conversationId) ?? [];
   if (prev.some((m) => m.id === message.id)) return;

@@ -1,9 +1,11 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { MessageThread } from "@/components/messaging/MessageThread";
+import { dispatchMessagingRefresh } from "@/lib/messaging/realtime";
 import {
   getCachedMeta,
+  invalidateConversationMeta,
   prefetchConversationMeta,
   type ConversationMeta,
 } from "@/lib/messaging/thread-cache";
@@ -45,6 +47,20 @@ function MessageThreadPageInner({ conversationId, onBack, embedded }: Props) {
     };
   }, [conversationId]);
 
+  const refreshMeta = useCallback(() => {
+    invalidateConversationMeta(conversationId);
+    void prefetchConversationMeta(conversationId).then((next) => {
+      if (next) setMeta(next);
+    });
+    dispatchMessagingRefresh();
+  }, [conversationId]);
+
+  const handleLeave = useCallback(() => {
+    invalidateConversationMeta(conversationId);
+    dispatchMessagingRefresh();
+    onBack?.();
+  }, [conversationId, onBack]);
+
   if (error) {
     return <p className="p-4 text-sm text-red-600 dark:text-red-400">{error}</p>;
   }
@@ -63,6 +79,8 @@ function MessageThreadPageInner({ conversationId, onBack, embedded }: Props) {
       members={meta.members}
       onBack={onBack}
       embedded={embedded}
+      onMembersChange={refreshMeta}
+      onLeave={handleLeave}
     />
   );
 }

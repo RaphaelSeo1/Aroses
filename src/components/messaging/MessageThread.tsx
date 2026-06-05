@@ -23,6 +23,8 @@ type Props = {
   members?: ConversationMember[];
   onBack?: () => void;
   embedded?: boolean;
+  onMembersChange?: () => void;
+  onLeave?: () => void;
 };
 
 function formatMessageTime(iso: string): string {
@@ -61,6 +63,8 @@ function MessageThreadInner({
   members = [],
   onBack,
   embedded = false,
+  onMembersChange,
+  onLeave,
 }: Props) {
   const router = useRouter();
   const [messages, setMessages] = useState<MessageRow[]>([]);
@@ -236,6 +240,9 @@ function MessageThreadInner({
       void send();
     }
   }
+
+  const selfMember = members.find((m) => m.isSelf);
+  const canManageMembers = !!isGroup && selfMember?.role === "admin";
 
   const shellClass = embedded
     ? `flex min-h-0 flex-1 bg-white dark:bg-zinc-950 ${infoOpen ? "flex-col lg:flex-row" : "flex-col"}`
@@ -414,11 +421,14 @@ function MessageThreadInner({
 
       {infoOpen && members.length > 0 ? (
         <ConversationSidebar
-          title={title}
+          conversationId={conversationId}
           isGroup={!!isGroup}
           members={members}
           courseId={courseId}
           courseTitle={courseTitle}
+          canManageMembers={canManageMembers}
+          onMembersChange={onMembersChange}
+          onLeave={onLeave}
         />
       ) : null}
     </div>
