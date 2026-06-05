@@ -11,6 +11,7 @@ import {
   type NotesPanelHandle,
 } from "@/components/immersive/NotesPanel";
 import { RoseDialoguePanel } from "@/components/immersive/RoseDialoguePanel";
+import { RoseQuestionBanner } from "@/components/immersive/RoseQuestionBanner";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
@@ -2135,6 +2136,19 @@ export function ImmersiveLessonRunner({
         moduleTitle={activeModule.title}
       />
 
+      {!awaitingContinue &&
+      chunk &&
+      (() => {
+        const q = chunk.checkQuestion.trim();
+        if (!q) return null;
+        const visible =
+          interactionMode === "text"
+            ? textCheckRevealed
+            : questionAudioStartedFor === chunk.id ||
+              chunkQuestionInTranscript(transcriptLines, q);
+        return visible ? <RoseQuestionBanner question={q} /> : null;
+      })()}
+
       {awaitingContinue ? (
         <GlassPanel className="mx-auto mt-6 max-w-2xl" tone="reply">
           <p className="text-sm leading-relaxed text-zinc-800">
@@ -2162,7 +2176,7 @@ export function ImmersiveLessonRunner({
 
       {!awaitingContinue ? (
       <div
-        className={`mt-2 grid grid-cols-1 gap-6 ${showNotesPanel ? "xl:grid-cols-2 xl:gap-8" : ""}`}
+        className={`mt-2 grid grid-cols-1 gap-6 ${showNotesPanel ? "xl:grid-cols-2 xl:items-start xl:gap-8" : ""}`}
       >
         <div className="min-w-0">
       {!awaitingContinue && chunk ? (
@@ -2297,28 +2311,27 @@ export function ImmersiveLessonRunner({
             shared editorRef is never cleared by an unmounted twin. */}
         {showNotesPanel && showDockedNotes ? (
         <div className="hidden min-w-0 xl:block">
-          <div className="sticky top-2">
-                <NotesPanel
-                  key="mentored-notes-panel"
-                  materialId={materialId}
-                  lessonTitle={activeModule.title}
-                  courseTitle={course.title}
-                  suggestions={noteSuggestions}
-                  onConsumeSuggestion={(id) =>
-                    setConsumedSuggestionIds((prev) => {
-                      const next = new Set(prev);
-                      next.add(id);
-                      return next;
-                    })
-                  }
-                  autoGenerate={autoGenerateNotes}
-                  onAutoGenerateChange={handleAutoGenerateChange}
-                  onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
-                  onEditorReady={onNotesEditorReady}
-                  editorRef={notesPanelRef}
-                  className="h-[calc(100vh-220px)] min-h-[34rem]"
-                />
-          </div>
+          <NotesPanel
+            key="mentored-notes-panel"
+            materialId={materialId}
+            lessonTitle={activeModule.title}
+            courseTitle={course.title}
+            suggestions={noteSuggestions}
+            onConsumeSuggestion={(id) =>
+              setConsumedSuggestionIds((prev) => {
+                const next = new Set(prev);
+                next.add(id);
+                return next;
+              })
+            }
+            autoGenerate={autoGenerateNotes}
+            onAutoGenerateChange={handleAutoGenerateChange}
+            onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
+            onEditorReady={onNotesEditorReady}
+            editorRef={notesPanelRef}
+            pinToolbar={false}
+            className="w-full"
+          />
         </div>
         ) : null}
       </div>
@@ -2494,348 +2507,6 @@ function detectImageRequest(
   return null;
 }
 
-/**
- * Centered ad-style question modal — with a minimize-to-chip mode.
- *
- * UX goal: the moment Rose's voice ACTUALLY says the question, the
- * screen dims and a cloud pops up smack in the middle of the viewport
- * so the student can't miss it. The dim backdrop is
- * `pointer-events-none` so the page underneath stays scrollable
- * through the dim — but the centered card naturally covers the notes
- * panel on a wide layout. That's where the minimize button comes in:
- * tapping "Minimize" shrinks the popup to a small chip in the
- * top-right corner of the viewport, lifts the dim, and lets the
- * student freely write notes / reread the source / cross-reference
- * the course material. Tapping the chip "Expand" re-inflates the
- * popup to center.
- *
- * Lifecycle
- *   - Parent controls `open` (when Rose's audio for the question
- *     starts) and `minimized` (toggled by chip/Minimize button).
- *   - A new chunkId remounts the component so the typewriter
- *     animation and entrance animation re-play.
- *   - `onDismiss` fully hides the popup until the next chunk;
- *     `onMinimize` / `onExpand` just toggle the chip/center modes.
- */
-function QuestionCloud({
-  chunkId,
-  text,
-  open,
-  minimized,
-  onMinimize,
-  onExpand,
-  onRepeat,
-  onDismiss,
-}: {
-  chunkId: string;
-  text: string;
-  open: boolean;
-  minimized: boolean;
-  onMinimize: () => void;
-  onExpand: () => void;
-  onRepeat: () => void;
-  onDismiss: () => void;
-}) {
-  // Escape: expanded → minimize; minimized → expand (never dismiss).
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (minimized) onExpand();
-      else onMinimize();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, minimized, onExpand, onMinimize]);
-
-  if (!open) return null;
-
-  // ───────────── MINIMIZED MODE — top-right chip ─────────────
-  // No backdrop, no dim, no blocked clicks. The page is fully usable
-  // and the chip is just a button hovering in the corner so the
-  // student can find their way back to the question.
-  if (minimized) {
-    return (
-      <div
-        key={`q-chip-${chunkId}`}
-        className="question-cloud-chip fixed right-4 top-[88px] z-30 w-[min(340px,calc(100vw-2rem))] sm:right-6"
-      >
-        <button
-          type="button"
-          onClick={onExpand}
-          aria-label="Expand Rose's question"
-          className="q-chip-btn group relative flex w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-full border border-amber-200/80 bg-gradient-to-br from-amber-50 via-white to-amber-100/90 px-3.5 py-2 shadow-[0_18px_36px_-12px_rgba(180,140,40,0.35)] ring-1 ring-amber-200/50 transition hover:from-amber-100 hover:to-amber-200/90 sm:px-4"
-        >
-          <span
-            aria-hidden
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-base shadow-sm ring-1 ring-amber-200/70"
-          >
-            💭
-          </span>
-          <span className="min-w-0 flex-1 overflow-hidden text-left">
-            <span className="block text-[9px] font-semibold uppercase tracking-[0.16em] text-amber-700">
-              Rose asks
-            </span>
-            <span className="block truncate text-[12px] font-medium text-zinc-800">
-              {text}
-            </span>
-          </span>
-          <span
-            aria-hidden
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/80 text-zinc-600 shadow-sm ring-1 ring-zinc-200 transition group-hover:text-zinc-900"
-            title="Expand"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              className="h-3 w-3"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2.4}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <path d="M4 10V4h6" />
-              <path d="M20 14v6h-6" />
-              <path d="M4 4l7 7" />
-              <path d="M20 20l-7-7" />
-            </svg>
-          </span>
-        </button>
-        <style jsx>{`
-          .q-chip-btn {
-            animation: q-chip-in 320ms cubic-bezier(0.22, 0.9, 0.32, 1.2) both;
-            will-change: transform, opacity;
-          }
-          @keyframes q-chip-in {
-            from {
-              opacity: 0;
-              transform: translate(20px, -10px) scale(0.85);
-            }
-            to {
-              opacity: 1;
-              transform: translate(0, 0) scale(1);
-            }
-          }
-          @media (prefers-reduced-motion: reduce) {
-            .q-chip-btn {
-              animation: none;
-            }
-          }
-        `}</style>
-      </div>
-    );
-  }
-
-  // ───────────── EXPANDED MODE — centered modal ─────────────
-  return (
-    <div
-      key={`q-cloud-${chunkId}`}
-      className="question-cloud-root fixed inset-0 z-30"
-      role="dialog"
-      aria-modal="false"
-      aria-label="Rose's question"
-    >
-      {/* Dim layer — covers the whole viewport so the page reads as
-          "dimmed", but pointer-events-none means clicks pass through. */}
-      <div
-        aria-hidden
-        className="question-cloud-backdrop pointer-events-none absolute inset-0 bg-zinc-900/35 backdrop-blur-[2px]"
-      />
-      {/* Click-to-minimize layer — covers the full viewport. Clicking
-          the dimmed area outside the card minimizes (not dismisses)
-          the popup. That's the cheaper gesture for "I want to look
-          at the notes for a second". The × button is the kill switch. */}
-      <button
-        type="button"
-        aria-label="Minimize question"
-        onClick={onMinimize}
-        className="absolute inset-0 cursor-default"
-      />
-
-      {/* The popup card. Smack in the middle of the viewport. */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 py-8 sm:py-12">
-        <div className="question-cloud-card pointer-events-auto relative w-full max-w-xl">
-          <div className="relative overflow-visible rounded-[32px] border border-amber-200/70 bg-gradient-to-br from-amber-50/98 via-white to-amber-100/95 px-7 py-7 shadow-[0_40px_80px_-20px_rgba(60,60,90,0.45)] ring-1 ring-amber-200/60 sm:px-9 sm:py-9">
-            <div
-              aria-hidden
-              className="pointer-events-none absolute -left-6 -top-7 h-20 w-20 rounded-full bg-amber-200/55 blur-2xl"
-            />
-            <div
-              aria-hidden
-              className="pointer-events-none absolute -right-6 -bottom-7 h-20 w-20 rounded-full bg-rose-200/45 blur-2xl"
-            />
-            <div
-              aria-hidden
-              className="pointer-events-none absolute -right-3 top-1/3 h-10 w-10 rounded-full bg-violet-200/40 blur-xl"
-            />
-
-            {/* Top-right cluster: minimize + close. Minimize sits to
-                the LEFT of close so the destructive action is always
-                on the outside. */}
-            <div className="absolute right-4 top-4 z-10 flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={onMinimize}
-                aria-label="Minimize question"
-                title="Minimize to corner"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/80 text-zinc-500 shadow-sm ring-1 ring-zinc-200 transition hover:text-zinc-900"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  className="h-3.5 w-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2.4}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden
-                >
-                  <path d="M5 19h14" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                onClick={onDismiss}
-                aria-label="Dismiss the question"
-                title="Dismiss"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/80 text-zinc-500 shadow-sm ring-1 ring-zinc-200 transition hover:text-zinc-900"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  className="h-3.5 w-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2.4}
-                  strokeLinecap="round"
-                  aria-hidden
-                >
-                  <path d="M6 6l12 12M18 6l-12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="relative flex items-start gap-4">
-              <div
-                aria-hidden
-                className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-[26px] shadow-sm ring-1 ring-amber-200/70"
-              >
-                💭
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
-                  Rose asks
-                </p>
-                <p className="mt-2 pr-16 text-[20px] font-semibold leading-snug text-zinc-900 sm:text-[22px]">
-                  {text}
-                </p>
-                <div className="mt-5 flex flex-wrap items-center gap-2 text-[12px] text-zinc-500">
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1">
-                    <span aria-hidden>🎙️</span>
-                    Hold the mic or type your answer below
-                  </span>
-                  <button
-                    type="button"
-                    onClick={onRepeat}
-                    className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1 font-medium text-zinc-700 transition hover:bg-white"
-                    title="Have Rose ask again"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-3 w-3"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2.4}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden
-                    >
-                      <path d="M3 12a9 9 0 1 0 3.5-7.1" />
-                      <path d="M3 4v6h6" />
-                    </svg>
-                    Replay
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onMinimize}
-                    className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-white/80 px-2.5 py-1 font-medium text-zinc-700 transition hover:bg-white"
-                    title="Minimize so I can check the notes"
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-3 w-3"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2.4}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden
-                    >
-                      <path d="M14 4h6v6" />
-                      <path d="M10 20H4v-6" />
-                      <path d="M20 4l-7 7" />
-                      <path d="M4 20l7-7" />
-                    </svg>
-                    Check notes
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <style jsx>{`
-        .question-cloud-root {
-          animation: q-root-in 220ms ease-out both;
-        }
-        .question-cloud-backdrop {
-          animation: q-bd-in 260ms ease-out both;
-        }
-        .question-cloud-card {
-          animation: q-card-in 480ms cubic-bezier(0.22, 0.9, 0.32, 1.25) both;
-          will-change: transform, opacity;
-        }
-        @keyframes q-root-in {
-          from {
-            opacity: 0;
-          }
-          to {
-            opacity: 1;
-          }
-        }
-        @keyframes q-bd-in {
-          from {
-            opacity: 0;
-          }
-          to {
-            opacity: 1;
-          }
-        }
-        @keyframes q-card-in {
-          from {
-            opacity: 0;
-            transform: translateY(24px) scale(0.9);
-          }
-          60% {
-            transform: translateY(-6px) scale(1.02);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .question-cloud-root,
-          .question-cloud-backdrop,
-          .question-cloud-card {
-            animation: none;
-          }
-        }
-      `}</style>
-    </div>
-  );
-}
 
 /**
  * Compact speed-rate selector for Rose's voice. Cycles through 0.75x ↔

@@ -202,6 +202,7 @@ export function NotesPanel({
   className,
   editorRef,
   onEditorReady,
+  pinToolbar = true,
 }: {
   /**
    * Mentored Learning path — when set, the panel reads/writes
@@ -232,6 +233,8 @@ export function NotesPanel({
   className?: string;
   /** Optional imperative handle so the parent can append notes. */
   editorRef?: React.RefObject<NotesPanelHandle | null>;
+  /** When false, the status bar scrolls with the page instead of sticking. */
+  pinToolbar?: boolean;
   /** Fired once the TipTap editor is mounted and the imperative handle is wired. */
   onEditorReady?: () => void;
 }) {
@@ -913,7 +916,9 @@ export function NotesPanel({
           Extra horizontal padding at xl so on the 50/50 desktop
           layout the "Edited just now" stamp and the Auto-generate
           toggle don't sit pinned against the panel edges. */}
-      <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-3 border-b border-zinc-100 bg-white/95 px-5 py-2.5 backdrop-blur-sm xl:px-7">
+      <div
+        className={`${pinToolbar ? "sticky top-0 z-10" : ""} flex shrink-0 items-center justify-between gap-3 border-b border-zinc-100 bg-white/95 px-5 py-2.5 backdrop-blur-sm xl:px-7`}
+      >
         <span
           className={`flex items-center gap-1.5 text-[11px] font-medium transition-opacity ${
             saving === "error"
