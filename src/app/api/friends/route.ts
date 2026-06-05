@@ -3,6 +3,7 @@ import {
   enrichProfiles,
   findExistingFriendship,
   resolveProfileForFriendAdd,
+  type ProfileLookupRow,
 } from "@/lib/messaging/profiles";
 import type { FriendshipListItem, FriendProfile } from "@/lib/messaging/types";
 import { createClient } from "@/lib/supabase/server";
@@ -104,39 +105,68 @@ export async function POST(request: Request) {
     typeof (body as { username?: unknown }).username === "string"
       ? (body as { username: string }).username.trim().replace(/^@/, "")
       : "";
+  const targetUserId =
+    typeof (body as { userId?: unknown }).userId === "string"
+      ? (body as { userId: string }).userId
+      : null;
 
-  if (query.length < 2) {
+  if (!targetUserId && query.length < 2) {
     return NextResponse.json(
       { error: "Enter at least 2 characters to search." },
       { status: 400 }
     );
   }
 
-  const resolved = await resolveProfileForFriendAdd(supabase, query);
-  if (resolved.status === "ambiguous") {
-    return NextResponse.json(
-      {
-        error: "Several people match — pick one from the list or use their full @username.",
-        suggestions: resolved.suggestions.map((p) => ({
-          id: p.id,
-          username: p.username,
-          displayName: p.display_name,
-        })),
-      },
-      { status: 409 }
-    );
-  }
-  if (resolved.status === "not_found") {
-    return NextResponse.json(
-      {
-        error:
-          "No one matched that search. They need an @username on their profile (Profile → General), or try their display name.",
-      },
-      { status: 404 }
-    );
+  let profile: ProfileLookupRow | null = null;
+
+  if (targetUserId && UUID_RE.test(targetUserId)) {
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const admin = createAdminClient();
+    const lookup = admin ?? supabase;
+    const { data: row } = await lookup
+      .from("profiles")
+      .select("id, display_name, username")
+      .eq("id", targetUserId)
+      .maybeSingle();
+    if (!row || row.id === user.id) {
+      return NextResponse.json({ error: "User not found." }, { status: 404 });
+    }
+    profile = {
+      id: row.id,
+      display_name: row.display_name,
+      username: row.username,
+      avatar_url: null,
+    };
+  } else {
+    const resolved = await resolveProfileForFriendAdd(supabase, user.id, query);
+    if (resolved.status === "ambiguous") {
+      return NextResponse.json(
+        {
+          error: "Several people match — pick one from the list below.",
+          suggestions: resolved.suggestions.map((p) => ({
+            id: p.id,
+            username: p.username,
+            displayName: p.display_name,
+          })),
+        },
+        { status: 409 }
+      );
+    }
+    if (resolved.status === "not_found") {
+      return NextResponse.json(
+        {
+          error:
+            "No one matched that search. Double-check their @username on Profile → General.",
+        },
+        { status: 404 }
+      );
+    }
+    profile = resolved.profile;
   }
 
-  const profile = resolved.profile;
+  if (!profile) {
+    return NextResponse.json({ error: "User not found." }, { status: 404 });
+  }
   if (profile.id === user.id) {
     return NextResponse.json({ error: "You cannot add yourself." }, { status: 400 });
   }
@@ -186,7 +216,10 @@ export async function POST(request: Request) {
   if (error) {
     if (missingTable(error)) {
       return NextResponse.json(
-        { error: "Friends are not enabled yet — run migration 060." },
+        {
+          error:
+            "Friends is not set up on the database yet. Apply Supabase migrations 060–064 (friends + messaging).",
+        },
         { status: 503 }
       );
     }

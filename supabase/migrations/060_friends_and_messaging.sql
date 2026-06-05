@@ -1,5 +1,7 @@
 -- Friends + messaging (1:1 DMs, group threads, course-linked context).
 
+alter table public.profiles add column if not exists avatar_url text;
+
 -- ── Friendships ───────────────────────────────────────────────────────────────
 
 create table if not exists public.friendships (

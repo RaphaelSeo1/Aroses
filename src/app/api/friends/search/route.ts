@@ -16,14 +16,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ suggestions: [] });
   }
 
-  const rows = await searchProfilesForFriendAdd(supabase, query);
-  const suggestions = rows
-    .filter((p) => p.id !== user.id)
-    .map((p) => ({
-      id: p.id,
-      username: p.username,
-      displayName: p.display_name,
-    }));
+  const rows = await searchProfilesForFriendAdd(supabase, user.id, query);
+  const suggestions = rows.map((p) => ({
+    id: p.id,
+    username: p.username,
+    displayName: p.display_name,
+  }));
 
   return NextResponse.json({ suggestions });
 }

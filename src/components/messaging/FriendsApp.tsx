@@ -136,16 +136,19 @@ export function FriendsApp({
     return () => clearTimeout(t);
   }, [username]);
 
-  async function sendRequest(e: React.FormEvent, pickUsername?: string) {
+  async function sendRequest(e: React.FormEvent, pick?: { username?: string; userId?: string }) {
     e.preventDefault();
     setError(null);
     setBusyId("add");
-    const target = (pickUsername ?? username).trim().replace(/^@/, "");
+    const target = (pick?.username ?? username).trim().replace(/^@/, "");
     try {
       const res = await fetch("/api/friends", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: target }),
+        body: JSON.stringify({
+          username: target,
+          userId: pick?.userId,
+        }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -259,7 +262,7 @@ export function FriendsApp({
                         setSuggestions([]);
                         void sendRequest(
                           { preventDefault: () => {} } as React.FormEvent,
-                          pick || undefined
+                          { username: s.username ?? undefined, userId: s.id }
                         );
                       }}
                       className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"

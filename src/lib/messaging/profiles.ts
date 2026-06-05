@@ -23,22 +23,67 @@ export async function findExistingFriendship(
   return data;
 }
 
-async function rpcSearchProfiles(
-  client: SupabaseClient,
-  query: string
-): Promise<ProfileLookupRow[]> {
-  const { data, error } = await client.rpc("search_profiles_for_friend_add", {
-    p_query: query,
-  });
-  if (error) {
-    console.error("[search_profiles_for_friend_add]", error.message);
-    return legacyUsernameSearch(client, query);
-  }
-  if (!data?.length) return legacyUsernameSearch(client, query);
-  return data as ProfileLookupRow[];
+function rowFromDb(p: {
+  id: string;
+  display_name: string | null;
+  username: string | null;
+  avatar_url?: string | null;
+}): ProfileLookupRow {
+  return {
+    id: p.id,
+    display_name: p.display_name,
+    username: p.username,
+    avatar_url: p.avatar_url ?? null,
+  };
 }
 
-/** Fallback when migration 063 is not applied yet. */
+/** Direct DB search — works even when friend-search RPC migrations are not applied yet. */
+async function directProfileSearch(
+  excludeUserId: string,
+  query: string
+): Promise<ProfileLookupRow[]> {
+  const admin = createAdminClient();
+  if (!admin) return [];
+
+  const term = query.trim();
+  if (term.length < 2) return [];
+
+  const pattern = `${term.replace(/[%_,]/g, "")}%`;
+  const { data, error } = await admin
+    .from("profiles")
+    .select("id, display_name, username")
+    .neq("id", excludeUserId)
+    .or(`username.ilike.${pattern},display_name.ilike.${pattern}`)
+    .limit(10);
+
+  if (error) {
+    console.error("[directProfileSearch]", error.message);
+    return [];
+  }
+
+  return (data ?? []).map((p) => rowFromDb(p as ProfileLookupRow));
+}
+
+async function rpcSearchProfiles(
+  client: SupabaseClient,
+  excludeUserId: string,
+  query: string
+): Promise<ProfileLookupRow[] | null> {
+  const { data, error } = await client.rpc("search_profiles_for_friend_add", {
+    p_query: query,
+    p_exclude_user_id: excludeUserId,
+  });
+
+  if (error) {
+    if (!/search_profiles_for_friend_add|schema cache|PGRST202/i.test(error.message)) {
+      console.error("[search_profiles_for_friend_add]", error.message);
+    }
+    return null;
+  }
+
+  return (data as ProfileLookupRow[] | null)?.map(rowFromDb) ?? [];
+}
+
 async function legacyUsernameSearch(
   client: SupabaseClient,
   query: string
@@ -50,26 +95,38 @@ async function legacyUsernameSearch(
     "lookup_profile_by_username",
     { p_username: normalized }
   );
-  if (!exactErr && exact?.length) return exact as ProfileLookupRow[];
+  if (!exactErr && exact?.length) {
+    return (exact as ProfileLookupRow[]).map(rowFromDb);
+  }
 
   const { data: prefix, error: prefixErr } = await client.rpc(
     "lookup_profiles_by_username_prefix",
     { p_prefix: normalized }
   );
-  if (!prefixErr && prefix?.length) return prefix as ProfileLookupRow[];
+  if (!prefixErr && prefix?.length) {
+    return (prefix as ProfileLookupRow[]).map(rowFromDb);
+  }
   return [];
 }
 
-async function withRpcFallback(
+async function searchProfilesInternal(
   supabase: SupabaseClient,
-  fn: (client: SupabaseClient) => Promise<ProfileLookupRow[]>
+  excludeUserId: string,
+  query: string
 ): Promise<ProfileLookupRow[]> {
-  const primary = await fn(supabase);
-  if (primary.length > 0) return primary;
+  const rpc = await rpcSearchProfiles(supabase, excludeUserId, query);
+  if (rpc && rpc.length > 0) {
+    return rpc.filter((p) => p.id !== excludeUserId);
+  }
 
-  const admin = createAdminClient();
-  if (!admin) return primary;
-  return fn(admin);
+  const legacy = await legacyUsernameSearch(supabase, query).catch(() => []);
+  const legacyFiltered = legacy.filter((p) => p.id !== excludeUserId);
+  if (legacyFiltered.length > 0) return legacyFiltered;
+
+  const direct = await directProfileSearch(excludeUserId, query);
+  if (direct.length > 0) return direct;
+
+  return rpc ?? [];
 }
 
 export type FriendUsernameResolveResult =
@@ -84,30 +141,37 @@ function normalizeFriendQuery(raw: string): string {
 /** Match by @username or display name (prefix or exact). */
 export async function resolveProfileForFriendAdd(
   supabase: SupabaseClient,
+  excludeUserId: string,
   rawQuery: string
 ): Promise<FriendUsernameResolveResult> {
   const query = normalizeFriendQuery(rawQuery);
   if (query.length < 2) return { status: "not_found" };
 
-  const matches = await withRpcFallback(supabase, (client) =>
-    rpcSearchProfiles(client, query)
-  );
+  const matches = await searchProfilesInternal(supabase, excludeUserId, query);
 
-  if (matches.length === 1) return { status: "found", profile: matches[0]! };
   if (matches.length > 1) {
+    const exactUsername = matches.filter(
+      (m) => m.username?.toLowerCase() === query.toLowerCase()
+    );
+    if (exactUsername.length === 1) {
+      return { status: "found", profile: exactUsername[0]! };
+    }
     return { status: "ambiguous", suggestions: matches };
   }
+
+  if (matches.length === 1) return { status: "found", profile: matches[0]! };
   return { status: "not_found" };
 }
 
 export async function searchProfilesForFriendAdd(
   supabase: SupabaseClient,
+  excludeUserId: string,
   rawQuery: string
 ): Promise<ProfileLookupRow[]> {
   const query = normalizeFriendQuery(rawQuery);
   if (query.length < 2) return [];
 
-  return withRpcFallback(supabase, (client) => rpcSearchProfiles(client, query));
+  return searchProfilesInternal(supabase, excludeUserId, query);
 }
 
 export async function enrichProfiles(
