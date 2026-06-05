@@ -87,6 +87,9 @@ export function FriendsApp({
   const [groupCourseId, setGroupCourseId] = useState("");
   const [selectedFriendIds, setSelectedFriendIds] = useState<Set<string>>(new Set());
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [suggestions, setSuggestions] = useState<
+    { id: string; username: string | null; displayName: string | null }[]
+  >([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -111,21 +114,48 @@ export function FriendsApp({
     void load();
   }, [load]);
 
-  async function sendRequest(e: React.FormEvent) {
+  useEffect(() => {
+    const q = username.trim().replace(/^@/, "");
+    if (q.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await fetch(`/api/friends/search?u=${encodeURIComponent(q)}`);
+          const body = await res.json().catch(() => ({}));
+          if (res.ok) {
+            setSuggestions(body.suggestions ?? []);
+          }
+        } catch {
+          setSuggestions([]);
+        }
+      })();
+    }, 300);
+    return () => clearTimeout(t);
+  }, [username]);
+
+  async function sendRequest(e: React.FormEvent, pickUsername?: string) {
     e.preventDefault();
     setError(null);
     setBusyId("add");
+    const target = (pickUsername ?? username).trim().replace(/^@/, "");
     try {
       const res = await fetch("/api/friends", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username }),
+        body: JSON.stringify({ username: target }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (Array.isArray(body.suggestions) && body.suggestions.length > 0) {
+          setSuggestions(body.suggestions);
+        }
         setError(typeof body.error === "string" ? body.error : "Could not send request.");
       } else {
         setUsername("");
+        setSuggestions([]);
         await load();
       }
     } catch {
@@ -203,15 +233,46 @@ export function FriendsApp({
       <section className="rounded-3xl border border-zinc-200/90 bg-white/95 p-6 shadow-lg dark:border-zinc-800 dark:bg-zinc-950/95 sm:p-8">
         <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Add a friend</h2>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Search by their Aroses username (from their profile).
+          Enter their exact Aroses username (from their profile). Partial matches work if only one user fits.
         </p>
-        <form onSubmit={(e) => void sendRequest(e)} className="mt-4 flex flex-col gap-2 sm:flex-row">
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value.replace(/^@/, ""))}
-            placeholder="username"
-            className="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
-          />
+        <form onSubmit={(e) => void sendRequest(e)} className="relative mt-4 flex flex-col gap-2 sm:flex-row">
+          <div className="relative min-w-0 flex-1">
+            <input
+              value={username}
+              onChange={(e) => {
+                setUsername(e.target.value.replace(/^@/, ""));
+                setError(null);
+              }}
+              placeholder="username"
+              autoComplete="off"
+              className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+            />
+            {suggestions.length > 0 ? (
+              <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                {suggestions.map((s) => (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (s.username) setUsername(s.username);
+                        setSuggestions([]);
+                        void sendRequest(
+                          { preventDefault: () => {} } as React.FormEvent,
+                          s.username ?? undefined
+                        );
+                      }}
+                      className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                    >
+                      <span className="font-medium">@{s.username}</span>
+                      {s.displayName ? (
+                        <span className="truncate text-xs text-zinc-500">{s.displayName}</span>
+                      ) : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
           <button
             type="submit"
             disabled={busyId === "add" || username.trim().length < 2}

@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import {
   enrichProfiles,
   findExistingFriendship,
-  lookupProfileByUsername,
+  resolveProfileForFriendAdd,
 } from "@/lib/messaging/profiles";
 import type { FriendshipListItem, FriendProfile } from "@/lib/messaging/types";
+import { parseUsername } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
@@ -105,14 +106,41 @@ export async function POST(request: Request) {
       ? (body as { username: string }).username.trim().replace(/^@/, "")
       : "";
 
-  if (username.length < 2) {
-    return NextResponse.json({ error: "Enter a valid username." }, { status: 400 });
+  const parsed = parseUsername(username);
+  if (!parsed) {
+    return NextResponse.json(
+      {
+        error:
+          "Enter a valid username — 3–30 characters, letters, numbers, and underscores only.",
+      },
+      { status: 400 }
+    );
   }
 
-  const profile = await lookupProfileByUsername(username);
-  if (!profile) {
-    return NextResponse.json({ error: "No user found with that username." }, { status: 404 });
+  const resolved = await resolveProfileForFriendAdd(supabase, parsed);
+  if (resolved.status === "ambiguous") {
+    return NextResponse.json(
+      {
+        error: "Several users match that search. Use the full username.",
+        suggestions: resolved.suggestions.map((p) => ({
+          id: p.id,
+          username: p.username,
+          displayName: p.display_name,
+        })),
+      },
+      { status: 409 }
+    );
   }
+  if (resolved.status === "not_found") {
+    return NextResponse.json(
+      {
+        error: `No user @${parsed} found. Check their profile for the exact username.`,
+      },
+      { status: 404 }
+    );
+  }
+
+  const profile = resolved.profile;
   if (profile.id === user.id) {
     return NextResponse.json({ error: "You cannot add yourself." }, { status: 400 });
   }
