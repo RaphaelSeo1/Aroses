@@ -119,6 +119,10 @@ export function ImmersiveLessonRunner({
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(
     onboarding.interactionMode
   );
+  const interactionModeRef = useRef<InteractionMode>(onboarding.interactionMode);
+  useEffect(() => {
+    interactionModeRef.current = interactionMode;
+  }, [interactionMode]);
 
   // Voice capture mode:
   //   "push"  — student holds M (or the on-screen status pill) to talk
@@ -182,6 +186,7 @@ export function ImmersiveLessonRunner({
       setVoiceCapped(true);
       voice.cancelSpeak();
       void voice.stopRecording();
+      interactionModeRef.current = "text";
       setInteractionMode("text");
     },
   });
@@ -273,6 +278,7 @@ export function ImmersiveLessonRunner({
   const lessonColumnRef = useRef<HTMLDivElement>(null);
   const [pairedColumnHeight, setPairedColumnHeight] = useState<number | null>(null);
   const notesAppendedChunkRef = useRef<string | null>(null);
+  const liveCycleGuardRef = useRef(false);
   const [notesEditorReady, setNotesEditorReady] = useState(false);
   const onNotesEditorReady = useCallback(() => {
     autoGenLog("parent: notes editor hydrated and ready");
@@ -727,7 +733,7 @@ export function ImmersiveLessonRunner({
       appendTranscriptLine({ role: "rose", text });
       setTutorReply(text);
       lastSpokenRef.current = text;
-      if (interactionMode === "voice") {
+      if (interactionModeRef.current === "voice") {
         try {
           await voice.speak(text);
         } catch (e) {
@@ -951,6 +957,7 @@ export function ImmersiveLessonRunner({
     isResumeRef.current = false;
 
     void (async () => {
+      if (interactionModeRef.current !== "voice") return;
       await voice.speak(explanation, {
         onPlay: () => {
           lastSpokenRef.current = explanation;
@@ -958,6 +965,7 @@ export function ImmersiveLessonRunner({
           appendTranscriptLineOnce({ role: "rose", text: explanation });
         },
       });
+      if (interactionModeRef.current !== "voice") return;
       // Bail if the chunk changed under us (advance / resume) so we never
       // speak this chunk's question after the student has moved on.
       if (lastSpokenChunkIdRef.current !== captured) return;
@@ -1279,7 +1287,7 @@ export function ImmersiveLessonRunner({
           }
         })();
 
-        if (interactionMode === "voice") {
+        if (interactionModeRef.current === "voice") {
           // Gate transcript reveal on audio playback — each sentence
           // appears in the transcript card the moment its audio chunk
           // actually starts playing, NOT when Claude emits the tokens.
@@ -1587,14 +1595,16 @@ export function ImmersiveLessonRunner({
 
   const switchInteractionMode = useCallback(
     (next: InteractionMode) => {
-      if (next === "text" && interactionMode === "voice") {
+      if (next === "text") {
         voice.cancelSpeak();
         void voice.stopRecording();
         mDownRef.current = false;
+        liveCycleGuardRef.current = false;
       }
+      interactionModeRef.current = next;
       setInteractionMode(next);
     },
-    [interactionMode, voice]
+    [voice]
   );
 
   // ----- barge-in handler -----
@@ -1649,7 +1659,6 @@ export function ImmersiveLessonRunner({
   // gives the conversational "they speak, you speak, repeat" feel without
   // ever needing to press a key. Push mode skips this — the student
   // controls the mic with M.
-  const liveCycleGuardRef = useRef(false);
   useEffect(() => {
     if (voiceMode !== "live") return;
     if (interactionMode !== "voice") return;
@@ -2340,23 +2349,27 @@ export function ImmersiveLessonRunner({
           </div>
           <button
             type="button"
-            onClick={() =>
-              void voice.speak(`${chunk.explanation}\n\n${chunk.checkQuestion}`)
-            }
+            onClick={() => {
+              void voice.speak(
+                `${chunk.explanation}\n\n${chunk.checkQuestion}`
+              );
+            }}
             className={
-              voice.state.speaking
+              voice.state.speaking && interactionMode === "voice"
                 ? "rounded-full bg-fuchsia-500/15 px-3 py-1 text-xs font-semibold text-fuchsia-700 ring-1 ring-fuchsia-300/40"
                 : "rounded-full border border-white/60 bg-white/60 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-white/80"
             }
           >
-            <span className={voice.state.speaking ? "animate-pulse" : ""}>
-              ●{" "}
-            </span>
-            {voice.state.speaking
-              ? "Speaking…"
-              : interactionMode === "voice"
-                ? "Replay"
-                : "Hear it"}
+            {voice.state.speaking && interactionMode === "voice" ? (
+              <>
+                <span className="animate-pulse">● </span>
+                Speaking…
+              </>
+            ) : interactionMode === "voice" ? (
+              "Replay"
+            ) : (
+              "Hear it"
+            )}
           </button>
         </div>
         <p className="mt-4 text-base leading-relaxed text-zinc-800">
