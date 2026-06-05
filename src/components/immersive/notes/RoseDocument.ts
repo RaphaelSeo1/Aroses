@@ -10,6 +10,10 @@ export const RoseDocument = Document.extend({
       roseDocEmoji: {
         default: "📝",
       },
+      /** Chunk IDs already auto-appended — survives refresh and prevents duplicates. */
+      roseAppendedChunkIds: {
+        default: [] as string[],
+      },
     };
   },
 });
@@ -17,10 +21,17 @@ export const RoseDocument = Document.extend({
 export type RoseDocAttrs = {
   roseDocTitle?: string;
   roseDocEmoji?: string;
+  roseAppendedChunkIds?: string[];
 };
 
 export function readRoseDocAttrs(doc: unknown): RoseDocAttrs {
   if (!doc || typeof doc !== "object") return {};
   const attrs = (doc as { attrs?: RoseDocAttrs }).attrs;
   return attrs ?? {};
+}
+
+export function readRoseAppendedChunkIds(doc: unknown): string[] {
+  const raw = readRoseDocAttrs(doc).roseAppendedChunkIds;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((id): id is string => typeof id === "string" && id.length > 0);
 }

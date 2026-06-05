@@ -97,6 +97,24 @@ export function ImmersiveLessonRunner({
   // one mount per turn so growth animates as a smooth character append.
   const [replyTurn, setReplyTurn] = useState(0);
   const [answerText, setAnswerText] = useState("");
+  /** Latest textarea value — safe to read inside async voice handlers. */
+  const answerDraftRef = useRef("");
+  /** Utterance tied to the in-flight submit — only clear the box if unchanged. */
+  const answerAtSubmitRef = useRef<string | null>(null);
+  const handleAnswerTextChange = useCallback((value: string) => {
+    answerDraftRef.current = value;
+    setAnswerText(value);
+  }, []);
+  const clearSubmittedAnswerDraft = useCallback(() => {
+    const submitted = answerAtSubmitRef.current;
+    answerAtSubmitRef.current = null;
+    if (submitted === null) return;
+    setAnswerText((current) => {
+      if (current.trim() !== submitted) return current;
+      answerDraftRef.current = "";
+      return "";
+    });
+  }, []);
   const [submitting, setSubmitting] = useState(false);
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(
     onboarding.interactionMode
@@ -144,6 +162,8 @@ export function ImmersiveLessonRunner({
   /** Returning students must tap Continue before Rose starts the lesson. */
   const [awaitingContinue, setAwaitingContinue] = useState(false);
   const awaitingContinueRef = useRef(false);
+  /** Grace window after Continue — readiness phrases aren't check answers. */
+  const lessonJustOpenedAtRef = useRef<number | null>(null);
   useEffect(() => {
     awaitingContinueRef.current = awaitingContinue;
   }, [awaitingContinue]);
@@ -198,10 +218,9 @@ export function ImmersiveLessonRunner({
   const [narrationText, setNarrationText] = useState<string>("");
 
   // ---- on-demand image (§9) ----
-  // The current Mentored Learning image (set when Rose's turn meta
-  // included an imageRequest OR the student asked for one via a
-  // keyword phrase like "show me X"). Renders above the lesson
-  // cards; clears when the chunk advances.
+  // Wikimedia image when the student explicitly asks ("show me a
+  // diagram of…"). Renders above the lesson cards; clears on dismiss
+  // or when the chunk advances.
   const [mentoredImage, setMentoredImage] = useState<{
     url: string;
     thumbUrl: string;
@@ -769,6 +788,15 @@ export function ImmersiveLessonRunner({
         autoGenLog("append aborted — chunk already appended", state);
         return;
       }
+      if (
+        notesPanelRef.current.isChunkAppended(chunk.id, chunk.concept)
+      ) {
+        autoGenLog("append aborted — chunk already in saved notes", {
+          chunkId: chunk.id,
+        });
+        notesAppendedChunkRef.current = chunk.id;
+        return;
+      }
 
       const block = buildAutoNotesFromChunk(chunk, lessonKeyTerms);
       if (!block) {
@@ -781,6 +809,7 @@ export function ImmersiveLessonRunner({
 
       const appended = notesPanelRef.current.appendBlock({
         ...block,
+        chunkId: chunk.id,
         skipDedupe: opts?.skipDedupe,
       });
       autoGenLog("appendBlock returned", { appended, chunkId: chunk.id });
@@ -984,6 +1013,15 @@ export function ImmersiveLessonRunner({
     transcriptLines,
   ]);
 
+  const acknowledgeAndContinue = useCallback(() => {
+    awaitingContinueRef.current = false;
+    setAwaitingContinue(false);
+    setGreetingPlayed(true);
+    lessonJustOpenedAtRef.current = Date.now();
+    lastSpokenChunkIdRef.current = null;
+    voice.cancelSpeak();
+  }, [voice]);
+
   // ----- submit (streaming turn → sentence-streamed TTS) -----
   //
   // Hits /api/mentored/turn-stream and pipes:
@@ -996,24 +1034,41 @@ export function ImmersiveLessonRunner({
   // Claude to finish (~3-6s) AND a full TTS round-trip.
   const submitAnswer = useCallback(
     async (utterance: string) => {
-      if (awaitingContinueRef.current) return;
-      if (!chunk || !plan) return;
       const text = utterance.trim();
+      if (text.length < 2) return;
 
-      // §9 — Detect explicit image requests in the student's
-      // utterance and kick off the search BEFORE we wait on
-      // Rose's reply. Two paths can result in an image:
-      //   1. This client-side keyword match (fast, fires the
-      //      moment the student submits).
-      //   2. Rose's turn meta emitting an imageRequest (handled
-      //      below when the stream meta event arrives).
-      // Both paths POST to the same cached endpoint so a
-      // duplicate request just hits the cache.
+      // Welcome / resume: "yes I'm ready" is not an answer to the check Q.
+      if (awaitingContinueRef.current) {
+        appendTranscriptLine({ role: "student", text });
+        acknowledgeAndContinue();
+        return;
+      }
+
+      if (
+        lessonJustOpenedAtRef.current != null &&
+        Date.now() - lessonJustOpenedAtRef.current < 60_000 &&
+        attempts === 0 &&
+        isSessionReadyAcknowledgement(text)
+      ) {
+        appendTranscriptLine({ role: "student", text });
+        appendTranscriptLine({
+          role: "rose",
+          text: "Sounds good — let's keep going.",
+        });
+        lessonJustOpenedAtRef.current = null;
+        return;
+      }
+
+      if (!chunk || !plan) return;
+
+      // §9 — Only fetch Wikimedia when the student explicitly asks
+      // for a visual ("show me a diagram of…"). Rose does not auto-pull
+      // images — unsolicited results were often unrelated.
       const imgIntent = detectImageRequest(text);
       if (imgIntent) {
         void fetchMentoredImage(imgIntent.query, imgIntent.type);
       }
-      if (text.length < 2) return;
+      answerAtSubmitRef.current = text;
       setSubmitting(true);
       setReplyTurn((n) => n + 1);
       appendTranscriptLine({ role: "student", text });
@@ -1201,18 +1256,9 @@ export function ImmersiveLessonRunner({
             } else if (ev.type === "meta") {
               finalIntent = ev.intent;
               finalAdvance = ev.advance;
-              // §9 — Rose's turn included an explicit image request.
-              // Kick the search off in parallel with the rest of the
-              // response (we don't await — image arrives when ready).
-              const ir = (ev as { imageRequest?: { query?: string; type?: string } })
-                .imageRequest;
-              if (ir && typeof ir.query === "string") {
-                const t =
-                  ir.type === "diagram" || ir.type === "photo"
-                    ? ir.type
-                    : "illustration";
-                void fetchMentoredImage(ir.query, t);
-              }
+              // Images only when the student explicitly asked (client-side
+              // detectImageRequest above). Rose meta imageRequest is ignored
+              // — proactive Wikimedia pulls were too often irrelevant.
             } else if (ev.type === "done") {
               // Flush any buffered sentences + the incomplete tail as one
               // final chunk so nothing is dropped.
@@ -1334,7 +1380,7 @@ export function ImmersiveLessonRunner({
           // Text mode: student reads feedback, then taps to advance.
           setTextPendingAdvance(true);
           setAttempts(0);
-          setAnswerText("");
+          clearSubmittedAnswerDraft();
           await persist({
             attemptState: {
               chunkIndex: chunkIdx,
@@ -1354,7 +1400,7 @@ export function ImmersiveLessonRunner({
           const nextIdx = chunkIdx + 1;
           setChunkIdx(nextIdx);
           setAttempts(0);
-          setAnswerText("");
+          clearSubmittedAnswerDraft();
           setNarrationText("");
           setTutorReply(null);
           setMentoredImage(null);
@@ -1399,7 +1445,7 @@ export function ImmersiveLessonRunner({
             finalIntent === "answer_wrong" || finalIntent === "answer_partial";
           const nextAttempts = wasAnswerAttempt ? attempts + 1 : attempts;
           setAttempts(nextAttempts);
-          setAnswerText("");
+          clearSubmittedAnswerDraft();
           await persist({
             attemptState: {
               chunkIndex: chunkIdx,
@@ -1423,11 +1469,13 @@ export function ImmersiveLessonRunner({
       setSubmitting(false);
     },
     [
+      acknowledgeAndContinue,
       activeModule.id,
       appendTranscriptLine,
       attempts,
       chunk,
       chunkIdx,
+      clearSubmittedAnswerDraft,
       fetchMentoredImage,
       interactionMode,
       interruptedContext,
@@ -1442,7 +1490,6 @@ export function ImmersiveLessonRunner({
 
   // ----- voice input -----
   const startVoiceAnswer = useCallback(async () => {
-    if (awaitingContinueRef.current) return;
     if (submitting || voice.state.recording) return;
     voice.cancelSpeak();
     recordPromiseRef.current = voice.startRecording();
@@ -1489,9 +1536,9 @@ export function ImmersiveLessonRunner({
       );
       return;
     }
-    setAnswerText(text);
+    handleAnswerTextChange(text);
     void submitAnswer(text);
-  }, [submitAnswer, voice]);
+  }, [handleAnswerTextChange, submitAnswer, voice]);
 
   // ----- global "hold M to talk" -----
   // Listens at the window level so the student can talk from anywhere in
@@ -1584,13 +1631,13 @@ export function ImmersiveLessonRunner({
         setInterruptedContext(null);
         return;
       }
-      setAnswerText(text);
+      handleAnswerTextChange(text);
       void submitAnswer(text);
     } catch (e) {
       console.error("[imm runner handleBargeIn]", e);
       setInterruptedContext(null);
     }
-  }, [submitAnswer, voice]);
+  }, [handleAnswerTextChange, submitAnswer, voice]);
 
   useEffect(() => {
     onBargeInRef.current = () => void handleBargeIn();
@@ -1614,6 +1661,8 @@ export function ImmersiveLessonRunner({
     if (voice.state.transcribing) return;
     if (submitting) return;
     if (liveCycleGuardRef.current) return;
+    // Don't auto-listen while the student is drafting a typed answer.
+    if (answerDraftRef.current.trim().length > 0) return;
     // Hold the mic while the check question is on screen — room noise
     // shouldn't auto-submit an answer before the student is ready.
     if (chunk && questionAudioStartedFor === chunk.id && attempts === 0) {
@@ -1624,9 +1673,11 @@ export function ImmersiveLessonRunner({
       try {
         const blob = await voice.recordUntilSilence();
         if (!blob) return;
+        if (answerDraftRef.current.trim().length > 0) return;
         const text = await voice.transcribe(blob);
         if (!text) return;
-        setAnswerText(text);
+        if (answerDraftRef.current.trim().length > 0) return;
+        handleAnswerTextChange(text);
         await submitAnswer(text);
       } catch (e) {
         console.error("[imm runner live mode]", e);
@@ -1642,6 +1693,7 @@ export function ImmersiveLessonRunner({
     interactionMode,
     phase,
     questionAudioStartedFor,
+    handleAnswerTextChange,
     submitAnswer,
     submitting,
     voice,
@@ -1652,25 +1704,15 @@ export function ImmersiveLessonRunner({
   ]);
 
   const resumeFromRecap = useCallback(() => {
-    // The welcome-back greeting was already spoken on this screen, so DON'T
-    // re-fire it in the teaching phase (that was the duplicate welcome). Mark
-    // the greeting done and keep the single-fire guard set.
+    // Greeting already played on the welcome-back screen. Enter teaching
+    // with awaitingContinue so "yes I'm ready" isn't graded as a check answer.
     greetingFiredRef.current = true;
-    setGreetingPlayed(true);
-    awaitingContinueRef.current = false;
-    setAwaitingContinue(false);
-    setTutorReply(null);
+    awaitingContinueRef.current = true;
+    setAwaitingContinue(true);
+    setGreetingPlayed(false);
     lastSpokenChunkIdRef.current = null;
     voice.cancelSpeak();
     setPhase("loading-plan");
-  }, [voice]);
-
-  const acknowledgeAndContinue = useCallback(() => {
-    awaitingContinueRef.current = false;
-    setAwaitingContinue(false);
-    setGreetingPlayed(true);
-    lastSpokenChunkIdRef.current = null;
-    voice.cancelSpeak();
   }, [voice]);
 
   const requestSkipModule = useCallback(() => {
@@ -1709,6 +1751,8 @@ export function ImmersiveLessonRunner({
     const nextIdx = chunkIdx + 1;
     setChunkIdx(nextIdx);
     setAttempts(0);
+    answerAtSubmitRef.current = null;
+    answerDraftRef.current = "";
     setAnswerText("");
     setNarrationText("");
     setTutorReply(null);
@@ -2068,10 +2112,34 @@ export function ImmersiveLessonRunner({
       contentMaxWidth={showNotesPanel ? "wide" : "default"}
       bottomBar={
         awaitingContinue ? (
-          <div className="border-t border-white/70 bg-white/85 px-4 py-3 text-center text-xs text-zinc-500 backdrop-blur-md">
-            Tap <span className="font-semibold text-zinc-700">Continue lesson</span>{" "}
-            above when you&apos;re ready — Rose will wait for you.
+        <div className="immersive-dock border-t border-white/70 bg-white/85 shadow-[0_-12px_28px_-18px_rgba(60,60,90,0.20)] backdrop-blur-md">
+          <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pt-3">
+            <p className="mb-2 text-center text-xs text-zinc-500">
+              Tap <span className="font-semibold text-zinc-700">Continue lesson</span>{" "}
+              above, or say / type that you&apos;re ready.
+            </p>
+            <AnswerComposer
+              interactionMode={interactionMode}
+              voiceMode={voiceMode}
+              onVoiceModeChange={setVoiceMode}
+              text={answerText}
+              onTextChange={handleAnswerTextChange}
+              onSubmitText={() => void submitAnswer(answerText)}
+              onComposerFocus={() => {
+                if (voice.state.recording || voice.state.autoCapturing) {
+                  void voice.stopRecording();
+                }
+              }}
+              recording={voice.state.recording}
+              transcribing={voice.state.transcribing}
+              onMicDown={() => void startVoiceAnswer()}
+              onMicUp={() => void finishVoiceAnswer()}
+              submitting={submitting}
+              error={voice.state.error}
+              placeholderOverride="I'm ready / yes let's go…"
+            />
           </div>
+        </div>
         ) : (
         <div className="immersive-dock border-t border-white/70 bg-white/85 shadow-[0_-12px_28px_-18px_rgba(60,60,90,0.20)] backdrop-blur-md">
           <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-6 sm:pt-3">
@@ -2143,8 +2211,13 @@ export function ImmersiveLessonRunner({
               voiceMode={voiceMode}
               onVoiceModeChange={setVoiceMode}
               text={answerText}
-              onTextChange={setAnswerText}
+              onTextChange={handleAnswerTextChange}
               onSubmitText={() => void submitAnswer(answerText)}
+              onComposerFocus={() => {
+                if (voice.state.recording || voice.state.autoCapturing) {
+                  void voice.stopRecording();
+                }
+              }}
               recording={voice.state.recording}
               transcribing={voice.state.transcribing}
               onMicDown={() => void startVoiceAnswer()}
@@ -2210,27 +2283,36 @@ export function ImmersiveLessonRunner({
       {!awaitingContinue && chunk ? (
         <>
 
-      {/* §9 — On-demand image area. Renders when Rose has decided a
-          visual would help OR the student explicitly asked for one
-          ("show me a diagram of..."). Stays visible until the
-          chunk advances. Loading skeleton matches the cloud aesthetic. */}
+      {/* §9 — On-demand image area. Only when the student explicitly
+          asked for a visual. Stays visible until dismissed or the
+          chunk advances. */}
       {mentoredImageLoading || mentoredImage ? (
         <GlassPanel tone="subtle">
           {mentoredImage ? (
             <figure className="overflow-hidden rounded-xl">
-              <a
-                href={mentoredImage.sourceUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Open original on Wikimedia Commons"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={mentoredImage.thumbUrl}
-                  alt=""
-                  className="block max-h-80 w-full object-contain bg-white"
-                />
-              </a>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setMentoredImage(null)}
+                  className="absolute right-2 top-2 z-10 rounded-full border border-zinc-200/80 bg-white/90 px-2 py-0.5 text-[11px] font-medium text-zinc-600 shadow-sm hover:bg-white"
+                  aria-label="Dismiss image"
+                >
+                  Dismiss
+                </button>
+                <a
+                  href={mentoredImage.sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Open original on Wikimedia Commons"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={mentoredImage.thumbUrl}
+                    alt=""
+                    className="block max-h-80 w-full object-contain bg-white"
+                  />
+                </a>
+              </div>
               <figcaption className="mt-2 px-1 text-[11px] text-zinc-500">
                 {mentoredImage.attribution}
               </figcaption>
@@ -2466,6 +2548,24 @@ function chunkQuestionInTranscript(
   );
 }
 
+/** "Yes I'm ready" / "let's go" — answers to the welcome, not the check Q. */
+function isSessionReadyAcknowledgement(utterance: string): boolean {
+  if (isVagueAffirmative(utterance)) return true;
+  const s = utterance
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?,…]/g, "")
+    .replace(/\s+/g, " ");
+  if (s.length === 0 || s.length > 72) return false;
+  return (
+    /^(yes|yeah|yep|yup|sure|ok|okay)(\s+i\s+am|\s+im|\s+ready)?$/.test(s) ||
+    /^(i\s+am|im)\s+ready$/.test(s) ||
+    /^ready(\s+to\s+(go|continue|keep\s+going|pick\s+up))?$/.test(s) ||
+    /^let'?s\s+(go|continue|do\s+it|pick\s+up|start)/.test(s) ||
+    /^(go\s+ahead|sounds\s+good|pick\s+up|keep\s+going)$/.test(s)
+  );
+}
+
 /** Short acknowledgments that are not real answers to a check question. */
 function isVagueAffirmative(utterance: string): boolean {
   const s = utterance
@@ -2475,10 +2575,11 @@ function isVagueAffirmative(utterance: string): boolean {
     .replace(/\s+/g, " ");
   if (s.length === 0 || s.length > 56) return false;
   return (
-    /^(ok|okay|yeah|yes|yep|yup|sure|got it|makes sense|sounds good|i think so|alright|right|cool|continue|keep going|go on|next|uh huh|mmhm|mhm|fine|good|great|perfect|thanks|thank you)$/.test(
+    /^(ok|okay|yeah|yes|yep|yup|sure|got it|makes sense|sounds good|i think so|i think|yes i think|yeah i think|i guess|i guess so|alright|right|cool|continue|keep going|go on|next|uh huh|mmhm|mhm|fine|good|great|perfect|thanks|thank you)$/.test(
       s
     ) ||
-    /^(yes|yeah|ok|okay|sure|yep)( please| thanks)?$/.test(s)
+    /^(yes|yeah|ok|okay|sure|yep)( please| thanks)?$/.test(s) ||
+    /^(yes|yeah)\s+i\s+think$/.test(s)
   );
 }
 
@@ -2533,7 +2634,6 @@ function detectImageRequest(
     { re: /(?:show|draw)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?diagram\s+of\s+(.+?)[.?!]?$/i, type: "diagram" },
     { re: /(?:show|draw)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?(?:picture|photo|image)\s+of\s+(.+?)[.?!]?$/i, type: "photo" },
     { re: /(?:draw|sketch)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?(.+?)[.?!]?$/i, type: "diagram" },
-    { re: /(?:show|see)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?(.+?)[.?!]?$/i, type: "photo" },
     { re: /what\s+does\s+(.+?)\s+look\s+like[.?!]?$/i, type: "photo" },
     { re: /^(?:picture|photo|image|diagram)\s+of\s+(.+?)[.?!]?$/i, type: "photo" },
   ];
@@ -2671,12 +2771,14 @@ function AnswerComposer({
   text,
   onTextChange,
   onSubmitText,
+  onComposerFocus,
   recording,
   transcribing,
   onMicDown,
   onMicUp,
   submitting,
   error,
+  placeholderOverride,
 }: {
   interactionMode: InteractionMode;
   voiceMode: "push" | "live";
@@ -2684,12 +2786,14 @@ function AnswerComposer({
   text: string;
   onTextChange: (v: string) => void;
   onSubmitText: () => void;
+  onComposerFocus?: () => void;
   recording: boolean;
   transcribing: boolean;
   onMicDown: () => void;
   onMicUp: () => void;
   submitting: boolean;
   error: string | null;
+  placeholderOverride?: string;
 }) {
   const canSubmit = text.trim().length >= 2 && !submitting;
   const busy = submitting || transcribing;
@@ -2744,6 +2848,7 @@ function AnswerComposer({
           rows={1}
           value={text}
           onChange={(e) => onTextChange(e.target.value)}
+          onFocus={onComposerFocus}
           onKeyDown={(e) => {
             // Enter sends; Shift+Enter (or Alt/Ctrl/Cmd+Enter) inserts a new
             // line. Guard against IME composition (Korean/Japanese/Chinese)
@@ -2761,11 +2866,12 @@ function AnswerComposer({
             }
           }}
           placeholder={
-            interactionMode === "voice"
+            placeholderOverride ??
+            (interactionMode === "voice"
               ? voiceMode === "live"
                 ? "Speak whenever — or type here…"
                 : "Press and hold M or the mic button to speak · or type here…"
-              : "Type your answer (↵ to send · ⇧↵ for a new line)…"
+              : "Type your answer (↵ to send · ⇧↵ for a new line)…")
           }
           className="block min-h-[2.5rem] flex-1 resize-none rounded-2xl border border-white/60 bg-white/70 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-500 focus:border-fuchsia-300 focus:bg-white/90 focus:outline-none focus:ring-2 focus:ring-fuchsia-200/60"
         />

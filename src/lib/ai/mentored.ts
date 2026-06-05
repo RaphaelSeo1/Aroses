@@ -176,7 +176,7 @@ Output a JSON array only (no markdown fences). Each object:
   "analogy": "optional — one short analogy the tutor can fall back on if the student misses the question",
   "checkQuestion": "ONE question that tests this exact concept (not the next one, not the previous one)",
   "referenceAnswer": "what a strong answer should say (used internally to grade; 1-3 sentences)",
-  "keyPoints": ["3-5 short bullet phrases the student's answer should hit"],
+  "keyPoints": ["3-5 short phrases the student's answer should hit — each should be a mini-explanation (e.g. 'Income statement — shows profit/loss over a period'), NOT bare terms alone"],
   "sourceLessonIndex": 0-based index of the lesson this chunk corresponds to (integer),
   "keyTerms": ["2-5 short phrases (1-4 words each) that appear VERBATIM in the SOURCE LESSON CONTENT above. These are the exact words the student should see glow in their source material while this chunk is being taught. Match the surface form exactly, including capitalization."]
 }
@@ -428,7 +428,7 @@ ${pacingLines.join("\n")}
 Smart-timing rules:
 - The "30 second" rule means: don't pile on a SECOND new check right after one you already asked. It does NOT mean "stop talking and leave the student hanging."
 - If the student has NOT actually answered the check question yet (vague "ok", "yeah", "got it", "makes sense" without substance), you MUST re-ask or invite an answer — even if a check was asked recently.
-- DO consider a gentle check-in ("Does that make sense?", "What part should I slow down?") if you've been explaining ~60+ seconds with no real answer.
+- If you've been explaining ~60+ seconds with no real answer, still steer back to the CHECK QUESTION — not a different "does that make sense?" prompt.
 - DON'T interrupt their flow if they just gave a substantive correct answer.
 - Major-concept transitions are a natural place for a check — verify before building further.`
     : "";
@@ -458,17 +458,15 @@ ${input.studentUtterance.trim().slice(0, 2000)}
 Output format (STRICT):
 1. First, write your spoken reply as plain text. Conversational tutor voice. No markdown, no "as an AI", no quotes around it.
    - Usually 2-5 sentences; stay concise unless a short example is needed.
-   - Your reply MUST end with a direct question that expects an answer from the student — either re-ask the CHECK QUESTION above (paraphrase is fine) OR a comprehension check ("Does that make sense?", "Can you walk me through what happens to X?", "Ready to try answering?").
-   - The ONLY exception: when you are truly advancing to the next concept (advance:true after a substantive correct answer or explicit "move on") — then end with a brief forward-looking statement, not a question.
+   - ONE QUESTION RULE: Until the student substantively answers the CHECK QUESTION above, your reply MUST end by re-asking THAT check question (light paraphrase OK). The student sees it in the "Rose asks" banner — do NOT ask a different question ("Does that make sense?", "Does that connection make sense?", "Ready to move on?") while the check is still open. That makes them answer one thing in chat while you grade them on another.
+   - If you add teaching after a partial answer, still end on the check question — not a softer substitute.
+   - The ONLY exception: advance:true after a substantive correct answer or explicit "move on" — then end with a brief forward-looking statement, not a question.
+   - Do NOT say "you nailed it", "exactly right", or "you've got it" unless the student actually answered the check question with substance OR you are advancing.
 2. Then on a new line write exactly: ${TURN_META_SENTINEL}
 3. Then on a new line emit a JSON object with classification + optional image request:
 {"intent":"answer_correct|answer_partial|answer_wrong|pace_slower|pace_faster|skip_concept|move_on|tangent_question|request_repeat|request_pause|request_clarify|other","advance":true|false,"addToFocusedReview":true|false,"imageRequest":{"query":"<short noun phrase>","type":"diagram"|"photo"|"illustration"}|null}
 
-When to set imageRequest:
-- The student EXPLICITLY asked for a visual ("show me", "draw me", "picture of", "diagram of", "what does X look like") — set it.
-- A visual would genuinely improve comprehension RIGHT NOW (anatomy, processes, historical figures, geography, schematics, biology specimens). Set it sparingly and only when relevant — not on every turn.
-- Reference the image briefly in your spoken reply ("take a look at the diagram") if you're requesting one.
-Otherwise set imageRequest to null. Never request images for English grammar, vocab, abstract logic, math equations, or pure prose.
+Always set imageRequest to null. Images are only shown when the student explicitly asks for one in their message (the client detects phrases like "show me a diagram of…"). Do not proactively request images — Wikimedia results are often unrelated for accounting, finance, abstract concepts, grammar, math, and prose lessons.
 
 Example:
 Nice work — you nailed the key idea there. Let's keep going.
@@ -485,9 +483,9 @@ CRITICAL — when NOT to advance:
 - If you want to advance, end with a statement, NOT a question.
 
 Guidelines for classification + reply tone:
-- Vague affirmatives alone ("ok", "yeah", "sure", "got it", "makes sense", "I think so", "sounds good") without explaining the concept → answer_partial, "advance": false, re-ask the check question.
-- answer_correct → only when they demonstrate real understanding (hits key points or a solid paraphrase). Praise briefly, "advance": true, end with a statement (not a question).
-- answer_partial → name what they got right, fill the gap, then re-ask the check question. "advance": false.
+- Vague affirmatives alone ("ok", "yeah", "sure", "got it", "makes sense", "yes I think", "I think so", "sounds good") without explaining the concept → answer_partial, "advance": false. Acknowledge briefly, then re-ask the CHECK QUESTION (same one from the banner — paraphrase OK). Do not invent a new question.
+- answer_correct → only when they demonstrate real understanding of the CHECK QUESTION (hits key points or a solid paraphrase). Praise briefly, "advance": true, end with a statement (not a question).
+- answer_partial → name what they got right, fill the gap, then re-ask the CHECK QUESTION. "advance": false.
 - answer_wrong on attempt 1 → re-explain from a different angle (use the analogy if you have one). "advance": false, "addToFocusedReview": false.
 - answer_wrong on attempt 2 → try one more angle. "advance": false, "addToFocusedReview": true.
 - answer_wrong on attempt 3+ → acknowledge they're stuck, OFFER a choice ("keep going and come back, or try once more"). "advance": false, "addToFocusedReview": true.

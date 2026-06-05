@@ -2,7 +2,7 @@ import type { AutoGenerateBlock } from "@/components/immersive/NotesPanel";
 import type { KeyTerm } from "@/types/course";
 import type { MentoredLessonChunk } from "@/types/mentored";
 
-function firstSentence(text: string, max = 160): string {
+function firstSentence(text: string, max = 200): string {
   const t = text.trim();
   if (!t) return "";
   const m = t.match(/^(.+?[.!?])(?:\s|$)/);
@@ -10,12 +10,21 @@ function firstSentence(text: string, max = 160): string {
   return s.length > max ? `${s.slice(0, max - 1).trim()}…` : s;
 }
 
-function sentencesAsBullets(text: string, max = 3): string[] {
+function sentencesAsBullets(text: string, max = 5): string[] {
   return text
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.trim())
-    .filter((s) => s.length > 24)
+    .filter((s) => s.length > 20 && s.length < 320)
     .slice(0, max);
+}
+
+function isBareTerm(phrase: string): boolean {
+  const t = phrase.trim();
+  if (t.length < 3) return true;
+  if (/[—–:]/.test(t)) return false;
+  if (t.length > 72) return false;
+  const words = t.split(/\s+/);
+  return words.length <= 5 && !/\b(is|are|means|shows|records|tracks)\b/i.test(t);
 }
 
 function matchBoldPrefix(text: string, terms: string[]): string | undefined {
@@ -38,13 +47,62 @@ function parseBullet(text: string): { text: string; bold?: string } {
   if (labeled) {
     return { bold: labeled[1].trim(), text: text.trim() };
   }
+  const termLead = text.match(
+    /^([A-Za-z][A-Za-z0-9'’\- ]{1,48})\s+(?:is|are|means|refers to|describes|shows|tracks|records)\b/i
+  );
+  if (termLead) {
+    return { bold: termLead[1].trim(), text: text.trim() };
+  }
   return { text: text.trim() };
 }
 
+function definitionFromContext(
+  term: string,
+  ...sources: string[]
+): string | undefined {
+  const lower = term.toLowerCase();
+  for (const src of sources) {
+    if (!src.trim()) continue;
+    const sentences = src
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const s of sentences) {
+      if (!s.toLowerCase().includes(lower)) continue;
+      if (s.length >= term.length + 18) {
+        return s.length > 220 ? `${s.slice(0, 217).trim()}…` : s;
+      }
+    }
+  }
+  return undefined;
+}
+
+function bulletFingerprint(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").slice(0, 80);
+}
+
+function isDuplicateBullet(candidate: string, existing: string[]): boolean {
+  const fp = bulletFingerprint(candidate);
+  return existing.some(
+    (e) =>
+      fp === bulletFingerprint(e) ||
+      e.toLowerCase().includes(fp.slice(0, 48)) ||
+      fp.includes(bulletFingerprint(e).slice(0, 48))
+  );
+}
+
+function toStyledBullet(
+  line: string,
+  boldCandidates: string[]
+): AutoGenerateBlock["bullets"][number] {
+  const parsed = parseBullet(line);
+  const bold = parsed.bold ?? matchBoldPrefix(parsed.text, boldCandidates);
+  return bold ? { text: parsed.text, bold } : parsed.text;
+}
+
 /**
- * Turn a taught chunk into structured study notes — headings, key
- * concept bullets, vocabulary, and an optional analogy callout.
- * Avoids pasting the spoken explanation verbatim.
+ * Turn a taught chunk into structured study notes — explanation bullets,
+ * a takeaway, and vocabulary only when we can attach a real definition.
  */
 export function buildAutoNotesFromChunk(
   chunk: MentoredLessonChunk,
@@ -55,13 +113,6 @@ export function buildAutoNotesFromChunk(
     courseKeyTerms.map((kt) => [kt.term.toLowerCase(), kt])
   );
 
-  const vocabulary = vocabTerms
-    .map((term) => {
-      const kt = termLookup.get(term.toLowerCase());
-      return { term, definition: kt?.definition };
-    })
-    .filter((v) => v.term.length > 0);
-
   const boldCandidates = [
     ...vocabTerms,
     ...chunk.keyPoints
@@ -69,46 +120,75 @@ export function buildAutoNotesFromChunk(
       .filter(Boolean),
   ];
 
-  let bullets: AutoGenerateBlock["bullets"];
-  if (chunk.keyPoints.length > 0) {
-    bullets = chunk.keyPoints.slice(0, 5).map((kp) => {
-      const parsed = parseBullet(kp);
-      const bold = parsed.bold ?? matchBoldPrefix(parsed.text, boldCandidates);
-      return bold ? { text: parsed.text, bold } : parsed.text;
-    });
-  } else {
-    const fallback = sentencesAsBullets(chunk.explanation, 3);
-    const lines =
-      fallback.length > 0
-        ? fallback
-        : sentencesAsBullets(chunk.referenceAnswer, 3);
-    bullets = lines.map((line) => {
-      const bold = matchBoldPrefix(line, boldCandidates);
-      return bold ? { text: line, bold } : line;
-    });
+  const seen: string[] = [];
+  const bullets: AutoGenerateBlock["bullets"] = [];
+
+  const addLine = (line: string) => {
+    const t = line.trim();
+    if (!t || isDuplicateBullet(t, seen)) return;
+    seen.push(t);
+    bullets.push(toStyledBullet(t, boldCandidates));
+  };
+
+  // Core notes: what Rose actually taught (not bare rubric keyPoints).
+  for (const line of sentencesAsBullets(chunk.explanation, 5)) {
+    addLine(line);
+  }
+
+  // Substantive key points only — skip naked terms like "balance sheet".
+  for (const kp of chunk.keyPoints.slice(0, 5)) {
+    if (isBareTerm(kp)) {
+      const expanded = definitionFromContext(
+        kp,
+        chunk.explanation,
+        chunk.referenceAnswer
+      );
+      if (expanded) addLine(expanded);
+    } else {
+      addLine(kp);
+    }
+  }
+
+  // Strong-answer summary — the "so what" of the concept.
+  const takeaway = firstSentence(chunk.referenceAnswer, 240);
+  if (
+    takeaway &&
+    takeaway.length > 28 &&
+    !isDuplicateBullet(takeaway, seen)
+  ) {
+    addLine(takeaway);
   }
 
   if (bullets.length === 0) return null;
 
-  let intro: string | undefined;
-  if (bullets.length === 1 && chunk.explanation.trim()) {
-    const summary = firstSentence(chunk.explanation);
-    const only =
-      typeof bullets[0] === "string" ? bullets[0] : bullets[0].text;
-    if (
-      summary &&
-      summary.toLowerCase() !== only.toLowerCase() &&
-      !only.toLowerCase().includes(summary.toLowerCase().slice(0, 40))
-    ) {
-      intro = summary;
-    }
-  }
+  const intro = firstSentence(chunk.explanation, 200);
+
+  const vocabulary = vocabTerms
+    .map((term) => {
+      const kt = termLookup.get(term.toLowerCase());
+      const definition =
+        kt?.definition?.trim() ||
+        definitionFromContext(term, chunk.explanation, chunk.referenceAnswer);
+      if (!definition) return null;
+      const def =
+        definition.length > 220
+          ? `${definition.slice(0, 217).trim()}…`
+          : definition;
+      return { term, definition: def };
+    })
+    .filter((v): v is { term: string; definition: string } => v != null);
+
+  const selfCheck =
+    chunk.checkQuestion.trim().length > 12
+      ? [chunk.checkQuestion.trim()]
+      : undefined;
 
   return {
     heading: chunk.concept,
-    intro,
+    intro: intro.length > 0 ? intro : undefined,
     bullets,
     vocabulary: vocabulary.length > 0 ? vocabulary : undefined,
+    selfCheck,
     callout:
       chunk.analogy && chunk.analogy.trim().length > 0
         ? { emoji: "💡", text: chunk.analogy.trim() }

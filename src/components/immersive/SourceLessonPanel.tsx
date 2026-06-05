@@ -3,6 +3,10 @@
 import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { LessonSourceAttribution } from "@/components/LessonSourceAttribution";
+import {
+  parseInlineMarkdown,
+  stripInlineMarkdownWrappers,
+} from "@/lib/inline-markdown";
 import type { CourseLesson } from "@/types/course";
 
 /**
@@ -129,7 +133,7 @@ function SourceLessonPanelImpl({
                     {seg.text}
                   </mark>
                 ) : (
-                  <span key={si}>{seg.text}</span>
+                  <span key={si}>{parseInlineMarkdown(seg.text)}</span>
                 )
               )}
             </p>
@@ -310,7 +314,11 @@ function splitWithKeyTerms(content: string, terms: string[]): Segment[] {
     return [{ kind: "text", text: content }];
   }
 
-  const escaped = cleaned.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const escaped = cleaned.map((t) => {
+    const core = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Match key terms even when the source wraps them in **bold** markdown.
+    return `(?:\\*\\*)?${core}(?:\\*\\*)?`;
+  });
   const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
 
   const out: Segment[] = [];
@@ -320,7 +328,10 @@ function splitWithKeyTerms(content: string, terms: string[]): Segment[] {
     if (m.index > lastIdx) {
       out.push({ kind: "text", text: content.slice(lastIdx, m.index) });
     }
-    out.push({ kind: "term", text: m[0] });
+    out.push({
+      kind: "term",
+      text: stripInlineMarkdownWrappers(m[0]),
+    });
     lastIdx = m.index + m[0].length;
     // Defensive: avoid infinite loop on zero-length matches.
     if (m[0].length === 0) pattern.lastIndex++;

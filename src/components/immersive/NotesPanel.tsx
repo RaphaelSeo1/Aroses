@@ -15,6 +15,7 @@ import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
 import { promptDialog } from "@/components/AppDialogs";
 import {
+  readRoseAppendedChunkIds,
   readRoseDocAttrs,
   RoseDocument,
 } from "./notes/RoseDocument";
@@ -92,6 +93,8 @@ export type AutoGenerateBlock = {
   dividerBefore?: boolean;
   /** When true, skip intro-fingerprint dedupe (explicit user toggle). */
   skipDedupe?: boolean;
+  /** Mentored chunk id — persisted on the doc to dedupe across refreshes. */
+  chunkId?: string;
 };
 
 export type NotesPanelHandle = {
@@ -99,7 +102,21 @@ export type NotesPanelHandle = {
   appendBlock: (input: AutoGenerateBlock) => boolean;
   /** True when the editor has any saved note content. */
   hasContent: () => boolean;
+  /** True when this chunk was already auto-appended (in doc metadata or heading). */
+  isChunkAppended: (chunkId: string, heading?: string) => boolean;
 };
+
+function nodePlainText(
+  node: { content?: Array<{ text?: string; content?: unknown[] }> } | undefined
+): string {
+  if (!node?.content) return "";
+  return node.content
+    .map((child) => {
+      if (typeof child.text === "string") return child.text;
+      return nodePlainText(child as { content?: Array<{ text?: string; content?: unknown[] }> });
+    })
+    .join("");
+}
 
 /**
  * Pick a deterministic emoji for the doc title based on the course /
@@ -371,7 +388,31 @@ export function NotesPanel({
   // callout.
   useEffect(() => {
     if (!editorRef) return;
+
+    const isChunkAppended = (chunkId: string, heading?: string) => {
+      if (!editor || editor.isDestroyed) return false;
+      const doc = editor.getJSON();
+      const appendedIds = readRoseAppendedChunkIds(doc);
+      if (appendedIds.includes(chunkId)) return true;
+      if (!heading?.trim()) return false;
+      const nodes =
+        (
+          doc as {
+            content?: Array<{
+              type?: string;
+              content?: Array<{ text?: string; content?: unknown[] }>;
+            }>;
+          }
+        ).content ?? [];
+      const target = heading.trim();
+      return nodes.some(
+        (n) =>
+          n.type === "heading" && nodePlainText(n).trim() === target
+      );
+    };
+
     const handle = {
+      isChunkAppended,
       appendBlock: ({
         heading,
         intro,
@@ -383,6 +424,7 @@ export function NotesPanel({
         dividerBefore,
         skipHeading,
         skipDedupe,
+        chunkId,
       }: AutoGenerateBlock) => {
         autoGenLog("inserting notes into editor", {
           hasEditor: !!editor,
@@ -397,13 +439,24 @@ export function NotesPanel({
           return false;
         }
 
+        if (
+          chunkId &&
+          !skipDedupe &&
+          isChunkAppended(chunkId, skipHeading ? undefined : heading)
+        ) {
+          autoGenLog("insertion skipped — chunk already in doc metadata", {
+            chunkId,
+          });
+          return true;
+        }
+
         const doc = editor.getJSON();
         const nodes =
           (
             doc as {
               content?: Array<{
                 type?: string;
-                content?: Array<{ text?: string }>;
+                content?: Array<{ text?: string; content?: unknown[] }>;
               }>;
             }
           ).content ?? [];
@@ -411,12 +464,24 @@ export function NotesPanel({
         // Skip if this exact heading block was already appended (prevents
         // duplicate stacks when auto-generate re-fires on the same chunk).
         if (heading && !skipHeading && !skipDedupe) {
+          const target = heading.trim();
           const already = nodes.some(
-            (n) =>
-              n.type === "heading" &&
-              n.content?.[0]?.text?.trim() === heading.trim()
+            (n) => n.type === "heading" && nodePlainText(n).trim() === target
           );
-          if (already) return false;
+          if (already) {
+            autoGenLog("insertion skipped — heading already present", {
+              heading: target,
+            });
+            if (chunkId) {
+              const existing = readRoseAppendedChunkIds(doc);
+              if (!existing.includes(chunkId)) {
+                editor.commands.updateAttributes("doc", {
+                  roseAppendedChunkIds: [...existing, chunkId],
+                });
+              }
+            }
+            return true;
+          }
         }
 
         // skipHeading path: dedupe by intro fingerprint (same chunk re-mounted).
@@ -424,14 +489,14 @@ export function NotesPanel({
           const fingerprint = intro.trim().slice(0, 96);
           const already = nodes.some((n) => {
             if (n.type !== "paragraph") return false;
-            const t = n.content?.[0]?.text?.trim() ?? "";
+            const t = nodePlainText(n).trim();
             return t.startsWith(fingerprint) || fingerprint.startsWith(t.slice(0, 96));
           });
           if (already) {
             autoGenLog("insertion skipped — dedupe matched existing intro", {
               fingerprint,
             });
-            return false;
+            return true;
           }
         }
 
@@ -570,6 +635,16 @@ export function NotesPanel({
         }
 
         chain.run();
+
+        if (chunkId) {
+          const existing = readRoseAppendedChunkIds(editor.getJSON());
+          if (!existing.includes(chunkId)) {
+            editor.commands.updateAttributes("doc", {
+              roseAppendedChunkIds: [...existing, chunkId],
+            });
+          }
+        }
+
         autoGenLog("insertion complete", {
           docSizeAfter: editor.state.doc.content.size,
         });
@@ -590,8 +665,11 @@ export function NotesPanel({
     };
   }, [editor, editorRef]);
 
+  const editorReadyFiredRef = useRef(false);
+
   // Initial load — hydrate the editor with the saved doc once.
   useEffect(() => {
+    editorReadyFiredRef.current = false;
     let cancelled = false;
     void (async () => {
       autoGenLog("loading saved notes from server", { endpoint });
@@ -640,7 +718,8 @@ export function NotesPanel({
           const t = Date.parse(body.notes.updatedAt);
           if (!Number.isNaN(t)) setLastSavedAt(t);
         }
-        if (!cancelled) {
+        if (!cancelled && !editorReadyFiredRef.current) {
+          editorReadyFiredRef.current = true;
           autoGenLog("notes panel ready — firing onEditorReady");
           notesHydratedRef.current = true;
           onEditorReady?.();

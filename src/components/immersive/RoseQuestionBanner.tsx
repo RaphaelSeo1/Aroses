@@ -10,7 +10,11 @@ export function RoseQuestionBanner({ question }: { question: string }) {
       <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700">
         Rose asks
       </p>
-      <p className="mt-1 text-sm leading-snug text-zinc-800 sm:text-[15px]">{text}</p>
+      <p className="mt-0.5 text-[11px] text-amber-800/80">
+        Answer this in your own words to move on — other chat questions don&apos;t
+        count until you do.
+      </p>
+      <p className="mt-1.5 text-sm leading-snug text-zinc-800 sm:text-[15px]">{text}</p>
     </div>
   );
 }
