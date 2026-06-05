@@ -10,11 +10,9 @@ import {
   type NoteSuggestion,
   type NotesPanelHandle,
 } from "@/components/immersive/NotesPanel";
+import { RoseInlineBubble } from "@/components/immersive/RoseInlineBubble";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
-import {
-  TranscriptPanel,
-  type TranscriptLine,
-} from "@/components/immersive/TranscriptPanel";
+import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
 import type { CourseModule, CoursePayload } from "@/types/course";
 import type {
@@ -2073,10 +2071,6 @@ export function ImmersiveLessonRunner({
               </div>
             ) : null}
 
-            {!awaitingContinue && phase === "teaching" ? (
-              <TranscriptPanel lines={transcriptLines} className="mb-2" />
-            ) : null}
-
             {interactionMode === "text" && !awaitingContinue && phase === "teaching" ? (
               <TextModeControls
                 checkQuestion={chunk?.checkQuestion ?? ""}
@@ -2237,15 +2231,47 @@ export function ImmersiveLessonRunner({
             : null;
         const lesson =
           lessonIdx != null ? activeModule.lessons[lessonIdx] : undefined;
-        if (!lesson) return null;
         const terms = chunk.keyTerms ?? [];
+        const showQuestion =
+          chunk.checkQuestion.trim().length > 0 &&
+          (interactionMode === "voice" || textCheckRevealed);
+        if (!lesson && !showQuestion && !tutorReply) return null;
+
+        const roseBubbles = (
+          <>
+            {showQuestion ? (
+              <RoseInlineBubble
+                label="Rose"
+                variant="question"
+                text={chunk.checkQuestion}
+              />
+            ) : null}
+            {tutorReply ? (
+              <RoseInlineBubble
+                key={`reply-${replyTurn}`}
+                label="Rose"
+                variant="reply"
+                text={tutorReply}
+                animate
+                animateKey={`reply-${replyTurn}`}
+              />
+            ) : null}
+          </>
+        );
+
         return (
-          <SourceLessonPanel
-            key={`src-${chunk.id}`}
-            lesson={lesson}
-            keyTerms={terms}
-            narrationText={narrationText}
-          />
+          <div key={`src-wrap-${chunk.id}`} className={lesson ? undefined : "mt-4"}>
+            {lesson ? (
+              <SourceLessonPanel
+                lesson={lesson}
+                keyTerms={terms}
+                narrationText={narrationText}
+                footer={roseBubbles}
+              />
+            ) : (
+              roseBubbles
+            )}
+          </div>
         );
       })()}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { LessonSourceAttribution } from "@/components/LessonSourceAttribution";
 import type { CourseLesson } from "@/types/course";
@@ -33,10 +33,12 @@ function SourceLessonPanelImpl({
   lesson,
   keyTerms,
   narrationText,
+  footer,
 }: {
   lesson: CourseLesson | undefined;
   keyTerms: string[];
   narrationText?: string;
+  footer?: ReactNode;
 }) {
   const lessonContent = lesson?.content;
   // Paragraph-level split first so we can pin highlight per paragraph.
@@ -136,6 +138,7 @@ function SourceLessonPanelImpl({
           </span>
         )}
       </div>
+      {footer ? <div className="mt-1">{footer}</div> : null}
       <style jsx>{`
         .source-lesson-body :global(.source-paragraph) {
           margin: 0;
