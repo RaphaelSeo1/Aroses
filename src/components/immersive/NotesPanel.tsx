@@ -84,6 +84,12 @@ export type AutoGenerateBlock = {
   callout?: { emoji?: string; text: string };
   /** Optional vocabulary list (rendered as H3 + bullets with bold terms). */
   vocabulary?: Array<{ term: string; definition?: string }>;
+  /** Worked examples, journal entries, or formulas (monospace blocks). */
+  examples?: Array<{ label?: string; content: string }>;
+  /** Short review questions appended as an ordered list. */
+  selfCheck?: string[];
+  /** Insert a divider before this block (separates major sections). */
+  dividerBefore?: boolean;
   /** When true, skip intro-fingerprint dedupe (explicit user toggle). */
   skipDedupe?: boolean;
 };
@@ -366,6 +372,9 @@ export function NotesPanel({
         bullets,
         callout,
         vocabulary,
+        examples,
+        selfCheck,
+        dividerBefore,
         skipHeading,
         skipDedupe,
       }: AutoGenerateBlock) => {
@@ -421,6 +430,10 @@ export function NotesPanel({
         }
 
         const chain = editor.chain().focus("end");
+
+        if (dividerBefore) {
+          chain.insertContent({ type: "horizontalRule" });
+        }
 
         if (heading && !skipHeading) {
           chain.insertContent({
@@ -527,6 +540,26 @@ export function NotesPanel({
                 content: [{ type: "text", text: callout.text.trim() }],
               },
             ],
+          });
+        }
+
+        if (selfCheck && selfCheck.length > 0) {
+          chain.insertContent({
+            type: "heading",
+            attrs: { level: 3 },
+            content: [{ type: "text", text: "Self-check" }],
+          });
+          chain.insertContent({
+            type: "orderedList",
+            content: selfCheck.map((q) => ({
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: q.trim() }],
+                },
+              ],
+            })),
           });
         }
 

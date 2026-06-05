@@ -1,15 +1,18 @@
 /**
  * Transforms Rose's spoken tutor reply into structured study notes.
- * Used instead of sentence-splitting the transcript — notes should
- * read like a TA wrote them, not like a chat log.
+ * Uses the same quality bar as end-of-session recaps (Sonnet, rich sections).
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { AutoGenerateBlock } from "@/components/immersive/NotesPanel";
 import type { TutorSessionMessage } from "@/types/tutor-session";
+import {
+  TUTOR_NOTES_JSON_SHAPE,
+  TUTOR_NOTES_QUALITY_RULES,
+} from "@/lib/ai/tutor-notes-quality";
 
-const FAST_MODEL =
-  process.env.ANTHROPIC_TUTOR_FAST_MODEL || "claude-haiku-4-5";
+const MODEL =
+  process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
 
 /** Rose lines that are session meta — never feed into notes synthesis. */
 const SKIP_ASSISTANT_PATTERNS = [
@@ -64,10 +67,15 @@ function normalizeBlock(raw: unknown): AutoGenerateBlock | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
 
-  const heading =
+  const emoji =
+    typeof o.emoji === "string" ? o.emoji.trim().slice(0, 4) : undefined;
+  let heading =
     typeof o.heading === "string" ? o.heading.trim().slice(0, 120) : "";
+  if (emoji && heading && !heading.startsWith(emoji)) {
+    heading = `${emoji} ${heading}`;
+  }
   const intro =
-    typeof o.intro === "string" ? o.intro.trim().slice(0, 500) : undefined;
+    typeof o.intro === "string" ? o.intro.trim().slice(0, 600) : undefined;
 
   const bullets: AutoGenerateBlock["bullets"] = [];
   if (Array.isArray(o.bullets)) {
@@ -96,6 +104,24 @@ function normalizeBlock(raw: unknown): AutoGenerateBlock | null {
     }
   }
 
+  const examples: AutoGenerateBlock["examples"] = [];
+  if (Array.isArray(o.examples)) {
+    for (const ex of o.examples) {
+      if (!ex || typeof ex !== "object") continue;
+      const row = ex as Record<string, unknown>;
+      const content =
+        typeof row.content === "string" ? row.content.trim() : "";
+      if (!content) continue;
+      examples.push({
+        label:
+          typeof row.label === "string"
+            ? row.label.trim().slice(0, 80)
+            : undefined,
+        content: content.slice(0, 1200),
+      });
+    }
+  }
+
   const vocabulary: AutoGenerateBlock["vocabulary"] = [];
   if (Array.isArray(o.vocabulary)) {
     for (const v of o.vocabulary) {
@@ -120,72 +146,75 @@ function normalizeBlock(raw: unknown): AutoGenerateBlock | null {
     if (text) {
       callout = {
         emoji: typeof c.emoji === "string" ? c.emoji.slice(0, 4) : "💡",
-        text: text.slice(0, 320),
+        text: text.slice(0, 400),
       };
     }
   }
 
-  if (!heading && bullets.length === 0 && vocabulary.length === 0 && !callout) {
+  const selfCheck: string[] = [];
+  if (Array.isArray(o.selfCheck)) {
+    for (const q of o.selfCheck) {
+      if (typeof q === "string" && q.trim()) {
+        selfCheck.push(q.trim().slice(0, 240));
+      }
+    }
+  }
+
+  if (
+    !heading &&
+    bullets.length === 0 &&
+    vocabulary.length === 0 &&
+    !callout &&
+    examples.length === 0
+  ) {
     return null;
   }
 
   return {
     heading: heading || "Key concepts",
     intro,
-    bullets: bullets.slice(0, 8),
+    bullets: bullets.slice(0, 10),
+    examples: examples.length > 0 ? examples.slice(0, 3) : undefined,
     vocabulary: vocabulary.length > 0 ? vocabulary.slice(0, 8) : undefined,
     callout,
+    selfCheck: selfCheck.length > 0 ? selfCheck.slice(0, 4) : undefined,
   };
 }
 
-const SYNTHESIS_SYSTEM = `You convert a tutor's SPOKEN explanation into polished written study notes for a student's notebook.
+const SYNTHESIS_SYSTEM = `You convert a tutor's SPOKEN explanation into ONE polished study-notes section for the student's notebook.
 
-The input is conversational (filler, rhetorical questions, "right?", "so here's the thing"). Your output must NOT read like a transcript.
+${TUTOR_NOTES_QUALITY_RULES}
 
-RULES:
-1. SYNTHESIZE — extract ideas, mechanisms, definitions, and cause→effect links. Rewrite in clear academic prose.
-2. NO transcript voice — never use "Alright", "So here's the thing", "right?", "This is where…", or other spoken filler.
-3. NO rhetorical questions as bullets — turn them into statements of fact.
-4. DEPTH — each bullet should teach something concrete (what it is, why it matters, how it works). Prefer 4–7 substantive bullets over shallow sentence splits.
-5. BOLD KEY TERMS — use "bold" on the leading term/concept in each bullet when applicable.
-6. NESTED DETAIL — use "children" sub-bullets for examples, steps, or exceptions when helpful (max 2–3 per parent).
-7. VOCABULARY — list 1–4 important terms with tight definitions the student can review later.
-8. CALLOUT — one "remember this" takeaway if there's a high-stakes insight (exam trap, common misconception, legal implication).
-9. HEADING — short topic title (3–8 words), not the first spoken sentence.
-10. INTRO — optional one-sentence thesis of what this section covers (not a copy of Rose's opener).
-11. NO meta study-skills advice — only domain content from what Rose actually taught.
+SECTION STRUCTURE:
+- heading: short topic title (3–8 words), not Rose's first sentence.
+- emoji: ONE topic emoji (optional, separate from heading).
+- intro: 1–2 sentences framing what this section covers.
+- bullets: 4–8 substantive bullets with bold key terms; use nested children for steps, contrasts, or sub-points.
+- examples: when math, journal entries, formulas, or calculations were taught, add 1–2 monospace-friendly blocks (Debit/Credit lines, equations, roll-forwards).
+- vocabulary: 2–5 important terms with tight definitions.
+- callout: one "remember this" takeaway for traps or misconceptions.
+- selfCheck: 1–2 short review questions ONLY when the explanation was substantial (skip for brief clarifications).
 
 Output ONLY valid JSON (no markdown fences):
-{
-  "heading": string,
-  "intro"?: string,
-  "bullets": Array<string | { "text": string, "bold"?: string, "children"?: string[] }>,
-  "vocabulary"?: Array<{ "term": string, "definition": string }>,
-  "callout"?: { "emoji"?: string, "text": string }
-}`;
+${TUTOR_NOTES_JSON_SHAPE}`;
 
 const BACKFILL_SYSTEM = `You convert a FULL tutor session transcript into structured study notes for the student's notebook.
 
-The session may span multiple days. Synthesize EVERY substantive concept Rose taught across the entire conversation — not just the final exchange.
+The session may span multiple exchanges. Synthesize EVERY substantive concept Rose taught — not just the final turn.
 
-RULES:
-1. DOMAIN CONTENT ONLY — extract actual subject matter (definitions, laws, mechanisms, examples). NEVER write generic study-skills meta advice ("review your notes", "pace yourself", "active engagement", "readiness check") unless that was literally the topic taught.
-2. SYNTHESIZE — rewrite in clear academic prose. No spoken filler.
-3. ORGANIZE into 2–6 SECTIONS grouped by topic/theme (e.g. "Annual Report Credibility", "GAAP & Auditing"). Not one section per chat message.
-4. DEPTH — each section has 4–7 substantive bullets with bold key terms and optional nested children.
-5. VOCABULARY — 1–4 terms per section when applicable.
-6. CALLOUT — one high-stakes takeaway per section when relevant.
-7. SKIP — greetings, inactivity check-ins ("still with me"), session logistics, quiz-only turns with no teaching.
+${TUTOR_NOTES_QUALITY_RULES}
+
+ORGANIZE into 3–8 SECTIONS grouped by topic/theme (e.g. "Contra-Asset Accounts & Depreciation", "Revenue Recognition"). Each section uses the JSON shape below.
+
+After the topic sections, add TWO final sections:
+1. heading "Key terms" — vocabulary bullets summarizing the most important terms across the session (8–12 items).
+2. heading "Self-check & next steps" — intro optional; bullets mixing 3–5 self-check questions AND 2–4 specific "what to study next" actions tied to gaps in the conversation.
+
+SKIP: greetings, inactivity check-ins, session logistics, quiz-only turns with no teaching.
 
 Output ONLY valid JSON (no markdown fences):
 {
-  "sections": Array<{
-    "heading": string,
-    "intro"?: string,
-    "bullets": Array<string | { "text": string, "bold"?: string, "children"?: string[] }>,
-    "vocabulary"?: Array<{ "term": string, "definition": string }>,
-    "callout"?: { "emoji"?: string, "text": string }
-  }>
+  "sections": Array<${TUTOR_NOTES_JSON_SHAPE}>
 }`;
 
 export async function synthesizeTutorNotes(input: {
@@ -197,7 +226,7 @@ export async function synthesizeTutorNotes(input: {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
-  const rose = input.roseReply.trim().slice(0, 6000);
+  const rose = input.roseReply.trim().slice(0, 8000);
   if (rose.length < 40) return null;
 
   const student =
@@ -211,19 +240,19 @@ export async function synthesizeTutorNotes(input: {
     topic ? `SESSION TOPIC: ${topic}` : null,
     mode ? `MODE: ${mode}` : null,
     student ? `STUDENT SAID:\n${student}` : null,
-    `ROSE EXPLAINED (spoken — do NOT copy verbatim):\n${rose}`,
-    "\nWrite study notes JSON now.",
+    `ROSE EXPLAINED (spoken — synthesize, do NOT copy verbatim):\n${rose}`,
+    "\nWrite one polished study-notes section as JSON now.",
   ]
     .filter(Boolean)
     .join("\n\n");
 
-  const anthropic = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 0 });
+  const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
 
   try {
     const msg = await anthropic.messages.create({
-      model: FAST_MODEL,
-      max_tokens: 1200,
-      temperature: 0.25,
+      model: MODEL,
+      max_tokens: 2048,
+      temperature: 0.35,
       system: SYNTHESIS_SYSTEM,
       messages: [{ role: "user", content: userPrompt }],
     });
@@ -241,9 +270,10 @@ export async function synthesizeTutorNotes(input: {
 
     const normalized = normalizeBlock(parsed);
     console.log("[synthesizeTutorNotes] ok", {
+      model: MODEL,
       heading: normalized?.heading,
       bulletCount: normalized?.bullets.length ?? 0,
-      vocabCount: normalized?.vocabulary?.length ?? 0,
+      exampleCount: normalized?.examples?.length ?? 0,
     });
     return normalized;
   } catch (e) {
@@ -273,18 +303,18 @@ export async function synthesizeTutorNotesFromTranscript(input: {
     mode ? `MODE: ${mode}` : null,
     reference ? `REFERENCE MATERIALS SUMMARY:\n${reference}` : null,
     `FULL TRANSCRIPT (synthesize all substantive teaching):\n${transcriptText}`,
-    "\nWrite study notes JSON with all sections now.",
+    "\nWrite recap-quality study notes JSON with all sections now.",
   ]
     .filter(Boolean)
     .join("\n\n");
 
-  const anthropic = new Anthropic({ apiKey, timeout: 90_000, maxRetries: 0 });
+  const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 0 });
 
   try {
     const msg = await anthropic.messages.create({
-      model: FAST_MODEL,
-      max_tokens: 4000,
-      temperature: 0.25,
+      model: MODEL,
+      max_tokens: 6000,
+      temperature: 0.35,
       system: BACKFILL_SYSTEM,
       messages: [{ role: "user", content: userPrompt }],
     });
@@ -313,9 +343,10 @@ export async function synthesizeTutorNotesFromTranscript(input: {
     }
 
     console.log("[synthesizeTutorNotesFromTranscript] ok", {
+      model: MODEL,
       sectionCount: blocks.length,
     });
-    return blocks.slice(0, 8);
+    return blocks.slice(0, 12);
   } catch (e) {
     console.error("[synthesizeTutorNotesFromTranscript]", e);
     return [];

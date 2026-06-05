@@ -2,9 +2,8 @@
  * Structured logging for the mentored auto-generate notes flow.
  * Leave enabled until the feature is confirmed stable in production.
  *
- * Note: auto-generate does NOT call a separate AI endpoint — it appends
- * the current lesson chunk's key points into the TipTap doc client-side
- * and persists the toggle via PUT /api/mentored/notes/[materialId].
+ * Tutor sessions: POST /api/tutor-session/[id]/synthesize-notes (Sonnet).
+ * Mentored lessons: client-side chunk → structured block (no extra AI call).
  */
 
 export type AutoGenLogPayload = Record<string, unknown>;

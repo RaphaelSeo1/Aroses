@@ -13,6 +13,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { TUTOR_NOTES_QUALITY_RULES } from "@/lib/ai/tutor-notes-quality";
 import type {
   TutorSessionMessage,
   TutorSessionModeTag,
@@ -551,6 +552,8 @@ RULES:
 // ---------------------------------------------------------------------------
 
 const RECAP_SYSTEM = `You generate a polished, study-ready RECAP from a tutor session transcript. Output MARKDOWN — proper headings, bullets, callouts, bold for key terms.
+
+${TUTOR_NOTES_QUALITY_RULES}
 
 STRUCTURE (use this EXACTLY):
 

@@ -11,10 +11,7 @@ import {
 import { TypewriterText } from "@/components/immersive/TypewriterText";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
-import {
-  buildAutoNotesFromTutorTurn,
-  studentRequestedNotesSave,
-} from "@/lib/mentored/build-auto-notes-from-tutor-turn";
+import { studentRequestedNotesSave } from "@/lib/mentored/build-auto-notes-from-tutor-turn";
 import { autoGenLog } from "@/lib/mentored/auto-generate-log";
 import { isLikelyNoiseTranscript, isEchoOfAssistantSpeech } from "@/lib/mentored/is-likely-noise-transcript";
 import { isTutorTurnEligibleForNotes } from "@/lib/ai/synthesize-tutor-notes";
@@ -341,16 +338,10 @@ export function TutorSessionRunner({
           }
         );
         if (!res.ok) {
-          autoGenLog("tutor synthesize failed", {
+          autoGenLog("tutor synthesize failed — skipping sentence-split fallback", {
             turnKey,
             status: res.status,
           });
-          const fallback = buildAutoNotesFromTutorTurn(roseReply, {
-            headingHint: initial.title,
-          });
-          if (fallback) {
-            return appendNotesBlock(fallback, turnKey, opts);
-          }
           return false;
         }
         const data = (await res.json()) as { block?: AutoGenerateBlock };
@@ -359,12 +350,6 @@ export function TutorSessionRunner({
       } catch (e) {
         console.error("[TutorSessionRunner synthesizeNotes]", e);
         autoGenLog("tutor synthesize error", { turnKey });
-        const fallback = buildAutoNotesFromTutorTurn(roseReply, {
-          headingHint: initial.title,
-        });
-        if (fallback) {
-          return appendNotesBlock(fallback, turnKey, opts);
-        }
         return false;
       }
     },
@@ -425,7 +410,11 @@ export function TutorSessionRunner({
       if (blocks.length === 0) return;
 
       let appended = 0;
-      for (const block of blocks) {
+      for (let i = 0; i < blocks.length; i++) {
+        const block = {
+          ...blocks[i]!,
+          dividerBefore: i > 0,
+        };
         const key = `backfill-${block.heading?.trim() || appended}`;
         if (appendNotesBlock(block, key)) appended += 1;
       }
