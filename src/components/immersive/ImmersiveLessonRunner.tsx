@@ -311,29 +311,27 @@ export function ImmersiveLessonRunner({
   //     so the question lands on screen synchronously with Rose's
   //     voice instead of jumping up while she's still explaining.
   //
-  //   • `questionPopupDismissedFor` — chunk id whose popup the
-  //     student × dismissed. Stays hidden until the next chunk.
-  //
-  //   • `questionPopupMinimized` — when true the popup is rendered
-  //     as a chip in the top-right corner (with no backdrop dim)
-  //     instead of the full centered modal. Lets the student step
-  //     away to read notes / source transcript without losing the
-  //     question entirely; tapping the chip re-expands.
-  //
-  // All three reset to "fresh" when the chunk id changes (open is
+  // All reset to "fresh" when the chunk id changes (open is
   // keyed off chunk.id, the audio-started ref clears in the speak
   // effect's setup, dismissed/minimized reset in a cleanup effect
   // below).
   const [questionAudioStartedFor, setQuestionAudioStartedFor] = useState<
     string | null
   >(null);
-  const [questionPopupDismissedFor, setQuestionPopupDismissedFor] = useState<
-    string | null
-  >(null);
-  const [questionPopupMinimized, setQuestionPopupMinimized] = useState(false);
-
   // ---- scrollable dialogue (persists across turns) ----
-  const [transcriptLines, setTranscriptLines] = useState<TranscriptLine[]>([]);
+  const dialogueStorageKey = `mentored-dialogue:${materialId}:${activeModule.id}`;
+  const [transcriptLines, setTranscriptLines] = useState<TranscriptLine[]>(() => {
+    try {
+      const raw = sessionStorage.getItem(
+        `mentored-dialogue:${materialId}:${activeModule.id}`
+      );
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as TranscriptLine[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const activeRoseLineIdRef = useRef<string | null>(null);
   const transcriptIdRef = useRef(0);
   const nextTranscriptId = useCallback(() => {
@@ -821,15 +819,11 @@ export function ImmersiveLessonRunner({
   ]);
 
   useEffect(() => {
-    setQuestionPopupDismissedFor(null);
-    setQuestionPopupMinimized(false);
     setQuestionAudioStartedFor(null);
     setTextCheckRevealed(false);
     setTextPendingAdvance(false);
     activeRoseLineIdRef.current = null;
   }, [chunk?.id]);
-
-  const dialogueStorageKey = `mentored-dialogue:${materialId}:${activeModule.id}`;
 
   useEffect(() => {
     setTextCheckRevealed(false);
@@ -867,16 +861,23 @@ export function ImmersiveLessonRunner({
     if (!greetingPlayed) return;
     if (awaitingContinueRef.current) return;
     if (lastSpokenChunkIdRef.current === chunk.id) return;
-    lastSpokenChunkIdRef.current = chunk.id;
-
-    if (questionAudioStartedFor !== chunk.id) {
-      setQuestionAudioStartedFor(null);
-      setQuestionPopupMinimized(false);
-    }
 
     const explanation = chunk.explanation;
     const checkQuestion = chunk.checkQuestion;
     const captured = chunk.id;
+
+    // Restored dialogue already contains this chunk's question — don't
+    // re-narrate or pop the question modal on re-entry.
+    if (checkQuestion && chunkQuestionInTranscript(transcriptLines, checkQuestion)) {
+      lastSpokenChunkIdRef.current = chunk.id;
+      return;
+    }
+
+    lastSpokenChunkIdRef.current = chunk.id;
+
+    if (questionAudioStartedFor !== chunk.id) {
+      setQuestionAudioStartedFor(null);
+    }
 
     // Clear the resume flag. We used to special-case resume by SKIPPING the
     // explanation and re-asking only the check question. That was wrong for
@@ -918,6 +919,7 @@ export function ImmersiveLessonRunner({
     chunk,
     interactionMode,
     phase,
+    transcriptLines,
     voice,
     greetingPlayed,
   ]);
@@ -930,10 +932,14 @@ export function ImmersiveLessonRunner({
     if (!greetingPlayed) return;
     if (awaitingContinueRef.current) return;
     isResumeRef.current = false;
+    const q = chunk.checkQuestion?.trim() ?? "";
+    if (q && chunkQuestionInTranscript(transcriptLines, q)) {
+      setTextCheckRevealed(true);
+      return;
+    }
     if (chunk.explanation.trim()) {
       appendTranscriptLineOnce({ role: "rose", text: chunk.explanation });
     }
-    const q = chunk.checkQuestion?.trim();
     if (q) {
       setTextCheckRevealed(true);
       appendTranscriptLineOnce({ role: "rose", text: q, kind: "question" });
@@ -947,6 +953,7 @@ export function ImmersiveLessonRunner({
     greetingPlayed,
     interactionMode,
     phase,
+    transcriptLines,
   ]);
 
   // ----- submit (streaming turn → sentence-streamed TTS) -----
@@ -1581,12 +1588,7 @@ export function ImmersiveLessonRunner({
     if (liveCycleGuardRef.current) return;
     // Hold the mic while the check question is on screen — room noise
     // shouldn't auto-submit an answer before the student is ready.
-    if (
-      chunk &&
-      questionAudioStartedFor === chunk.id &&
-      attempts === 0 &&
-      questionPopupDismissedFor !== chunk.id
-    ) {
+    if (chunk && questionAudioStartedFor === chunk.id && attempts === 0) {
       return;
     }
     liveCycleGuardRef.current = true;
@@ -1612,7 +1614,6 @@ export function ImmersiveLessonRunner({
     interactionMode,
     phase,
     questionAudioStartedFor,
-    questionPopupDismissedFor,
     submitAnswer,
     submitting,
     voice,
@@ -2276,37 +2277,10 @@ export function ImmersiveLessonRunner({
         );
       })()}
 
-      {/* Check question — appears as a centered ad-style modal the
-          MOMENT Rose's voice starts speaking the question (not when
-          the chunk arrives). Dim backdrop is click-through so the
-          student can scroll the lesson or jot notes through the dim.
-          The student can also Minimize the popup to a chip in the
-          top-right corner to fully reclaim the page; tap the chip to
-          expand back to center. Auto-hides after submission or on ×
-          dismiss. */}
-      {interactionMode === "voice" ? (
-        <QuestionCloud
-          key={`q-cloud-${chunk.id}`}
-          chunkId={chunk.id}
-          text={chunk.checkQuestion}
-          open={
-            questionAudioStartedFor === chunk.id &&
-            questionPopupDismissedFor !== chunk.id
-          }
-          minimized={questionPopupMinimized}
-          onMinimize={() => setQuestionPopupMinimized(true)}
-          onExpand={() => setQuestionPopupMinimized(false)}
-          onDismiss={() => setQuestionPopupDismissedFor(chunk.id)}
-          onRepeat={() =>
-            void voice.speak(chunk.checkQuestion, {
-              onPlay: () => {
-                lastSpokenRef.current = chunk.checkQuestion;
-                lastCheckAtRef.current = Date.now();
-              },
-            })
-          }
-        />
-      ) : null}
+      {/* Check question lives in the dialogue panel below the source text.
+          The old centered modal auto-opened on re-entry (restored
+          dialogue raced ahead of narration) and blocked the lesson
+          before students had read the material. */}
 
       {attempts >= 3 ? (
         <p className="mt-3 text-center text-xs italic text-amber-700">
@@ -2424,6 +2398,17 @@ export function ImmersiveLessonRunner({
 // ===========================================================================
 // Pieces
 // ===========================================================================
+
+function chunkQuestionInTranscript(
+  lines: TranscriptLine[],
+  question: string
+): boolean {
+  const q = question.trim();
+  if (!q) return false;
+  return lines.some(
+    (l) => l.role === "rose" && l.kind === "question" && l.text === q
+  );
+}
 
 /** Short acknowledgments that are not real answers to a check question. */
 function isVagueAffirmative(utterance: string): boolean {
