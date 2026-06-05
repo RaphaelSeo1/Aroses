@@ -10,7 +10,7 @@ import {
   type NoteSuggestion,
   type NotesPanelHandle,
 } from "@/components/immersive/NotesPanel";
-import { RoseInlineBubble } from "@/components/immersive/RoseInlineBubble";
+import { RoseDialoguePanel } from "@/components/immersive/RoseDialoguePanel";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
@@ -829,12 +829,36 @@ export function ImmersiveLessonRunner({
     activeRoseLineIdRef.current = null;
   }, [chunk?.id]);
 
+  const dialogueStorageKey = `mentored-dialogue:${materialId}:${activeModule.id}`;
+
   useEffect(() => {
-    setTranscriptLines([]);
     setTextCheckRevealed(false);
     setTextPendingAdvance(false);
     activeRoseLineIdRef.current = null;
-  }, [activeModule.id]);
+    try {
+      const raw = sessionStorage.getItem(dialogueStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as TranscriptLine[];
+        setTranscriptLines(Array.isArray(parsed) ? parsed : []);
+      } else {
+        setTranscriptLines([]);
+      }
+    } catch {
+      setTranscriptLines([]);
+    }
+  }, [activeModule.id, dialogueStorageKey]);
+
+  useEffect(() => {
+    if (transcriptLines.length === 0) {
+      sessionStorage.removeItem(dialogueStorageKey);
+      return;
+    }
+    try {
+      sessionStorage.setItem(dialogueStorageKey, JSON.stringify(transcriptLines));
+    } catch {
+      /* quota — dialogue still lives in memory for this visit */
+    }
+  }, [dialogueStorageKey, transcriptLines]);
 
   useEffect(() => {
     if (phase !== "teaching") return;
@@ -1629,7 +1653,6 @@ export function ImmersiveLessonRunner({
     setTutorReply(null);
     setTextCheckRevealed(false);
     setTextPendingAdvance(false);
-    setTranscriptLines([]);
     activeRoseLineIdRef.current = null;
     lastSpokenChunkIdRef.current = null;
     await persist({
@@ -2232,46 +2255,24 @@ export function ImmersiveLessonRunner({
         const lesson =
           lessonIdx != null ? activeModule.lessons[lessonIdx] : undefined;
         const terms = chunk.keyTerms ?? [];
-        const showQuestion =
-          chunk.checkQuestion.trim().length > 0 &&
-          (interactionMode === "voice" || textCheckRevealed);
-        if (!lesson && !showQuestion && !tutorReply) return null;
+        const dialogue = <RoseDialoguePanel lines={transcriptLines} />;
 
-        const roseBubbles = (
-          <>
-            {showQuestion ? (
-              <RoseInlineBubble
-                label="Rose"
-                variant="question"
-                text={chunk.checkQuestion}
-              />
-            ) : null}
-            {tutorReply ? (
-              <RoseInlineBubble
-                key={`reply-${replyTurn}`}
-                label="Rose"
-                variant="reply"
-                text={tutorReply}
-                animate
-                animateKey={`reply-${replyTurn}`}
-              />
-            ) : null}
-          </>
-        );
+        if (lesson) {
+          return (
+            <SourceLessonPanel
+              key={`src-${chunk.id}`}
+              lesson={lesson}
+              keyTerms={terms}
+              narrationText={narrationText}
+              footer={dialogue}
+            />
+          );
+        }
 
         return (
-          <div key={`src-wrap-${chunk.id}`} className={lesson ? undefined : "mt-4"}>
-            {lesson ? (
-              <SourceLessonPanel
-                lesson={lesson}
-                keyTerms={terms}
-                narrationText={narrationText}
-                footer={roseBubbles}
-              />
-            ) : (
-              roseBubbles
-            )}
-          </div>
+          <GlassPanel key={`dialogue-${chunk.id}`} className="mt-4" tone="subtle">
+            {dialogue}
+          </GlassPanel>
         );
       })()}
 

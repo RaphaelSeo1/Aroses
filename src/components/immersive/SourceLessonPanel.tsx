@@ -138,7 +138,9 @@ function SourceLessonPanelImpl({
           </span>
         )}
       </div>
-      {footer ? <div className="mt-1">{footer}</div> : null}
+      {footer ? (
+        <div className="mt-4 border-t-2 border-zinc-200/90 pt-4">{footer}</div>
+      ) : null}
       <style jsx>{`
         .source-lesson-body :global(.source-paragraph) {
           margin: 0;
