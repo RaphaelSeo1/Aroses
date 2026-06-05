@@ -1790,6 +1790,7 @@ export function CoursePlayer({
         materialId={materialId}
         moduleId={activeModuleId}
         quizOpen={quizOpen}
+        courseId={courseId}
         studyHrefBase={studyBase}
         learnMode={learnMode}
         docked

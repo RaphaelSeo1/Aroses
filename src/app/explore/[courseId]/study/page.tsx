@@ -420,6 +420,7 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
             materialId={row.id}
             moduleId={1}
             quizOpen={false}
+            courseId={courseId}
             studyHrefBase={`/explore/${courseId}/study`}
             docked
             variant="legacy"

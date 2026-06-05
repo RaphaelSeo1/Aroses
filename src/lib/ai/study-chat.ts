@@ -7,9 +7,36 @@ import type { StudyChatTurn } from "@/types/study-chat";
 
 const MODEL = "claude-sonnet-4-6";
 
+export type StudyCourseMapEntry = {
+  materialId: string;
+  label: string;
+  modules: { id: number; title: string; lessonTitles: string[] }[];
+};
+
+export function buildCourseMapSection(entries: StudyCourseMapEntry[]): string {
+  if (entries.length === 0) return "";
+  let s = "=== FULL COURSE MAP (all uploads / modules — use for navigation & cross-module questions) ===\n";
+  for (const entry of entries) {
+    s += `\nUpload “${entry.label}” (materialId: ${entry.materialId}):\n`;
+    for (const mod of entry.modules) {
+      const lessons =
+        mod.lessonTitles.length > 0
+          ? ` — lessons: ${mod.lessonTitles.join("; ")}`
+          : "";
+      s += `  • Module ${mod.id}: ${mod.title}${lessons}\n`;
+    }
+  }
+  return `${s}\n`;
+}
+
 export function buildStudyContextText(
   payload: CoursePayload,
-  opts: { moduleId: number; quizOpen: boolean }
+  opts: {
+    moduleId: number;
+    quizOpen: boolean;
+    courseMap?: StudyCourseMapEntry[];
+    currentMaterialId?: string;
+  }
 ): string {
   const mod = payload.modules.find((m) => m.id === opts.moduleId);
   if (!mod) {
@@ -19,13 +46,30 @@ export function buildStudyContextText(
   let s = "";
   s += `Course: ${payload.title}\n`;
   s += `Description: ${payload.description}\n\n`;
+
+  if (opts.courseMap && opts.courseMap.length > 0) {
+    s += buildCourseMapSection(opts.courseMap);
+  } else {
+    s += "=== MODULE INDEX (this upload) ===\n";
+    for (const m of payload.modules) {
+      const lessons = m.lessons.map((l) => l.title).join("; ");
+      s += `  • Module ${m.id}: ${m.title}${lessons ? ` — ${lessons}` : ""}\n`;
+    }
+    s += "\n";
+  }
+
+  if (opts.currentMaterialId) {
+    s += `Current upload materialId: ${opts.currentMaterialId}\n\n`;
+  }
+
   s += `=== WHAT THE STUDENT IS VIEWING NOW ===\n`;
   s += `Module ${mod.id}: ${mod.title}\n`;
   if (opts.quizOpen) {
-    s += `Screen: MODULE QUIZ — The student is answering mixed multiple-choice and short written questions for this module.\n`;
-    s += `Help them understand concepts and reasoning. Do NOT reveal correct MC letters, sample answers, or reference_answer text for written prompts.\n\n`;
+    s += `Screen: MODULE QUIZ — The student is actively answering questions for this module.\n`;
+    s += `Coach them on concepts and reasoning. Do NOT read out the correct MCQ letter or paste the stored reference answer — but DO explain ideas, walk through similar examples, and help them think.\n\n`;
   } else {
-    s += `Screen: LESSONS — The student is reading this module's lesson content.\n\n`;
+    s += `Screen: LESSONS — The student is reading this module's lesson content.\n`;
+    s += `They may ask about other modules, exam prep, or quiz-style practice — help fully using the course map and lesson content below.\n\n`;
   }
 
   for (const lesson of mod.lessons) {
@@ -166,7 +210,7 @@ VOICE STYLE (very important):
 RULES:
 - Answer ONLY using the CONTEXT below. If something isn't in the student's notes, say it naturally — e.g. "Honestly, that's not really in your notes — closest thing is [X], wanna check that out?".
 - Never invent facts, citations, numbers, or sources that aren't in CONTEXT.
-- If CONTEXT says the student is on a quiz screen, don't reveal which choice is correct or hand them sample answers — teach the underlying reasoning instead.
+- If CONTEXT says the student is on an active quiz screen, don't read out the correct MCQ letter or paste stored reference answers — but DO explain concepts and guide their thinking. Never refuse by calling them a cheater.
 - Output ONLY the spoken reply as plain text. No JSON, no preamble, no labels, no quotes around it.
 
 CONTEXT:
@@ -230,20 +274,26 @@ export async function runStudyChat(
     throw new Error("Missing ANTHROPIC_API_KEY");
   }
 
-  const system = `You are ${AI_ASSISTANT_NAME}, an expert but friendly tutor. The student is working inside ${APP_NAME} on course material that was generated from their own uploaded files.
+  const system = `You are ${AI_ASSISTANT_NAME}, an expert but friendly tutor. The student is working inside ${APP_NAME} on course material generated from their own uploaded files.
 
-Rules:
-- Answer ONLY using the CONTEXT section below. If the answer is not there, say clearly that their materials don't cover it and point them to the closest related heading or module to re-read.
-- Be concise unless they ask for depth. Use short paragraphs or bullet lists when helpful.
-- Never invent citations, sources, or facts outside CONTEXT.
-- If CONTEXT indicates the student is on a quiz screen, do not reveal correct multiple-choice letters or give away quiz keys; teach the underlying ideas instead.
-- When the student asks to jump to another module or to find where a term is covered, you may request navigation by setting an ACTION in the JSON output.
+How to help:
+- Use the FULL COURSE MAP and lesson content in CONTEXT. Topics may live in a different module than the one on screen — check the map before saying something isn't covered.
+- Be a real tutor: explain concepts, connect ideas, and help with exam/quiz prep. Never refuse by calling the student a cheater. Studying for a quiz is normal.
+- On the LESSONS screen: answer fully, including practice-style questions, as long as you ground answers in their materials.
+- On the MODULE QUIZ screen only: do not reveal the correct multiple-choice letter or copy the stored reference answer verbatim. Still explain the underlying ideas and guide their reasoning.
+- If something truly isn't in CONTEXT, say so briefly and point to the closest related module from the course map.
+
+Navigation:
+- When the student asks to go somewhere ("take me to…", "where is…"), check the course map.
+- If exactly one module is the clear best fit, set action to navigate there.
+- If several modules mention the topic, list them in "reply" (module number + title) and ask which they want — set action to null unless they already picked one or only one is a primary focus (title match beats a passing mention).
+- Use {"type":"navigate_by_query","query":"short topic"} only when you need the server to search; keep query to the core topic (e.g. "income statement preparation").
+- For cross-upload navigation use {"type":"navigate_to_location","materialId":"uuid","moduleId":number}.
 
 Output format:
 - Return ONLY valid JSON, no markdown fences.
-- Shape: {"reply": string, "action": null | {"type":"navigate_to_module","moduleId":number,"reason"?:string} | {"type":"navigate_by_query","query":string}}
-- "reply" should be the user-visible tutoring message.
-- Use "navigate_by_query" when the user asks for a module about a term/concept but you are not sure which module id it is.
+- Shape: {"reply": string, "action": null | {"type":"navigate_to_module","moduleId":number,"reason"?:string} | {"type":"navigate_to_location","materialId":string,"moduleId":number,"reason"?:string} | {"type":"navigate_by_query","query":string}}
+- "reply" is markdown-friendly user-visible text (short paragraphs or bullets).
 
 CONTEXT:
 ---

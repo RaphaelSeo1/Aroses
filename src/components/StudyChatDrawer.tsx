@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
+import {
+  loadStudyChatMessages,
+  saveStudyChatMessages,
+  studyChatStorageKey,
+} from "@/lib/study-chat-storage";
 import type { StudyChatResponse, StudyChatTurn } from "@/types/study-chat";
 
 export const STUDY_CHAT_PREFILL_EVENT = "aroses-study-chat-prefill";
@@ -18,6 +23,8 @@ type Props = {
   materialId: string;
   moduleId: number;
   quizOpen: boolean;
+  /** Persists chat across modules when set. */
+  courseId?: string;
   /** Base lessons URL (e.g. `/dashboard/courses/:id/study` or `/explore/:id/study`). */
   studyHrefBase?: string;
   /** Keep `mode=learn` when navigating (dashboard “study as learner”). */
@@ -32,14 +39,17 @@ export function StudyChatDrawer({
   materialId,
   moduleId,
   quizOpen,
+  courseId,
   studyHrefBase,
   learnMode = false,
   docked = false,
   variant = "course",
 }: Props) {
   const router = useRouter();
+  const storageKey = studyChatStorageKey(courseId, materialId);
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<StudyChatTurn[]>([]);
+  const [hydrated, setHydrated] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,9 +57,14 @@ export function StudyChatDrawer({
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setMessages([]);
-    setError(null);
-  }, [moduleId]);
+    setMessages(loadStudyChatMessages(storageKey));
+    setHydrated(true);
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveStudyChatMessages(storageKey, messages);
+  }, [hydrated, messages, storageKey]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -216,7 +231,7 @@ export function StudyChatDrawer({
               <p className="text-[11px] leading-snug text-zinc-500">
                 {variant === "legacy"
                   ? "Uses your summary and practice questions only."
-                  : `Side-by-side with your lesson.${quizOpen ? " Quiz mode: won’t reveal MCQ answers." : ""}`}
+                  : `Side-by-side with your lesson — chat is saved for this course.${quizOpen ? " Active quiz: guides reasoning without giving away letters." : ""}`}
               </p>
             </div>
             <button

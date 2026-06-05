@@ -6,9 +6,11 @@ import {
   buildStudyContextText,
   runStudyChat,
 } from "@/lib/ai/study-chat";
+import { fetchCourseMaterialsForChat, buildCourseMapFromMaterials } from "@/lib/study-chat-context";
 import {
-  findBestModuleIdForQuery,
-  findBestStudyLocationForQuery,
+  extractNavigationQuery,
+  findAllStudyLocationsForQuery,
+  isUnambiguousNavigation,
 } from "@/lib/study-chat-nav";
 import type { StudyChatTurn } from "@/types/study-chat";
 import type { CoursePayload } from "@/types/course";
@@ -144,13 +146,35 @@ export async function POST(request: Request) {
     payload.modules.length > 0;
 
   let contextText: string;
+  let courseMaterials: { id: string; course_payload: CoursePayload; label: string }[] =
+    [];
 
   if (hasStructuredCourse) {
     const resolvedModuleId =
       moduleId ?? payload!.modules[0]?.id ?? 1;
+
+    if (courseId) {
+      courseMaterials = await fetchCourseMaterialsForChat(
+        supabase,
+        courseId,
+        b.materialId,
+        payload!
+      );
+    } else {
+      courseMaterials = [
+        {
+          id: b.materialId,
+          course_payload: payload!,
+          label: payload!.title?.trim() || "Current upload",
+        },
+      ];
+    }
+
     contextText = buildStudyContextText(payload!, {
       moduleId: resolvedModuleId,
       quizOpen,
+      courseMap: buildCourseMapFromMaterials(courseMaterials),
+      currentMaterialId: b.materialId,
     });
   } else {
     const summary = typeof row.summary === "string" ? row.summary : "";
@@ -176,36 +200,24 @@ export async function POST(request: Request) {
     // Server-side fallback: if the user is asking to navigate, try searching the full payload
     // even if the model doesn't return an action.
     let fallbackAction: unknown | null = null;
-    if (hasStructuredCourse && looksLikeNavigationIntent(last.content)) {
-      // Search this material first, then other materials in the same course (if available).
-      const materials: { id: string; course_payload: CoursePayload }[] = [
-        { id: b.materialId, course_payload: payload! },
-      ];
-      if (courseId) {
-        const { data: otherMats } = await supabase
-          .from("study_materials")
-          .select("id, course_payload")
-          .eq("course_id", courseId)
-          .order("created_at", { ascending: true });
-        for (const om of otherMats ?? []) {
-          if (!om?.id || om.id === b.materialId) continue;
-          const pl = om.course_payload as CoursePayload | null;
-          if (pl && Array.isArray((pl as CoursePayload).modules) && pl.modules.length > 0) {
-            materials.push({ id: om.id, course_payload: pl });
-          }
-        }
-      }
+    const navMaterials =
+      courseMaterials.length > 0
+        ? courseMaterials
+        : [{ id: b.materialId, course_payload: payload!, label: "Current upload" }];
 
-      const loc = findBestStudyLocationForQuery({
-        materials,
-        query: last.content,
+    if (hasStructuredCourse && looksLikeNavigationIntent(last.content)) {
+      const navQuery = extractNavigationQuery(last.content);
+      const matches = findAllStudyLocationsForQuery({
+        materials: navMaterials,
+        query: navQuery || last.content,
       });
-      if (loc) {
+      const pick = isUnambiguousNavigation(matches);
+      if (pick) {
         fallbackAction = {
           type: "navigate_to_location",
-          materialId: loc.materialId,
-          moduleId: loc.moduleId,
-          reason: loc.reason,
+          materialId: pick.materialId,
+          moduleId: pick.moduleId,
+          reason: pick.reason,
         };
       }
     }
@@ -214,17 +226,60 @@ export async function POST(request: Request) {
     let action: unknown | null = out.action ?? null;
 
     if (hasStructuredCourse && action && typeof action === "object") {
-      const a = action as { type?: unknown; query?: unknown; moduleId?: unknown };
+      const a = action as {
+        type?: unknown;
+        query?: unknown;
+        moduleId?: unknown;
+        materialId?: unknown;
+      };
+
       if (a.type === "navigate_by_query" && typeof a.query === "string") {
-        const hit = findBestModuleIdForQuery(payload!, a.query);
-        action = hit
-          ? { type: "navigate_to_module", moduleId: hit.moduleId, reason: hit.reason }
+        const matches = findAllStudyLocationsForQuery({
+          materials: navMaterials,
+          query: a.query,
+        });
+        const pick = isUnambiguousNavigation(matches);
+        action = pick
+          ? {
+              type: "navigate_to_location",
+              materialId: pick.materialId,
+              moduleId: pick.moduleId,
+              reason: pick.reason,
+            }
           : null;
       }
 
       if (a.type === "navigate_to_module") {
         const modId = typeof a.moduleId === "number" ? a.moduleId : Number.NaN;
-        const ok = Number.isFinite(modId) && payload!.modules.some((m) => m.id === modId);
+        const ok =
+          Number.isFinite(modId) &&
+          navMaterials.some((m) =>
+            m.course_payload.modules.some((mod) => mod.id === modId)
+          );
+        if (ok) {
+          const host =
+            navMaterials.find((m) =>
+              m.course_payload.modules.some((mod) => mod.id === modId)
+            ) ?? navMaterials[0]!;
+          action = {
+            type: "navigate_to_location",
+            materialId: host.id,
+            moduleId: modId,
+            reason: (a as { reason?: string }).reason,
+          };
+        } else {
+          action = null;
+        }
+      }
+
+      if (a.type === "navigate_to_location") {
+        const matId = typeof a.materialId === "string" ? a.materialId : "";
+        const modId = typeof a.moduleId === "number" ? a.moduleId : Number.NaN;
+        const host = navMaterials.find((m) => m.id === matId);
+        const ok =
+          host &&
+          Number.isFinite(modId) &&
+          host.course_payload.modules.some((mod) => mod.id === modId);
         if (!ok) action = null;
       }
     }

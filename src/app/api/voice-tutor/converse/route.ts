@@ -7,9 +7,11 @@ import {
   streamVoiceReply,
   type VoiceContinuationHint,
 } from "@/lib/ai/study-chat";
+import { fetchCourseMaterialsForChat, buildCourseMapFromMaterials } from "@/lib/study-chat-context";
 import {
-  findBestModuleIdForQuery,
-  findBestStudyLocationForQuery,
+  extractNavigationQuery,
+  findAllStudyLocationsForQuery,
+  isUnambiguousNavigation,
 } from "@/lib/study-chat-nav";
 import type { StudyChatTurn } from "@/types/study-chat";
 import type { CoursePayload } from "@/types/course";
@@ -182,12 +184,34 @@ export async function POST(request: Request) {
     payload.modules.length > 0;
 
   let contextText: string;
+  let courseMaterials: { id: string; course_payload: CoursePayload; label: string }[] =
+    [];
 
   if (hasStructuredCourse) {
     const resolvedModuleId = moduleId ?? payload!.modules[0]?.id ?? 1;
+
+    if (courseId) {
+      courseMaterials = await fetchCourseMaterialsForChat(
+        supabase,
+        courseId,
+        b.materialId,
+        payload!
+      );
+    } else {
+      courseMaterials = [
+        {
+          id: b.materialId,
+          course_payload: payload!,
+          label: payload!.title?.trim() || "Current upload",
+        },
+      ];
+    }
+
     contextText = buildStudyContextText(payload!, {
       moduleId: resolvedModuleId,
       quizOpen,
+      courseMap: buildCourseMapFromMaterials(courseMaterials),
+      currentMaterialId: b.materialId,
     });
   } else {
     const summary = typeof row.summary === "string" ? row.summary : "";
@@ -212,43 +236,23 @@ export async function POST(request: Request) {
   // spoken reply even finishes.
   let detectedAction: unknown | null = null;
   if (hasStructuredCourse && looksLikeNavigationIntent(last.content)) {
-    const materials: { id: string; course_payload: CoursePayload }[] = [
-      { id: b.materialId, course_payload: payload! },
-    ];
-    if (courseId) {
-      const { data: otherMats } = await supabase
-        .from("study_materials")
-        .select("id, course_payload")
-        .eq("course_id", courseId)
-        .order("created_at", { ascending: true });
-      for (const om of otherMats ?? []) {
-        if (!om?.id || om.id === b.materialId) continue;
-        const pl = om.course_payload as CoursePayload | null;
-        if (pl && Array.isArray(pl.modules) && pl.modules.length > 0) {
-          materials.push({ id: om.id, course_payload: pl });
-        }
-      }
-    }
-    const loc = findBestStudyLocationForQuery({
-      materials,
-      query: last.content,
+    const navMaterials =
+      courseMaterials.length > 0
+        ? courseMaterials
+        : [{ id: b.materialId, course_payload: payload!, label: "Current upload" }];
+    const navQuery = extractNavigationQuery(last.content);
+    const matches = findAllStudyLocationsForQuery({
+      materials: navMaterials,
+      query: navQuery || last.content,
     });
-    if (loc) {
+    const pick = isUnambiguousNavigation(matches);
+    if (pick) {
       detectedAction = {
         type: "navigate_to_location",
-        materialId: loc.materialId,
-        moduleId: loc.moduleId,
-        reason: loc.reason,
+        materialId: pick.materialId,
+        moduleId: pick.moduleId,
+        reason: pick.reason,
       };
-    } else {
-      const hit = findBestModuleIdForQuery(payload!, last.content);
-      if (hit) {
-        detectedAction = {
-          type: "navigate_to_module",
-          moduleId: hit.moduleId,
-          reason: hit.reason,
-        };
-      }
     }
   }
 
