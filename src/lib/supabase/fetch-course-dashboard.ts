@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { resolveCourseAccess } from "@/lib/collaboration/permissions";
+import type { ViewerCourseRole } from "@/lib/collaboration/types";
 import { fetchIsDbSuperAdmin } from "@/lib/db-super-admin";
 
 export type DashboardCourseRow = {
@@ -12,6 +14,9 @@ export type DashboardCourseRow = {
   study_context?: string | null;
   /** Present when `025_app_super_admins.sql` is applied and you are in `app_super_admins`. */
   owner_user_id?: string;
+  viewer_role?: ViewerCourseRole;
+  can_edit_content?: boolean;
+  can_manage_collaborators?: boolean;
 };
 
 /**
@@ -70,10 +75,23 @@ export async function fetchCourseForDashboard(
   }
 
   const rowUserId = typeof row.user_id === "string" ? row.user_id : "";
-  if (rowUserId !== viewerUserId) {
-    const isAdmin = await fetchIsDbSuperAdmin(supabase);
-    if (!isAdmin) return null;
-  }
+  const isAdmin =
+    rowUserId !== viewerUserId
+      ? await fetchIsDbSuperAdmin(supabase)
+      : false;
+
+  const access =
+    rowUserId === viewerUserId
+      ? {
+          role: "owner" as const,
+          canView: true,
+          canEditContent: true,
+          canManageCollaborators: true,
+          canDeleteCourse: true,
+        }
+      : await resolveCourseAccess(supabase, viewerUserId, courseId);
+
+  if (!access?.canView && !isAdmin) return null;
 
   const { user_id: ownerUserId, ...rest } = row;
 
@@ -86,5 +104,9 @@ export async function fetchCourseForDashboard(
     is_self_study: Boolean(rest.is_self_study),
     study_context: rest.study_context ?? null,
     owner_user_id: ownerUserId,
+    viewer_role: isAdmin && rowUserId !== viewerUserId ? null : access?.role ?? null,
+    can_edit_content: isAdmin || Boolean(access?.canEditContent),
+    can_manage_collaborators:
+      isAdmin || Boolean(access?.canManageCollaborators),
   };
 }

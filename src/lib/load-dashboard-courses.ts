@@ -7,6 +7,13 @@ export type StudyingCourse = {
   description: string | null;
 };
 
+export type SharedCourse = {
+  id: string;
+  title: string;
+  description: string | null;
+  role: "editor" | "viewer";
+};
+
 function missingIsPublicColumn(err: {
   code?: string;
   message?: string;
@@ -36,7 +43,11 @@ function missingSelfStudyColumn(err: {
 export async function loadDashboardCourseLists(
   supabase: SupabaseClient,
   userId: string
-): Promise<{ owned: DashboardCourse[]; studying: StudyingCourse[] }> {
+): Promise<{
+  owned: DashboardCourse[];
+  studying: StudyingCourse[];
+  sharedWithMe: SharedCourse[];
+}> {
   let primary = await supabase
     .from("courses")
     .select(
@@ -147,5 +158,36 @@ export async function loadDashboardCourseLists(
     }
   }
 
-  return { owned, studying };
+  const { data: collabRows } = await supabase
+    .from("course_collaborators")
+    .select("course_id, role")
+    .eq("user_id", userId)
+    .eq("status", "accepted")
+    .in("role", ["editor", "viewer"]);
+
+  let sharedWithMe: SharedCourse[] = [];
+  const sharedCourseIds = (collabRows ?? [])
+    .map((r) => r.course_id)
+    .filter((id) => !ownedIds.has(id));
+
+  if (sharedCourseIds.length > 0) {
+    const roleByCourse = new Map(
+      (collabRows ?? []).map((r) => [r.course_id, r.role as "editor" | "viewer"])
+    );
+    const { data: sharedRows } = await supabase
+      .from("courses")
+      .select("id, title, description")
+      .in("id", sharedCourseIds);
+
+    sharedWithMe = (sharedRows ?? [])
+      .map((r) => ({
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        role: roleByCourse.get(r.id) ?? ("viewer" as const),
+      }))
+      .sort((a, b) => a.title.localeCompare(b.title));
+  }
+
+  return { owned, studying, sharedWithMe };
 }

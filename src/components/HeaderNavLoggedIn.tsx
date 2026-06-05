@@ -15,10 +15,6 @@ import { useSrsDueCounts, type SrsDueCounts } from "@/lib/srs-due";
  *     + due-count badge), then the avatar account menu on the right.
  *   - Mobile (< lg): the primary links collapse into a hamburger; the avatar
  *     menu stays visible so account actions remain reachable.
- *
- * Account items (Profile, Admin — admins only, Log out) live in the avatar
- * menu. The Admin gate is unchanged: it only renders when `adminHubHref` is
- * set, which upstream only does for allow-listed admin accounts.
  */
 export function HeaderNavLoggedIn({
   courseHomeHref,
@@ -50,14 +46,12 @@ export function HeaderNavLoggedIn({
 
   return (
     <>
-      {/* Mobile: primary links behind a hamburger. */}
       <MobileNavMenu
         dueTotal={dueTotal}
         badgeLabel={badgeLabel}
         courseHomeHref={courseHomeHref}
       />
 
-      {/* Desktop: top-level links. */}
       <div className="hidden items-center gap-1.5 lg:flex lg:gap-2">
         <HeaderNavLink
           href="/"
@@ -128,7 +122,6 @@ export function HeaderNavLoggedIn({
         ) : null}
       </div>
 
-      {/* Account menu — all screen sizes. */}
       <AvatarMenu
         displayName={displayName}
         email={email}

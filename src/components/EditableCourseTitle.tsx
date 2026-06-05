@@ -11,6 +11,7 @@ type Props = {
   size?: "2xl" | "3xl";
   /** Tailwind ring/border accent for the active edit input. */
   accent?: "brand" | "indigo";
+  readOnly?: boolean;
 };
 
 /**
@@ -24,6 +25,7 @@ export function EditableCourseTitle({
   initialTitle,
   size = "3xl",
   accent = "indigo",
+  readOnly = false,
 }: Props) {
   const router = useRouter();
   const [title, setTitle] = useState(initialTitle);
@@ -145,6 +147,16 @@ export function EditableCourseTitle({
           <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
         ) : null}
       </div>
+    );
+  }
+
+  if (readOnly) {
+    return (
+      <h1
+        className={`${headingSize} font-semibold tracking-tight text-zinc-900 dark:text-zinc-50`}
+      >
+        {title}
+      </h1>
     );
   }
 

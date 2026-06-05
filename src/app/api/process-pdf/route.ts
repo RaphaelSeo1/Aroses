@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
 import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
+import { hasCourseEdit } from "@/lib/collaboration/api-guards";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   detectIngestFormat,
@@ -222,14 +223,8 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     );
   }
 
-  const { data: courseOwn } = await supabase
-    .from("courses")
-    .select("id")
-    .eq("id", courseId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (!courseOwn) {
+  const canEdit = await hasCourseEdit(supabase, user.id, courseId);
+  if (!canEdit) {
     await removeIngestObjects(admin, files.map((x) => x.storagePath));
     return NextResponse.json({ error: "Course not found" }, { status: 403 });
   }

@@ -9,7 +9,7 @@ import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import type { UserProfileRow } from "@/types/profile";
 
 type PageProps = {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; conversation?: string }>;
 };
 
 function ProfileBodySkeleton() {
@@ -35,7 +35,11 @@ export default async function ProfilePage({ searchParams }: PageProps) {
       ? ("progress" as const)
       : sp.tab === "account"
         ? ("account" as const)
-        : ("general" as const);
+        : sp.tab === "friends"
+          ? ("friends" as const)
+          : sp.tab === "messages"
+            ? ("messages" as const)
+            : ("general" as const);
 
   return (
     <>
@@ -72,7 +76,7 @@ async function ProfilePageBody({
 }: {
   userEmail: string;
   userId: string;
-  initialPanel: "progress" | "account" | "general";
+  initialPanel: "progress" | "account" | "general" | "friends" | "messages";
 }) {
   const { supabase } = await getServerAuth();
   const [selProfiles, progressData] = await Promise.all([

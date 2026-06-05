@@ -33,7 +33,7 @@ async function HomeContent() {
     redirect("/onboarding");
   }
 
-  const [{ owned, studying }, progress] = await Promise.all([
+  const [{ owned, studying, sharedWithMe }, progress] = await Promise.all([
     loadDashboardCourseLists(supabase, user.id),
     loadDashboardProgress(supabase, user.id),
   ]);
@@ -44,6 +44,7 @@ async function HomeContent() {
       viewerUserId={user.id}
       ownedCourses={owned}
       studyingCourses={studying}
+      sharedCourses={sharedWithMe}
       progress={progress}
     />
   );

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { canEditStudyMaterial } from "@/lib/collaboration/permissions";
+import { recordStudyMaterialEdit } from "@/lib/collaboration/record-material-edit";
 import { finalizeMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { createClient } from "@/lib/supabase/server";
 
@@ -41,6 +43,11 @@ export async function PATCH(request: Request, ctx: Params) {
     );
   }
 
+  const allowed = await canEditStudyMaterial(supabase, user.id, materialId);
+  if (!allowed) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { error } = await supabase
     .from("study_materials")
     .update({ file_name: fileName })
@@ -50,6 +57,8 @@ export async function PATCH(request: Request, ctx: Params) {
     console.error(error);
     return NextResponse.json({ error: "Could not update." }, { status: 500 });
   }
+
+  await recordStudyMaterialEdit(supabase, materialId, user.id);
 
   return NextResponse.json({ ok: true });
 }
@@ -66,6 +75,11 @@ export async function DELETE(_request: Request, ctx: Params) {
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const allowed = await canEditStudyMaterial(supabase, user.id, materialId);
+  if (!allowed) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const { error } = await supabase

@@ -57,6 +57,9 @@ export default async function CourseSettingsPage({ params, searchParams }: Props
 
   const course = await fetchCourseForDashboard(supabase, courseId, user.id);
   if (!course) notFound();
+  if (!course.can_manage_collaborators) {
+    redirect(`/dashboard/courses/${courseId}`);
+  }
   if (course.is_self_study) {
     redirect(`/dashboard/courses/${courseId}`);
   }

@@ -9,13 +9,15 @@ import { ContinueStudyingCarousel } from "@/components/ContinueStudyingCarousel"
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
 import { ReviewDueBanner } from "@/components/ReviewDueBanner";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
-import type { StudyingCourse } from "@/lib/load-dashboard-courses";
+import { PendingCollaboratorInvites } from "@/components/PendingCollaboratorInvites";
+import type { SharedCourse, StudyingCourse } from "@/lib/load-dashboard-courses";
 
 export function DashboardHomeContent({
   userEmail,
   viewerUserId,
   ownedCourses,
   studyingCourses,
+  sharedCourses = [],
   progress,
   omitHeader = false,
 }: {
@@ -23,11 +25,13 @@ export function DashboardHomeContent({
   viewerUserId: string;
   ownedCourses: DashboardCourse[];
   studyingCourses: StudyingCourse[];
+  sharedCourses?: SharedCourse[];
   progress: DashboardProgressPayload;
   /** When true, only render main workspace (parent supplies `<AppHeader />`). */
   omitHeader?: boolean;
 }) {
   const hasOwned = ownedCourses.length > 0;
+  const hasShared = sharedCourses.length > 0;
   // The "Continue studying" carousel is driven by `progress.recentPractice`,
   // which can have entries even when `studyingCourses` is empty (the two come
   // from different queries). Treat the dashboard as empty only when ALL three
@@ -35,7 +39,7 @@ export function DashboardHomeContent({
   // courses the user is actively studying.
   const isStudyingSomething =
     studyingCourses.length > 0 || (progress.recentPractice?.length ?? 0) > 0;
-  const empty = !hasOwned && !isStudyingSomething;
+  const empty = !hasOwned && !hasShared && !isStudyingSomething;
 
   return (
     <>
@@ -46,6 +50,7 @@ export function DashboardHomeContent({
         <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
           <div className="grid gap-8 lg:grid-cols-[1fr_22rem] lg:items-start">
             <div className="min-w-0">
+              <PendingCollaboratorInvites />
               <ReviewDueBanner />
               <div className="relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/75 p-6 shadow-xl shadow-zinc-900/[0.06] ring-1 ring-white/60 backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-950/75 dark:shadow-black/30 dark:ring-zinc-600/40 sm:p-8">
             <div
@@ -232,6 +237,47 @@ export function DashboardHomeContent({
                   </Link>
                 </section>
               )}
+
+              {hasShared ? (
+                <section>
+                  <div className="flex flex-wrap items-start gap-4">
+                    <span
+                      className="mt-1 hidden h-10 w-1 shrink-0 rounded-full bg-gradient-to-b from-indigo-500 to-violet-400 sm:block"
+                      aria-hidden
+                    />
+                    <div>
+                      <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
+                        Shared with you
+                      </h2>
+                      <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                        Courses others invited you to — your study progress stays private.
+                      </p>
+                    </div>
+                  </div>
+                  <ul className="mt-5 grid gap-3 sm:grid-cols-2">
+                    {sharedCourses.map((course) => (
+                      <li key={course.id}>
+                        <Link
+                          href={`/dashboard/courses/${course.id}`}
+                          className="block rounded-2xl border border-zinc-200/90 bg-white p-4 shadow-sm transition hover:border-indigo-200 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-indigo-900/50"
+                        >
+                          <p className="font-semibold text-zinc-900 dark:text-zinc-50">
+                            {course.title}
+                          </p>
+                          {course.description ? (
+                            <p className="mt-1 line-clamp-2 text-sm text-zinc-500 dark:text-zinc-400">
+                              {course.description}
+                            </p>
+                          ) : null}
+                          <p className="mt-3 text-xs font-medium uppercase tracking-wide text-indigo-600 dark:text-indigo-400">
+                            {course.role}
+                          </p>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
 
               {/* “Continue learning” (Explore) cards removed — use the black carousel above instead. */}
             </div>

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { hasCourseEdit } from "@/lib/collaboration/api-guards";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -60,7 +61,12 @@ export async function PATCH(request: Request, { params }: Params) {
     .eq("id", group.course_id)
     .maybeSingle();
 
-  if (!course || course.user_id !== user.id) {
+  if (!course) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const canEdit = await hasCourseEdit(supabase, user.id, group.course_id);
+  if (!canEdit) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -112,7 +118,12 @@ export async function DELETE(_request: Request, { params }: Params) {
     .eq("id", group.course_id)
     .maybeSingle();
 
-  if (!course || course.user_id !== user.id) {
+  if (!course) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const canEdit = await hasCourseEdit(supabase, user.id, group.course_id);
+  if (!canEdit) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

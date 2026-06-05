@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { linkPendingInvitesForUser } from "@/lib/collaboration/link-pending-invites";
 import { parseSafeInternalNext } from "@/lib/internal-next-path";
 import { logActivity } from "@/lib/activity-log";
 
@@ -31,6 +32,7 @@ export async function GET(request: Request) {
     const { data } = await supabase.auth.exchangeCodeForSession(code);
     const signedInUser = data?.user;
     if (signedInUser) {
+      await linkPendingInvitesForUser(signedInUser.id, signedInUser.email);
       await logActivity({ userId: signedInUser.id, type: "sign_in" });
     }
   }

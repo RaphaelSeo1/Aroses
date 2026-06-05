@@ -72,6 +72,7 @@ function SortableMaterialRow({
   selected,
   selectionDisabled,
   onToggleSelect,
+  readOnly = false,
 }: {
   material: MaterialRow;
   courseId: string;
@@ -88,6 +89,7 @@ function SortableMaterialRow({
   selected: boolean;
   selectionDisabled: boolean;
   onToggleSelect: (id: string) => void;
+  readOnly?: boolean;
 }) {
   const {
     attributes,
@@ -198,24 +200,28 @@ function SortableMaterialRow({
             href={`/dashboard/courses/${courseId}/study?material=${encodeURIComponent(m.id)}`}
             className="rounded-full border border-brand/45 bg-brand-blush/70 px-3 py-1.5 text-xs font-semibold text-brand hover:bg-brand-blush dark:border-brand-border/45 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand-blush/25"
           >
-            Edit
+            {readOnly ? "Open" : "Edit"}
           </Link>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onBeginRename(m)}
-            className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-          >
-            Rename
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void onDelete(m)}
-            className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
-          >
-            Delete
-          </button>
+          {!readOnly ? (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onBeginRename(m)}
+                className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void onDelete(m)}
+                className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+              >
+                Delete
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
     </li>
@@ -243,6 +249,7 @@ function PlainMaterialRow(
     selected,
     selectionDisabled,
     onToggleSelect,
+    readOnly = false,
   } = props;
 
   if (editing) {
@@ -328,24 +335,28 @@ function PlainMaterialRow(
               href={`/dashboard/courses/${courseId}/study?material=${encodeURIComponent(m.id)}`}
               className="rounded-full border border-brand/45 bg-brand-blush/70 px-3 py-1.5 text-xs font-semibold text-brand hover:bg-brand-blush dark:border-brand-border/45 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand-blush/25"
             >
-              Edit
+              {readOnly ? "Open" : "Edit"}
             </Link>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => onBeginRename(m)}
-              className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            >
-              Rename
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void onDelete(m)}
-              className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
-            >
-              Delete
-            </button>
+            {!readOnly ? (
+              <>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onBeginRename(m)}
+                  className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void onDelete(m)}
+                  className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                >
+                  Delete
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
       </li>
@@ -384,24 +395,28 @@ function PlainMaterialRow(
             href={`/dashboard/courses/${courseId}/study?material=${encodeURIComponent(m.id)}`}
             className="rounded-full border border-brand/45 bg-brand-blush/70 px-3 py-1.5 text-xs font-semibold text-brand hover:bg-brand-blush dark:border-brand-border/45 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand-blush/25"
           >
-            Edit
+            {readOnly ? "Open" : "Edit"}
           </Link>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onBeginRename(m)}
-            className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-          >
-            Rename
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void onDelete(m)}
-            className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
-          >
-            Delete
-          </button>
+          {!readOnly ? (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onBeginRename(m)}
+                className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void onDelete(m)}
+                className="rounded-full border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+              >
+                Delete
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
     </li>
@@ -426,6 +441,7 @@ function MaterialBuildsList({
   selectedIds,
   selectionDisabled,
   onToggleSelectMaterial,
+  readOnly = false,
 }: {
   courseId: string;
   materials: MaterialRow[];
@@ -444,6 +460,7 @@ function MaterialBuildsList({
   selectedIds: Set<string>;
   selectionDisabled: boolean;
   onToggleSelectMaterial: (id: string) => void;
+  readOnly?: boolean;
 }) {
   const ulClass =
     "mt-3 divide-y divide-zinc-100 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-sm dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-950";
@@ -459,7 +476,7 @@ function MaterialBuildsList({
   const rows = materials.map((m) => {
     const busy = materialBusyId === m.id || reorderBusy;
     const editing = editingMaterialId === m.id;
-    const dragDisabled = busy || editing || !sortable;
+    const dragDisabled = readOnly || busy || editing || !sortable;
     const selected = selectedIds.has(m.id);
 
     if (!sortable) {
@@ -480,6 +497,7 @@ function MaterialBuildsList({
           selected={selected}
           selectionDisabled={selectionDisabled}
           onToggleSelect={onToggleSelectMaterial}
+          readOnly={readOnly}
         />
       );
     }
@@ -503,6 +521,7 @@ function MaterialBuildsList({
           selected={selected}
           selectionDisabled={selectionDisabled}
           onToggleSelect={onToggleSelectMaterial}
+          readOnly={readOnly}
         />
       );
     }
@@ -525,6 +544,7 @@ function MaterialBuildsList({
         selected={selected}
         selectionDisabled={selectionDisabled}
         onToggleSelect={onToggleSelectMaterial}
+        readOnly={readOnly}
       />
     );
   });
@@ -568,6 +588,7 @@ export function ExamGroupsPanel({
   failedJobs = [],
   initialSectionId,
   isSelfStudy = false,
+  readOnly = false,
 }: {
   courseId: string;
   groups: ExamGroupRow[];
@@ -578,6 +599,8 @@ export function ExamGroupsPanel({
   /** Expands the per-upload goal block by default in the upload form so the
    *  learner remembers to write a fresh goal for each lecture. */
   isSelfStudy?: boolean;
+  /** View-only collaborators: hide uploads and content mutations. */
+  readOnly?: boolean;
 }) {
   const router = useRouter();
   const [dismissedJobIds, setDismissedJobIds] = useState<Set<string>>(() => new Set());
@@ -1040,6 +1063,15 @@ export function ExamGroupsPanel({
   }
 
   if (groups.length === 0) {
+    if (readOnly) {
+      return (
+        <section className="mt-12 rounded-3xl border border-zinc-200/90 bg-zinc-50/80 p-8 dark:border-zinc-800 dark:bg-zinc-950/40">
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            This course has no sections yet.
+          </p>
+        </section>
+      );
+    }
     return (
       <section className="mt-12 rounded-3xl border border-amber-200/90 bg-amber-50/80 p-8 dark:border-amber-900/60 dark:bg-amber-950/40">
         <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
@@ -1273,24 +1305,26 @@ export function ExamGroupsPanel({
           </div>
         )}
 
-        <div className="mt-8 border-t border-zinc-100 pt-8 dark:border-zinc-800">
-          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            Upload for{" "}
-            <span className="text-brand dark:text-brand-soft">
-              {groups.find((g) => g.id === activeId)?.name ?? "this section"}
-            </span>
-          </h3>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Slides or readings for this section only.
-          </p>
-          <div className="mt-6">
-            <CourseUploadForm
-              courseId={courseId}
-              examGroupId={activeId}
-              isSelfStudy={isSelfStudy}
-            />
+        {!readOnly ? (
+          <div className="mt-8 border-t border-zinc-100 pt-8 dark:border-zinc-800">
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              Upload for{" "}
+              <span className="text-brand dark:text-brand-soft">
+                {groups.find((g) => g.id === activeId)?.name ?? "this section"}
+              </span>
+            </h3>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              Slides or readings for this section only.
+            </p>
+            <div className="mt-6">
+              <CourseUploadForm
+                courseId={courseId}
+                examGroupId={activeId}
+                isSelfStudy={isSelfStudy}
+              />
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       {materialsForActive.length > 0 && (
@@ -1322,20 +1356,22 @@ export function ExamGroupsPanel({
                 , … Use checkboxes to delete several uploads at once.
               </p>
             </div>
-            <button
-              type="button"
-              disabled={
-                autoRenameBusy ||
-                reorderBusy ||
-                Boolean(materialBusyId) ||
-                Boolean(editingMaterialId) ||
-                deleteBusy
-              }
-              onClick={() => void autoRenameBuildsInGroup()}
-              className="shrink-0 rounded-full border border-zinc-300 bg-white px-4 py-2 text-xs font-semibold text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
-            >
-              {autoRenameBusy ? "Renaming…" : "Auto-rename"}
-            </button>
+            {!readOnly ? (
+              <button
+                type="button"
+                disabled={
+                  autoRenameBusy ||
+                  reorderBusy ||
+                  Boolean(materialBusyId) ||
+                  Boolean(editingMaterialId) ||
+                  deleteBusy
+                }
+                onClick={() => void autoRenameBuildsInGroup()}
+                className="shrink-0 rounded-full border border-zinc-300 bg-white px-4 py-2 text-xs font-semibold text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+              >
+                {autoRenameBusy ? "Renaming…" : "Auto-rename"}
+              </button>
+            ) : null}
           </div>
           {materialError && (
             <p className="mt-3 text-sm text-red-600 dark:text-red-400">
@@ -1395,10 +1431,11 @@ export function ExamGroupsPanel({
             cancelRenameMaterial={cancelRenameMaterial}
             beginRenameMaterial={beginRenameMaterial}
             deleteMaterial={requestDeleteMaterial}
-            showSelection={showRowSelection}
+            showSelection={readOnly ? false : showRowSelection}
             selectedIds={selectedMaterialIds}
             selectionDisabled={selectionDisabled}
             onToggleSelectMaterial={toggleSelectMaterial}
+            readOnly={readOnly}
           />
         </div>
       )}

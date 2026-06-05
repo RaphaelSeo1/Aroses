@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { canViewCourse } from "@/lib/collaboration/permissions";
 import { fetchIsDbSuperAdmin } from "@/lib/db-super-admin";
 import { hasPurchasedCourse } from "@/lib/marketplace/purchases";
 
@@ -29,6 +30,7 @@ export async function canAccessStudyMaterial(
 
   if (ce || !course) return false;
   if (course.user_id === userId) return true;
+  if (await canViewCourse(supabase, userId, row.course_id)) return true;
   if (course.is_public) return true;
   if (await hasPurchasedCourse(supabase, userId, row.course_id)) return true;
 

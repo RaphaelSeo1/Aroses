@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { PostgrestError } from "@supabase/supabase-js";
+import { hasCourseEdit } from "@/lib/collaboration/api-guards";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -70,9 +71,9 @@ export async function POST(request: Request) {
 
   // The cookie client can read public courses owned by other users (public-read
   // RLS), and the insert below runs through the service-role client which
-  // bypasses RLS — so we MUST verify ownership explicitly here, or any signed-in
-  // user could add sections to someone else's public course.
-  if (course.user_id !== user.id) {
+  // bypasses RLS — so we MUST verify edit access explicitly here.
+  const canEdit = await hasCourseEdit(supabase, user.id, b.courseId);
+  if (!canEdit) {
     return NextResponse.json({ error: "Not your course" }, { status: 403 });
   }
 

@@ -133,9 +133,12 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
 
   const adminViewingOthersCourse =
     typeof course.owner_user_id === "string" &&
-    course.owner_user_id !== user.id;
+    course.owner_user_id !== user.id &&
+    !course.viewer_role;
 
   const isSelfStudy = Boolean(course.is_self_study);
+  const readOnlyWorkspace = course.viewer_role === "viewer";
+  const isOwner = course.viewer_role === "owner" || !course.viewer_role;
 
   return (
     <>
@@ -147,6 +150,16 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
               Admin: you are editing someone else&apos;s course in the creator
               workspace. Materials and sections stay attributed to the course
               owner.
+            </p>
+          ) : null}
+
+          {readOnlyWorkspace ? (
+            <p className="mb-6 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400">
+              View only — you can study this course but cannot edit shared content.
+            </p>
+          ) : course.viewer_role === "editor" ? (
+            <p className="mb-6 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200">
+              Editor — you can edit course content.
             </p>
           ) : null}
 
@@ -163,13 +176,19 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                       courseId={course.id}
                       initialTitle={course.title}
                       accent="indigo"
+                      readOnly={!course.can_edit_content}
                     />
                   </div>
                   <p className="mt-1.5 text-sm text-zinc-500 dark:text-zinc-400">
                     Private to you · not shown on Explore
                   </p>
                 </div>
-                <ShareCourseButton courseId={course.id} accent="indigo" />
+                <ShareCourseButton
+                  courseId={course.id}
+                  accent="indigo"
+                  canManageCollaborators={Boolean(course.can_manage_collaborators)}
+                  viewerRole={course.viewer_role ?? "owner"}
+                />
               </div>
 
               {/* Note: per-upload goals replaced the course-wide "your study
@@ -229,6 +248,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                     failedJobs={failedJobs}
                     initialSectionId={sectionFromUrl ?? undefined}
                     isSelfStudy
+                    readOnly={readOnlyWorkspace}
                   />
                 </div>
               </div>
@@ -245,9 +265,14 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                     courseId={course.id}
                     initialTitle={course.title}
                     accent="brand"
+                    readOnly={!course.can_edit_content}
                   />
                 </div>
-                <ShareCourseButton courseId={course.id} />
+                <ShareCourseButton
+                  courseId={course.id}
+                  canManageCollaborators={Boolean(course.can_manage_collaborators)}
+                  viewerRole={course.viewer_role ?? "owner"}
+                />
               </div>
               {course.description ? (
                 <p className="mt-4 leading-relaxed text-zinc-600 dark:text-zinc-400">
@@ -261,7 +286,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                 modulesTotal={modulesTotal}
               />
 
-              {publishing ? (
+              {publishing && isOwner ? (
                 <CoursePublishingEntry courseId={course.id} summary={publishing} />
               ) : null}
 
@@ -272,6 +297,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                   materials={materials}
                   failedJobs={failedJobs}
                   initialSectionId={sectionFromUrl ?? undefined}
+                  readOnly={readOnlyWorkspace}
                 />
               </div>
             </>
