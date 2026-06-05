@@ -233,7 +233,7 @@ export function FriendsApp({
       <section className="rounded-3xl border border-zinc-200/90 bg-white/95 p-6 shadow-lg dark:border-zinc-800 dark:bg-zinc-950/95 sm:p-8">
         <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Add a friend</h2>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Enter their exact Aroses username (from their profile). Partial matches work if only one user fits.
+          Search by @username or display name. Pick a match from the list when it appears.
         </p>
         <form onSubmit={(e) => void sendRequest(e)} className="relative mt-4 flex flex-col gap-2 sm:flex-row">
           <div className="relative min-w-0 flex-1">
@@ -254,17 +254,20 @@ export function FriendsApp({
                     <button
                       type="button"
                       onClick={() => {
-                        if (s.username) setUsername(s.username);
+                        const pick = s.username ?? s.displayName ?? "";
+                        if (pick) setUsername(pick);
                         setSuggestions([]);
                         void sendRequest(
                           { preventDefault: () => {} } as React.FormEvent,
-                          s.username ?? undefined
+                          pick || undefined
                         );
                       }}
                       className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                     >
-                      <span className="font-medium">@{s.username}</span>
-                      {s.displayName ? (
+                      <span className="font-medium">
+                        {s.username ? `@${s.username}` : s.displayName ?? "User"}
+                      </span>
+                      {s.displayName && s.username ? (
                         <span className="truncate text-xs text-zinc-500">{s.displayName}</span>
                       ) : null}
                     </button>

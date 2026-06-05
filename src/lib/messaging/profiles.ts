@@ -1,5 +1,4 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { parseUsername } from "@/lib/onboarding";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export type ProfileLookupRow = {
@@ -24,53 +23,53 @@ export async function findExistingFriendship(
   return data;
 }
 
-async function rpcLookupExact(
+async function rpcSearchProfiles(
   client: SupabaseClient,
-  username: string
-): Promise<ProfileLookupRow | null> {
-  const { data, error } = await client.rpc("lookup_profile_by_username", {
-    p_username: username,
-  });
-  if (error || !data?.length) return null;
-  return data[0] as ProfileLookupRow;
-}
-
-async function rpcLookupPrefix(
-  client: SupabaseClient,
-  prefix: string
+  query: string
 ): Promise<ProfileLookupRow[]> {
-  const { data, error } = await client.rpc("lookup_profiles_by_username_prefix", {
-    p_prefix: prefix,
+  const { data, error } = await client.rpc("search_profiles_for_friend_add", {
+    p_query: query,
   });
-  if (error || !data?.length) return [];
+  if (error) {
+    console.error("[search_profiles_for_friend_add]", error.message);
+    return legacyUsernameSearch(client, query);
+  }
+  if (!data?.length) return legacyUsernameSearch(client, query);
   return data as ProfileLookupRow[];
 }
 
-async function withRpcFallback<T>(
+/** Fallback when migration 063 is not applied yet. */
+async function legacyUsernameSearch(
+  client: SupabaseClient,
+  query: string
+): Promise<ProfileLookupRow[]> {
+  const normalized = query.trim().toLowerCase();
+  if (normalized.length < 2) return [];
+
+  const { data: exact, error: exactErr } = await client.rpc(
+    "lookup_profile_by_username",
+    { p_username: normalized }
+  );
+  if (!exactErr && exact?.length) return exact as ProfileLookupRow[];
+
+  const { data: prefix, error: prefixErr } = await client.rpc(
+    "lookup_profiles_by_username_prefix",
+    { p_prefix: normalized }
+  );
+  if (!prefixErr && prefix?.length) return prefix as ProfileLookupRow[];
+  return [];
+}
+
+async function withRpcFallback(
   supabase: SupabaseClient,
-  fn: (client: SupabaseClient) => Promise<T>,
-  empty: T
-): Promise<T> {
+  fn: (client: SupabaseClient) => Promise<ProfileLookupRow[]>
+): Promise<ProfileLookupRow[]> {
   const primary = await fn(supabase);
-  const hasPrimary = Array.isArray(primary)
-    ? primary.length > 0
-    : primary != null;
-  if (hasPrimary) return primary;
+  if (primary.length > 0) return primary;
 
   const admin = createAdminClient();
   if (!admin) return primary;
   return fn(admin);
-}
-
-/** Exact username match for friend add. Uses session RPC (not admin-only). */
-export async function lookupProfileByUsername(
-  supabase: SupabaseClient,
-  rawUsername: string
-): Promise<ProfileLookupRow | null> {
-  const parsed = parseUsername(rawUsername.replace(/^@/, ""));
-  if (!parsed) return null;
-
-  return withRpcFallback(supabase, (client) => rpcLookupExact(client, parsed), null);
 }
 
 export type FriendUsernameResolveResult =
@@ -78,47 +77,37 @@ export type FriendUsernameResolveResult =
   | { status: "ambiguous"; suggestions: ProfileLookupRow[] }
   | { status: "not_found" };
 
-/** Exact match first; if none, accept a single prefix match. */
+function normalizeFriendQuery(raw: string): string {
+  return raw.trim().replace(/^@/, "");
+}
+
+/** Match by @username or display name (prefix or exact). */
 export async function resolveProfileForFriendAdd(
   supabase: SupabaseClient,
-  rawUsername: string
+  rawQuery: string
 ): Promise<FriendUsernameResolveResult> {
-  const parsed = parseUsername(rawUsername.replace(/^@/, ""));
-  if (!parsed) return { status: "not_found" };
+  const query = normalizeFriendQuery(rawQuery);
+  if (query.length < 2) return { status: "not_found" };
 
-  const exact = await withRpcFallback(
-    supabase,
-    (client) => rpcLookupExact(client, parsed),
-    null
+  const matches = await withRpcFallback(supabase, (client) =>
+    rpcSearchProfiles(client, query)
   );
-  if (exact) return { status: "found", profile: exact };
 
-  const prefixMatches = await withRpcFallback(
-    supabase,
-    (client) => rpcLookupPrefix(client, parsed),
-    []
-  );
-  if (prefixMatches.length === 1) {
-    return { status: "found", profile: prefixMatches[0]! };
-  }
-  if (prefixMatches.length > 1) {
-    return { status: "ambiguous", suggestions: prefixMatches };
+  if (matches.length === 1) return { status: "found", profile: matches[0]! };
+  if (matches.length > 1) {
+    return { status: "ambiguous", suggestions: matches };
   }
   return { status: "not_found" };
 }
 
-export async function searchProfilesByUsernamePrefix(
+export async function searchProfilesForFriendAdd(
   supabase: SupabaseClient,
-  rawPrefix: string
+  rawQuery: string
 ): Promise<ProfileLookupRow[]> {
-  const parsed = parseUsername(rawPrefix.replace(/^@/, ""));
-  if (!parsed || parsed.length < 2) return [];
+  const query = normalizeFriendQuery(rawQuery);
+  if (query.length < 2) return [];
 
-  return withRpcFallback(
-    supabase,
-    (client) => rpcLookupPrefix(client, parsed),
-    []
-  );
+  return withRpcFallback(supabase, (client) => rpcSearchProfiles(client, query));
 }
 
 export async function enrichProfiles(

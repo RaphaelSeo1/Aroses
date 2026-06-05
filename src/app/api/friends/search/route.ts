@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
-import { searchProfilesByUsernamePrefix } from "@/lib/messaging/profiles";
-import { parseUsername } from "@/lib/onboarding";
+import { searchProfilesForFriendAdd } from "@/lib/messaging/profiles";
 import { createClient } from "@/lib/supabase/server";
 
-/** GET — username prefix suggestions while adding a friend. */
+/** GET — suggestions while adding a friend (@username or display name). */
 export async function GET(request: Request) {
   const supabase = await createClient();
   const {
@@ -12,13 +11,12 @@ export async function GET(request: Request) {
   if (!user) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
 
   const url = new URL(request.url);
-  const raw = url.searchParams.get("u") ?? "";
-  const parsed = parseUsername(raw.replace(/^@/, ""));
-  if (!parsed || parsed.length < 2) {
+  const query = (url.searchParams.get("u") ?? "").trim().replace(/^@/, "");
+  if (query.length < 2) {
     return NextResponse.json({ suggestions: [] });
   }
 
-  const rows = await searchProfilesByUsernamePrefix(supabase, parsed);
+  const rows = await searchProfilesForFriendAdd(supabase, query);
   const suggestions = rows
     .filter((p) => p.id !== user.id)
     .map((p) => ({

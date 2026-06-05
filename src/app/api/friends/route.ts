@@ -5,7 +5,6 @@ import {
   resolveProfileForFriendAdd,
 } from "@/lib/messaging/profiles";
 import type { FriendshipListItem, FriendProfile } from "@/lib/messaging/types";
-import { parseUsername } from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
@@ -101,27 +100,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON." }, { status: 400 });
   }
 
-  const username =
+  const query =
     typeof (body as { username?: unknown }).username === "string"
       ? (body as { username: string }).username.trim().replace(/^@/, "")
       : "";
 
-  const parsed = parseUsername(username);
-  if (!parsed) {
+  if (query.length < 2) {
     return NextResponse.json(
-      {
-        error:
-          "Enter a valid username — 3–30 characters, letters, numbers, and underscores only.",
-      },
+      { error: "Enter at least 2 characters to search." },
       { status: 400 }
     );
   }
 
-  const resolved = await resolveProfileForFriendAdd(supabase, parsed);
+  const resolved = await resolveProfileForFriendAdd(supabase, query);
   if (resolved.status === "ambiguous") {
     return NextResponse.json(
       {
-        error: "Several users match that search. Use the full username.",
+        error: "Several people match — pick one from the list or use their full @username.",
         suggestions: resolved.suggestions.map((p) => ({
           id: p.id,
           username: p.username,
@@ -134,7 +129,8 @@ export async function POST(request: Request) {
   if (resolved.status === "not_found") {
     return NextResponse.json(
       {
-        error: `No user @${parsed} found. Check their profile for the exact username.`,
+        error:
+          "No one matched that search. They need an @username on their profile (Profile → General), or try their display name.",
       },
       { status: 404 }
     );
