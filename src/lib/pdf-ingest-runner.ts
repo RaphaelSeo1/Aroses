@@ -42,8 +42,21 @@ import {
   structurePlanToOutline,
   type PdfIngestStreamSink,
 } from "@/lib/ai/study-generation";
+import {
+  courseContentLocaleToOutputLanguage,
+  computeContentSourceKey,
+  resolveCanonicalAndDisplayLocales,
+} from "@/lib/course-canonical";
 import type { CourseOutputLanguage } from "@/lib/course-output-language";
+import { DEFAULT_COURSE_OUTPUT_LANGUAGE } from "@/lib/course-output-language";
 import { loadCourseGenerationContext } from "@/lib/load-course-generation-context";
+import {
+  buildLocalizedCourseMaterial,
+  coursePayloadToOutline,
+  displayPayloadFromExistingCanonical,
+  type LocalizedCourseMaterial,
+} from "@/lib/localize-course-payload";
+import { findSiblingCanonicalMaterial } from "@/lib/study-material-canonical";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
@@ -379,6 +392,11 @@ async function finalizePdfIngest(
     ingestMedia?: Record<string, unknown> | null;
     sourceImages?: IngestSourceImageRecord[];
     sourceIndex?: SourceIndex | null;
+    /** Pre-built canonical + display payloads (sibling reuse fast path). */
+    localized?: LocalizedCourseMaterial;
+    /** Required for canonical → translate when `localized` is omitted. */
+    sourceText?: string;
+    outputLanguage?: CourseOutputLanguage;
   }
 ): Promise<{ materialId: string } | null> {
   // Idempotency guard: if a concurrent expand call (e.g. from a page refresh)
@@ -418,11 +436,28 @@ async function finalizePdfIngest(
         )
       : embedResult.modules;
 
-  const payload: CoursePayload = {
-    title: outline.title,
-    description: outline.description,
-    modules,
-  };
+  let localizedMaterial = options?.localized;
+  if (
+    !localizedMaterial &&
+    typeof options?.sourceText === "string" &&
+    options.sourceText.trim().length > 0
+  ) {
+    localizedMaterial = await buildLocalizedCourseMaterial(
+      outline,
+      modules,
+      options.sourceText,
+      originalFileName,
+      options.outputLanguage ?? DEFAULT_COURSE_OUTPUT_LANGUAGE
+    );
+  }
+
+  const payload: CoursePayload = localizedMaterial
+    ? localizedMaterial.display
+    : {
+        title: outline.title,
+        description: outline.description,
+        modules,
+      };
 
   const { data: courseOwnerRow, error: ownerErr } = await admin
     .from("courses")
@@ -490,6 +525,12 @@ async function finalizePdfIngest(
     course_payload: payload,
     sort_order: nextSortOrder,
   };
+  if (localizedMaterial) {
+    materialInsert.canonical_payload = localizedMaterial.canonical;
+    materialInsert.base_locale = localizedMaterial.baseLocale;
+    materialInsert.display_locale = localizedMaterial.displayLocale;
+    materialInsert.content_source_key = localizedMaterial.contentSourceKey;
+  }
   if (options?.ingestMedia) {
     materialInsert.ingest_media = options.ingestMedia;
   }
@@ -570,6 +611,37 @@ async function finalizePdfIngest(
     const retry = await admin
       .from("study_materials")
       .insert(minimalInsert as never)
+      .select("id")
+      .single();
+    row = retry.data;
+    insErr = retry.error;
+  }
+
+  if (
+    insErr &&
+    localizedMaterial &&
+    isMissingDbColumnError(
+      insErr,
+      "canonical_payload",
+      "base_locale",
+      "display_locale",
+      "content_source_key"
+    )
+  ) {
+    const {
+      canonical_payload: _c,
+      base_locale: _b,
+      display_locale: _d,
+      content_source_key: _k,
+      ...withoutCanonical
+    } = materialInsert;
+    void _c;
+    void _b;
+    void _d;
+    void _k;
+    const retry = await admin
+      .from("study_materials")
+      .insert(withoutCanonical as never)
       .select("id")
       .single();
     row = retry.data;
@@ -671,7 +743,18 @@ export async function runPdfIngestExpandOne(
         job.id,
         typeof job.course_id === "string" ? job.course_id : null
       )
-    : { studyContext: null, outputLanguage: "auto" as const };
+    : { studyContext: null, outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE };
+
+  const sourceTextForLocale =
+    typeof job?.ingest_source_text === "string" ? job.ingest_source_text : "";
+  const { canonicalLocale: expandCanonicalLocale } =
+    resolveCanonicalAndDisplayLocales(
+      expandGenerationContext.outputLanguage,
+      sourceTextForLocale
+    );
+  const generationLanguage = courseContentLocaleToOutputLanguage(
+    expandCanonicalLocale
+  );
 
   // STRUCTURE_PLANNING: per-module source text assembled from each module's
   // lessons' chunk ids. Separate defensive query so DBs without migration 045
@@ -781,7 +864,14 @@ export async function runPdfIngestExpandOne(
       job.original_file_name,
       outline,
       prefix,
-      { retainStorage, ingestMedia, sourceImages, sourceIndex }
+      {
+        retainStorage,
+        ingestMedia,
+        sourceImages,
+        sourceIndex,
+        sourceText: sourceTextForLocale,
+        outputLanguage: expandGenerationContext.outputLanguage,
+      }
     );
     if (!fin) {
       return { kind: "failed", message: "Could not save study material." };
@@ -893,7 +983,7 @@ export async function runPdfIngestExpandOne(
               moduleIndex,
               offset === 0 ? createPdfStreamSink(admin, jobId) : undefined,
               expandGenerationContext.studyContext ?? undefined,
-              expandGenerationContext.outputLanguage
+              generationLanguage
             );
           },
           // 6 attempts × 90 s exp-backoff cap = ~126 s worst-case retry +
@@ -976,7 +1066,14 @@ export async function runPdfIngestExpandOne(
       job.original_file_name,
       outline,
       cappedNext,
-      { retainStorage, ingestMedia, sourceImages, sourceIndex }
+      {
+        retainStorage,
+        ingestMedia,
+        sourceImages,
+        sourceIndex,
+        sourceText: sourceTextForLocale,
+        outputLanguage: expandGenerationContext.outputLanguage,
+      }
     );
     if (!fin) {
       return { kind: "failed", message: "Could not save study material." };
@@ -1158,7 +1255,7 @@ export async function runPdfIngestJob(
         claimed.id,
         typeof claimed.course_id === "string" ? claimed.course_id : null
       )
-    : { studyContext: null, outputLanguage: "auto" as const };
+    : { studyContext: null, outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE };
 
   if (claimErr) {
     console.error("[pdf-ingest] claim", jobId, claimErr);
@@ -1309,6 +1406,57 @@ export async function runPdfIngestJob(
 
   const sourceTextForOutline = previewResult.text;
 
+  const contentSourceKey = computeContentSourceKey(
+    sourceTextForOutline,
+    claimed.original_file_name
+  );
+  const sibling = await findSiblingCanonicalMaterial(
+    admin,
+    claimed.course_id,
+    contentSourceKey
+  );
+  if (sibling) {
+    try {
+      const localized = await displayPayloadFromExistingCanonical(
+        sibling.canonical_payload,
+        sibling.base_locale,
+        generationContext.outputLanguage,
+        sourceTextForOutline,
+        claimed.original_file_name
+      );
+      const outline = coursePayloadToOutline(localized.canonical);
+      const finished = await finalizePdfIngest(
+        admin,
+        jobId,
+        claimed.course_id,
+        claimed.exam_group_id,
+        cleanupPaths,
+        claimed.original_file_name,
+        outline,
+        localized.canonical.modules,
+        {
+          localized,
+          retainStorage: previewResult.retainStorage,
+          ingestMedia: previewResult.ingestMedia,
+        }
+      );
+      if (finished) {
+        console.info("[pdf-ingest] reused sibling canonical", {
+          jobId,
+          siblingMaterialId: sibling.id,
+          displayLocale: localized.displayLocale,
+        });
+        return;
+      }
+    } catch (e) {
+      console.warn(
+        "[pdf-ingest] sibling canonical reuse failed; running full build",
+        jobId,
+        e
+      );
+    }
+  }
+
   // Audio/video: pause for transcript review before outline generation.
   if (previewResult.ingestMedia) {
     if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) return;
@@ -1445,7 +1593,7 @@ async function runPdfIngestOutlinePhase(
     cleanupPaths,
     sourceTextForOutline,
     courseStudyContext,
-    outputLanguage,
+    outputLanguage: uploadOutputLanguage,
     chunks,
     sourceImages: sourceImagesInput = [],
     sourceFiles = null,
@@ -1454,6 +1602,13 @@ async function runPdfIngestOutlinePhase(
     driveModules,
     t0,
   } = input;
+
+  const { canonicalLocale } = resolveCanonicalAndDisplayLocales(
+    uploadOutputLanguage,
+    sourceTextForOutline
+  );
+  const generationLanguage =
+    courseContentLocaleToOutputLanguage(canonicalLocale);
 
   const storedMaterial = materialTextForPdfIngest(sourceTextForOutline);
 
@@ -1555,7 +1710,7 @@ async function runPdfIngestOutlinePhase(
             summarizeChunksForPlanner(chunks),
             streamSink,
             courseStudyContext ?? undefined,
-            outputLanguage
+            generationLanguage
           ),
         { maxAttempts: 14 }
       );
@@ -1594,7 +1749,7 @@ async function runPdfIngestOutlinePhase(
             sourceTextForOutline,
             streamSink,
             courseStudyContext ?? undefined,
-            outputLanguage
+            generationLanguage
           ),
         { maxAttempts: 14 }
       );

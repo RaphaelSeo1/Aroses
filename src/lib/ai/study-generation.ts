@@ -7,16 +7,23 @@ import {
 import {
   type CourseOutlinePayload,
   type CourseStructurePlan,
+  parseCourseStructurePlan,
   parseCourseModule,
   parseCourseOutlinePayload,
   parseCoursePayload,
-  parseCourseStructurePlan,
   stripJsonFence,
 } from "@/lib/ai/course-payload";
 import type {
   IngestChunk,
   IngestChunkSummary,
 } from "@/lib/study-ingest/chunking";
+import {
+  buildDeterministicStructurePlan,
+  structurePlanCoveragePromptBlock,
+  structurePlanTargets,
+  validateStructurePlanCoverage,
+  type StructurePlanTargets,
+} from "@/lib/structure-plan-coverage";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
 import {
   DEFAULT_COURSE_OUTPUT_LANGUAGE,
@@ -373,7 +380,7 @@ function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
     return `${core} The excerpt below may omit the document middle for speed—use headings/numbering in the head and tail to infer later topics. Modules and lesson_titles together should still **map** the full arc of the course; full lessons use a longer excerpt later.`;
   }
   if (mode === "module") {
-    return `${core} Output **exactly one full lesson per planned lesson title** below, in the **same order** and **same count**. Do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material.`;
+    return `${core} Output **exactly one full lesson per planned lesson title** below, in the **same order** and **same count**. Do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material. Teach what the source covers for that slice — neither pad with outside topics nor skip assigned content.`;
   }
   return `${core} Across the full course JSON, every substantive part of the source should appear in some lesson; do not only cover the introduction.`;
 }
@@ -407,7 +414,7 @@ QUIZ (critical): Each module needs a rich practice set — **at least ${quizTarg
     quizFooter =
       `Include many quiz objects per module (minimum ${quizTarget} total per module, including ≥${frMin} free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.`;
   } else if (profile === "express") {
-    sizeRules = `Rules for output size (critical for speed): use **2 or 3** modules only. At most **3 lessons per module**. Each lesson "content" must be **under 400 words** — concise teaching, not a textbook.
+    sizeRules = `Rules for output size (critical for speed): use **2 or 3** modules only. At most **3 lessons per module**. Each lesson "content" must be **under 500 words** — clear and complete for its planned scope, not a textbook.
 
 QUIZ (critical): Each module needs **at least ${quizTarget} questions**, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ with exactly 4 choices.`;
     quizFooter =
@@ -913,7 +920,7 @@ function moduleInstruction(
   const titles = stub.lesson_titles.map((t) => JSON.stringify(t)).join(", ");
   const styleRule =
     profile === "express"
-      ? `STYLE (express): Short, high-signal lessons (**under ~400 words** each). Clarity beats length.`
+      ? `STYLE (express): Focused lessons (**under ~500 words** each). Cover every planned topic from the source — do not skip subtopics assigned to this module.`
       : profile === "fast"
         ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
         : profile === "balanced"
@@ -1118,12 +1125,18 @@ async function ensureModuleLessonFields(
 
 function structurePlanInstruction(
   chunkSummaries: IngestChunkSummary[],
+  targets: StructurePlanTargets,
   studyContext?: string,
-  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE,
+  replanReason?: string
 ): string {
   const chunkJson = JSON.stringify(chunkSummaries, null, 0);
+  const replanBlock =
+    replanReason && replanReason.trim().length > 0
+      ? `\nPREVIOUS PLAN REJECTED (fix this):\n${replanReason.trim()}\n`
+      : "";
   return `You are an expert course architect. You are given a list of CONTENT CHUNKS extracted from one or more uploaded files. Group them into a coherent course structure based on the CONTENT, not on which file they came from.
-
+${replanBlock}
 CRITICAL GROUPING RULES:
 - File boundaries do NOT equal lesson boundaries.
 - A single lesson MAY span multiple files (e.g. "Lecture 3 Part 1", "Part 2", "Part 3" almost certainly belong to the same lesson or module).
@@ -1131,7 +1144,9 @@ CRITICAL GROUPING RULES:
 - Some files/chunks may be SUPPLEMENTARY to a lesson (examples, appendices, problem sets) rather than their own lesson — attach them to the most relevant lesson instead of giving them a standalone lesson.
 - Decide grouping using: chunk titles/headings, topic continuity, chunk length (approxChars), and filename patterns (e.g. "Part 1/2/3", "Week N", "Chapter N").
 ${generationContextSuffix(studyContext, outputLanguage)}
-Every chunk id that carries real teaching content should be referenced by exactly one lesson via source_chunk_ids (a chunk may be referenced by more than one lesson only if genuinely shared). Do not invent chunk ids that are not in the list.
+${structurePlanCoveragePromptBlock(targets)}
+
+Do not invent chunk ids that are not in the list.
 
 ${titleStyleRules()}
 
@@ -1192,7 +1207,7 @@ ${brokenAssistantText.slice(0, 60_000)}`;
 
 function planMaxTokens(profile: CourseBuildProfile): number {
   if (profile === "express") {
-    return clampInt(envInt("COURSE_PLAN_MAX_TOKENS", 3072), 1024, 6144);
+    return clampInt(envInt("COURSE_PLAN_MAX_TOKENS", 4096), 2048, 6144);
   }
   if (profile === "fast" || profile === "balanced") {
     return clampInt(envInt("COURSE_PLAN_MAX_TOKENS", 5120), 2048, 10_240);
@@ -1227,38 +1242,75 @@ export async function planCourseStructureFromChunks(
     maxRetries: 0,
   });
 
-  const instruction = structurePlanInstruction(
-    chunkSummaries,
-    studyContext,
-    outputLanguage
-  );
-  const maxAttempts = profile === "express" || profile === "fast" ? 1 : 2;
+  const targets = structurePlanTargets(chunkSummaries.length, profile);
+  const planAttempts =
+    profile === "express" || profile === "fast" ? 2 : 3;
+  let lastCoverageError: string | null = null;
 
-  const rawText = await invokeUserMessageForPdfText(
-    anthropic,
-    {
-      model: resolveOutlineModel(profile),
-      max_tokens: planMaxTokens(profile),
-      temperature: 0.15,
-      messages: [{ role: "user", content: instruction }],
-    },
-    streamSink,
-    maxAttempts,
-    OUTLINE_BUDGET_WAIT_MS
-  );
+  for (let attempt = 0; attempt < planAttempts; attempt++) {
+    const instruction = structurePlanInstruction(
+      chunkSummaries,
+      targets,
+      studyContext,
+      outputLanguage,
+      attempt > 0 ? (lastCoverageError ?? undefined) : undefined
+    );
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonFence(rawText));
-  } catch {
-    return repairStructurePlanJson(anthropic, rawText, profile);
+    const rawText = await invokeUserMessageForPdfText(
+      anthropic,
+      {
+        model: resolveOutlineModel(profile),
+        max_tokens: planMaxTokens(profile),
+        temperature: attempt === 0 ? 0.12 : 0.08,
+        messages: [{ role: "user", content: instruction }],
+      },
+      streamSink,
+      1,
+      OUTLINE_BUDGET_WAIT_MS
+    );
+
+    let plan: CourseStructurePlan;
+    try {
+      const parsed: unknown = JSON.parse(stripJsonFence(rawText));
+      plan = parseCourseStructurePlan(parsed);
+    } catch {
+      try {
+        plan = await repairStructurePlanJson(anthropic, rawText, profile);
+      } catch (e) {
+        console.warn("[study-generation] plan parse/repair failed", e);
+        lastCoverageError = "Response was not valid JSON for a structure plan.";
+        continue;
+      }
+    }
+
+    const coverageError = validateStructurePlanCoverage(
+      plan,
+      chunkSummaries,
+      targets
+    );
+    if (!coverageError) {
+      if (attempt > 0) {
+        console.info("[study-generation] structure plan ok after replan", {
+          attempt: attempt + 1,
+          lessons: plan.modules.reduce((n, m) => n + m.lessons.length, 0),
+          modules: plan.modules.length,
+        });
+      }
+      return plan;
+    }
+
+    lastCoverageError = coverageError;
+    console.warn("[study-generation] structure plan coverage rejected", {
+      attempt: attempt + 1,
+      reason: coverageError,
+    });
   }
-  try {
-    return parseCourseStructurePlan(parsed);
-  } catch (e) {
-    console.warn("[study-generation] plan validation failed; repairing", e);
-    return repairStructurePlanJson(anthropic, rawText, profile);
-  }
+
+  console.warn(
+    "[study-generation] using deterministic structure plan (full chunk coverage)",
+    { chunks: chunkSummaries.length, lastError: lastCoverageError }
+  );
+  return buildDeterministicStructurePlan(chunkSummaries, profile);
 }
 
 /** Convert a structure plan into the existing outline shape (expand/finalize unchanged). */
