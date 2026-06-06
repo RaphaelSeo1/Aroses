@@ -6,6 +6,7 @@ import {
   type CourseLearningSummary,
   type GlobalLearningTotals,
 } from "@/lib/learning-stats";
+import { loadDismissedStudyCourseIds } from "@/lib/study-course-dismiss";
 import type { CourseMode } from "@/types/mentored";
 
 export type DashboardProgressPayload = {
@@ -73,6 +74,11 @@ export async function loadDashboardProgress(
   supabase: SupabaseClient,
   ownerUserId: string
 ): Promise<DashboardProgressPayload> {
+  const dismissedCourseIds = await loadDismissedStudyCourseIds(
+    supabase,
+    ownerUserId
+  );
+
   const primary = await supabase
     .from("courses")
     .select("id, title, description, created_at, sort_order, is_public")
@@ -205,7 +211,9 @@ export async function loadDashboardProgress(
     );
   }
 
-  const courses = [...ownedCourses, ...learnerCourses];
+  const courses = [...ownedCourses, ...learnerCourses].filter(
+    (c) => !dismissedCourseIds.has(c.id)
+  );
 
   const since = new Date();
   since.setDate(since.getDate() - 20);
@@ -414,10 +422,12 @@ export async function loadDashboardProgress(
     summaryByCourseId.set(s.courseId, s);
   }
 
-  const sortedRecent = [...recentPracticeByCourse.values()].sort(
-    (a, b) =>
-      new Date(b.answeredAt).getTime() - new Date(a.answeredAt).getTime()
-  );
+  const sortedRecent = [...recentPracticeByCourse.values()]
+    .filter((r) => !dismissedCourseIds.has(r.courseId))
+    .sort(
+      (a, b) =>
+        new Date(b.answeredAt).getTime() - new Date(a.answeredAt).getTime()
+    );
 
   // Per-(user, material) "lastUsedMode" — drives where the home page
   // "Open" / "Jump back in" links send the student. New rows default to
@@ -529,14 +539,7 @@ export async function loadDashboardProgress(
     14
   );
 
-  const hasCourses =
-    recentProgressRows.length > 0 ||
-    summaries.some(
-      (s) =>
-        s.uploadsCount > 0 ||
-        s.quizAttempts > 0 ||
-        s.modulesCompleted > 0
-    );
+  const hasCourses = summaries.length > 0 || recentPractice.length > 0;
 
   return {
     hasCourses,

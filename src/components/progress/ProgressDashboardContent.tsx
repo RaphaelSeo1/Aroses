@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { APP_NAME } from "@/lib/brand";
 import { ActivityRhythm } from "@/components/progress/ActivityRhythm";
-import { CourseLearningCard } from "@/components/progress/CourseLearningCard";
+import { ProgressCourseList } from "@/components/progress/ProgressCourseList";
 import { ProgressRings } from "@/components/progress/ProgressRings";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
 
@@ -194,16 +194,11 @@ export function ProgressDashboardContent({
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 {summaries.length} {summaries.length === 1 ? "course" : "courses"} ·
-                tiles follow module checkpoints
+                use <span className="font-semibold text-zinc-700 dark:text-zinc-300">Remove</span>{" "}
+                to hide a course from Continue studying
               </p>
             </div>
-            <ul className="mt-5 grid gap-4 md:grid-cols-2">
-              {summaries.map((c) => (
-                <li key={c.courseId} className="flex">
-                  <CourseLearningCard course={c} />
-                </li>
-              ))}
-            </ul>
+            <ProgressCourseList courses={summaries} />
           </section>
 
           <p className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 border-t border-zinc-100 pt-8 text-center dark:border-zinc-800">

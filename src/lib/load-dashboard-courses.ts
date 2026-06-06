@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { DashboardCourse } from "@/components/CourseDashboardList";
+import { loadDismissedStudyCourseIds } from "@/lib/study-course-dismiss";
 
 export type StudyingCourse = {
   id: string;
@@ -93,6 +94,7 @@ export async function loadDashboardCourseLists(
     }));
 
   const ownedIds = new Set(owned.map((c) => c.id));
+  const dismissedCourseIds = await loadDismissedStudyCourseIds(supabase, userId);
 
   const { data: ownedMaterialsRaw } =
     ownedIds.size > 0
@@ -148,7 +150,7 @@ export async function loadDashboardCourseLists(
         .in("id", [...foreignCourseIds]);
 
       studying = (foreignRows ?? [])
-        .filter((r) => !ownedIds.has(r.id))
+        .filter((r) => !ownedIds.has(r.id) && !dismissedCourseIds.has(r.id))
         .map((r) => ({
           id: r.id,
           title: r.title,

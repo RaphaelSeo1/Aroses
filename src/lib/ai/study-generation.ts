@@ -17,6 +17,7 @@ import type {
   IngestChunk,
   IngestChunkSummary,
 } from "@/lib/study-ingest/chunking";
+import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 import type { CourseModule, CoursePayload } from "@/types/course";
@@ -48,6 +49,89 @@ function envInt(name: string, fallback: number): number {
   if (!raw) return fallback;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** Target quiz bank size per module after generation (includes post-parse backfill). */
+export function moduleQuizTarget(profile: CourseBuildProfile): number {
+  if (profile === "full") {
+    return clampInt(envInt("COURSE_FULL_QUIZ_MIN", 12), 4, 24);
+  }
+  if (profile === "express") {
+    return clampInt(envInt("COURSE_EXPRESS_QUIZ_MIN", 10), 3, 16);
+  }
+  if (profile === "fast") {
+    return clampInt(envInt("COURSE_FAST_QUIZ_MIN", 10), 3, 16);
+  }
+  if (profile === "balanced") {
+    return clampInt(envInt("COURSE_BALANCED_QUIZ_MIN", 10), 3, 16);
+  }
+  const _never: never = profile;
+  return _never;
+}
+
+function moduleFreeResponseMin(
+  profile: CourseBuildProfile,
+  target: number
+): number {
+  if (profile === "full") {
+    return clampInt(
+      envInt("COURSE_FULL_FREE_RESPONSE_MIN", Math.max(4, Math.floor(target / 2))),
+      1,
+      target
+    );
+  }
+  return clampInt(
+    envInt("COURSE_FREE_RESPONSE_MIN", Math.max(2, Math.floor(target / 3))),
+    1,
+    target
+  );
+}
+
+async function ensureModuleQuizCount(
+  module: CourseModule,
+  profile: CourseBuildProfile
+): Promise<CourseModule> {
+  const target = moduleQuizTarget(profile);
+  let quiz = [...module.quiz];
+  if (quiz.length >= target) return module;
+
+  console.info(
+    `[study-generation] module ${module.id} quiz backfill: ${quiz.length} → target ${target}`
+  );
+
+  const maxRounds = 3;
+  for (let round = 0; round < maxRounds && quiz.length < target; round++) {
+    const need = target - quiz.length;
+    const batch = Math.min(16, Math.max(6, need + 4));
+    try {
+      const added = await generateAdditionalModuleQuizItems(
+        { ...module, quiz },
+        batch
+      );
+      if (added.length === 0) break;
+
+      const seen = new Set(quiz.map((q) => q.question.trim().toLowerCase()));
+      const novel = added.filter((q) => {
+        const key = q.question.trim().toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (novel.length === 0) break;
+      quiz = [...quiz, ...novel];
+    } catch (e) {
+      console.warn("[study-generation] quiz backfill round failed", e);
+      break;
+    }
+  }
+
+  if (quiz.length < target) {
+    console.warn(
+      `[study-generation] module ${module.id} quiz backfill incomplete: ${quiz.length}/${target}`
+    );
+  }
+
+  return { ...module, quiz };
 }
 
 function clampInt(n: number, min: number, max: number): number {
@@ -303,31 +387,34 @@ function courseInstruction(
   let sizeRules: string;
   let quizFooter: string;
 
+  const quizTarget = moduleQuizTarget(profile);
+  const frMin = moduleFreeResponseMin(profile, quizTarget);
+
   if (profile === "full") {
     sizeRules = `Rules for output size (important): use at least 2 modules and at most 8 unless the source is extremely short. Keep each lesson "content" thorough but under roughly 1000 words so the full answer fits in one response. Every module must include at least one lesson.
 
-QUIZ (critical): Each module needs a rich practice set — **at least 8 questions per module**, with **at least 4 items** whose type is free_response (short written answer). The rest should be mcq. Aim for roughly half MCQ and half free-response overall. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, several sentences of rubric — key ideas and acceptable points).`;
+QUIZ (critical): Each module needs a rich practice set — **at least ${quizTarget} questions per module**, with **at least ${frMin} items** whose type is free_response (short written answer). The rest should be mcq. Aim for roughly half MCQ and half free-response overall. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, several sentences of rubric — key ideas and acceptable points).`;
     quizFooter =
-      "Include many quiz objects per module (minimum 8 total per module, including ≥4 free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+      `Include many quiz objects per module (minimum ${quizTarget} total per module, including ≥${frMin} free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.`;
   } else if (profile === "express") {
     sizeRules = `Rules for output size (critical for speed): use **2 or 3** modules only. At most **3 lessons per module**. Each lesson "content" must be **under 400 words** — concise teaching, not a textbook.
 
-QUIZ (critical): Each module needs **at least 3 questions**, with **at least 1** type free_response (reference_answer required). The rest MCQ with exactly 4 choices.`;
+QUIZ (critical): Each module needs **at least ${quizTarget} questions**, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ with exactly 4 choices.`;
     quizFooter =
-      "Meet the minimums above (≥3 quiz items per module, including ≥1 free_response). Only return valid JSON. No markdown fences, no extra text. Base everything on the uploaded material.";
+      `Meet the minimums above (≥${quizTarget} quiz items per module, including ≥${frMin} free_response). Only return valid JSON. No markdown fences, no extra text. Base everything on the uploaded material.`;
   } else if (profile === "fast") {
     sizeRules = `Rules for output size (important): use at least 2 modules and at most 4 unless the source is extremely short. Keep each lesson "content" clear and instructive but under roughly 500 words. Every module must include at least one lesson.
 
-QUIZ (critical): Each module needs a practical practice set — **at least 4 questions per module**, with **at least 1 item** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
+QUIZ (critical): Each module needs a practical practice set — **at least ${quizTarget} questions per module**, with **at least ${frMin} items** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
     quizFooter =
-      "Include enough quiz objects per module to meet the minimums above. Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+      `Include enough quiz objects per module to meet the minimums above (≥${quizTarget} total, ≥${frMin} free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.`;
   } else if (profile === "balanced") {
     const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 6);
     sizeRules = `Rules for output size (important): use at least 2 modules and at most ${maxBalMods} unless the source is extremely short. Keep each lesson "content" clear; aim under roughly 500 words per lesson. Every module must include at least one lesson.
 
-QUIZ (critical): Each module needs **at least 4 questions per module**, with **at least 1** type free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
+QUIZ (critical): Each module needs **at least ${quizTarget} questions per module**, with **at least ${frMin}** type free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
     quizFooter =
-      "Include enough quiz objects per module to meet the minimums above. Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.";
+      `Include enough quiz objects per module to meet the minimums above (≥${quizTarget} total, ≥${frMin} free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.`;
   } else {
     const _bad: never = profile;
     throw new Error(`Unhandled course build profile: ${String(_bad)}`);
@@ -650,7 +737,11 @@ export async function generateCourseFromMaterial(
     parsed = JSON.parse(stripJsonFence(rawText));
   } catch {
     try {
-      return await repairPayloadJson(anthropic, rawText, profile);
+      const repaired = await repairPayloadJson(anthropic, rawText, profile);
+      const modules = await Promise.all(
+        repaired.modules.map((m) => ensureModuleQuizCount(m, profile))
+      );
+      return { ...repaired, modules };
     } catch (e) {
       console.error(e);
       throw new Error("Claude did not return valid JSON");
@@ -658,11 +749,19 @@ export async function generateCourseFromMaterial(
   }
 
   try {
-    return parseCoursePayload(parsed);
+    const payload = parseCoursePayload(parsed);
+    const modules = await Promise.all(
+      payload.modules.map((m) => ensureModuleQuizCount(m, profile))
+    );
+    return { ...payload, modules };
   } catch (e) {
     console.warn("[study-generation] Payload validation failed; repairing", e);
     try {
-      return await repairPayloadJson(anthropic, rawText, profile);
+      const repaired = await repairPayloadJson(anthropic, rawText, profile);
+      const modules = await Promise.all(
+        repaired.modules.map((m) => ensureModuleQuizCount(m, profile))
+      );
+      return { ...repaired, modules };
     } catch {
       throw e;
     }
@@ -754,22 +853,9 @@ Repetition rule: across the whole outline, no two modules (or two lesson titles)
 }
 
 function moduleQuizRules(profile: CourseBuildProfile): string {
-  if (profile === "full") {
-    return `QUIZ (this module only): **at least 8** questions, with **at least 4** type free_response (include reference_answer snake_case). The rest MCQ with exactly 4 choices each.`;
-  }
-  if (profile === "express") {
-    return `QUIZ (this module only): **at least 3** questions — **at least 1** type free_response (reference_answer required). The rest MCQ with exactly 4 choices each.`;
-  }
-  if (profile === "fast") {
-    const quizMin = clampInt(envInt("COURSE_FAST_QUIZ_MIN", 4), 1, 12);
-    const frMin = clampInt(envInt("COURSE_FAST_FREE_RESPONSE_MIN", 1), 0, quizMin);
-    return `QUIZ (this module only): **at least ${quizMin}** questions, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ, 4 choices each.`;
-  }
-  if (profile === "balanced") {
-    return `QUIZ (this module only): **at least 4** questions, with **at least 1** type free_response (reference_answer required). The rest MCQ with exactly 4 choices each.`;
-  }
-  const _never: never = profile;
-  return _never;
+  const target = moduleQuizTarget(profile);
+  const frMin = moduleFreeResponseMin(profile, target);
+  return `QUIZ (this module only): **at least ${target}** questions, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ with exactly 4 choices each.`;
 }
 
 function moduleInstruction(
@@ -1299,7 +1385,7 @@ export async function generateCourseModuleFromMaterial(
   } catch {
     let repaired = await repairModuleJson(anthropic, rawText, profile);
     repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
-    return repaired;
+    return ensureModuleQuizCount(repaired, profile);
   }
 
   try {
@@ -1309,11 +1395,12 @@ export async function generateCourseModuleFromMaterial(
     const expectedId = outline.modules[moduleIndex].id;
     const normalized = courseMod.id !== expectedId ? { ...courseMod, id: expectedId } : courseMod;
 
-    return await ensureModuleLessonFields(anthropic, normalized, profile);
+    const withLessons = await ensureModuleLessonFields(anthropic, normalized, profile);
+    return ensureModuleQuizCount(withLessons, profile);
   } catch (e) {
     console.warn("[study-generation] module validation failed; repairing", e);
     let repaired = await repairModuleJson(anthropic, rawText, profile);
     repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
-    return repaired;
+    return ensureModuleQuizCount(repaired, profile);
   }
 }

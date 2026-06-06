@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useDismissStudyCourse } from "@/components/progress/useDismissStudyCourse";
 import { buildResumeCourseHref } from "@/lib/dashboard/resume-course-href";
 import type { CourseMode } from "@/types/mentored";
 
@@ -51,7 +53,18 @@ function formatRelativeTime(iso: string): string {
 }
 
 export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
-  if (entries.length === 0) return null;
+  const [items, setItems] = useState(entries);
+  const { requestDismiss, dismissDialog, error } = useDismissStudyCourse({
+    onDismissed: (courseId) => {
+      setItems((prev) => prev.filter((e) => e.courseId !== courseId));
+    },
+  });
+
+  useEffect(() => {
+    setItems(entries);
+  }, [entries]);
+
+  if (items.length === 0) return null;
 
   return (
     <section className="mt-10">
@@ -72,9 +85,15 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
         </Link>
       </div>
 
+      {error ? (
+        <p className="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">
+          {error}
+        </p>
+      ) : null}
+
       <div className="mt-5 -mx-4 px-4 sm:-mx-6 sm:px-6">
         <div className="flex gap-4 overflow-x-auto pb-2 [-webkit-overflow-scrolling:touch] [scrollbar-gutter:stable] snap-x snap-mandatory">
-          {entries.map((e) => {
+          {items.map((e) => {
             const progressPct = pct(e.modulesCompleted, e.modulesTotal);
             const score =
               e.totalLast10 > 0 ? `${e.correctLast10}/${e.totalLast10}` : "—";
@@ -84,10 +103,6 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
                 : e.modulesTotal > 0
                   ? `${e.modulesTotal} modules`
                   : null;
-            // Route to the experience the student last used — Mentored
-            // Learning OR Free Exploration — instead of always landing
-            // them on the reading view. New / never-opened courses
-            // default to Mentored, the flagship experience.
             const href = buildResumeCourseHref({
               courseId: e.courseId,
               lastUsedMode: e.lastUsedMode,
@@ -115,8 +130,8 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
                   className="pointer-events-none absolute -right-24 -top-24 h-56 w-56 rounded-full bg-gradient-to-br from-emerald-500/18 via-cyan-400/10 to-transparent blur-2xl"
                   aria-hidden
                 />
-                <div className="relative flex items-start justify-between gap-4 px-5">
-                  <div className="min-w-0">
+                <div className="relative flex items-start justify-between gap-3 px-5">
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                       {e.title}
                     </p>
@@ -130,13 +145,28 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
                       ) : null}
                     </p>
                   </div>
-                  <div className="shrink-0 text-right">
-                    <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                      {score}
-                    </p>
-                    <p className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-                      last 10
-                    </p>
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        requestDismiss({
+                          courseId: e.courseId,
+                          title: e.title,
+                          isExploreLearner: e.isExploreLearner,
+                        })
+                      }
+                      className="rounded-full border border-zinc-300/90 bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 shadow-sm transition hover:border-red-300 hover:bg-red-50 hover:text-red-700 dark:border-zinc-600 dark:bg-zinc-900/80 dark:text-zinc-200 dark:hover:border-red-800 dark:hover:bg-red-950/50 dark:hover:text-red-300"
+                    >
+                      Remove
+                    </button>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                        {score}
+                      </p>
+                      <p className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+                        last 10
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -178,7 +208,7 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
           })}
         </div>
       </div>
+      {dismissDialog}
     </section>
   );
 }
-

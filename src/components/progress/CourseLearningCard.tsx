@@ -4,7 +4,13 @@ import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { ModuleMosaic } from "@/components/progress/ModuleMosaic";
 import { ProgressRings } from "@/components/progress/ProgressRings";
 
-export function CourseLearningCard({ course }: { course: CourseLearningSummary }) {
+export function CourseLearningCard({
+  course,
+  onRemove,
+}: {
+  course: CourseLearningSummary;
+  onRemove?: () => void;
+}) {
   const modPct =
     course.modulesTotal > 0
       ? Math.round((course.modulesCompleted / course.modulesTotal) * 100)
@@ -44,12 +50,23 @@ export function CourseLearningCard({ course }: { course: CourseLearningSummary }
             </p>
           ) : null}
         </div>
-        <Link
-          href={studyHref}
-          className="shrink-0 rounded-full bg-brand px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover dark:bg-brand"
-        >
-          Study
-        </Link>
+        <div className="flex shrink-0 flex-col items-stretch gap-1.5 sm:items-end">
+          {onRemove ? (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="rounded-full border border-zinc-300/90 bg-white/90 px-3 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm transition hover:border-red-300 hover:bg-red-50 hover:text-red-700 dark:border-zinc-600 dark:bg-zinc-900/80 dark:text-zinc-200 dark:hover:border-red-800 dark:hover:bg-red-950/50 dark:hover:text-red-300"
+            >
+              Remove
+            </button>
+          ) : null}
+          <Link
+            href={studyHref}
+            className="inline-flex justify-center rounded-full bg-brand px-3.5 py-1.5 text-center text-xs font-semibold text-white hover:bg-brand-hover dark:bg-brand"
+          >
+            Study
+          </Link>
+        </div>
       </div>
 
       {/* Module path */}
