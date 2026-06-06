@@ -1,7 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse";
-import { extractPdfTextHeadTail } from "@/lib/pdf-text-head-tail";
+import {
+  extractPdfPagesForIngest,
+  type PdfPageText,
+} from "@/lib/pdf-text-head-tail";
 import {
   detectIngestFormat,
   extensionOfFileName,
@@ -23,6 +26,10 @@ export type ExtractedSourceMeta = {
   slideCount?: number;
   transcript?: TranscriptionResult;
   retainStorage?: boolean;
+  /** True when a fast head/tail read skipped middle pages (full read follows). */
+  skippedMiddle?: boolean;
+  /** True when page count exceeded PDF_INGEST_MAX_PAGES. */
+  truncatedPages?: boolean;
 };
 
 export type ExtractedStudyChunk = {
@@ -48,56 +55,101 @@ function attributionPrefix(fileName: string, detail: string): string {
   return `[from ${fileName} ${detail}]`;
 }
 
+function envPositiveInt(name: string, fallback: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(max, Math.floor(n));
+}
+
+/** Merge adjacent pages into fewer chunks so long PDFs plan faster without losing text. */
+function groupPdfPagesForChunks(
+  pages: PdfPageText[],
+  fileName: string
+): ExtractedStudyChunk[] {
+  const nonEmpty = pages.filter((p) => p.text.trim().length > 0);
+  if (nonEmpty.length === 0) return [];
+
+  const pagesPerChunk =
+    nonEmpty.length > 30
+      ? Math.min(4, Math.max(2, Math.ceil(nonEmpty.length / 50)))
+      : 1;
+
+  if (pagesPerChunk <= 1) {
+    return nonEmpty.map((p) => ({
+      attribution: attributionPrefix(fileName, `page ${p.pageNum}`),
+      body: p.text.trim(),
+    }));
+  }
+
+  const chunks: ExtractedStudyChunk[] = [];
+  for (let i = 0; i < nonEmpty.length; i += pagesPerChunk) {
+    const slice = nonEmpty.slice(i, i + pagesPerChunk);
+    const body = slice
+      .map((p) => p.text.trim())
+      .filter(Boolean)
+      .join("\n\n");
+    if (body.length === 0) continue;
+    const start = slice[0]!.pageNum;
+    const end = slice[slice.length - 1]!.pageNum;
+    const detail =
+      start === end ? `page ${start}` : `pages ${start}–${end}`;
+    chunks.push({
+      attribution: attributionPrefix(fileName, detail),
+      body,
+    });
+  }
+  return chunks;
+}
+
 async function extractPdfBuffer(
   buf: Buffer,
   fileName: string,
   onHeartbeat?: () => void
 ): Promise<ExtractedStudyContent> {
-  const maxPagesRaw = process.env.PDF_INGEST_MAX_PAGES?.trim();
-  const maxPages = maxPagesRaw ? Number(maxPagesRaw) : 60;
-  const safeMaxPages =
-    Number.isFinite(maxPages) && maxPages >= 1 && maxPages <= 400
-      ? Math.floor(maxPages)
-      : 60;
+  const safeMaxPages = envPositiveInt("PDF_INGEST_MAX_PAGES", 150, 400);
+  const beat = onHeartbeat ? () => Promise.resolve(onHeartbeat()) : undefined;
 
-  let text = "";
-  let numpages = 0;
+  // Single PDF load + batched page render (no head/tail peek that re-parsed the file).
+  const { pages, numpages, truncated } = await extractPdfPagesForIngest(buf, {
+    maxPages: safeMaxPages,
+    onHeartbeat: beat,
+  });
 
-  const useHeadTail = process.env.PDF_INGEST_FAST_EXTRACT?.trim() !== "0";
-  if (useHeadTail) {
-    try {
-        const extracted = await extractPdfTextHeadTail(buf, {
-          onHeartbeat: onHeartbeat
-            ? () => Promise.resolve(onHeartbeat())
-            : undefined,
-        });
-      if (extracted.text.length >= 80) {
-        text = extracted.text;
-        numpages = extracted.numpages;
-      }
-    } catch {
-      /* fall through */
+  let pageChunks = groupPdfPagesForChunks(pages, fileName);
+
+  if (pageChunks.length === 0) {
+    const parsed = await pdfParse(buf, { max: safeMaxPages });
+    const text = (parsed.text ?? "").trim();
+    if (text.length >= 80) {
+      const attr = attributionPrefix(fileName, "document");
+      pageChunks = [{ attribution: attr, body: text }];
     }
   }
 
-  if (text.length < 80) {
-    const parsed = await pdfParse(buf, { max: safeMaxPages });
-    text = (parsed.text ?? "").trim();
-    numpages = typeof parsed.numpages === "number" ? parsed.numpages : 0;
-  }
-
-  if (text.length < 80) {
+  if (pageChunks.length === 0) {
     throw new Error(
       "Not enough text extracted from this PDF. Try slides with selectable text or another file."
     );
   }
 
-  const attr = attributionPrefix(fileName, "document");
+  const plainText = pageChunks
+    .map((c) => `${c.attribution}\n${c.body}`)
+    .join("\n\n");
+  const combinedWordCount = wordCount(plainText);
+
   return {
-    plainText: `${attr}\n${text}`,
-    chunks: [{ attribution: attr, body: text }],
-    meta: { fileName, kind: "pdf", pageCount: numpages, wordCount: wordCount(text) },
-    charCount: text.length,
+    plainText,
+    chunks: pageChunks.length > 1 ? pageChunks : [pageChunks[0]!],
+    meta: {
+      fileName,
+      kind: "pdf",
+      pageCount: numpages,
+      wordCount: combinedWordCount,
+      truncatedPages: truncated,
+    },
+    charCount: plainText.length,
   };
 }
 

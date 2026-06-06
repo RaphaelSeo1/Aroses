@@ -134,19 +134,27 @@ export async function extractContentForIngestJob(input: {
     if (kind === "audio" || kind === "video") {
       input.onPhase?.("transcribing");
     }
-    const part = await extractStudyMaterialFromBuffer({
-      buffer: buf,
-      fileName,
-      kind,
-      imageIndex,
-      onHeartbeat: input.onHeartbeat,
-    });
+    const embeddedImagesEnabled = (() => {
+      const raw = process.env.PDF_INGEST_EMBEDDED_IMAGES?.trim();
+      if (raw === "1" || raw?.toLowerCase() === "true") return true;
+      if (raw === "0" || raw?.toLowerCase() === "false") return false;
+      // Default off: a second full PDF pass is slow on long decks; page renders
+      // are added later from the structure plan when needed.
+      return kind !== "pdf";
+    })();
 
-    const figures = await extractSourceImagesFromBuffer({
-      buffer: buf,
-      fileName,
-      kind,
-    });
+    const [part, figures] = await Promise.all([
+      extractStudyMaterialFromBuffer({
+        buffer: buf,
+        fileName,
+        kind,
+        imageIndex,
+        onHeartbeat: input.onHeartbeat,
+      }),
+      embeddedImagesEnabled
+        ? extractSourceImagesFromBuffer({ buffer: buf, fileName, kind })
+        : Promise.resolve([]),
+    ]);
 
     let retain = false;
     let media: JobExtractSuccess["ingestMedia"] = null;
@@ -224,6 +232,9 @@ export async function extractContentForIngestJob(input: {
   }
 
   const pdfMeta = extractedParts.find((p) => p.meta.kind === "pdf")?.meta;
+  const skippedMiddle = extractedParts.some(
+    (p) => p.meta.kind === "pdf" && p.meta.skippedMiddle === true
+  );
 
   const chunks = buildIngestChunks(extractedParts);
 
@@ -238,7 +249,7 @@ export async function extractContentForIngestJob(input: {
     text: textForCourse,
     chunks,
     numpages: pdfMeta?.pageCount ?? 0,
-    skippedMiddle: false,
+    skippedMiddle,
     retainStorage,
     ingestMedia: mediaMeta,
     sourcePaths: refs.map((r) => r.storagePath),

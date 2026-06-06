@@ -36,8 +36,11 @@ export function structurePlanTargets(
     minLessons =
       chunkCount <= 2
         ? 1
-        : clampInt(Math.ceil(chunkCount / 2), 2, 14);
-    maxModules = 4;
+        : clampInt(Math.ceil(chunkCount / 2), 2, 24);
+    if (chunkCount >= 60) maxModules = 8;
+    else if (chunkCount >= 30) maxModules = 6;
+    else if (chunkCount >= 15) maxModules = 5;
+    else maxModules = 4;
   } else if (profile === "fast") {
     minLessons = clampInt(Math.ceil(chunkCount / 1.75), 2, 18);
     maxModules = 5;
@@ -185,8 +188,10 @@ export function buildDeterministicStructurePlan(
     });
   }
 
-  const lessonsPerModule =
-    profile === "express" ? 2 : profile === "fast" ? 3 : 4;
+  const lessonsPerModule = Math.max(
+    1,
+    Math.ceil(lessons.length / targets.maxModules)
+  );
   const modules: CourseStructurePlanModule[] = [];
   for (let i = 0; i < lessons.length; i += lessonsPerModule) {
     const group = lessons.slice(i, i + lessonsPerModule);

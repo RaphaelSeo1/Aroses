@@ -126,7 +126,7 @@ function tabStatusLine(
     return {
       line: "Extracting…",
       detail:
-        "Step 1/2: reading PDF text. Long slide decks prioritize the start and end of the file so you see progress faster.",
+        "Step 1/2: reading every page of your PDF (long files can take a minute or two).",
     };
   }
   return {

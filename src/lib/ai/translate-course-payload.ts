@@ -8,7 +8,30 @@ import {
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import type { CourseModule, CoursePayload } from "@/types/course";
 
-const MODEL = "claude-sonnet-4-6";
+function resolveTranslateModel(): string {
+  const override = process.env.ANTHROPIC_TRANSLATE_MODEL?.trim();
+  if (override) return override;
+  return "claude-haiku-4-5";
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      results[idx] = await fn(items[idx]!, idx);
+    }
+  }
+  const workers = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
+}
 
 function localeLabel(locale: CourseContentLocale): string {
   return locale === "ko" ? "Korean (한국어)" : "English";
@@ -34,7 +57,7 @@ async function translateJsonBlock<T>(
   parse: (raw: unknown) => T
 ): Promise<T> {
   const msg = await anthropic.messages.create({
-    model: MODEL,
+    model: resolveTranslateModel(),
     max_tokens: 12_288,
     temperature: 0.1,
     messages: [{ role: "user", content: prompt }],
@@ -128,18 +151,25 @@ export async function translateCoursePayload(
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const { title, description } = await translateTitleDescription(
-        anthropic,
-        canonical,
-        sourceLocale,
-        targetLocale
-      );
-      const modules: CourseModule[] = [];
-      for (const mod of canonical.modules) {
-        modules.push(
-          await translateModule(anthropic, mod, sourceLocale, targetLocale)
-        );
-      }
+      const translateConcurrency = (() => {
+        const raw = process.env.COURSE_TRANSLATE_CONCURRENCY?.trim();
+        const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+        return Number.isFinite(n) ? Math.max(1, Math.min(6, n)) : 4;
+      })();
+
+      const [{ title, description }, modules] = await Promise.all([
+        translateTitleDescription(
+          anthropic,
+          canonical,
+          sourceLocale,
+          targetLocale
+        ),
+        mapWithConcurrency(
+          canonical.modules,
+          translateConcurrency,
+          (mod) => translateModule(anthropic, mod, sourceLocale, targetLocale)
+        ),
+      ]);
       const translated: CoursePayload = { title, description, modules };
       const withSources = mergeSourcesFromCanonical(canonical, translated);
       assertPayloadStructureMatch(canonical, withSources);

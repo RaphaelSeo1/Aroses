@@ -104,6 +104,13 @@ export type ExtractPdfTextFullOptions = {
   renderBatchSize?: number;
 };
 
+export type PdfPageText = { pageNum: number; text: string };
+
+export type ExtractPdfPagesOptions = ExtractPdfTextFullOptions & {
+  /** Cap pages read (default: entire document). */
+  maxPages?: number;
+};
+
 /**
  * @returns trimmed text, page count, and whether middle pages were skipped.
  */
@@ -227,6 +234,109 @@ async function renderPageRangeWithBatchSize(
   return parts.join("\n\n");
 }
 
+async function renderPagesIndividually(
+  doc: PdfDoc,
+  fromInclusive: number,
+  toInclusive: number,
+  batchSize: number,
+  onEveryPages: { n: number; fn: () => Promise<void> } | undefined
+): Promise<PdfPageText[]> {
+  const pageNums: number[] = [];
+  for (let p = fromInclusive; p <= toInclusive; p++) pageNums.push(p);
+
+  const results: PdfPageText[] = [];
+  let rendered = 0;
+
+  for (let i = 0; i < pageNums.length; i += batchSize) {
+    const batch = pageNums.slice(i, i + batchSize);
+    const texts = await Promise.all(
+      batch.map(async (p) => {
+        const page = await doc.getPage(p);
+        return pageToText(page);
+      })
+    );
+    for (let j = 0; j < texts.length; j++) {
+      results.push({ pageNum: batch[j]!, text: texts[j]!.trim() });
+      rendered++;
+      if (onEveryPages && rendered % onEveryPages.n === 0) {
+        await onEveryPages.fn();
+      }
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Per-page text for course ingest — one chunk per page so the structure planner
+ * can assign coverage across the full document (not just head/tail).
+ */
+export async function extractPdfPagesForIngest(
+  buffer: Buffer,
+  options?: ExtractPdfPagesOptions
+): Promise<{ pages: PdfPageText[]; numpages: number; truncated: boolean }> {
+  PDFJS.disableWorker = true;
+
+  let wallClock: ReturnType<typeof setInterval> | undefined;
+  if (options?.onHeartbeat) {
+    void options.onHeartbeat();
+    wallClock = setInterval(() => {
+      void options.onHeartbeat!();
+    }, 8_000);
+  }
+
+  const batchSize = envPositiveInt(
+    "PDF_INGEST_FULL_RENDER_BATCH",
+    14,
+    RENDER_BATCH_SIZE
+  );
+
+  let doc: PdfDoc | null = null;
+  try {
+    doc = await PDFJS.getDocument(buffer);
+    if (!doc) {
+      throw new Error("Failed to load PDF document");
+    }
+    const pdf = doc;
+    const numpages = pdf.numPages;
+    const readThrough = Math.min(
+      numpages,
+      options?.maxPages != null && options.maxPages >= 1
+        ? Math.floor(options.maxPages)
+        : numpages
+    );
+    const beat =
+      options?.onHeartbeat != null
+        ? { n: 5, fn: options.onHeartbeat }
+        : undefined;
+
+    let pages: PdfPageText[];
+    try {
+      pages = await renderPagesIndividually(
+        pdf,
+        1,
+        readThrough,
+        options?.renderBatchSize ?? batchSize,
+        beat
+      );
+    } finally {
+      try {
+        pdf.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return {
+      pages,
+      numpages,
+      truncated: readThrough < numpages,
+    };
+  } finally {
+    if (wallClock) clearInterval(wallClock);
+  }
+}
+
 /**
  * Extract text from **every** page (for final ingest after a fast head/tail preview).
  * Uses a smaller default batch size than the head/tail path to stay gentle when
@@ -248,7 +358,7 @@ export async function extractPdfTextFullDocument(
 
   const batchSize = envPositiveInt(
     "PDF_INGEST_FULL_RENDER_BATCH",
-    10,
+    14,
     RENDER_BATCH_SIZE
   );
 

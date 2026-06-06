@@ -37,6 +37,7 @@ import {
   assembleModuleSourcesFromPlan,
   generateCourseModuleFromMaterial,
   generateCourseOutlineFromMaterial,
+  buildMaterialDigestFromFullPdfText,
   materialTextForPdfIngest,
   planCourseStructureFromChunks,
   structurePlanToOutline,
@@ -1610,7 +1611,16 @@ async function runPdfIngestOutlinePhase(
   const generationLanguage =
     courseContentLocaleToOutputLanguage(canonicalLocale);
 
-  const storedMaterial = materialTextForPdfIngest(sourceTextForOutline);
+  // Structure planning uses per-chunk source text on the job; skip the slow
+  // multi-call digest for long PDFs when chunks already carry full coverage.
+  const storedMaterial =
+    chunks.length > 0
+      ? materialTextForPdfIngest(sourceTextForOutline)
+      : sourceTextForOutline.length > 24_000
+        ? await buildMaterialDigestFromFullPdfText(sourceTextForOutline, {
+            studyContext: courseStudyContext ?? undefined,
+          })
+        : materialTextForPdfIngest(sourceTextForOutline);
 
   if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
     return;

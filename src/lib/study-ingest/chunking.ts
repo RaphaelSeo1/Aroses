@@ -115,15 +115,26 @@ function splitBodyIntoSections(body: string): string[] {
   return capped.filter((s) => s.trim().length > 0);
 }
 
+function pagePositionFromAttribution(attribution: string): string | null {
+  const range = attribution.match(/\bpages\s+(\d+)\s*[–-]\s*(\d+)\s*\]/i);
+  if (range) return `pages ${range[1]}–${range[2]}`;
+  const single = attribution.match(/\bpage\s+(\d+)\s*\]/i);
+  return single ? `page ${single[1]}` : null;
+}
+
 /** Locator text for a chunk based on file kind and ordinal within the file. */
 function positionLabel(
   part: ExtractedStudyContent,
   chunkOrdinal: number,
-  usedExistingChunk: boolean
+  usedExistingChunk: boolean,
+  attribution?: string
 ): string {
   const kind = part.meta.kind;
   if (kind === "slides" && usedExistingChunk) {
     return `slide ${chunkOrdinal + 1}`;
+  }
+  if (kind === "pdf" && usedExistingChunk && attribution) {
+    return pagePositionFromAttribution(attribution) ?? `page ${chunkOrdinal + 1}`;
   }
   if (kind === "audio" || kind === "video") {
     return `transcript part ${chunkOrdinal + 1}`;
@@ -184,7 +195,26 @@ export function buildIngestChunks(parts: ExtractedStudyContent[]): IngestChunk[]
         chunks.push({
           id: nextId(),
           sourceFileName: fileName,
-          position: positionLabel(part, i, true),
+          position: positionLabel(part, i, true, slideChunks[i].attribution),
+          title: cleanTitleFromText(body),
+          text: body,
+          approxChars: body.length,
+        });
+      }
+      continue;
+    }
+
+    // Long PDFs arrive chunked per page — reuse so the planner covers every page.
+    if (kind === "pdf" && part.chunks.length > 1) {
+      const pageChunks = coalesceSmall(part.chunks);
+      for (let i = 0; i < pageChunks.length; i++) {
+        if (chunks.length >= MAX_CHUNKS_TOTAL) break;
+        const body = pageChunks[i].body.trim();
+        if (body.length === 0) continue;
+        chunks.push({
+          id: nextId(),
+          sourceFileName: fileName,
+          position: positionLabel(part, i, true, pageChunks[i].attribution),
           title: cleanTitleFromText(body),
           text: body,
           approxChars: body.length,
