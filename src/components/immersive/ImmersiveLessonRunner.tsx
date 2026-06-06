@@ -12,7 +12,7 @@ import {
 } from "@/components/immersive/NotesPanel";
 import { RoseDialoguePanel } from "@/components/immersive/RoseDialoguePanel";
 import { RoseQuestionBanner } from "@/components/immersive/RoseQuestionBanner";
-import { SourceFigurePanel } from "@/components/immersive/SourceFigurePanel";
+import { SlideStage } from "@/components/immersive/SlideStage";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
@@ -225,47 +225,8 @@ export function ImmersiveLessonRunner({
   // changes don't trigger unnecessary work here.
   const [narrationText, setNarrationText] = useState<string>("");
 
-  // ---- on-demand image (§9) ----
-  // Wikimedia image when the student explicitly asks ("show me a
-  // diagram of…"). Renders above the lesson cards; clears on dismiss
-  // or when the chunk advances.
-  const [mentoredImage, setMentoredImage] = useState<{
-    url: string;
-    thumbUrl: string;
-    sourceUrl: string;
-    attribution: string;
-    type: "diagram" | "photo" | "illustration";
-  } | null>(null);
-  const [mentoredImageLoading, setMentoredImageLoading] = useState(false);
-  const fetchMentoredImage = useCallback(
-    async (query: string, type: "diagram" | "photo" | "illustration") => {
-      if (!query || query.trim().length < 3) return;
-      setMentoredImageLoading(true);
-      try {
-        const res = await fetch("/api/mentored/image", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ materialId, query, imageType: type }),
-        });
-        if (!res.ok) return;
-        const body = (await res.json()) as {
-          image: {
-            url: string;
-            thumbUrl: string;
-            sourceUrl: string;
-            attribution: string;
-            type: "diagram" | "photo" | "illustration";
-          } | null;
-        };
-        if (body.image) setMentoredImage(body.image);
-      } catch (e) {
-        console.error("[imm runner fetchMentoredImage]", e);
-      } finally {
-        setMentoredImageLoading(false);
-      }
-    },
-    [materialId]
-  );
+  // On-demand web images (Wikimedia) have been removed. The whiteboard
+  // shows only figures/tables extracted from the student's own upload.
 
   // ---- source figures from the upload (Phase 1) ----
   // The actual figures / full-page renders extracted from the student's PDF,
@@ -677,8 +638,6 @@ export function ImmersiveLessonRunner({
     showDockedNotes,
     chunk?.id,
     transcriptLines.length,
-    mentoredImage,
-    mentoredImageLoading,
     attempts,
     narrationText,
   ]);
@@ -1128,6 +1087,12 @@ export function ImmersiveLessonRunner({
 
       if (
         lessonJustOpenedAtRef.current != null &&
+        // Only swallow "I'm ready" as a pleasantry BEFORE Rose has actually
+        // checked in on a concept. Once she's asked "does that make sense?"
+        // (lastCheckAtRef is set), a "continue / I'm ready" is the student
+        // telling us to MOVE ON — that must flow through the turn so Rose
+        // advances to the next concept instead of going silent.
+        lastCheckAtRef.current == null &&
         Date.now() - lessonJustOpenedAtRef.current < 60_000 &&
         attempts === 0 &&
         isSessionReadyAcknowledgement(text)
@@ -1143,13 +1108,6 @@ export function ImmersiveLessonRunner({
 
       if (!chunk || !plan) return;
 
-      // §9 — Only fetch Wikimedia when the student explicitly asks
-      // for a visual ("show me a diagram of…"). Rose does not auto-pull
-      // images — unsolicited results were often unrelated.
-      const imgIntent = detectImageRequest(text);
-      if (imgIntent) {
-        void fetchMentoredImage(imgIntent.query, imgIntent.type);
-      }
       answerAtSubmitRef.current = text;
       setSubmitting(true);
       setReplyTurn((n) => n + 1);
@@ -1366,20 +1324,11 @@ export function ImmersiveLessonRunner({
             } else if (ev.type === "meta") {
               finalIntent = ev.intent;
               finalAdvance = ev.advance;
-              // Proactive visual: when Rose signals a visual would help, prefer
-              // the student's OWN uploaded figure for this lesson. Un-hide it if
-              // they dismissed it; only fall back to Wikimedia when the upload
-              // has no figure for this concept. (Student-asked images are still
-              // handled by detectImageRequest above.)
-              if (ev.imageRequest && !imgIntent) {
-                if (primaryChunkFigureRef.current) {
-                  setFigureDismissedForChunk(null);
-                } else {
-                  void fetchMentoredImage(
-                    ev.imageRequest.query,
-                    ev.imageRequest.type
-                  );
-                }
+              // Proactive visual: when Rose signals a visual would help,
+              // surface the student's OWN uploaded figure for this lesson
+              // (un-hide it if they dismissed it). No web-image fallback.
+              if (ev.imageRequest && primaryChunkFigureRef.current) {
+                setFigureDismissedForChunk(null);
               }
             } else if (ev.type === "done") {
               // Flush any buffered sentences + the incomplete tail as one
@@ -1530,8 +1479,6 @@ export function ImmersiveLessonRunner({
           clearSubmittedAnswerDraft();
           setNarrationText("");
           setTutorReply(null);
-          setMentoredImage(null);
-          setMentoredImageLoading(false);
           setFigureDismissedForChunk(null);
           setTextCheckRevealed(false);
           setTextPendingAdvance(false);
@@ -1604,7 +1551,6 @@ export function ImmersiveLessonRunner({
       chunk,
       chunkIdx,
       clearSubmittedAnswerDraft,
-      fetchMentoredImage,
       interactionMode,
       interruptedContext,
       materialId,
@@ -1885,8 +1831,6 @@ export function ImmersiveLessonRunner({
     setAnswerText("");
     setNarrationText("");
     setTutorReply(null);
-    setMentoredImage(null);
-    setMentoredImageLoading(false);
     setTextCheckRevealed(false);
     activeRoseLineIdRef.current = null;
 
@@ -2411,62 +2355,22 @@ export function ImmersiveLessonRunner({
         <div ref={lessonColumnRef} className="mt-6 flex min-w-0 flex-col gap-6">
       {!awaitingContinue && chunk ? (
         <>
-
-      {/* Proactive figure from the student's OWN upload for this lesson.
-          Shown automatically while Rose teaches the concept; "Hide" sticks
-          per-chunk. Falls back silently to nothing when the upload has no
-          figure (the Wikimedia slot below covers asked-for / fallback cases). */}
-      {primaryChunkFigure && figureDismissedForChunk !== chunk.id ? (
-        <SourceFigurePanel
-          key={`fig-${chunk.id}`}
-          figure={primaryChunkFigure}
-          onDismiss={() => setFigureDismissedForChunk(chunk.id)}
-        />
-      ) : null}
-
-      {/* §9 — On-demand image area. Only when the student explicitly
-          asked for a visual. Stays visible until dismissed or the
-          chunk advances. */}
-      {mentoredImageLoading || mentoredImage ? (
-        <GlassPanel tone="subtle">
-          {mentoredImage ? (
-            <figure className="overflow-hidden rounded-xl">
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setMentoredImage(null)}
-                  className="absolute right-2 top-2 z-10 rounded-full border border-zinc-200/80 bg-white/90 px-2 py-0.5 text-[11px] font-medium text-zinc-600 shadow-sm hover:bg-white"
-                  aria-label="Dismiss image"
-                >
-                  Dismiss
-                </button>
-                <a
-                  href={mentoredImage.sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label="Open original on Wikimedia Commons"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={mentoredImage.thumbUrl}
-                    alt=""
-                    className="block max-h-80 w-full object-contain bg-white"
-                  />
-                </a>
-              </div>
-              <figcaption className="mt-2 px-1 text-[11px] text-zinc-500">
-                {mentoredImage.attribution}
-              </figcaption>
-            </figure>
-          ) : (
-            <div
-              className="h-44 animate-pulse rounded-xl bg-gradient-to-br from-zinc-100/80 to-zinc-50/60"
-              aria-busy="true"
-              aria-label="Rose is sketching this out…"
-            />
-          )}
-        </GlassPanel>
-      ) : null}
+      {/* Whiteboard — the surface Rose "writes" on as she teaches: the
+          concept headline, key points appearing one-by-one, and the
+          table / figure pulled from the student's own upload. The
+          detailed explanation, source text and dialogue live in the
+          cards below, exactly where they were before. */}
+      <SlideStage
+        key={`slide-${chunk.id}`}
+        chunkId={chunk.id}
+        concept={chunk.concept}
+        keyPoints={chunk.keyPoints}
+        narrationText={narrationText}
+        figure={
+          figureDismissedForChunk === chunk.id ? null : primaryChunkFigure
+        }
+        pageFigure={chunkPageFigure}
+      />
 
       {/* Concept + explanation */}
       <GlassPanel key={`exp-${chunk.id}`} tone="default">
@@ -2513,10 +2417,9 @@ export function ImmersiveLessonRunner({
         </p>
       </GlassPanel>
 
-      {/* Source lesson with glowing key terms — anchors the chunk to the
-          original course material so the student sees where the AI is
-          drawing from. Hidden when the chunk has no source mapping or no
-          extractable key terms. */}
+      {/* Source lesson with glowing key terms + the dialogue footer —
+          anchors the chunk to the original course material and keeps the
+          back-and-forth right under it (its original home). */}
       {(() => {
         const lessonIdx =
           typeof chunk.sourceLessonIndex === "number"
@@ -2546,11 +2449,6 @@ export function ImmersiveLessonRunner({
           </GlassPanel>
         );
       })()}
-
-      {/* Check question lives in the dialogue panel below the source text.
-          The old centered modal auto-opened on re-entry (restored
-          dialogue raced ahead of narration) and blocked the lesson
-          before students had read the material. */}
 
       {attempts >= 3 ? (
         <p className="mt-3 text-center text-xs italic text-amber-700">
@@ -2773,51 +2671,6 @@ function ProgressHeader({
     </div>
   );
 }
-
-/**
- * Detects when the student is explicitly asking for a visual.
- *
- * Returns `{ query, type }` if a request was recognized, `null`
- * otherwise. Recognized phrases (case-insensitive):
- *   - "show me ..."             → photo
- *   - "show me a diagram of ..." → diagram
- *   - "draw me ..."             → diagram
- *   - "draw a ..."              → diagram
- *   - "picture of ..."          → photo
- *   - "diagram of ..."          → diagram
- *   - "what does X look like"   → photo
- *
- * The extracted noun phrase is trimmed of stop words at the front
- * ("a", "an", "the", "some") and capped at 60 chars to keep the
- * Wikimedia query tight.
- */
-function detectImageRequest(
-  text: string
-):
-  | { query: string; type: "diagram" | "photo" | "illustration" }
-  | null {
-  const lower = text.toLowerCase().trim();
-  if (lower.length < 6) return null;
-  const patterns: { re: RegExp; type: "diagram" | "photo" | "illustration" }[] = [
-    { re: /(?:show|draw)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?diagram\s+of\s+(.+?)[.?!]?$/i, type: "diagram" },
-    { re: /(?:show|draw)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?(?:picture|photo|image)\s+of\s+(.+?)[.?!]?$/i, type: "photo" },
-    { re: /(?:draw|sketch)\s+(?:me\s+)?(?:a\s+|the\s+|an\s+)?(.+?)[.?!]?$/i, type: "diagram" },
-    { re: /what\s+does\s+(.+?)\s+look\s+like[.?!]?$/i, type: "photo" },
-    { re: /^(?:picture|photo|image|diagram)\s+of\s+(.+?)[.?!]?$/i, type: "photo" },
-  ];
-  for (const { re, type } of patterns) {
-    const m = lower.match(re);
-    if (m && m[1]) {
-      const q = m[1]
-        .replace(/^(?:a|an|the|some)\s+/, "")
-        .trim()
-        .slice(0, 60);
-      if (q.length >= 3) return { query: q, type };
-    }
-  }
-  return null;
-}
-
 
 /**
  * Compact speed-rate selector for Rose's voice. Cycles through 0.75x ↔

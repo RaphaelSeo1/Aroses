@@ -1,35 +1,24 @@
 import { NextResponse } from "next/server";
-import { classifyLessonImage } from "@/lib/ai/mentored";
-import { searchWikimediaImage } from "@/lib/images/wikimedia";
-import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
-import type { CourseModule, CoursePayload } from "@/types/course";
 
 /**
  * GET /api/study-materials/[materialId]/modules/[moduleId]/lessons/[lessonIndex]/image
  *
- * Returns the cached image for this lesson, OR — on cache miss —
- * classifies the lesson, searches Wikimedia, persists the result,
- * and returns it. Designed to be called on first render and ignored
- * after that (a `null` image response means "no image for this
- * lesson"; clients should not retry).
+ * Auto Wikimedia lesson images have been removed product-wide. This
+ * endpoint no longer classifies lessons or searches the web — it only
+ * returns an image the course CREATOR explicitly uploaded for this
+ * lesson (via PATCH `replace`). Everything else returns `{ image: null }`,
+ * including any previously auto-fetched Wikimedia rows still in the cache.
  *
  * Response shape:
- *   { image: null }                       // classifier said no
- *   { image: { url, thumbUrl, sourceUrl, attribution, type } }
- *
- * Per spec there's a soft cap of 10 cached images per course so we
- * don't blow up Wikimedia or our DB if every lesson decided it
- * needed one. After 10, we still return the cached classifier
- * decision but don't run NEW searches.
+ *   { image: null }
+ *   { image: { url, thumbUrl, sourceUrl, attribution, type } }   // creator upload only
  */
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-const MAX_IMAGES_PER_COURSE = 10;
 
 type Params = {
   params: Promise<{
@@ -78,27 +67,23 @@ export async function GET(_req: Request, ctx: Params) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
-  // 1. Cache hit?
+  // Only serve a CREATOR-uploaded image (PATCH `replace` writes
+  // search_query: "custom"). Auto Wikimedia rows are never returned.
   const { data: cached } = await supabase
     .from("lesson_images")
-    .select(
-      "needs_image, image_url, image_thumb_url, source_page_url, attribution, image_type"
-    )
+    .select("image_url, image_thumb_url, attribution, image_type, search_query")
     .eq("material_id", materialId)
     .eq("module_id", moduleId)
     .eq("lesson_idx", lessonIndex)
     .maybeSingle();
 
-  if (cached) {
-    if (!cached.needs_image || !cached.image_url) {
-      return NextResponse.json({ image: null });
-    }
+  if (cached && cached.image_url && cached.search_query === "custom") {
     return NextResponse.json({
       image: {
         url: cached.image_url,
         thumbUrl: cached.image_thumb_url ?? cached.image_url,
-        sourceUrl: cached.source_page_url ?? "",
-        attribution: cached.attribution ?? "",
+        sourceUrl: "",
+        attribution: cached.attribution ?? "Added by the course creator",
         type:
           cached.image_type === "diagram"
             ? "diagram"
@@ -109,110 +94,7 @@ export async function GET(_req: Request, ctx: Params) {
     });
   }
 
-  // 2. Need to classify — pull the lesson from the material payload.
-  const { data: materialRow } = await supabase
-    .from("study_materials")
-    .select("course_payload, course_id")
-    .eq("id", materialId)
-    .maybeSingle();
-  if (!materialRow?.course_payload || typeof materialRow.course_payload !== "object") {
-    return NextResponse.json({ image: null });
-  }
-  const payload = materialRow.course_payload as CoursePayload;
-  const lessonModule: CourseModule | undefined = payload.modules?.find(
-    (m) => m.id === moduleId
-  );
-  const lesson = lessonModule?.lessons?.[lessonIndex];
-  if (!lesson) {
-    return NextResponse.json({ image: null });
-  }
-
-  if (lessonMarkdownHasImages(lesson.content)) {
-    return NextResponse.json({ image: null });
-  }
-
-  // 3. Per-course cap on NEW image fetches. Cached "no image"
-  //    classifier rows don't count — only cached rows with an actual
-  //    image_url consume a slot. We still RUN the classifier (cheap
-  //    Haiku call) so subsequent calls hit the cache, but skip the
-  //    Wikimedia fetch when over the cap.
-  const { count: imagesUsed } = await supabase
-    .from("lesson_images")
-    .select("id", { count: "exact", head: true })
-    .eq("material_id", materialId)
-    .eq("needs_image", true)
-    .not("image_url", "is", null);
-  const overCap = (imagesUsed ?? 0) >= MAX_IMAGES_PER_COURSE;
-
-  // 4. Classify.
-  const classification = await classifyLessonImage({
-    lessonTitle: lesson.title,
-    lessonContent: lesson.content,
-    courseTitle: payload.title,
-  });
-
-  // 5. If classifier said no, or we're over the cap, persist a
-  //    "no-image" verdict and return null. The cap path persists
-  //    `needs_image: classification.needsImage` so if you raise the
-  //    cap later we can backfill.
-  if (!classification.needsImage || overCap) {
-    await supabase.from("lesson_images").upsert(
-      {
-        material_id: materialId,
-        module_id: moduleId,
-        lesson_idx: lessonIndex,
-        needs_image: classification.needsImage,
-        search_query: classification.searchQuery || null,
-        image_type: classification.imageType,
-        image_url: null,
-        image_thumb_url: null,
-        source_page_url: null,
-        attribution: null,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "material_id,module_id,lesson_idx" }
-    );
-    return NextResponse.json({ image: null });
-  }
-
-  // 6. Search Wikimedia. On failure, persist the miss so we don't
-  //    keep retrying — students viewing this lesson later will just
-  //    see no image (per spec, never a broken placeholder).
-  const result = await searchWikimediaImage(
-    classification.searchQuery,
-    classification.imageType
-  );
-
-  await supabase.from("lesson_images").upsert(
-    {
-      material_id: materialId,
-      module_id: moduleId,
-      lesson_idx: lessonIndex,
-      needs_image: true,
-      search_query: classification.searchQuery,
-      image_type: classification.imageType,
-      image_url: result?.imageUrl ?? null,
-      image_thumb_url: result?.thumbUrl ?? null,
-      source_page_url: result?.sourcePageUrl ?? null,
-      attribution: result?.attribution ?? null,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "material_id,module_id,lesson_idx" }
-  );
-
-  if (!result) {
-    return NextResponse.json({ image: null });
-  }
-
-  return NextResponse.json({
-    image: {
-      url: result.imageUrl,
-      thumbUrl: result.thumbUrl,
-      sourceUrl: result.sourcePageUrl,
-      attribution: result.attribution,
-      type: classification.imageType,
-    } satisfies ImagePayload,
-  });
+  return NextResponse.json({ image: null });
 }
 
 /**

@@ -1003,12 +1003,47 @@ export async function runPdfIngestExpandOne(
   }
   const batchCount = pdfIngestModuleBatchSize(n - idx, modulePeerCount);
   const batchIndices = Array.from({ length: batchCount }, (_, offset) => idx + offset);
-  let newModules: CourseModule[];
   const moduleHeartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
   }, 22_000);
+
+  // Persist each module the instant it resolves (saving the longest contiguous
+  // run starting at `idx`), rather than waiting for the whole batch to finish
+  // before a single write at the end. Previously, if the serverless function
+  // was killed mid-batch — which happens for big documents whose batch of
+  // modules can't all finish within `maxDuration` — NOTHING was saved, so every
+  // re-kick re-attempted the same batch from zero and the build wedged at
+  // "N/total" forever. Saving as-we-go guarantees forward progress: a re-kick
+  // resumes from the last saved module.
+  const resolvedModules = new Map<number, CourseModule>();
+  let persistChain: Promise<void> = Promise.resolve();
+  const contiguousResolved = (): CourseModule[] => {
+    const built: CourseModule[] = [];
+    for (let i = idx; i < idx + batchCount; i++) {
+      const m = resolvedModules.get(i);
+      if (!m) break;
+      built.push(m);
+    }
+    return built;
+  };
+  const flushContiguousProgress = async () => {
+    const built = contiguousResolved();
+    if (built.length === 0) return;
+    const merged = [...prefix, ...built].slice(0, n);
+    await admin
+      .from("pdf_ingest_jobs")
+      .update({
+        ingest_modules: merged,
+        stream_preview: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .eq("ingest_epoch", expandEpoch);
+  };
+
+  let newModules: CourseModule[];
   try {
-    newModules = await Promise.all(
+    await Promise.all(
       batchIndices.map((moduleIndex, offset) =>
         withAnthropicRateLimitRetries(
           jobId,
@@ -1036,10 +1071,20 @@ export async function runPdfIngestExpandOne(
           // reconnect, and the same module would be re-attempted from zero
           // — the UI looked stuck at "Writing module N of M" for minutes.
           { maxAttempts: 6 }
-        )
+        ).then((mod) => {
+          resolvedModules.set(moduleIndex, mod);
+          // Serialize DB writes so concurrently-resolving modules don't race.
+          persistChain = persistChain.then(flushContiguousProgress);
+          return persistChain;
+        })
       )
     );
+    await persistChain;
+    newModules = contiguousResolved();
   } catch (e) {
+    // Flush any contiguous modules that DID resolve before the failure, so a
+    // retry resumes from there instead of rebuilding saved modules.
+    await persistChain.catch(() => {});
     if (await isStaleIngestEpoch(admin, jobId, expandEpoch)) {
       return {
         kind: "failed",
