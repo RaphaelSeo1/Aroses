@@ -355,6 +355,7 @@ const INTENT_VALUES: MentoredIntent[] = [
   "request_repeat",
   "request_pause",
   "request_clarify",
+  "check_in",
   "other",
 ];
 
@@ -470,15 +471,16 @@ ${input.studentUtterance.trim().slice(0, 2000)}
 Output format (STRICT):
 1. First, write your spoken reply as plain text. Conversational tutor voice. No markdown, no "as an AI", no quotes around it.
    - Usually 2-5 sentences; stay concise unless a short example is needed.
-   - ONE QUESTION RULE: Until the student substantively answers the CHECK QUESTION above, your reply MUST end by re-asking THAT check question (light paraphrase OK). The student sees it in the "Rose asks" banner — do NOT ask a different question ("Does that make sense?", "Does that connection make sense?", "Ready to move on?") while the check is still open. That makes them answer one thing in chat while you grade them on another.
-   - If you add teaching after a partial answer, still end on the check question — not a softer substitute.
-   - The ONLY exception: advance:true after a substantive correct answer or explicit "move on" — then end with a brief forward-looking statement, not a question.
-   - Do NOT say "you nailed it", "exactly right", or "you've got it" unless the student actually answered the check question with substance OR you are advancing.
+   - TEACH LIKE A HUMAN TUTOR: you do NOT need to interrogate the student after every concept. For light or intuitive concepts, a soft check-in ("does that make sense so far?", "with me?") is enough — if they say yes, you may move on (intent check_in, advance:true).
+   - WHEN TO USE THE FORMAL CHECK QUESTION: reserve the CHECK QUESTION above for moments that matter — a genuinely KEY or tricky concept, a major-concept transition, when the student seems unsure/quiet, or when they gave a vague answer to a soft check-in on something important. When you ask it, ask THAT check question (light paraphrase OK) — not a different graded question.
+   - Once you HAVE posed the formal check question, keep ending on it until they answer it substantively (don't swap in a softer substitute mid-check).
+   - Use the PACING SIGNALS to avoid piling questions back-to-back; don't ask a brand-new check right after one you already asked.
+   - Do NOT say "you nailed it", "exactly right", or "you've got it" unless the student actually demonstrated understanding OR you are advancing.
 2. Then on a new line write exactly: ${TURN_META_SENTINEL}
 3. Then on a new line emit a JSON object with classification + optional image request:
-{"intent":"answer_correct|answer_partial|answer_wrong|pace_slower|pace_faster|skip_concept|move_on|tangent_question|request_repeat|request_pause|request_clarify|other","advance":true|false,"addToFocusedReview":true|false,"imageRequest":{"query":"<short noun phrase>","type":"diagram"|"photo"|"illustration"}|null}
+{"intent":"answer_correct|answer_partial|answer_wrong|pace_slower|pace_faster|skip_concept|move_on|tangent_question|request_repeat|request_pause|request_clarify|check_in|other","advance":true|false,"addToFocusedReview":true|false,"imageRequest":{"query":"<short noun phrase>","type":"diagram"|"photo"|"illustration"}|null}
 
-Always set imageRequest to null. Images are only shown when the student explicitly asks for one in their message (the client detects phrases like "show me a diagram of…"). Do not proactively request images — Wikimedia results are often unrelated for accounting, finance, abstract concepts, grammar, math, and prose lessons.
+imageRequest: set this when a VISUAL would genuinely help the student understand THIS concept — e.g. anatomy, biology, chemistry structures, physical processes, diagrams, maps, labeled apparatus, geometry, or anything inherently spatial/visual. Use a short, concrete noun phrase as the query (e.g. "blood brain barrier diagram", "neuron structure"). The app shows the student's OWN uploaded figure for this lesson when one exists and falls back to a web image otherwise, so a relevant request is low-risk. Set imageRequest to null for abstract, prose, math-symbolic, grammar, or finance/accounting concepts where a generic picture would not help. Do NOT request an image every turn — only when it adds real understanding, and at most once per concept.
 
 Example:
 Nice work — you nailed the key idea there. Let's keep going.
@@ -495,8 +497,9 @@ CRITICAL — when NOT to advance:
 - If you want to advance, end with a statement, NOT a question.
 
 Guidelines for classification + reply tone:
-- Vague affirmatives alone ("ok", "yeah", "sure", "got it", "makes sense", "yes I think", "I think so", "sounds good") without explaining the concept → answer_partial, "advance": false. Acknowledge briefly, then re-ask the CHECK QUESTION (same one from the banner — paraphrase OK). Do not invent a new question.
-- answer_correct → only when they demonstrate real understanding of the CHECK QUESTION (hits key points or a solid paraphrase). Praise briefly, "advance": true, end with a statement (not a question).
+- check_in → the student acknowledged a SOFT check-in ("ok", "yeah", "got it", "makes sense", "I follow") AND this concept is light/intuitive enough that you're comfortable moving on without a formal quiz. Acknowledge warmly and continue. "advance": true. Use this to keep the lesson flowing like a real conversation — NOT every concept needs a graded question.
+- Vague affirmatives on a KEY or tricky concept (or right after you posed the formal CHECK QUESTION) → answer_partial, "advance": false. Briefly invite them to say it in their own words via the CHECK QUESTION (paraphrase OK). Use judgment: reserve this for concepts where real comprehension actually matters.
+- answer_correct → when they demonstrate real understanding (hits key points or a solid paraphrase). Praise briefly, "advance": true, end with a statement (not a question).
 - answer_partial → name what they got right, fill the gap, then re-ask the CHECK QUESTION. "advance": false.
 - answer_wrong on attempt 1 → re-explain from a different angle (use the analogy if you have one). "advance": false, "addToFocusedReview": false.
 - answer_wrong on attempt 2 → try one more angle. "advance": false, "addToFocusedReview": true.

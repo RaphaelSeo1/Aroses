@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { LessonSourceAttribution } from "@/components/LessonSourceAttribution";
 import {
@@ -8,6 +8,7 @@ import {
   stripInlineMarkdownWrappers,
 } from "@/lib/inline-markdown";
 import type { CourseLesson } from "@/types/course";
+import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 
 /**
  * Glass panel that displays the original course lesson the AI is currently
@@ -39,13 +40,21 @@ function SourceLessonPanelImpl({
   narrationText,
   footer,
   className = "",
+  pageFigure,
 }: {
   lesson: CourseLesson | undefined;
   keyTerms: string[];
   narrationText?: string;
   footer?: ReactNode;
   className?: string;
+  /**
+   * Full-page render / slide of the source this lesson is drawn from (from
+   * `figures_index`). When present, a "Text / Page" toggle appears so the
+   * student can flip to the actual page like a tutor pointing at the slide.
+   */
+  pageFigure?: IngestSourceImageRecord | null;
 }) {
+  const [view, setView] = useState<"text" | "page">("text");
   const lessonContent = lesson?.content;
   // Paragraph-level split first so we can pin highlight per paragraph.
   // Inside each paragraph we still inline-mark key terms.
@@ -109,13 +118,67 @@ function SourceLessonPanelImpl({
         <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
           From your course
         </p>
-        <p className="text-[11px] font-medium text-zinc-500">{lesson.title}</p>
+        <div className="flex items-center gap-2">
+          {pageFigure ? (
+            <div
+              className="flex items-center rounded-full border border-white/60 bg-white/55 p-0.5 text-[11px] font-medium shadow-sm"
+              role="tablist"
+              aria-label="Source view"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "text"}
+                onClick={() => setView("text")}
+                className={
+                  view === "text"
+                    ? "rounded-full bg-zinc-900 px-2.5 py-0.5 text-white"
+                    : "rounded-full px-2.5 py-0.5 text-zinc-600 hover:text-zinc-900"
+                }
+              >
+                Text
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "page"}
+                onClick={() => setView("page")}
+                className={
+                  view === "page"
+                    ? "rounded-full bg-zinc-900 px-2.5 py-0.5 text-white"
+                    : "rounded-full px-2.5 py-0.5 text-zinc-600 hover:text-zinc-900"
+                }
+              >
+                Page
+              </button>
+            </div>
+          ) : null}
+          <p className="text-[11px] font-medium text-zinc-500">{lesson.title}</p>
+        </div>
       </div>
       {lesson.sources && lesson.sources.length > 0 ? (
         <div className="mt-2">
           <LessonSourceAttribution sources={lesson.sources} />
         </div>
       ) : null}
+      {pageFigure && view === "page" ? (
+        <figure className="mt-3 overflow-hidden rounded-xl">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={pageFigure.url}
+            alt={pageFigure.label || `Source page for ${lesson.title}`}
+            className="block max-h-[28rem] w-full object-contain bg-white"
+          />
+          <figcaption className="mt-2 px-1 text-[11px] text-zinc-500">
+            {pageFigure.label || pageFigure.sourceFileName}
+            {pageFigure.anchorType === "page"
+              ? ` · page ${pageFigure.anchorIndex}`
+              : pageFigure.anchorType === "slide"
+                ? ` · slide ${pageFigure.anchorIndex}`
+                : ""}
+          </figcaption>
+        </figure>
+      ) : (
       <div
         ref={containerRef}
         className="source-lesson-body mt-3 max-h-72 overflow-y-auto pr-1 text-sm leading-relaxed text-zinc-800"
@@ -144,6 +207,7 @@ function SourceLessonPanelImpl({
           </span>
         )}
       </div>
+      )}
       {footer ? (
         <div className="mt-4 border-t-2 border-zinc-200/90 pt-4">{footer}</div>
       ) : null}

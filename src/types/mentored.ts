@@ -230,6 +230,12 @@ export type MentoredIntent =
   | "request_repeat"
   | "request_pause"
   | "request_clarify"
+  /**
+   * The student acknowledged a SOFT check-in ("makes sense", "yeah I follow")
+   * for a non-critical concept. Rose may continue without forcing the formal
+   * check question. Does not burn an attempt or require the banner question.
+   */
+  | "check_in"
   | "other";
 
 export type MentoredTurnRequest = {

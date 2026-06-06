@@ -12,6 +12,7 @@ import {
 } from "@/components/immersive/NotesPanel";
 import { RoseDialoguePanel } from "@/components/immersive/RoseDialoguePanel";
 import { RoseQuestionBanner } from "@/components/immersive/RoseQuestionBanner";
+import { SourceFigurePanel } from "@/components/immersive/SourceFigurePanel";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
@@ -27,6 +28,8 @@ import type {
   MentoredTurnResponse,
 } from "@/types/mentored";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
+import { isPageFigure } from "@/lib/mentored/source-figures";
+import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
@@ -263,6 +266,44 @@ export function ImmersiveLessonRunner({
     },
     [materialId]
   );
+
+  // ---- source figures from the upload (Phase 1) ----
+  // The actual figures / full-page renders extracted from the student's PDF,
+  // keyed by 0-based lesson index within the active module. Rose shows these
+  // while teaching (Phase 2) and the source walkthrough renders the page view
+  // from them (Phase 3). Empty for text-only or pre-migration uploads.
+  const [sourceFiguresByLesson, setSourceFiguresByLesson] = useState<
+    Record<number, IngestSourceImageRecord[]>
+  >({});
+  // Chunk id the student dismissed the proactive figure for, so "Hide" sticks
+  // for that concept but a fresh figure shows on the next one.
+  const [figureDismissedForChunk, setFigureDismissedForChunk] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSourceFiguresByLesson({});
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/mentored/source-figures/${materialId}?moduleId=${activeModule.id}`
+        );
+        if (!res.ok) return;
+        const body = (await res.json()) as {
+          figuresByLesson?: Record<number, IngestSourceImageRecord[]>;
+        };
+        if (!cancelled && body.figuresByLesson) {
+          setSourceFiguresByLesson(body.figuresByLesson);
+        }
+      } catch (e) {
+        console.error("[imm runner source-figures]", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [materialId, activeModule.id]);
 
   // ---- notes panel (§2) ----
   // The "seed" suggestion for the current chunk is derived from the
@@ -587,6 +628,35 @@ export function ImmersiveLessonRunner({
     }
     return activeModule.lessons.flatMap((l) => l.key_terms ?? []);
   }, [activeModule.lessons, chunk]);
+
+  // Figures from the student's upload assigned to the lesson this chunk teaches.
+  const chunkFigures = useMemo<IngestSourceImageRecord[]>(() => {
+    if (!chunk || typeof chunk.sourceLessonIndex !== "number") return [];
+    return sourceFiguresByLesson[chunk.sourceLessonIndex] ?? [];
+  }, [chunk, sourceFiguresByLesson]);
+
+  // Full-page render / slide for this lesson — drives the SourceLessonPanel
+  // "Page" toggle (Phase 3 source walkthrough).
+  const chunkPageFigure = useMemo<IngestSourceImageRecord | null>(() => {
+    return chunkFigures.find(isPageFigure) ?? null;
+  }, [chunkFigures]);
+
+  // Preferred single figure to surface alongside the explanation (Phase 2
+  // proactive show): prefer an embedded diagram so it doesn't merely duplicate
+  // the page render that already lives behind the source "Page" toggle; fall
+  // back to the page render when that's all the upload has.
+  const primaryChunkFigure = useMemo<IngestSourceImageRecord | null>(() => {
+    if (chunkFigures.length === 0) return null;
+    return (
+      chunkFigures.find((f) => !isPageFigure(f)) ?? chunkPageFigure ?? null
+    );
+  }, [chunkFigures, chunkPageFigure]);
+  // Ref mirror so the streaming-turn closure reads the current figure without
+  // capturing a stale value when Rose's imageRequest arrives.
+  const primaryChunkFigureRef = useRef<IngestSourceImageRecord | null>(null);
+  useEffect(() => {
+    primaryChunkFigureRef.current = primaryChunkFigure;
+  }, [primaryChunkFigure]);
 
   useEffect(() => {
     if (!showNotesPanel || !showDockedNotes) {
@@ -927,16 +997,11 @@ export function ImmersiveLessonRunner({
     if (lastSpokenChunkIdRef.current === chunk.id) return;
 
     const explanation = chunk.explanation;
-    const checkQuestion = chunk.checkQuestion;
     const captured = chunk.id;
 
-    // Restored dialogue already contains this chunk's question — don't
-    // re-narrate or pop the question modal on re-entry.
-    if (
-      checkQuestion &&
-      (questionAudioStartedFor === chunk.id ||
-        chunkQuestionInTranscript(transcriptLines, checkQuestion))
-    ) {
+    // Restored dialogue already contains this chunk's explanation — don't
+    // re-narrate on re-entry (mount with restored transcript).
+    if (transcriptLines.some((l) => l.role === "rose" && l.text === explanation)) {
       lastSpokenChunkIdRef.current = chunk.id;
       return;
     }
@@ -952,9 +1017,15 @@ export function ImmersiveLessonRunner({
     // any chunk the student hadn't actually heard explained yet (e.g. a
     // freshly-advanced section, or a resume that lands on a new chunk) — the
     // new section would start by speaking the question with no explanation.
-    // Always narrate the explanation first; the question bubble still
-    // surfaces below when the question audio starts.
+    // Always narrate the explanation first.
     isResumeRef.current = false;
+
+    // Softer flow (Phase 4): after the explanation we lead with a natural
+    // check-in ("does that make sense?") instead of auto-firing the formal
+    // graded question on every concept. Rose poses the real CHECK QUESTION
+    // mid-conversation only when it matters (key concept, vague answer,
+    // long silence) — driven by the turn prompt + pacing signals.
+    const softCheck = softCheckInLine(captured);
 
     void (async () => {
       if (interactionModeRef.current !== "voice") return;
@@ -967,14 +1038,13 @@ export function ImmersiveLessonRunner({
       });
       if (interactionModeRef.current !== "voice") return;
       // Bail if the chunk changed under us (advance / resume) so we never
-      // speak this chunk's question after the student has moved on.
+      // speak this chunk's check-in after the student has moved on.
       if (lastSpokenChunkIdRef.current !== captured) return;
-      if (!checkQuestion || checkQuestion.trim().length === 0) return;
-      await voice.speak(checkQuestion, {
+      await voice.speak(softCheck, {
         onPlay: () => {
-          lastSpokenRef.current = `${explanation}\n\n${checkQuestion}`;
+          lastSpokenRef.current = `${explanation}\n\n${softCheck}`;
           lastCheckAtRef.current = Date.now();
-          setQuestionAudioStartedFor(captured);
+          appendTranscriptLineOnce({ role: "rose", text: softCheck });
         },
       });
     })();
@@ -998,17 +1068,21 @@ export function ImmersiveLessonRunner({
     if (!greetingPlayed) return;
     if (awaitingContinueRef.current) return;
     isResumeRef.current = false;
-    const q = chunk.checkQuestion?.trim() ?? "";
-    if (q && chunkQuestionInTranscript(transcriptLines, q)) {
-      setTextCheckRevealed(true);
+    const explanation = chunk.explanation.trim();
+    // Re-entry: explanation already shown — leave the existing dialogue as-is.
+    if (
+      explanation &&
+      transcriptLines.some((l) => l.role === "rose" && l.text === explanation)
+    ) {
       return;
     }
-    if (chunk.explanation.trim()) {
-      appendTranscriptLineOnce({ role: "rose", text: chunk.explanation });
+    if (explanation) {
+      appendTranscriptLineOnce({ role: "rose", text: explanation });
     }
-    if (q) {
-      setTextCheckRevealed(true);
-    }
+    // Softer flow (Phase 4): lead with a natural check-in rather than
+    // auto-revealing the formal graded question. The student can answer
+    // conversationally, or open the real check via "Show check question".
+    appendTranscriptLineOnce({ role: "rose", text: softCheckInLine(chunk.id) });
   }, [
     appendTranscriptLineOnce,
     chunk,
@@ -1144,7 +1218,14 @@ export function ImmersiveLessonRunner({
 
         async function* eachSseEvent(): AsyncGenerator<
           | { type: "text"; delta: string }
-          | { type: "meta"; intent: MentoredTurnResponse["intent"]; advance: boolean }
+          | {
+              type: "meta";
+              intent: MentoredTurnResponse["intent"];
+              advance: boolean;
+              imageRequest:
+                | { query: string; type: "diagram" | "photo" | "illustration" }
+                | null;
+            }
           | { type: "done" }
           | { type: "error"; message: string },
           void,
@@ -1172,6 +1253,26 @@ export function ImmersiveLessonRunner({
                 if (event === "text" && typeof parsed.delta === "string") {
                   yield { type: "text", delta: parsed.delta };
                 } else if (event === "meta") {
+                  let imageRequest:
+                    | {
+                        query: string;
+                        type: "diagram" | "photo" | "illustration";
+                      }
+                    | null = null;
+                  if (
+                    parsed.imageRequest &&
+                    typeof parsed.imageRequest === "object"
+                  ) {
+                    const ir = parsed.imageRequest as Record<string, unknown>;
+                    const q = typeof ir.query === "string" ? ir.query.trim() : "";
+                    const t =
+                      ir.type === "diagram" ||
+                      ir.type === "photo" ||
+                      ir.type === "illustration"
+                        ? ir.type
+                        : "illustration";
+                    if (q.length >= 3) imageRequest = { query: q, type: t };
+                  }
                   yield {
                     type: "meta",
                     intent:
@@ -1179,6 +1280,7 @@ export function ImmersiveLessonRunner({
                         ? (parsed.intent as MentoredTurnResponse["intent"])
                         : "other",
                     advance: parsed.advance === true,
+                    imageRequest,
                   };
                 } else if (event === "done") {
                   yield { type: "done" };
@@ -1264,9 +1366,21 @@ export function ImmersiveLessonRunner({
             } else if (ev.type === "meta") {
               finalIntent = ev.intent;
               finalAdvance = ev.advance;
-              // Images only when the student explicitly asked (client-side
-              // detectImageRequest above). Rose meta imageRequest is ignored
-              // — proactive Wikimedia pulls were too often irrelevant.
+              // Proactive visual: when Rose signals a visual would help, prefer
+              // the student's OWN uploaded figure for this lesson. Un-hide it if
+              // they dismissed it; only fall back to Wikimedia when the upload
+              // has no figure for this concept. (Student-asked images are still
+              // handled by detectImageRequest above.)
+              if (ev.imageRequest && !imgIntent) {
+                if (primaryChunkFigureRef.current) {
+                  setFigureDismissedForChunk(null);
+                } else {
+                  void fetchMentoredImage(
+                    ev.imageRequest.query,
+                    ev.imageRequest.type
+                  );
+                }
+              }
             } else if (ev.type === "done") {
               // Flush any buffered sentences + the incomplete tail as one
               // final chunk so nothing is dropped.
@@ -1332,7 +1446,9 @@ export function ImmersiveLessonRunner({
               ? "partial"
               : finalIntent === "answer_wrong"
                 ? "wrong"
-                : finalIntent === "skip_concept" || finalIntent === "move_on"
+                : finalIntent === "skip_concept" ||
+                    finalIntent === "move_on" ||
+                    finalIntent === "check_in"
                   ? "skipped"
                   : "partial";
         const attemptEval: "correct" | "partial" | "wrong" | null =
@@ -1368,12 +1484,15 @@ export function ImmersiveLessonRunner({
         }
         // Model sometimes treats "ok / got it" as correct and advances without
         // a real answer — keep the student on the chunk until they respond.
+        // `check_in` is exempt: a soft acknowledgement on a light concept is a
+        // legitimate reason to flow forward (Phase 4 softer check-ins).
         if (
           finalAdvance &&
           attempts === 0 &&
           isVagueAffirmative(text) &&
           finalIntent !== "move_on" &&
-          finalIntent !== "skip_concept"
+          finalIntent !== "skip_concept" &&
+          finalIntent !== "check_in"
         ) {
           finalAdvance = false;
         }
@@ -1413,6 +1532,7 @@ export function ImmersiveLessonRunner({
           setTutorReply(null);
           setMentoredImage(null);
           setMentoredImageLoading(false);
+          setFigureDismissedForChunk(null);
           setTextCheckRevealed(false);
           setTextPendingAdvance(false);
 
@@ -2292,6 +2412,18 @@ export function ImmersiveLessonRunner({
       {!awaitingContinue && chunk ? (
         <>
 
+      {/* Proactive figure from the student's OWN upload for this lesson.
+          Shown automatically while Rose teaches the concept; "Hide" sticks
+          per-chunk. Falls back silently to nothing when the upload has no
+          figure (the Wikimedia slot below covers asked-for / fallback cases). */}
+      {primaryChunkFigure && figureDismissedForChunk !== chunk.id ? (
+        <SourceFigurePanel
+          key={`fig-${chunk.id}`}
+          figure={primaryChunkFigure}
+          onDismiss={() => setFigureDismissedForChunk(chunk.id)}
+        />
+      ) : null}
+
       {/* §9 — On-demand image area. Only when the student explicitly
           asked for a visual. Stays visible until dismissed or the
           chunk advances. */}
@@ -2403,6 +2535,7 @@ export function ImmersiveLessonRunner({
               keyTerms={terms}
               narrationText={narrationText}
               footer={dialogue}
+              pageFigure={chunkPageFigure}
             />
           );
         }
@@ -2549,6 +2682,28 @@ export function ImmersiveLessonRunner({
 // ===========================================================================
 // Pieces
 // ===========================================================================
+
+/**
+ * A short, natural "does that land?" check-in spoken after each explanation
+ * (Phase 4 softer flow). Varies a little by chunk so it doesn't feel canned.
+ * The formal graded check question is still asked by Rose mid-conversation
+ * when it actually matters.
+ */
+const SOFT_CHECK_INS = [
+  "Does that make sense so far?",
+  "Still with me on that?",
+  "How's that landing — make sense?",
+  "Following so far, or want me to go deeper?",
+  "That track for you?",
+];
+
+function softCheckInLine(chunkId: string): string {
+  let h = 0;
+  for (let i = 0; i < chunkId.length; i++) {
+    h = (h * 31 + chunkId.charCodeAt(i)) >>> 0;
+  }
+  return SOFT_CHECK_INS[h % SOFT_CHECK_INS.length]!;
+}
 
 function chunkQuestionInTranscript(
   lines: TranscriptLine[],

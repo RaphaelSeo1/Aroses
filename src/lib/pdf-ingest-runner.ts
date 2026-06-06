@@ -1,4 +1,5 @@
 import {
+  APIConnectionError,
   APIConnectionTimeoutError,
   APIError,
   APIUserAbortError,
@@ -94,12 +95,23 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isRetriableAnthropicRateLimit(e: unknown): boolean {
-  return (
-    e instanceof RateLimitError ||
-    (e instanceof APIError &&
-      typeof e.status === "number" &&
-      (e.status === 429 || e.status === 503 || e.status === 529))
-  );
+  // Rate limit / overload — the original reason this wrapper existed.
+  if (e instanceof RateLimitError) return true;
+  // Transient network failures and timeouts. These are MUCH more common on the
+  // longer-running streaming calls that larger PDFs produce (structure plan /
+  // outline / module writing), and a single blip used to hard-fail the whole
+  // job with the generic "(network or model timeout)" error even though a
+  // retry almost always succeeds. APIConnectionTimeoutError extends
+  // APIConnectionError, so this covers both. (Note: APIConnectionError has no
+  // numeric `status`, so the APIError status branch below never caught it.)
+  if (e instanceof APIConnectionError) return true;
+  if (e instanceof APIError && typeof e.status === "number") {
+    const s = e.status;
+    // 408 request timeout, 500/502 transient server errors, 503/529 overloaded,
+    // 429 rate limited — all worth a backoff + retry.
+    return [408, 429, 500, 502, 503, 529].includes(s);
+  }
+  return false;
 }
 
 function anthropic429BodyText(e: unknown): string {
@@ -119,6 +131,19 @@ function anthropic429BodyText(e: unknown): string {
 }
 
 function backoffMsAfterRateLimit(e: unknown, attemptIndex: number): number {
+  // Connection drops / timeouts aren't rate limits — retry quickly rather than
+  // sitting on the long token-budget backoff (which can blow the function's
+  // time budget over several attempts). Short exponential with jitter.
+  const isConnection =
+    e instanceof APIConnectionError ||
+    (e instanceof APIError &&
+      typeof e.status === "number" &&
+      [408, 500, 502].includes(e.status));
+  if (isConnection) {
+    const exp = Math.min(12_000, 1_500 * 2 ** attemptIndex);
+    return Math.round(exp + Math.random() * 1_500);
+  }
+
   let fromHeader: number | null = null;
   if (e instanceof APIError && e.headers && typeof e.headers.get === "function") {
     const ra = e.headers.get("retry-after");
@@ -289,6 +314,11 @@ function mapAiFailureToMessage(jobId: string, e: unknown): string {
   if (e instanceof RateLimitError) {
     return "The AI service rate limit was hit. Wait one minute and try again.";
   }
+  // Connection drops / timeouts that survived the retry loop. Most common on
+  // big PDFs whose AI calls run long. Distinct, accurate message.
+  if (e instanceof APIConnectionError) {
+    return "Lost the connection to the AI service partway through. This is usually temporary — try this file again in a moment.";
+  }
   if (e instanceof APIError && typeof e.status === "number") {
     if (e.status === 404) {
       return "The configured AI model is not available (404). Update ANTHROPIC_COURSE_MODEL or redeploy — fast profile uses Claude Haiku 4.5.";
@@ -298,6 +328,17 @@ function mapAiFailureToMessage(jobId: string, e: unknown): string {
     }
     if (e.status === 429) {
       return "Too many AI requests right now. Wait a minute and retry this file.";
+    }
+    if (e.status === 400) {
+      const body = (e.message ?? "").toLowerCase();
+      if (
+        body.includes("too long") ||
+        body.includes("maximum") ||
+        body.includes("max_tokens") ||
+        body.includes("context")
+      ) {
+        return "This document is too large for the AI to process in one pass. Split it into smaller sections (e.g. by chapter) and upload those.";
+      }
     }
   }
   const msg = e instanceof Error ? e.message : "";
