@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import { runMentoredTurn } from "@/lib/ai/mentored";
+import { loadMentoredPersonalization } from "@/lib/mentored/load-personalization";
 import type {
   KnowledgeLevel,
   MentoredLessonChunk,
@@ -91,6 +92,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
+  let personalization = {};
+  try {
+    const loaded = await loadMentoredPersonalization(
+      supabase,
+      user.id,
+      body.materialId
+    );
+    personalization = loaded.personalization;
+  } catch (e) {
+    console.error("[mentored/turn personalization-read]", e);
+  }
+
   let turn: MentoredTurnResponse;
   try {
     const result = await runMentoredTurn({
@@ -98,6 +111,7 @@ export async function POST(request: Request) {
       attempts: body.attempts,
       studentUtterance: body.studentUtterance,
       knowledgeLevel: level,
+      personalization,
     });
     turn = result;
   } catch (e) {

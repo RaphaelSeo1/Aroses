@@ -18,6 +18,12 @@ import type {
   IngestChunkSummary,
 } from "@/lib/study-ingest/chunking";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
+import {
+  DEFAULT_COURSE_OUTPUT_LANGUAGE,
+  formatOutputLanguageGenerationBlock,
+  type CourseOutputLanguage,
+} from "@/lib/course-output-language";
+import { formatSelfStudyGenerationBlock } from "@/lib/self-study-context";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 import type { CourseModule, CoursePayload } from "@/types/course";
@@ -89,7 +95,8 @@ function moduleFreeResponseMin(
 
 async function ensureModuleQuizCount(
   module: CourseModule,
-  profile: CourseBuildProfile
+  profile: CourseBuildProfile,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
 ): Promise<CourseModule> {
   const target = moduleQuizTarget(profile);
   let quiz = [...module.quiz];
@@ -106,7 +113,8 @@ async function ensureModuleQuizCount(
     try {
       const added = await generateAdditionalModuleQuizItems(
         { ...module, quiz },
-        batch
+        batch,
+        outputLanguage
       );
       if (added.length === 0) break;
 
@@ -382,7 +390,9 @@ function isRetryableApiError(err: unknown): boolean {
 
 function courseInstruction(
   materialText: string,
-  profile: CourseBuildProfile
+  profile: CourseBuildProfile,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE,
+  studyContext?: string
 ): string {
   let sizeRules: string;
   let quizFooter: string;
@@ -421,7 +431,7 @@ QUIZ (critical): Each module needs **at least ${quizTarget} questions per module
   }
 
   return `You are an expert course designer and educator. You have been given raw course material (lecture slides, syllabi, notes). Your job is NOT to summarize this material. Your job is to use it as a source to BUILD a complete, professional, structured course that a student would genuinely pay for.
-
+${generationContextSuffix(studyContext, outputLanguage)}
 ${sizeRules}
 
 ${titleStyleRules()}
@@ -683,8 +693,15 @@ ${brokenAssistantText.slice(0, 120_000)}`;
 }
 
 export async function generateCourseFromMaterial(
-  materialText: string
+  materialText: string,
+  options?: {
+    outputLanguage?: CourseOutputLanguage;
+    studyContext?: string;
+  }
 ): Promise<CoursePayload> {
+  const outputLanguage =
+    options?.outputLanguage ?? DEFAULT_COURSE_OUTPUT_LANGUAGE;
+  const studyContext = options?.studyContext;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("Missing ANTHROPIC_API_KEY");
@@ -699,7 +716,12 @@ export async function generateCourseFromMaterial(
   });
 
   const trimmed = truncateMaterial(materialText, materialCharLimit(profile));
-  const instruction = courseInstruction(trimmed, profile);
+  const instruction = courseInstruction(
+    trimmed,
+    profile,
+    outputLanguage,
+    studyContext
+  );
 
   const monolithMaxTokens =
     profile === "express"
@@ -739,7 +761,9 @@ export async function generateCourseFromMaterial(
     try {
       const repaired = await repairPayloadJson(anthropic, rawText, profile);
       const modules = await Promise.all(
-        repaired.modules.map((m) => ensureModuleQuizCount(m, profile))
+        repaired.modules.map((m) =>
+          ensureModuleQuizCount(m, profile, outputLanguage)
+        )
       );
       return { ...repaired, modules };
     } catch (e) {
@@ -751,7 +775,9 @@ export async function generateCourseFromMaterial(
   try {
     const payload = parseCoursePayload(parsed);
     const modules = await Promise.all(
-      payload.modules.map((m) => ensureModuleQuizCount(m, profile))
+      payload.modules.map((m) =>
+        ensureModuleQuizCount(m, profile, outputLanguage)
+      )
     );
     return { ...payload, modules };
   } catch (e) {
@@ -759,7 +785,9 @@ export async function generateCourseFromMaterial(
     try {
       const repaired = await repairPayloadJson(anthropic, rawText, profile);
       const modules = await Promise.all(
-        repaired.modules.map((m) => ensureModuleQuizCount(m, profile))
+        repaired.modules.map((m) =>
+          ensureModuleQuizCount(m, profile, outputLanguage)
+        )
       );
       return { ...repaired, modules };
     } catch {
@@ -782,13 +810,27 @@ function outlineMaxTokens(profile: CourseBuildProfile): number {
 }
 
 function selfStudyBlock(studyContext: string): string {
-  return `\n=== LEARNER CONTEXT (self-study mode) ===\nThe student described their study situation as follows. Use this to calibrate the ENTIRE course — depth, focus, pacing, and terminology:\n"${studyContext}"\nApply this context throughout: adjust module emphasis, skip or compress topics they already know, expand areas they are struggling with, and use the exam timeline or goal if one is mentioned.\n=== END LEARNER CONTEXT ===\n`;
+  const block = formatSelfStudyGenerationBlock(studyContext);
+  return block ? `\n${block}\n` : "";
+}
+
+function generationContextSuffix(
+  studyContext?: string,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
+): string {
+  const parts = [formatOutputLanguageGenerationBlock(outputLanguage)];
+  if (studyContext) {
+    const block = selfStudyBlock(studyContext);
+    if (block.trim()) parts.push(block.trim());
+  }
+  return `\n${parts.join("\n\n")}\n`;
 }
 
 function outlineInstruction(
   materialText: string,
   profile: CourseBuildProfile,
-  studyContext?: string
+  studyContext?: string,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
 ): string {
   let moduleCount: string;
   let maxLessonTitles: number;
@@ -811,7 +853,7 @@ function outlineInstruction(
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
-${studyContext ? selfStudyBlock(studyContext) : ""}
+${generationContextSuffix(studyContext, outputLanguage)}
 ${moduleCount}
 Each module must include: numeric "id" (1, 2, 3, … in order), "title", and "lesson_titles" (array of **1 to ${maxLessonTitles}** short strings — concise titles only, no pasted paragraphs). For dense excerpts, use many distinct titles (up to the max) so each major idea can get its own lesson later.
 
@@ -863,7 +905,8 @@ function moduleInstruction(
   outline: CourseOutlinePayload,
   moduleIndex: number,
   profile: CourseBuildProfile,
-  studyContext?: string
+  studyContext?: string,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
 ): string {
   const stub = outline.modules[moduleIndex];
   const n = outline.modules.length;
@@ -886,7 +929,7 @@ function moduleInstruction(
           : `For EACH lesson: include key_terms (term+definition) and examples (strings).`;
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. Module title **must be** ${JSON.stringify(stub.title)}.
-${studyContext ? selfStudyBlock(studyContext) : ""}
+${generationContextSuffix(studyContext, outputLanguage)}
 Create one full module object: lessons (one per planned lesson title below, in order — same count as lesson_titles, each with rich "content", "key_terms", "examples"), plus quiz.
 
 Planned lesson titles for this module: ${titles}.
@@ -1075,7 +1118,8 @@ async function ensureModuleLessonFields(
 
 function structurePlanInstruction(
   chunkSummaries: IngestChunkSummary[],
-  studyContext?: string
+  studyContext?: string,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
 ): string {
   const chunkJson = JSON.stringify(chunkSummaries, null, 0);
   return `You are an expert course architect. You are given a list of CONTENT CHUNKS extracted from one or more uploaded files. Group them into a coherent course structure based on the CONTENT, not on which file they came from.
@@ -1086,7 +1130,7 @@ CRITICAL GROUPING RULES:
 - One file MAY contain multiple lessons (a long PDF with several chapters/sections becomes several lessons).
 - Some files/chunks may be SUPPLEMENTARY to a lesson (examples, appendices, problem sets) rather than their own lesson — attach them to the most relevant lesson instead of giving them a standalone lesson.
 - Decide grouping using: chunk titles/headings, topic continuity, chunk length (approxChars), and filename patterns (e.g. "Part 1/2/3", "Week N", "Chapter N").
-${studyContext ? selfStudyBlock(studyContext) : ""}
+${generationContextSuffix(studyContext, outputLanguage)}
 Every chunk id that carries real teaching content should be referenced by exactly one lesson via source_chunk_ids (a chunk may be referenced by more than one lesson only if genuinely shared). Do not invent chunk ids that are not in the list.
 
 ${titleStyleRules()}
@@ -1165,7 +1209,8 @@ function planMaxTokens(profile: CourseBuildProfile): number {
 export async function planCourseStructureFromChunks(
   chunkSummaries: IngestChunkSummary[],
   streamSink?: PdfIngestStreamSink,
-  studyContext?: string
+  studyContext?: string,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
 ): Promise<CourseStructurePlan> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -1182,7 +1227,11 @@ export async function planCourseStructureFromChunks(
     maxRetries: 0,
   });
 
-  const instruction = structurePlanInstruction(chunkSummaries, studyContext);
+  const instruction = structurePlanInstruction(
+    chunkSummaries,
+    studyContext,
+    outputLanguage
+  );
   const maxAttempts = profile === "express" || profile === "fast" ? 1 : 2;
 
   const rawText = await invokeUserMessageForPdfText(
@@ -1271,7 +1320,8 @@ export function assembleModuleSourcesFromPlan(
 export async function generateCourseOutlineFromMaterial(
   materialText: string,
   streamSink?: PdfIngestStreamSink,
-  studyContext?: string
+  studyContext?: string,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
 ): Promise<CourseOutlinePayload> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -1289,7 +1339,12 @@ export async function generateCourseOutlineFromMaterial(
     materialText,
     outlineMaterialCharLimit(profile)
   );
-  const instruction = outlineInstruction(trimmed, profile, studyContext);
+  const instruction = outlineInstruction(
+    trimmed,
+    profile,
+    studyContext,
+    outputLanguage
+  );
 
   const maxAttempts =
     profile === "express" || profile === "fast" || profile === "balanced"
@@ -1340,7 +1395,8 @@ export async function generateCourseModuleFromMaterial(
   outline: CourseOutlinePayload,
   moduleIndex: number,
   streamSink?: PdfIngestStreamSink,
-  studyContext?: string
+  studyContext?: string,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
 ): Promise<CourseModule> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -1358,7 +1414,14 @@ export async function generateCourseModuleFromMaterial(
   });
 
   const trimmed = truncateMaterial(materialText, materialCharLimit(profile));
-  const instruction = moduleInstruction(trimmed, outline, moduleIndex, profile, studyContext);
+  const instruction = moduleInstruction(
+    trimmed,
+    outline,
+    moduleIndex,
+    profile,
+    studyContext,
+    outputLanguage
+  );
 
   const maxAttempts =
     profile === "express" || profile === "fast"
@@ -1385,7 +1448,7 @@ export async function generateCourseModuleFromMaterial(
   } catch {
     let repaired = await repairModuleJson(anthropic, rawText, profile);
     repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
-    return ensureModuleQuizCount(repaired, profile);
+    return ensureModuleQuizCount(repaired, profile, outputLanguage);
   }
 
   try {
@@ -1396,11 +1459,11 @@ export async function generateCourseModuleFromMaterial(
     const normalized = courseMod.id !== expectedId ? { ...courseMod, id: expectedId } : courseMod;
 
     const withLessons = await ensureModuleLessonFields(anthropic, normalized, profile);
-    return ensureModuleQuizCount(withLessons, profile);
+    return ensureModuleQuizCount(withLessons, profile, outputLanguage);
   } catch (e) {
     console.warn("[study-generation] module validation failed; repairing", e);
     let repaired = await repairModuleJson(anthropic, rawText, profile);
     repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
-    return ensureModuleQuizCount(repaired, profile);
+    return ensureModuleQuizCount(repaired, profile, outputLanguage);
   }
 }

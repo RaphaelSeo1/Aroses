@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { buildSelfStudyContextBlob } from "@/lib/self-study-context";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
@@ -431,14 +432,21 @@ export default function NewCoursePage() {
     }
     setError(null);
     setLoading(true);
+    const title = finalTitle.trim() || d.title;
+    const studyContextBlob = buildSelfStudyContextBlob({
+      title,
+      summary: d.summary,
+      bullets: d.bullets,
+      rawGoal: studyContext.trim(),
+    });
     try {
       const res = await fetch("/api/courses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           is_self_study: true,
-          title: finalTitle.trim() || d.title,
-          study_context: d.summary.trim(),
+          title,
+          study_context: studyContextBlob || d.summary.trim(),
           // Optional — if blank the workspace falls back to "My materials".
           section_name: sectionName.trim() || undefined,
         }),

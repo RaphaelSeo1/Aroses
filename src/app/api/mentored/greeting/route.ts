@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { generateSessionGreeting } from "@/lib/ai/mentored";
+import { loadStudyContextForMaterial } from "@/lib/load-course-study-context";
+import { formatSelfStudyTutorBlock } from "@/lib/self-study-context";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 
@@ -88,6 +90,14 @@ export async function POST(request: Request) {
   }
 
   try {
+    const studyContextRaw = await loadStudyContextForMaterial(
+      supabase,
+      body.materialId
+    );
+    const studyContext = studyContextRaw
+      ? formatSelfStudyTutorBlock(studyContextRaw)
+      : undefined;
+
     const greeting = await generateSessionGreeting({
       courseTitle: body.courseTitle.trim(),
       courseDescription:
@@ -103,6 +113,7 @@ export async function POST(request: Request) {
           ? body.lastLessonTitle.trim() || undefined
           : undefined,
       scenario: body.scenario,
+      studyContext,
     });
     return NextResponse.json({ greeting });
   } catch (e) {

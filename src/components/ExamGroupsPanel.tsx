@@ -22,6 +22,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { CourseUploadForm } from "@/components/CourseUploadForm";
+import type { CourseOutputLanguage } from "@/lib/course-output-language";
 import {
   displayMaterialSectionLabel,
   suggestMaterialLabelFromPayload,
@@ -588,6 +589,7 @@ export function ExamGroupsPanel({
   failedJobs = [],
   initialSectionId,
   isSelfStudy = false,
+  defaultOutputLanguage,
   readOnly = false,
 }: {
   courseId: string;
@@ -599,6 +601,7 @@ export function ExamGroupsPanel({
   /** Expands the per-upload goal block by default in the upload form so the
    *  learner remembers to write a fresh goal for each lecture. */
   isSelfStudy?: boolean;
+  defaultOutputLanguage?: CourseOutputLanguage;
   /** View-only collaborators: hide uploads and content mutations. */
   readOnly?: boolean;
 }) {
@@ -1321,6 +1324,7 @@ export function ExamGroupsPanel({
                 courseId={courseId}
                 examGroupId={activeId}
                 isSelfStudy={isSelfStudy}
+                defaultOutputLanguage={defaultOutputLanguage}
               />
             </div>
           </div>

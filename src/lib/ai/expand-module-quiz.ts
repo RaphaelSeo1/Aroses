@@ -3,6 +3,11 @@ import {
   normalizeQuizItemsLoose,
   stripJsonFence,
 } from "@/lib/ai/course-payload";
+import {
+  DEFAULT_COURSE_OUTPUT_LANGUAGE,
+  formatOutputLanguageGenerationBlock,
+  type CourseOutputLanguage,
+} from "@/lib/course-output-language";
 import type { CourseModule, CourseQuizItem } from "@/types/course";
 
 const MODEL = "claude-sonnet-4-6";
@@ -25,7 +30,8 @@ function lessonCorpus(m: CourseModule): string {
  */
 export async function generateAdditionalModuleQuizItems(
   module: CourseModule,
-  count: number
+  count: number,
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
 ): Promise<CourseQuizItem[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -50,6 +56,7 @@ EXISTING QUESTION STEMS (do NOT repeat or trivially rephrase these):
 ${stemHint}
 
 Task: Output EXACTLY ${n} NEW practice questions as a JSON array only (no markdown fences, no commentary).
+${formatOutputLanguageGenerationBlock(outputLanguage)}
 Mix multiple-choice and short written answer:
 - MCQ objects: { "type": "mcq", "question": string, "choices": [4 strings], "correct": "A"|"B"|"C"|"D" OR matching choice text, "explanation": string }
 - Free-response: { "type": "free_response", "question": string, "reference_answer": string (snake_case, detailed rubric), "explanation": string }

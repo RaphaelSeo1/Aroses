@@ -15,6 +15,7 @@ import {
   UUID_RE,
 } from "@/lib/study-ingest/path";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
+import { parseCourseOutputLanguage } from "@/lib/course-output-language";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 
 export const runtime = "nodejs";
@@ -116,11 +117,13 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
   }
 
   const raw = body as Record<string, unknown>;
-  const { courseId, examGroupId, studyContext } = raw;
+  const { courseId, examGroupId, studyContext, outputLanguage: outputLanguageRaw } =
+    raw;
   const studyContextValue =
     typeof studyContext === "string" && studyContext.trim().length > 0
       ? studyContext.trim().slice(0, 4000)
       : null;
+  const outputLanguage = parseCourseOutputLanguage(outputLanguageRaw);
 
   if (typeof courseId !== "string" || !UUID_RE.test(courseId)) {
     return NextResponse.json({ error: "Invalid course" }, { status: 400 });
@@ -285,6 +288,8 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     minimalJobInsert.study_context = studyContextValue;
     extendedJobInsert.study_context = studyContextValue;
   }
+  minimalJobInsert.output_language = outputLanguage;
+  extendedJobInsert.output_language = outputLanguage;
 
   let { data: jobRow, error: jobInsErr } = await supabase
     .from("pdf_ingest_jobs")
@@ -298,7 +303,8 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
       jobInsErr,
       "source_format",
       "source_files",
-      "study_context"
+      "study_context",
+      "output_language"
     )
   ) {
     const retry = await supabase
@@ -326,6 +332,18 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
   }
 
   const jobId = jobRow.id;
+
+  const { error: langPrefErr } = await supabase
+    .from("courses")
+    .update({ output_language: outputLanguage })
+    .eq("id", courseId);
+  if (
+    langPrefErr &&
+    !isMissingDbColumnError(langPrefErr, "output_language")
+  ) {
+    console.warn("[process-pdf] could not save output_language preference", langPrefErr);
+  }
+
   const useChunkedPdfIngest = process.env.PDF_INGEST_SYNCHRONOUS !== "1";
 
   if (useChunkedPdfIngest) {

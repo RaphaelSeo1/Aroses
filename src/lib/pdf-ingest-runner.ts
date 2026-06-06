@@ -42,6 +42,8 @@ import {
   structurePlanToOutline,
   type PdfIngestStreamSink,
 } from "@/lib/ai/study-generation";
+import type { CourseOutputLanguage } from "@/lib/course-output-language";
+import { loadCourseGenerationContext } from "@/lib/load-course-generation-context";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
@@ -663,35 +665,13 @@ export async function runPdfIngestExpandOne(
     .eq("id", jobId)
     .maybeSingle();
 
-  // Prefer the per-upload context (set on the job row at upload time). Fall
-  // back to the parent course's context so existing self-study sessions keep
-  // working until the user customises individual lectures. The per-job
-  // lookup is a separate query so older schemas (pre-migration 030 where
-  // `study_context` doesn't exist on the table) still keep working — we
-  // swallow the error and continue.
-  let expandStudyContext: string | null = null;
-  if (job?.id) {
-    const { data: jobCtx } = await admin
-      .from("pdf_ingest_jobs")
-      .select("study_context")
-      .eq("id", job.id)
-      .maybeSingle();
-    const raw = (jobCtx as { study_context?: unknown } | null | undefined)
-      ?.study_context;
-    if (typeof raw === "string" && raw.trim().length > 0) {
-      expandStudyContext = raw.trim();
-    }
-  }
-  if (!expandStudyContext && job?.course_id) {
-    const { data: courseCtx } = await admin
-      .from("courses")
-      .select("study_context")
-      .eq("id", job.course_id)
-      .maybeSingle();
-    const raw = courseCtx?.study_context;
-    expandStudyContext =
-      typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
-  }
+  const expandGenerationContext = job?.id
+    ? await loadCourseGenerationContext(
+        admin,
+        job.id,
+        typeof job.course_id === "string" ? job.course_id : null
+      )
+    : { studyContext: null, outputLanguage: "auto" as const };
 
   // STRUCTURE_PLANNING: per-module source text assembled from each module's
   // lessons' chunk ids. Separate defensive query so DBs without migration 045
@@ -912,7 +892,8 @@ export async function runPdfIngestExpandOne(
               outline,
               moduleIndex,
               offset === 0 ? createPdfStreamSink(admin, jobId) : undefined,
-              expandStudyContext ?? undefined
+              expandGenerationContext.studyContext ?? undefined,
+              expandGenerationContext.outputLanguage
             );
           },
           // 6 attempts × 90 s exp-backoff cap = ~126 s worst-case retry +
@@ -1171,33 +1152,13 @@ export async function runPdfIngestJob(
     )
     .maybeSingle();
 
-  // Fetch self-study context. Per-upload (job-level) overrides the
-  // course-level default. Done after the claim so we don't delay the claim
-  // itself; the context is only needed at outline time. Per-job lookup is a
-  // separate query so older schemas (pre-migration 030) don't break.
-  let courseStudyContext: string | null = null;
-  if (claimed?.id) {
-    const { data: jobCtxRow } = await admin
-      .from("pdf_ingest_jobs")
-      .select("study_context")
-      .eq("id", claimed.id)
-      .maybeSingle();
-    const raw = (jobCtxRow as { study_context?: unknown } | null | undefined)
-      ?.study_context;
-    if (typeof raw === "string" && raw.trim().length > 0) {
-      courseStudyContext = raw.trim();
-    }
-  }
-  if (!courseStudyContext && claimed?.course_id) {
-    const { data: courseRow } = await admin
-      .from("courses")
-      .select("study_context")
-      .eq("id", claimed.course_id)
-      .maybeSingle();
-    const raw = courseRow?.study_context;
-    courseStudyContext =
-      typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
-  }
+  const generationContext = claimed?.id
+    ? await loadCourseGenerationContext(
+        admin,
+        claimed.id,
+        typeof claimed.course_id === "string" ? claimed.course_id : null
+      )
+    : { studyContext: null, outputLanguage: "auto" as const };
 
   if (claimErr) {
     console.error("[pdf-ingest] claim", jobId, claimErr);
@@ -1380,7 +1341,8 @@ export async function runPdfIngestJob(
     claimedEpoch,
     cleanupPaths,
     sourceTextForOutline,
-    courseStudyContext,
+    courseStudyContext: generationContext.studyContext,
+    outputLanguage: generationContext.outputLanguage,
     chunks: previewResult.chunks,
     sourceImages: previewResult.sourceImages,
     sourceFiles,
@@ -1427,25 +1389,11 @@ export async function runPdfIngestContinueAfterTranscript(
 
   const cleanupPaths = storagePathsForJob(job as { storage_path: string; source_files?: unknown });
 
-  let courseStudyContext: string | null = null;
-  const { data: jobCtxRow } = await admin
-    .from("pdf_ingest_jobs")
-    .select("study_context")
-    .eq("id", jobId)
-    .maybeSingle();
-  const rawCtx = (jobCtxRow as { study_context?: unknown } | null)?.study_context;
-  if (typeof rawCtx === "string" && rawCtx.trim()) {
-    courseStudyContext = rawCtx.trim();
-  } else if (job.course_id) {
-    const { data: courseRow } = await admin
-      .from("courses")
-      .select("study_context")
-      .eq("id", job.course_id)
-      .maybeSingle();
-    const raw = courseRow?.study_context;
-    courseStudyContext =
-      typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
-  }
+  const generationContext = await loadCourseGenerationContext(
+    admin,
+    jobId,
+    typeof job.course_id === "string" ? job.course_id : null
+  );
 
   await runPdfIngestOutlinePhase(admin, {
     jobId,
@@ -1453,7 +1401,8 @@ export async function runPdfIngestContinueAfterTranscript(
     claimedEpoch,
     cleanupPaths,
     sourceTextForOutline: transcript,
-    courseStudyContext,
+    courseStudyContext: generationContext.studyContext,
+    outputLanguage: generationContext.outputLanguage,
     // Transcript-resume has no per-file chunks here; use the legacy outline path.
     chunks: [],
     driveModules: options?.driveModules,
@@ -1479,6 +1428,7 @@ async function runPdfIngestOutlinePhase(
     cleanupPaths: string[];
     sourceTextForOutline: string;
     courseStudyContext: string | null;
+    outputLanguage: CourseOutputLanguage;
     chunks: IngestChunk[];
     sourceImages?: IngestSourceImageRecord[];
     sourceFiles?: IngestSourceFileRef[] | null;
@@ -1495,6 +1445,7 @@ async function runPdfIngestOutlinePhase(
     cleanupPaths,
     sourceTextForOutline,
     courseStudyContext,
+    outputLanguage,
     chunks,
     sourceImages: sourceImagesInput = [],
     sourceFiles = null,
@@ -1603,7 +1554,8 @@ async function runPdfIngestOutlinePhase(
           planCourseStructureFromChunks(
             summarizeChunksForPlanner(chunks),
             streamSink,
-            courseStudyContext ?? undefined
+            courseStudyContext ?? undefined,
+            outputLanguage
           ),
         { maxAttempts: 14 }
       );
@@ -1641,7 +1593,8 @@ async function runPdfIngestOutlinePhase(
           generateCourseOutlineFromMaterial(
             sourceTextForOutline,
             streamSink,
-            courseStudyContext ?? undefined
+            courseStudyContext ?? undefined,
+            outputLanguage
           ),
         { maxAttempts: 14 }
       );

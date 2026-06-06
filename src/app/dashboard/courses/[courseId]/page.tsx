@@ -11,6 +11,7 @@ import {
 } from "@/components/ExamGroupsPanel";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { ShareCourseButton } from "@/components/ShareCourseButton";
+import { parseCourseOutputLanguage } from "@/lib/course-output-language";
 import { fetchCoursePublishingPanels } from "@/lib/marketplace/course-publishing-data";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
@@ -139,6 +140,9 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
   const isSelfStudy = Boolean(course.is_self_study);
   const readOnlyWorkspace = course.viewer_role === "viewer";
   const isOwner = course.viewer_role === "owner" || !course.viewer_role;
+  const defaultOutputLanguage = parseCourseOutputLanguage(
+    course.output_language
+  );
 
   return (
     <>
@@ -248,6 +252,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                     failedJobs={failedJobs}
                     initialSectionId={sectionFromUrl ?? undefined}
                     isSelfStudy
+                    defaultOutputLanguage={defaultOutputLanguage}
                     readOnly={readOnlyWorkspace}
                   />
                 </div>
@@ -297,6 +302,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                   materials={materials}
                   failedJobs={failedJobs}
                   initialSectionId={sectionFromUrl ?? undefined}
+                  defaultOutputLanguage={defaultOutputLanguage}
                   readOnly={readOnlyWorkspace}
                 />
               </div>

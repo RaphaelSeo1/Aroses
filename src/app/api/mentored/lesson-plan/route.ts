@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import { generateLessonPlan } from "@/lib/ai/mentored";
+import { loadStudyContextForMaterial } from "@/lib/load-course-study-context";
+import { formatSelfStudyTutorBlock } from "@/lib/self-study-context";
 import type { CoursePayload } from "@/types/course";
 import type {
   GoalsAnswer,
@@ -136,11 +138,20 @@ export async function POST(request: Request) {
         ? "intermediate"
         : "beginner";
 
+  const studyContextRaw = await loadStudyContextForMaterial(
+    supabase,
+    body.materialId
+  );
+  const studyContext = studyContextRaw
+    ? formatSelfStudyTutorBlock(studyContextRaw)
+    : undefined;
+
   try {
     const plan = await generateLessonPlan({
       module,
       goals,
       knowledgeLevel,
+      studyContext,
     });
     // Cache on the session row so subsequent loads of this module are free.
     await supabase.from("user_mentored_sessions").upsert(

@@ -12,6 +12,7 @@ export type DashboardCourseRow = {
   is_public: boolean;
   is_self_study?: boolean;
   study_context?: string | null;
+  output_language?: string | null;
   /** Present when `025_app_super_admins.sql` is applied and you are in `app_super_admins`. */
   owner_user_id?: string;
   viewer_role?: ViewerCourseRole;
@@ -37,13 +38,14 @@ export async function fetchCourseForDashboard(
     is_public?: boolean | null;
     is_self_study?: boolean | null;
     study_context?: string | null;
+    output_language?: string | null;
   };
 
   let row: Row | null = null;
 
   const primary = await supabase
     .from("courses")
-    .select("id, user_id, title, description, created_at, is_public, is_self_study, study_context")
+    .select("id, user_id, title, description, created_at, is_public, is_self_study, study_context, output_language")
     .eq("id", courseId)
     .maybeSingle();
 
@@ -103,6 +105,7 @@ export async function fetchCourseForDashboard(
     is_public: Boolean(rest.is_public),
     is_self_study: Boolean(rest.is_self_study),
     study_context: rest.study_context ?? null,
+    output_language: rest.output_language ?? null,
     owner_user_id: ownerUserId,
     viewer_role: isAdmin && rowUserId !== viewerUserId ? null : access?.role ?? null,
     can_edit_content: isAdmin || Boolean(access?.canEditContent),

@@ -1,11 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
-import {
-  extractPersonalization,
-  runMentoredTurnStream,
-} from "@/lib/ai/mentored";
+import { runMentoredTurnStream } from "@/lib/ai/mentored";
+import { loadMentoredPersonalization } from "@/lib/mentored/load-personalization";
 import type {
-  GoalsAnswer,
   KnowledgeLevel,
   MentoredLessonChunk,
   MentoredPersonalization,
@@ -142,44 +139,13 @@ export async function POST(request: Request) {
   let personalization: MentoredPersonalization = {};
   let shouldPersistPersonalization = false;
   try {
-    const { data: onboardingRow } = await supabase
-      .from("user_course_onboarding")
-      .select("goals, knowledge_level, personalization")
-      .eq("user_id", userId)
-      .eq("material_id", materialId)
-      .maybeSingle();
-    const existing =
-      onboardingRow?.personalization &&
-      typeof onboardingRow.personalization === "object"
-        ? (onboardingRow.personalization as MentoredPersonalization)
-        : {};
-    const isEmpty =
-      !existing.summary &&
-      !(existing.knownTopics?.length) &&
-      !(existing.focusAreas?.length) &&
-      !existing.experienceLevel;
-    if (!isEmpty) {
-      personalization = existing;
-    } else if (
-      onboardingRow?.goals &&
-      Array.isArray(onboardingRow.goals) &&
-      onboardingRow.goals.length > 0
-    ) {
-      // Lazy extract — fire it, but bound the wait. If the extraction
-      // hits its own timeout, we proceed without personalization
-      // rather than blocking Rose's reply.
-      try {
-        personalization = await extractPersonalization({
-          goals: onboardingRow.goals as GoalsAnswer[],
-          quizLevel: isLevel(onboardingRow.knowledge_level)
-            ? (onboardingRow.knowledge_level as KnowledgeLevel)
-            : undefined,
-        });
-        shouldPersistPersonalization = true;
-      } catch (e) {
-        console.error("[mentored/turn-stream personalization-extract]", e);
-      }
-    }
+    const loaded = await loadMentoredPersonalization(
+      supabase,
+      userId,
+      materialId
+    );
+    personalization = loaded.personalization;
+    shouldPersistPersonalization = loaded.shouldPersist;
   } catch (e) {
     console.error("[mentored/turn-stream personalization-read]", e);
   }

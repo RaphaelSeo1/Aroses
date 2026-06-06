@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { formatSelfStudyTutorBlock } from "@/lib/self-study-context";
 import { AI_ASSISTANT_NAME, APP_NAME } from "@/lib/brand";
 import { parseStudyChatResponse } from "@/lib/ai/study-chat-parse";
 import type { CoursePayload } from "@/types/course";
@@ -190,7 +191,7 @@ function buildVoiceSystem(
   voiceLanguage?: string
 ): string {
   const selfStudySection = studyContext
-    ? `\nSTUDENT BACKGROUND (they told us this when they started — use it to calibrate every reply):\n"${studyContext}"\n`
+    ? `\n${formatSelfStudyTutorBlock(studyContext)}\n`
     : "";
   const languageSection = buildVoiceLanguageInstruction(voiceLanguage);
   return `You are ${AI_ASSISTANT_NAME}, the student's voice tutor inside ${APP_NAME}. The student is TALKING TO YOU OUT LOUD and your reply will be SPOKEN BACK to them via text-to-speech. Write like a real person speaks — not like a written essay or chatbot.${selfStudySection}
@@ -268,14 +269,19 @@ export async function* streamVoiceReply(
 
 export async function runStudyChat(
   contextText: string,
-  messages: StudyChatTurn[]
+  messages: StudyChatTurn[],
+  studyContext?: string
 ): Promise<{ reply: string; action: unknown | null }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("Missing ANTHROPIC_API_KEY");
   }
 
-  const system = `You are ${AI_ASSISTANT_NAME}, an expert but friendly tutor. The student is working inside ${APP_NAME} on course material generated from their own uploaded files.
+  const selfStudySection = studyContext
+    ? `\n${formatSelfStudyTutorBlock(studyContext)}\n`
+    : "";
+
+  const system = `You are ${AI_ASSISTANT_NAME}, an expert but friendly tutor. The student is working inside ${APP_NAME} on course material generated from their own uploaded files.${selfStudySection}
 
 How to help:
 - Use the FULL COURSE MAP and lesson content in CONTEXT. Topics may live in a different module than the one on screen — check the map before saying something isn't covered.

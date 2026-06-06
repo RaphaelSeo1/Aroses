@@ -16,6 +16,11 @@ import {
   validateIngestBatch,
 } from "@/lib/study-ingest/validate";
 import {
+  COURSE_OUTPUT_LANGUAGE_OPTIONS,
+  DEFAULT_COURSE_OUTPUT_LANGUAGE,
+  type CourseOutputLanguage,
+} from "@/lib/course-output-language";
+import {
   estimatedProcessingHint,
   formatLabel,
   INGEST_ACCEPT_ATTRIBUTE,
@@ -97,10 +102,13 @@ export function CourseUploadForm({
    *  learner is nudged to write a goal specific to *this* lecture. The
    *  textarea always starts blank — goals are no longer course-wide. */
   isSelfStudy = false,
+  defaultOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE,
 }: {
   courseId: string;
   examGroupId: string;
   isSelfStudy?: boolean;
+  /** Last choice for this course; updated on each upload. */
+  defaultOutputLanguage?: CourseOutputLanguage;
 }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -114,6 +122,8 @@ export function CourseUploadForm({
   // own focus statement, not a stale course-wide one. For self-study courses
   // we open the block by default so the learner remembers to fill it in.
   const [studyGoal, setStudyGoal] = useState<string>("");
+  const [outputLanguage, setOutputLanguage] =
+    useState<CourseOutputLanguage>(defaultOutputLanguage);
   const [showGoal, setShowGoal] = useState<boolean>(isSelfStudy);
   const [polishingGoal, setPolishingGoal] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
@@ -139,6 +149,10 @@ export function CourseUploadForm({
   // Drag state: which file chip is being dragged + the group hovered over.
   const [draggedKey, setDraggedKey] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  useEffect(() => {
+    setOutputLanguage(defaultOutputLanguage);
+  }, [defaultOutputLanguage]);
 
   const fileKey = (f: File) => `${f.name}:${f.size}`;
 
@@ -605,6 +619,7 @@ export function CourseUploadForm({
                 examGroupId,
                 files: g.files,
                 studyContext: studyGoal.trim() || undefined,
+                outputLanguage,
               }),
             });
             const raw = await res.text();
@@ -719,6 +734,46 @@ export function CourseUploadForm({
 
   return (
     <form onSubmit={(e) => void onSubmit(e)} className="space-y-4">
+      <div className="rounded-2xl border border-zinc-200/90 bg-zinc-50/60 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+        <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+          <span aria-hidden className="mr-1">
+            🌐
+          </span>
+          Course language
+        </p>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          Lessons and quizzes will be written in this language.
+        </p>
+        <div
+          className="mt-3 flex flex-wrap gap-2"
+          role="radiogroup"
+          aria-label="Course output language"
+        >
+          {COURSE_OUTPUT_LANGUAGE_OPTIONS.map((opt) => {
+            const selected = outputLanguage === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                disabled={loading}
+                title={opt.description}
+                onClick={() => setOutputLanguage(opt.value)}
+                className={[
+                  "rounded-full border px-3.5 py-2 text-sm font-semibold transition-colors disabled:opacity-50",
+                  selected
+                    ? "border-brand bg-brand text-white shadow-sm shadow-red-600/20 dark:border-brand dark:bg-brand dark:text-white"
+                    : "border-zinc-300 bg-white text-zinc-700 hover:border-brand-border hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-brand-border/50 dark:hover:bg-zinc-800",
+                ].join(" ")}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Per-upload study goal — applies only to this set of files. Self-study
           courses see it expanded; public courses see a collapsed toggle. */}
       <div className="rounded-2xl border border-zinc-200/90 bg-zinc-50/60 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40">

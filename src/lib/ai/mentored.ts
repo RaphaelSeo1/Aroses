@@ -106,12 +106,14 @@ export type LessonPlanInput = {
   module: CourseModule;
   goals: GoalsAnswer[];
   knowledgeLevel: KnowledgeLevel;
+  /** Self-study course goal — used when onboarding goals are empty. */
+  studyContext?: string;
 };
 
 // Bump when the prompt or parser changes in a way that invalidates cached
 // plans. v2 adds `keyTerms` so the immersive runner can glow phrases in the
 // source-lesson panel.
-const LESSON_PLAN_VERSION = 2;
+const LESSON_PLAN_VERSION = 3;
 
 function levelGuidance(level: KnowledgeLevel): string {
   switch (level) {
@@ -147,12 +149,16 @@ export async function generateLessonPlan(
     .join("\n\n")
     .slice(0, MAX_CONTEXT_CHARS);
 
-  const goalsText =
+  const goalsFromOnboarding =
     input.goals.length > 0
-      ? input.goals
-          .map((g) => `Q: ${g.question}\nA: ${g.answer}`)
-          .join("\n\n")
-      : "(none provided)";
+      ? input.goals.map((g) => `Q: ${g.question}\nA: ${g.answer}`).join("\n\n")
+      : "";
+
+  const goalsText =
+    goalsFromOnboarding ||
+    (input.studyContext?.trim()
+      ? `SELF-STUDY GOAL:\n${input.studyContext.trim().slice(0, 2_000)}`
+      : "(none provided)");
 
   const prompt = `You are a one-on-one tutor planning how to TEACH a specific module to a student.
 
@@ -163,6 +169,12 @@ ${goalsText}
 
 CALIBRATION:
 ${levelGuidance(input.knowledgeLevel)}
+${
+  input.studyContext?.trim()
+    ? `
+SELF-STUDY CALIBRATION: The student stated a personal goal above. Plan MORE chunks on their focus areas and FEWER on topics they say they already know. Match check questions to what they are trying to master.`
+    : ""
+}
 
 SOURCE LESSON CONTENT (use as ground truth — do not invent facts):
 ${lessons}
@@ -706,6 +718,8 @@ export type SessionGreetingInput = {
    *  they actually worked on. Falls back to a generic "Welcome back"
    *  framing in the prompt when missing. */
   lastLessonTitle?: string;
+  /** Self-study goal — personalize the greeting when present. */
+  studyContext?: string;
 };
 
 const GREETING_SYSTEM = `You are Rose, a friendly, encouraging AI tutor inside a one-on-one Mentored Learning session. Generate a brief, warm GREETING for a student who just opened a course. Sound human and conversational, like a real tutor would when a student walks in. Do not use overly formal language. Do not list bullet points. Do not say "as an AI". Do not narrate what you'll do — just greet them.
@@ -738,6 +752,10 @@ export async function generateSessionGreeting(
     ? `\nCOURSE DESCRIPTION (use only if it fits naturally — do NOT recite verbatim):\n${input.courseDescription.trim().slice(0, 400)}`
     : "\n(No course description available — do not mention course content specifics.)";
 
+  const studyBlock = input.studyContext?.trim()
+    ? `\nSTUDENT'S STUDY GOAL (mention ONE focus area naturally if it fits — do NOT read a list):\n${input.studyContext.trim().slice(0, 500)}`
+    : "";
+
   const scenarioBlock = (() => {
     switch (input.scenario) {
       case "first_time":
@@ -756,7 +774,7 @@ Tone: cheerful "look who's back, you finished it!" Warmly acknowledge the comple
     }
   })();
 
-  const user = `COURSE TITLE: ${input.courseTitle.slice(0, 200)}${desc}
+  const user = `COURSE TITLE: ${input.courseTitle.slice(0, 200)}${desc}${studyBlock}
 
 ${scenarioBlock}
 

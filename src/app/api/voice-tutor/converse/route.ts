@@ -7,6 +7,7 @@ import {
   streamVoiceReply,
   type VoiceContinuationHint,
 } from "@/lib/ai/study-chat";
+import { formatSelfStudyTutorBlock } from "@/lib/self-study-context";
 import { fetchCourseMaterialsForChat, buildCourseMapFromMaterials } from "@/lib/study-chat-context";
 import {
   extractNavigationQuery,
@@ -167,7 +168,9 @@ export async function POST(request: Request) {
       .maybeSingle();
     const raw = courseCtxRow?.study_context;
     studyContext =
-      typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : undefined;
+      typeof raw === "string" && raw.trim().length > 0
+        ? formatSelfStudyTutorBlock(raw.trim())
+        : undefined;
   }
 
   if (fetchErr || !row) {

@@ -6,6 +6,7 @@ import {
   buildStudyContextText,
   runStudyChat,
 } from "@/lib/ai/study-chat";
+import { loadStudyContextForMaterial } from "@/lib/load-course-study-context";
 import { sanitizeStudyChatReply } from "@/lib/ai/study-chat-parse";
 import {
   fetchCourseMaterialsForChat,
@@ -358,7 +359,15 @@ export async function POST(request: Request) {
       });
     }
 
-    const out = await runStudyChat(contextText, messages);
+    const studyContext = await loadStudyContextForMaterial(
+      supabase,
+      b.materialId
+    );
+    const out = await runStudyChat(
+      contextText,
+      messages,
+      studyContext ?? undefined
+    );
     let reply = sanitizeStudyChatReply(out.reply);
     let action = resolveNavigateAction(out.action, navMaterials);
     let options: StudyChatOption[] = [];
