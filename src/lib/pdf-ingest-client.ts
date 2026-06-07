@@ -33,6 +33,131 @@ function jobStartedAtMs(createdAt?: string): number | null {
 /** Gap between consecutive expand calls per PDF (ms). */
 const EXPAND_MODULE_GAP_MS = 50;
 
+/** Poll job row while a long /expand call runs so module counts tick up live. */
+const EXPAND_PROGRESS_POLL_MS = 1_400;
+
+async function pollJobProgressWhileExpandRuns(
+  jobId: string,
+  signal: AbortSignal | undefined,
+  options: {
+    createdAt?: string;
+    modulesTotal: number;
+    modulesBuiltStart: number;
+    onProgress?: (info: PdfBuildProgressUI) => void;
+    onJobSnapshot?: PollPdfIngestOptions["onJobSnapshot"];
+    onPreviewCourse?: PollPdfIngestOptions["onPreviewCourse"];
+    onStreamPreview?: PollPdfIngestOptions["onStreamPreview"];
+  },
+  expandPromise: Promise<
+    | { ok: true; json: ExpandResponseJson }
+    | { ok: false; status: number; json: ExpandResponseJson | null }
+  >
+): Promise<
+  | { ok: true; json: ExpandResponseJson }
+  | { ok: false; status: number; json: ExpandResponseJson | null }
+> {
+  let lastBuilt = options.modulesBuiltStart;
+  const started = jobStartedAtMs(options.createdAt);
+
+  const formatLine = (built: number, suffix: string) => {
+    const elapsed =
+      started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
+    const bar =
+      options.modulesTotal > 0
+        ? Math.min(100, ((built + 0.35) / options.modulesTotal) * 100)
+        : ("indeterminate" as const);
+    return {
+      line: `Writing modules… · ${built}/${options.modulesTotal} built${elapsed}${suffix}`,
+      bar,
+    };
+  };
+
+  const applySnapshot = (data: JobGetJson) => {
+    const snapStatus = typeof data.status === "string" ? data.status : "unknown";
+    const rawPhase = data.ingestPhase;
+    const ingestPhase: PdfIngestPhase | undefined =
+      rawPhase === "reading_pdf" ||
+      rawPhase === "reading_full_pdf" ||
+      rawPhase === "digesting_full_pdf" ||
+      rawPhase === "planning_preview" ||
+      rawPhase === "planning_outline" ||
+      rawPhase === "enriching_sources" ||
+      rawPhase === "writing_modules" ||
+      rawPhase === "reviewing_transcript" ||
+      rawPhase === "transcribing"
+        ? rawPhase
+        : undefined;
+    options.onJobSnapshot?.({
+      status: snapStatus,
+      outlineReady: Boolean(data.outlineReady),
+      ingestPhase,
+      ingestTranscript:
+        typeof data.ingestTranscript === "string"
+          ? data.ingestTranscript
+          : undefined,
+      modulesBuilt:
+        typeof data.modulesBuilt === "number" ? data.modulesBuilt : undefined,
+      modulesTotal:
+        typeof data.modulesTotal === "number" ? data.modulesTotal : undefined,
+    });
+    if ("streamPreview" in data) {
+      const raw = (data as { streamPreview?: unknown }).streamPreview;
+      if (raw === null) options.onStreamPreview?.(null);
+      else if (typeof raw === "string") options.onStreamPreview?.(raw);
+    }
+    if ("previewCourse" in data) {
+      const raw = (data as { previewCourse?: unknown }).previewCourse;
+      if (raw === null || raw === undefined) {
+        options.onPreviewCourse?.(null);
+      } else if (typeof raw === "object") {
+        try {
+          options.onPreviewCourse?.(parseLivePreviewCoursePayload(raw));
+        } catch {
+          options.onPreviewCourse?.(null);
+        }
+      }
+    }
+  };
+
+  const pollOnce = async () => {
+    const got = await fetchJobStatusWithRetry(jobId, signal);
+    if (got.kind !== "ok") return;
+    const built =
+      typeof got.data.modulesBuilt === "number"
+        ? got.data.modulesBuilt
+        : lastBuilt;
+    if (built !== lastBuilt) {
+      lastBuilt = built;
+      options.onProgress?.(formatLine(built, ""));
+    }
+    applySnapshot(got.data);
+  };
+
+  options.onProgress?.(
+    formatLine(
+      lastBuilt,
+      lastBuilt === 0 ? " · generating first batch…" : ""
+    )
+  );
+
+  let expandDone = false;
+  void expandPromise.finally(() => {
+    expandDone = true;
+  });
+
+  while (!expandDone) {
+    if (signal?.aborted) break;
+    await sleep(EXPAND_PROGRESS_POLL_MS);
+    if (expandDone) break;
+    await pollOnce();
+    if (!expandDone) {
+      options.onProgress?.(formatLine(lastBuilt, " · still working…"));
+    }
+  }
+
+  return expandPromise;
+}
+
 /**
  * Max parallel POST /expand calls across all in-tab PDF jobs.
  * The Anthropic retry logic handles 429s, so set this high enough
@@ -98,6 +223,7 @@ export type PdfIngestPhase =
   | "digesting_full_pdf"
   | "planning_preview"
   | "planning_outline"
+  | "enriching_sources"
   | "writing_modules"
   | "reviewing_transcript"
   | "transcribing";
@@ -334,6 +460,7 @@ export async function pollPdfIngestJob(
       rawPhase === "digesting_full_pdf" ||
       rawPhase === "planning_preview" ||
       rawPhase === "planning_outline" ||
+      rawPhase === "enriching_sources" ||
       rawPhase === "writing_modules" ||
       rawPhase === "reviewing_transcript" ||
       rawPhase === "transcribing"
@@ -394,8 +521,23 @@ export async function pollPdfIngestJob(
     // would spin on "Writing module N of N" forever).
     const built = data.modulesBuilt;
     const total = data.modulesTotal;
+    if (ingestPhase === "enriching_sources") {
+      const started = jobStartedAtMs(data.createdAt);
+      const elapsedPart =
+        started != null
+          ? ` · ${formatElapsedShort(Date.now() - started)}`
+          : "";
+      onProgress?.({
+        line: `Extracting tables and figures from your PDF pages…${elapsedPart}`,
+        bar: "indeterminate",
+      });
+      await sleep(1_200);
+      continue;
+    }
+
     const inModulePhase =
       data.status === "running" &&
+      ingestPhase === "writing_modules" &&
       data.outlineReady &&
       typeof built === "number" &&
       typeof total === "number" &&
@@ -403,30 +545,28 @@ export async function pollPdfIngestJob(
       built <= total;
 
     if (inModulePhase && built < total) {
-      const next = built + 1;
-      const started = jobStartedAtMs(data.createdAt);
-      const bar = Math.min(100, ((next - 0.5) / total) * 100);
-
-      // Keep the timer ticking while we block on the expand fetch.
-      // Without this the text (including elapsed) is frozen for the entire
-      // duration of the server call (up to ~5 min under heavy rate-limiting).
-      // Modules are written in batches (several per expand call), so the count
-      // advances in jumps. Show how many are built rather than a single module
-      // number that would look "stuck" while a batch generates in parallel.
-      const liveTimer = setInterval(() => {
-        if (signal?.aborted) return;
-        const elapsed = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
-        onProgress?.({ line: `Writing modules… · ${built}/${total} built${elapsed}`, bar });
-      }, 1_000);
-      const elapsed0 = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
-      onProgress?.({ line: `Writing modules… · ${built}/${total} built${elapsed0}`, bar });
-
-      const expandResult = await postProcessPdfExpand(jobId, signal);
-      clearInterval(liveTimer);
+      const expandResult = await pollJobProgressWhileExpandRuns(
+        jobId,
+        signal,
+        {
+          createdAt: data.createdAt,
+          modulesTotal: total,
+          modulesBuiltStart: built,
+          onProgress,
+          onJobSnapshot: options?.onJobSnapshot,
+          onPreviewCourse: options?.onPreviewCourse,
+          onStreamPreview: options?.onStreamPreview,
+        },
+        postProcessPdfExpand(jobId, signal)
+      );
 
       if (!expandResult.ok && expandResult.status === 0) {
         if (signal?.aborted) return { error: "Cancelled." };
-        const elapsed = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
+        const startedReconnect = jobStartedAtMs(data.createdAt);
+        const elapsed =
+          startedReconnect != null
+            ? ` · ${formatElapsedShort(Date.now() - startedReconnect)}`
+            : "";
         onProgress?.({
           line: `Writing modules… · ${built}/${total} built${elapsed} — reconnecting…`,
           bar: "indeterminate",
@@ -442,7 +582,7 @@ export async function pollPdfIngestJob(
           error:
             typeof expJson.error === "string" && expJson.error.trim()
               ? expJson.error.trim()
-              : `Module ${next} failed (${expandResult.status}).`,
+              : `Module batch failed (${expandResult.status}).`,
         };
       }
       if (expJson.complete === true && typeof expJson.materialId === "string") {
@@ -483,8 +623,20 @@ export async function pollPdfIngestJob(
       const elapsed0 = started != null ? ` · ${formatElapsedShort(Date.now() - started)}` : "";
       onProgress?.({ line: `${label}…${elapsed0}`, bar: 100 });
 
-      const expandSave = await postProcessPdfExpand(jobId, signal);
-      clearInterval(liveTimerSave);
+      const expandSave = await pollJobProgressWhileExpandRuns(
+        jobId,
+        signal,
+        {
+          createdAt: data.createdAt,
+          modulesTotal: total,
+          modulesBuiltStart: built,
+          onProgress,
+          onJobSnapshot: options?.onJobSnapshot,
+          onPreviewCourse: options?.onPreviewCourse,
+          onStreamPreview: options?.onStreamPreview,
+        },
+        postProcessPdfExpand(jobId, signal)
+      );
 
       if (!expandSave.ok && expandSave.status === 0) {
         if (signal?.aborted) return { error: "Cancelled." };

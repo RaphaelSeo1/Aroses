@@ -5,7 +5,13 @@ import type {
 } from "@/lib/study-ingest/source-images/types";
 
 const BUCKET = "study-material-images";
-const MAX_TOTAL = 40;
+/** Must cover full lecture PDF page renders (see PDF_INGEST_MAX_PAGE_RENDERS_PER_PDF). */
+const MAX_TOTAL = (() => {
+  const raw = process.env.PDF_INGEST_MAX_SOURCE_IMAGES?.trim();
+  const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  if (Number.isFinite(n) && n > 0) return Math.min(250, n);
+  return 180;
+})();
 
 function extForMime(mime: string): string {
   switch (mime) {

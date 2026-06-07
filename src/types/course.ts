@@ -10,6 +10,25 @@ export type SourceRef = {
   locator: string;
 };
 
+export type LessonVisualAssetType =
+  | "diagram"
+  | "table"
+  | "chart"
+  | "image"
+  | "page_snapshot";
+
+/** Cropped or page-level visual from the student's uploaded PDF. */
+export type LessonVisualAsset = {
+  assetId: string;
+  imageUrl: string;
+  type: LessonVisualAssetType;
+  sourcePage: number;
+  title: string;
+  caption: string;
+  whyRelevant: string;
+  placementAfterParagraph?: number;
+};
+
 export type CourseLesson = {
   title: string;
   content: string;
@@ -17,6 +36,8 @@ export type CourseLesson = {
   examples: string[];
   /** Present when ingest mapped this lesson to specific upload chunks. */
   sources?: SourceRef[];
+  /** PDF visuals attached during finalize (NotebookLM-style). */
+  visual_assets?: LessonVisualAsset[];
 };
 
 /** Parsed MCQ with resolved correct choice index */

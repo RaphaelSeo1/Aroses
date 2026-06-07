@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useActivePdfBuildOptional } from "@/components/ActivePdfBuildProvider";
+import { buildSessionId } from "@/lib/active-pdf-builds";
 import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseWorkspaceBackRow } from "@/components/CourseWorkspaceBackRow";
@@ -55,6 +57,13 @@ function tabStatusLine(
   }
   if (terminal?.materialId) {
     return { line: "Done", detail: "Open in study editor from the course list." };
+  }
+  if (snap?.ingestPhase === "enriching_sources") {
+    return {
+      line: "Extracting tables & figures…",
+      detail:
+        "Outline is on screen. Pulling tables and page images from your PDF before lesson bodies are written.",
+    };
   }
   // IMPORTANT: check module progress before `preview`. The merged preview
   // exists as soon as the outline is saved, but modules can still be writing
@@ -238,6 +247,10 @@ export function CourseBuildTheater({
   initialDueCounts?: SrsDueCounts;
 }) {
   const router = useRouter();
+  const pdfBuild = useActivePdfBuildOptional();
+  const sessionIdRef = useRef(
+    jobIds.length > 0 ? buildSessionId(courseId, jobIds) : ""
+  );
   const [activeJob, setActiveJob] = useState(jobIds[0] ?? "");
   const [rows, setRows] = useState<Record<string, RowState>>({});
   const [previewByJob, setPreviewByJob] = useState<
@@ -286,7 +299,32 @@ export function CourseBuildTheater({
     router.refresh();
   }, [router, courseHomeWithSection]);
 
+  useEffect(() => {
+    if (!pdfBuild || jobIds.length === 0) return;
+    sessionIdRef.current = pdfBuild.registerSession({
+      courseId,
+      courseTitle,
+      sectionId,
+      jobIds,
+    });
+  }, [pdfBuild, courseId, courseTitle, sectionId, jobIds]);
+
+  useEffect(() => {
+    if (!pdfBuild || !sessionIdRef.current) return;
+    const labels: Record<string, string> = {};
+    for (const id of jobIds) {
+      const label = rows[id]?.label;
+      if (label) labels[id] = label;
+    }
+    if (Object.keys(labels).length > 0) {
+      pdfBuild.updateLabels(sessionIdRef.current, labels);
+    }
+  }, [pdfBuild, jobIds, rows]);
+
   const onProgress = useCallback((id: string, info: PdfBuildProgressUI) => {
+    if (pdfBuild && sessionIdRef.current) {
+      pdfBuild.updateJobProgress(sessionIdRef.current, id, info);
+    }
     setRows((prev) => {
       const base = prev[id] ?? {
         label: "PDF",
@@ -302,7 +340,7 @@ export function CourseBuildTheater({
         },
       };
     });
-  }, []);
+  }, [pdfBuild]);
 
   const onPreview = useCallback((id: string, course: CoursePayload | null) => {
     setPreviewByJob((prev) => ({ ...prev, [id]: course }));
@@ -326,6 +364,9 @@ export function CourseBuildTheater({
   );
 
   const onDone = useCallback((id: string, result: PollOutcome) => {
+    if (pdfBuild && sessionIdRef.current) {
+      pdfBuild.updateJobTerminal(sessionIdRef.current, id, result);
+    }
     setTerminalByJob((prev) => ({ ...prev, [id]: result }));
     // Immediately update the status card for this job so it doesn't stay
     // stale while other jobs in the batch are still running.
@@ -346,7 +387,18 @@ export function CourseBuildTheater({
         },
       };
     });
-  }, []);
+  }, [pdfBuild]);
+
+  useEffect(() => {
+    if (!pdfBuild || !sessionIdRef.current) return;
+    if (!jobIds.every((id) => terminalByJob[id] != null)) return;
+    const ok = jobIds.some((id) => terminalByJob[id]?.materialId);
+    const err = jobIds.some((id) => terminalByJob[id]?.error);
+    pdfBuild.markSessionStatus(
+      sessionIdRef.current,
+      err && ok ? "partial" : err ? "failed" : "success"
+    );
+  }, [pdfBuild, jobIds, terminalByJob]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -628,6 +680,24 @@ export function CourseBuildTheater({
         : null}
       <AppHeader right={<HeaderNavLoggedIn initialDueCounts={initialDueCounts} />} />
       <CourseWorkspaceBackRow courseId={courseId} courseTitle={courseTitle} />
+      {phase === "running" ? (
+        <div className="border-b border-zinc-200 bg-zinc-50/90 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900/40 sm:px-6">
+          <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">
+              You can leave this page — building continues in the background.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                router.push("/dashboard");
+              }}
+              className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+            >
+              Browse while building
+            </button>
+          </div>
+        </div>
+      ) : null}
       <main className="min-h-[calc(100vh-4rem)] bg-white dark:bg-zinc-950">
         <div className="mx-auto max-w-3xl px-4 py-8 sm:px-10">
           <AiStudyDisclaimer className="mb-6" />

@@ -22,7 +22,41 @@ import {
   persistIngestChunks,
   type SourceIndex,
 } from "@/lib/source-attribution";
+import { filterCroppedFiguresOnly } from "@/lib/study-ingest/source-images/is-page-render";
 import { embedSourceImagesInModules } from "@/lib/study-ingest/source-images/embed-in-course";
+import {
+  enrichChunksWithPageFigures,
+  enrichChunksWithPageTables,
+} from "@/lib/study-ingest/enrich-chunks-with-page-tables";
+import {
+  collectPdfFiguresForModule,
+  collectPdfTablesForModule,
+  extractPdfTableBlocksFromSource,
+  injectPageImagesFromLessonSources,
+  injectUnplacedFiguresByRelevance,
+  injectPdfArtifactsIntoModule,
+  injectPdfArtifactsIntoModules,
+  mergeIngestPageImageRecords,
+  parseIngestPageArtifacts,
+  type IngestPageArtifacts,
+} from "@/lib/study-ingest/inject-pdf-tables-into-module";
+import { pageTableExtractionsToMap } from "@/lib/study-ingest/source-images/extract-pdf-page-tables";
+import {
+  buildCourseAssetManifest,
+  formatAssetManifestForPrompt,
+  mergeManifestWithDbAssets,
+  parseCourseAssetManifest,
+  resolveAssetTokensInModules,
+  retrieveAssetsForModuleOutline,
+  type CourseAssetManifest,
+} from "@/lib/study-ingest/course-assets";
+import { attachVisualAssetsToModules } from "@/lib/study-ingest/lesson-visual-assets";
+import { ensurePdfVisualsAtFinalize } from "@/lib/pdf-ingest/ensure-pdf-visuals";
+import { placeAllPdfAssetsIntoModules } from "@/lib/pdf-ingest/place-course-assets";
+import {
+  linkCourseAssetsToMaterial,
+  loadCourseAssetsForJob,
+} from "@/lib/pdf-ingest/persist-course-assets";
 import { supplementPdfPageFigures } from "@/lib/study-ingest/source-images/supplement-pdf-pages";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 import { parseIngestSourceImages } from "@/lib/study-ingest/source-images/upload";
@@ -37,6 +71,7 @@ import type { CoursePayload } from "@/types/course";
 import {
   assembleModuleSourcesFromPlan,
   generateCourseModuleFromMaterial,
+  type ModuleGenerationOptions,
   generateCourseOutlineFromMaterial,
   buildMaterialDigestFromFullPdfText,
   materialTextForPdfIngest,
@@ -59,6 +94,7 @@ import {
   type LocalizedCourseMaterial,
 } from "@/lib/localize-course-payload";
 import { findSiblingCanonicalMaterial } from "@/lib/study-material-canonical";
+import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
@@ -345,8 +381,21 @@ function mapAiFailureToMessage(jobId: string, e: unknown): string {
   if (msg === "Missing ANTHROPIC_API_KEY") {
     return "Server is not configured for AI. Contact support.";
   }
+  if (msg.includes("after module repair")) {
+    return "One module was too large to finish in one AI pass (common with table-heavy PDFs). Click Restart this PDF — it usually succeeds on retry.";
+  }
+  if (
+    msg.includes("Each module needs at least one") ||
+    msg.includes("Invalid module") ||
+    msg.includes("Each module needs at least one lesson")
+  ) {
+    return "The model returned an incomplete module (missing quiz or lessons). Click Restart this PDF — it usually succeeds on retry.";
+  }
   if (msg.includes("Claude did not return valid JSON")) {
-    return "The model returned an incomplete response. Try uploading again, or use a smaller PDF.";
+    return "The model returned an incomplete response. Click Restart this PDF — if it keeps failing, try splitting the PDF by chapter.";
+  }
+  if (msg.length > 0 && msg.length <= 200) {
+    return msg;
   }
   return "AI processing failed (network or model timeout). Try again in a moment.";
 }
@@ -420,6 +469,40 @@ async function loadIngestSourceIndex(
   return plan ? { chunks, plan } : { chunks };
 }
 
+async function loadIngestPageArtifacts(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+): Promise<IngestPageArtifacts> {
+  const { data, error } = await admin
+    .from("pdf_ingest_jobs")
+    .select("ingest_page_tables")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (error && isMissingDbColumnError(error, "ingest_page_tables")) {
+    return { tables: {}, figures: [] };
+  }
+  return parseIngestPageArtifacts(
+    (data as { ingest_page_tables?: unknown } | null)?.ingest_page_tables
+  );
+}
+
+async function loadIngestAssetManifest(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+): Promise<CourseAssetManifest | null> {
+  const { data, error } = await admin
+    .from("pdf_ingest_jobs")
+    .select("ingest_asset_manifest")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (error && isMissingDbColumnError(error, "ingest_asset_manifest")) {
+    return null;
+  }
+  return parseCourseAssetManifest(
+    (data as { ingest_asset_manifest?: unknown } | null)?.ingest_asset_manifest
+  );
+}
+
 async function finalizePdfIngest(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
@@ -433,12 +516,14 @@ async function finalizePdfIngest(
     retainStorage?: boolean;
     ingestMedia?: Record<string, unknown> | null;
     sourceImages?: IngestSourceImageRecord[];
+    assetManifest?: CourseAssetManifest | null;
     sourceIndex?: SourceIndex | null;
     /** Pre-built canonical + display payloads (sibling reuse fast path). */
     localized?: LocalizedCourseMaterial;
     /** Required for canonical → translate when `localized` is omitted. */
     sourceText?: string;
     outputLanguage?: CourseOutputLanguage;
+    knownPageCount?: number;
   }
 ): Promise<{ materialId: string } | null> {
   // Idempotency guard: if a concurrent expand call (e.g. from a page refresh)
@@ -454,21 +539,78 @@ async function finalizePdfIngest(
   }
 
   const modulesRenumbered = renumberModules(modulesRaw);
-
-  const embedResult =
-    options?.sourceImages?.length
-      ? embedSourceImagesInModules(
-          modulesRenumbered,
-          options.sourceImages,
-          options.sourceIndex ?? null
-        )
-      : { modules: modulesRenumbered, figuresIndex: null };
+  let pageArtifacts = await loadIngestPageArtifacts(admin, jobId);
+  let sourceImagesForFinalize = options?.sourceImages ?? [];
+  let assetManifest =
+    options?.assetManifest ?? (await loadIngestAssetManifest(admin, jobId));
 
   const fallbackFileName =
     typeof originalFileName === "string" && originalFileName.trim().length > 0
       ? originalFileName.trim()
-      : undefined;
-  const modules =
+      : "upload.pdf";
+  const primaryStoragePath = Array.isArray(storagePath)
+    ? storagePath[0] ?? ""
+    : storagePath;
+  const isPdfUpload =
+    /\.pdf$/i.test(fallbackFileName) || /\.pdf$/i.test(primaryStoragePath);
+
+  if (
+    isPdfUpload &&
+    pageArtifacts.figures.filter((f) => f.url?.trim()).length === 0 &&
+    primaryStoragePath
+  ) {
+    const { data: ownerRow } = await admin
+      .from("courses")
+      .select("user_id")
+      .eq("id", courseId)
+      .maybeSingle();
+    const ownerId =
+      typeof ownerRow?.user_id === "string" ? ownerRow.user_id : null;
+    if (ownerId) {
+      try {
+        const ensured = await ensurePdfVisualsAtFinalize({
+          admin,
+          userId: ownerId,
+          jobId,
+          storagePath: primaryStoragePath,
+          fileName: fallbackFileName,
+          pageArtifacts,
+          sourceImages: sourceImagesForFinalize,
+          chunks: options?.sourceIndex?.chunks ?? [],
+          plan: options?.sourceIndex?.plan ?? null,
+          knownPageCount:
+            options?.knownPageCount && options.knownPageCount > 0
+              ? options.knownPageCount
+              : undefined,
+        });
+        pageArtifacts = ensured.pageArtifacts;
+        sourceImagesForFinalize = ensured.sourceImages;
+        if (ensured.manifest) assetManifest = ensured.manifest;
+      } catch (e) {
+        console.error("[pdf-ingest] ensurePdfVisualsAtFinalize", jobId, e);
+      }
+    }
+  }
+
+  const modulesWithArtifacts = injectPdfArtifactsIntoModules(
+    modulesRenumbered,
+    options?.sourceIndex?.plan ?? null,
+    options?.sourceIndex?.chunks ?? [],
+    pageArtifacts
+  );
+
+  const embedResult =
+    sourceImagesForFinalize.length || options?.sourceImages?.length
+      ? embedSourceImagesInModules(
+          modulesWithArtifacts,
+          sourceImagesForFinalize.length
+            ? sourceImagesForFinalize
+            : (options?.sourceImages ?? []),
+          options?.sourceIndex ?? null
+        )
+      : { modules: modulesWithArtifacts, figuresIndex: null };
+
+  const modulesWithSources =
     options?.sourceIndex && options.sourceIndex.chunks.length > 0
       ? attachLessonSources(
           embedResult.modules,
@@ -477,6 +619,92 @@ async function finalizePdfIngest(
           fallbackFileName
         )
       : embedResult.modules;
+
+  const allPageImages = mergeIngestPageImageRecords(
+    sourceImagesForFinalize,
+    pageArtifacts
+  );
+  const modulesWithTokens = resolveAssetTokensInModules(
+    injectPageImagesFromLessonSources(modulesWithSources, allPageImages),
+    assetManifest
+  );
+  const modulesAfterFallback = await injectUnplacedFiguresByRelevance(
+    modulesWithTokens,
+    pageArtifacts.figures,
+    assetManifest
+  );
+
+  let courseAssetsFromDb: Awaited<ReturnType<typeof loadCourseAssetsForJob>> = [];
+  try {
+    courseAssetsFromDb = await loadCourseAssetsForJob(admin, jobId);
+  } catch (e) {
+    console.error("[pdf-ingest] loadCourseAssetsForJob", jobId, e);
+  }
+
+  const placed = await placeAllPdfAssetsIntoModules(modulesAfterFallback, {
+    manifest: assetManifest,
+    pageArtifacts,
+    courseAssets: courseAssetsFromDb,
+    jobId,
+  });
+
+  let effectiveManifest = assetManifest;
+  if (
+    (!effectiveManifest || effectiveManifest.assets.length === 0) &&
+    pageArtifacts.figures.length > 0
+  ) {
+    try {
+      effectiveManifest = await buildCourseAssetManifest(pageArtifacts);
+    } catch (e) {
+      console.warn("[pdf-ingest] rebuild asset manifest at finalize", jobId, e);
+    }
+  }
+  effectiveManifest = mergeManifestWithDbAssets(
+    effectiveManifest,
+    courseAssetsFromDb,
+    fallbackFileName ?? "upload.pdf"
+  );
+
+  const pagesRendered = new Set(
+    pageArtifacts.figures.map((f) => f.pageNum).filter((p) => p > 0)
+  ).size;
+
+  const attachResult = await attachVisualAssetsToModules({
+    modules: placed.modules,
+    manifest: effectiveManifest,
+    pagesRendered,
+    jobId,
+  });
+  const modules = attachResult.modules;
+
+  const allLessons = modules.flatMap((m) => m.lessons);
+  const lessonsWithVisualAssets = allLessons.filter(
+    (l) => (l.visual_assets?.length ?? 0) > 0
+  ).length;
+  const lessonsWithImages = allLessons.filter((l) =>
+    lessonMarkdownHasImages(l.content ?? "")
+  ).length;
+  const lessonsWithTables = allLessons.filter((l) => {
+    const c = l.content ?? "";
+    return c.includes("|") && /^\|.*\|/m.test(c);
+  }).length;
+  console.info("[pdf-ingest] finalize asset placement", {
+    jobId,
+    placeAvailable: placed.placeCounts.assetsAvailable,
+    placeInjected: placed.placeCounts.assetsInjected,
+    lessonsReceiving: placed.placeCounts.lessonsReceiving,
+    pageImages: allPageImages.length,
+    pagesRendered,
+    assetsAvailable: attachResult.assetsAvailable,
+    captionsAvailable: attachResult.captionsAvailable,
+    lessonsWithVisualAssets,
+    totalVisualsInserted: attachResult.totalVisualsInserted,
+    lessonsWithImages,
+    lessonsWithTables,
+    manifestAssets: effectiveManifest?.assets.length ?? 0,
+    pageTablePages: Object.keys(pageArtifacts.tables).length,
+    pageFigures: pageArtifacts.figures.length,
+  });
 
   let localizedMaterial = options?.localized;
   if (
@@ -582,6 +810,9 @@ async function finalizePdfIngest(
   if (embedResult.figuresIndex) {
     materialInsert.figures_index = embedResult.figuresIndex;
   }
+  if (effectiveManifest && effectiveManifest.assets.length > 0) {
+    materialInsert.asset_manifest = effectiveManifest;
+  }
 
   let { data: row, error: insErr } = await admin
     .from("study_materials")
@@ -615,6 +846,22 @@ async function finalizePdfIngest(
     const retry = await admin
       .from("study_materials")
       .insert(withoutSourceIndex as never)
+      .select("id")
+      .single();
+    row = retry.data;
+    insErr = retry.error;
+  }
+
+  if (
+    insErr &&
+    assetManifest &&
+    isMissingDbColumnError(insErr, "asset_manifest")
+  ) {
+    const { asset_manifest: _a, ...withoutAssetManifest } = materialInsert;
+    void _a;
+    const retry = await admin
+      .from("study_materials")
+      .insert(withoutAssetManifest as never)
       .select("id")
       .single();
     row = retry.data;
@@ -747,6 +994,13 @@ async function finalizePdfIngest(
     admin
   );
 
+  try {
+    await linkCourseAssetsToMaterial(admin, jobId, row.id);
+  } catch (e) {
+    console.error("[pdf-ingest] linkCourseAssetsToMaterial FAILED", jobId, e);
+    throw e;
+  }
+
   await removeIngestObject(admin, storagePath, {
     retainStorage: options?.retainStorage,
   });
@@ -802,6 +1056,9 @@ export async function runPdfIngestExpandOne(
   // lessons' chunk ids. Separate defensive query so DBs without migration 045
   // still expand normally (missing-column error is swallowed).
   let moduleSources: string[] | null = null;
+  let ingestPageArtifacts: IngestPageArtifacts = { tables: {}, figures: [] };
+  let ingestAssetManifest: CourseAssetManifest | null = null;
+  let sourceIndexForInject: SourceIndex | null = null;
   if (job?.id) {
     const { data: msRow } = await admin
       .from("pdf_ingest_jobs")
@@ -813,6 +1070,9 @@ export async function runPdfIngestExpandOne(
     if (Array.isArray(raw)) {
       moduleSources = raw.map((x) => (typeof x === "string" ? x : ""));
     }
+    ingestPageArtifacts = await loadIngestPageArtifacts(admin, job.id);
+    ingestAssetManifest = await loadIngestAssetManifest(admin, job.id);
+    sourceIndexForInject = await loadIngestSourceIndex(admin, job.id);
   }
 
   if (loadErr || !job) {
@@ -833,6 +1093,18 @@ export async function runPdfIngestExpandOne(
 
   if (job.status !== "running") {
     return { kind: "failed", message: "Job is not ready to expand yet." };
+  }
+
+  const ingestPhaseRaw = (job as { ingest_phase?: unknown }).ingest_phase;
+  if (
+    ingestPhaseRaw === "enriching_sources" ||
+    ingestPhaseRaw === "planning_outline" ||
+    ingestPhaseRaw === "planning_preview"
+  ) {
+    return {
+      kind: "failed",
+      message: "Still preparing source material — try again in a moment.",
+    };
   }
 
   if (job.ingest_outline == null || job.ingest_source_text == null) {
@@ -897,6 +1169,7 @@ export async function runPdfIngestExpandOne(
 
   if (prefix.length >= n) {
     const sourceIndex = await loadIngestSourceIndex(admin, jobId);
+    const ingestAssetManifest = await loadIngestAssetManifest(admin, jobId);
     const fin = await finalizePdfIngest(
       admin,
       jobId,
@@ -911,6 +1184,7 @@ export async function runPdfIngestExpandOne(
         ingestMedia,
         sourceImages,
         sourceIndex,
+        assetManifest: ingestAssetManifest,
         sourceText: sourceTextForLocale,
         outputLanguage: expandGenerationContext.outputLanguage,
       }
@@ -1048,19 +1322,31 @@ export async function runPdfIngestExpandOne(
         withAnthropicRateLimitRetries(
           jobId,
           batchCount === 1 ? "module" : `module-${moduleIndex + 1}`,
-          () => {
+          async () => {
             const planned = moduleSources?.[moduleIndex];
             const materialForModule =
               typeof planned === "string" && planned.trim().length > 0
                 ? planned
                 : job.ingest_source_text;
+            const modOutline = outline.modules[moduleIndex];
+            let moduleGenOptions: ModuleGenerationOptions | undefined;
+            if (ingestAssetManifest && modOutline) {
+              const retrieved = await retrieveAssetsForModuleOutline({
+                manifest: ingestAssetManifest,
+                moduleTitle: modOutline.title,
+                lessonTitles: modOutline.lesson_titles,
+              });
+              const prompt = formatAssetManifestForPrompt(retrieved);
+              if (prompt.trim()) moduleGenOptions = { assetManifestPrompt: prompt };
+            }
             return generateCourseModuleFromMaterial(
               materialForModule,
               outline,
               moduleIndex,
               offset === 0 ? createPdfStreamSink(admin, jobId) : undefined,
               expandGenerationContext.studyContext ?? undefined,
-              generationLanguage
+              generationLanguage,
+              moduleGenOptions
             );
           },
           // 6 attempts × 90 s exp-backoff cap = ~126 s worst-case retry +
@@ -1072,7 +1358,37 @@ export async function runPdfIngestExpandOne(
           // — the UI looked stuck at "Writing module N of M" for minutes.
           { maxAttempts: 6 }
         ).then((mod) => {
-          resolvedModules.set(moduleIndex, mod);
+          const planned = moduleSources?.[moduleIndex];
+          let injected = mod;
+          const plan = sourceIndexForInject?.plan ?? null;
+          const chunks = sourceIndexForInject?.chunks ?? [];
+          const tableMap = new Map(Object.entries(ingestPageArtifacts.tables));
+          if (plan && (tableMap.size > 0 || ingestPageArtifacts.figures.length > 0)) {
+            const tables = collectPdfTablesForModule(
+              moduleIndex,
+              plan,
+              chunks,
+              tableMap
+            );
+            const figures = collectPdfFiguresForModule(
+              moduleIndex,
+              plan,
+              chunks,
+              ingestPageArtifacts.figures
+            );
+            injected = injectPdfArtifactsIntoModule(injected, tables, figures);
+          }
+          if (typeof planned === "string" && planned.trim().length > 0) {
+            const fromSource = extractPdfTableBlocksFromSource(planned);
+            if (fromSource.length > 0) {
+              injected = injectPdfArtifactsIntoModule(
+                injected,
+                fromSource,
+                []
+              );
+            }
+          }
+          resolvedModules.set(moduleIndex, injected);
           // Serialize DB writes so concurrently-resolving modules don't race.
           persistChain = persistChain.then(flushContiguousProgress);
           return persistChain;
@@ -1407,6 +1723,8 @@ export async function runPdfIngestJob(
     ingestMedia: Record<string, unknown> | null;
     chunks: IngestChunk[];
     sourceImages: IngestSourceImageRecord[];
+    primaryPdfBuffer: Buffer | null;
+    primaryPdfFileName: string | null;
   };
 
   try {
@@ -1438,6 +1756,8 @@ export async function runPdfIngestJob(
       ingestMedia: extracted.ingestMedia,
       chunks: extracted.chunks ?? [],
       sourceImages: extracted.sourceImages,
+      primaryPdfBuffer: extracted.primaryPdfBuffer,
+      primaryPdfFileName: extracted.primaryPdfFileName,
     };
 
     await admin
@@ -1502,7 +1822,9 @@ export async function runPdfIngestJob(
     claimed.course_id,
     contentSourceKey
   );
-  if (sibling) {
+  const isPdfUpload = /\.pdf$/i.test(claimed.original_file_name ?? "");
+  // PDF decks need per-job vision tables/figures — sibling canonical lacks them.
+  if (sibling && !isPdfUpload) {
     try {
       const localized = await displayPayloadFromExistingCanonical(
         sibling.canonical_payload,
@@ -1583,6 +1905,8 @@ export async function runPdfIngestJob(
     sourceFiles,
     primaryStoragePath: storagePath,
     primaryFileName: claimed.original_file_name,
+    primaryPdfBuffer: previewResult.primaryPdfBuffer,
+    knownPageCount: previewResult.numpages,
     driveModules: options?.driveModules,
     t0,
   });
@@ -1669,6 +1993,8 @@ async function runPdfIngestOutlinePhase(
     sourceFiles?: IngestSourceFileRef[] | null;
     primaryStoragePath?: string;
     primaryFileName?: string | null;
+    primaryPdfBuffer?: Buffer | null;
+    knownPageCount?: number;
     driveModules?: boolean;
     t0: number;
   }
@@ -1686,6 +2012,8 @@ async function runPdfIngestOutlinePhase(
     sourceFiles = null,
     primaryStoragePath = "",
     primaryFileName = null,
+    primaryPdfBuffer = null,
+    knownPageCount = 0,
     driveModules,
     t0,
   } = input;
@@ -1796,6 +2124,9 @@ async function runPdfIngestOutlinePhase(
   let planModuleSources: string[] | null = null;
   let planJson: unknown = null;
   let sourceImages = sourceImagesInput;
+  let chunksForGeneration = chunks;
+  let pageArtifactsForJob: IngestPageArtifacts = { tables: {}, figures: [] };
+  let assetManifestForJob: CourseAssetManifest | null = null;
   try {
     if (useStructurePlanning) {
       const plan = await withAnthropicRateLimitRetries(
@@ -1811,7 +2142,6 @@ async function runPdfIngestOutlinePhase(
         { maxAttempts: 14 }
       );
       outline = structurePlanToOutline(plan);
-      planModuleSources = assembleModuleSourcesFromPlan(plan, chunks);
       planJson = plan;
       console.info("[pdf-ingest] structure plan ok", {
         jobId,
@@ -1819,9 +2149,30 @@ async function runPdfIngestOutlinePhase(
         chunks: chunks.length,
       });
 
-      if (isPdfPageRenderEnabled() && primaryStoragePath) {
+      // Surface the outline immediately so the build UI can show module
+      // titles while page renders + table vision run (often 1–3 min on
+      // large pharmacology PDFs).
+      await admin
+        .from("pdf_ingest_jobs")
+        .update({
+          ingest_outline: outline,
+          ingest_plan: planJson,
+          ingest_phase: "enriching_sources",
+          stream_preview: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", jobId)
+        .eq("ingest_epoch", claimedEpoch);
+
+      if (isPdfPageRenderEnabled() && (primaryStoragePath || primaryPdfBuffer)) {
+        console.info("[pdf-ingest] visual enrich starting", {
+          jobId,
+          hasStoragePath: Boolean(primaryStoragePath),
+          hasPdfBuffer: Boolean(primaryPdfBuffer),
+          bufferBytes: primaryPdfBuffer?.length ?? 0,
+        });
         try {
-          sourceImages = await supplementPdfPageFigures({
+          const supplemented = await supplementPdfPageFigures({
             admin,
             userId: claimed.user_id,
             jobId,
@@ -1831,11 +2182,68 @@ async function runPdfIngestOutlinePhase(
             sourceFiles,
             primaryStoragePath,
             primaryFileName,
+            primaryPdfBuffer,
+            knownPageCount: knownPageCount > 0 ? knownPageCount : undefined,
           });
+          sourceImages = filterCroppedFiguresOnly(supplemented.images);
+          pageArtifactsForJob = supplemented.pageArtifacts;
+          const pageTables = pageTableExtractionsToMap(
+            supplemented.pageTableExtractions
+          );
+          const pageFigures = pageArtifactsForJob.figures;
+          if (pageTables.size > 0) {
+            chunksForGeneration = enrichChunksWithPageTables(chunks, pageTables);
+          }
+          if (pageFigures.length > 0) {
+            chunksForGeneration = enrichChunksWithPageFigures(
+              chunksForGeneration,
+              pageFigures
+            );
+          }
+          if (pageTables.size > 0 || pageFigures.length > 0) {
+            console.info("[pdf-ingest] enriched chunks with page artifacts", {
+              jobId,
+              tablePages: pageTables.size,
+              figurePages: pageFigures.length,
+            });
+          }
+          try {
+            assetManifestForJob = await buildCourseAssetManifest(
+              pageArtifactsForJob
+            );
+            if (assetManifestForJob.assets.length > 0) {
+              console.info("[pdf-ingest] asset manifest", {
+                jobId,
+                assets: assetManifestForJob.assets.length,
+              });
+            }
+          } catch (e) {
+            console.warn("[pdf-ingest] buildCourseAssetManifest", jobId, e);
+          }
         } catch (e) {
-          console.warn("[pdf-ingest] supplementPdfPageFigures", jobId, e);
+          console.error("[pdf-ingest] supplementPdfPageFigures FAILED", jobId, e);
+          await failJobUnlessStale(
+            admin,
+            jobId,
+            cleanupPaths,
+            e instanceof Error ? e.message : "PDF visual extraction failed.",
+            claimedEpoch
+          );
+          return;
         }
+      } else {
+        console.warn("[pdf-ingest] visual enrich skipped at outline", {
+          jobId,
+          pageRenderEnabled: isPdfPageRenderEnabled(),
+          hasStoragePath: Boolean(primaryStoragePath),
+          hasPdfBuffer: Boolean(primaryPdfBuffer),
+        });
       }
+
+      planModuleSources = assembleModuleSourcesFromPlan(
+        plan,
+        chunksForGeneration
+      );
     } else {
       outline = await withAnthropicRateLimitRetries(
         jobId,
@@ -1868,7 +2276,7 @@ async function runPdfIngestOutlinePhase(
     ingest_preview_outline: null,
     stream_preview: null,
     ingest_phase: "writing_modules",
-    ingest_chunks: persistIngestChunks(chunks),
+    ingest_chunks: persistIngestChunks(chunksForGeneration),
     updated_at: new Date().toISOString(),
   };
   if (useStructurePlanning) {
@@ -1877,6 +2285,15 @@ async function runPdfIngestOutlinePhase(
   }
   if (sourceImages.length > 0) {
     outlineUpdate.ingest_source_images = sourceImages;
+  }
+  if (
+    Object.keys(pageArtifactsForJob.tables).length > 0 ||
+    pageArtifactsForJob.figures.length > 0
+  ) {
+    outlineUpdate.ingest_page_tables = pageArtifactsForJob;
+  }
+  if (assetManifestForJob && assetManifestForJob.assets.length > 0) {
+    outlineUpdate.ingest_asset_manifest = assetManifestForJob;
   }
 
   let { data: outlineRow, error: outlineErr } = await admin
@@ -1894,7 +2311,9 @@ async function runPdfIngestOutlinePhase(
       outlineErr,
       "ingest_plan",
       "ingest_module_sources",
-      "ingest_chunks"
+      "ingest_chunks",
+      "ingest_page_tables",
+      "ingest_asset_manifest"
     )
   ) {
     const retry = await admin

@@ -304,12 +304,77 @@ function normalizeLesson(raw: unknown): CourseLesson {
     }
     if (parsed.length > 0) sources = parsed;
   }
+
+  const visualRaw =
+    o.visual_assets ?? o.visualAssets ?? o.VisualAssets;
+  let visual_assets: import("@/types/course").LessonVisualAsset[] | undefined;
+  if (Array.isArray(visualRaw)) {
+    const parsed: import("@/types/course").LessonVisualAsset[] = [];
+    for (const item of visualRaw) {
+      if (!item || typeof item !== "object") continue;
+      const v = item as Record<string, unknown>;
+      const assetId =
+        typeof v.assetId === "string"
+          ? v.assetId
+          : typeof v.asset_id === "string"
+            ? v.asset_id
+            : "";
+      const imageUrl =
+        typeof v.imageUrl === "string"
+          ? v.imageUrl
+          : typeof v.image_url === "string"
+            ? v.image_url
+            : "";
+      const type = v.type;
+      const validType =
+        type === "diagram" ||
+        type === "table" ||
+        type === "chart" ||
+        type === "image" ||
+        type === "page_snapshot"
+          ? type
+          : "image";
+      const sourcePage =
+        typeof v.sourcePage === "number"
+          ? v.sourcePage
+          : typeof v.source_page === "number"
+            ? v.source_page
+            : 0;
+      const title = typeof v.title === "string" ? v.title : "";
+      const caption = typeof v.caption === "string" ? v.caption : title;
+      const whyRelevant =
+        typeof v.whyRelevant === "string"
+          ? v.whyRelevant
+          : typeof v.why_relevant === "string"
+            ? v.why_relevant
+            : "";
+      if (!assetId || !imageUrl) continue;
+      parsed.push({
+        assetId,
+        imageUrl,
+        type: validType,
+        sourcePage,
+        title: title || caption.slice(0, 80),
+        caption,
+        whyRelevant,
+        placementAfterParagraph:
+          typeof v.placementAfterParagraph === "number"
+            ? v.placementAfterParagraph
+            : typeof v.placement_after_paragraph === "number"
+              ? v.placement_after_paragraph
+              : undefined,
+      });
+    }
+    if (parsed.length > 0) visual_assets = parsed;
+  }
+
   return {
     title: o.title,
     content: o.content,
     key_terms: normalizeKeyTerms(keyTermsRaw),
     examples,
     ...(sources ? { sources } : {}),
+    ...(visual_assets ? { visual_assets } : {}),
   };
 }
 

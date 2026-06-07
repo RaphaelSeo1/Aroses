@@ -3,7 +3,13 @@ import type { CourseOutputLanguage } from "@/lib/course-output-language";
 import type { CoursePayload } from "@/types/course";
 
 /** Locales we generate / translate course content into. */
-export type CourseContentLocale = "en" | "ko";
+export type CourseContentLocale =
+  | "en"
+  | "ko"
+  | "es"
+  | "fr"
+  | "ja"
+  | "zh";
 
 export function courseContentLocaleToOutputLanguage(
   locale: CourseContentLocale
@@ -15,10 +21,18 @@ export function courseContentLocaleToOutputLanguage(
 export function detectSourceLocaleFromText(text: string): CourseContentLocale {
   const sample = text.slice(0, 14_000);
   let hangul = 0;
+  let hiraganaKatakana = 0;
+  let cjkOther = 0;
   let latin = 0;
   for (const ch of sample) {
     const c = ch.charCodeAt(0);
     if (c >= 0xac00 && c <= 0xd7a3) hangul++;
+    else if (
+      (c >= 0x3040 && c <= 0x309f) ||
+      (c >= 0x30a0 && c <= 0x30ff)
+    ) {
+      hiraganaKatakana++;
+    } else if (c >= 0x4e00 && c <= 0x9fff) cjkOther++;
     else if (
       (c >= 65 && c <= 90) ||
       (c >= 97 && c <= 122)
@@ -27,6 +41,8 @@ export function detectSourceLocaleFromText(text: string): CourseContentLocale {
     }
   }
   if (hangul > 80 && hangul > latin * 0.12) return "ko";
+  if (hiraganaKatakana > 40 && hiraganaKatakana > hangul) return "ja";
+  if (cjkOther > 120 && hangul < 40 && hiraganaKatakana < 40) return "zh";
   return "en";
 }
 
@@ -43,9 +59,8 @@ export function resolveCanonicalAndDisplayLocales(
 } {
   const canonicalLocale = detectSourceLocaleFromText(sourceText);
   let displayLocale: CourseContentLocale;
-  if (outputLanguage === "en") displayLocale = "en";
-  else if (outputLanguage === "ko") displayLocale = "ko";
-  else displayLocale = canonicalLocale;
+  if (outputLanguage === "auto") displayLocale = canonicalLocale;
+  else displayLocale = outputLanguage;
   return { canonicalLocale, displayLocale };
 }
 
@@ -141,6 +156,8 @@ export function mergeSourcesFromCanonical(
       lessons: mod.lessons.map((les, li) => ({
         ...les,
         sources: canonical.modules[mi]?.lessons[li]?.sources ?? les.sources,
+        visual_assets:
+          canonical.modules[mi]?.lessons[li]?.visual_assets ?? les.visual_assets,
       })),
     })),
   };

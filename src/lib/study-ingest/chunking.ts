@@ -43,17 +43,37 @@ const MIN_CHUNK_CHARS = 400;
 const MAX_TITLE_CHARS = 80;
 const MAX_CHUNKS_TOTAL = 400;
 
-function cleanTitleFromText(text: string): string {
-  const firstLine =
-    text
-      .split(/\n+/)
-      .map((l) => l.trim())
-      .find((l) => l.length > 0) ?? "Untitled section";
-  const stripped = firstLine.replace(/^[#>\-*\s]+/, "").trim();
-  const title = stripped.length > 0 ? stripped : firstLine;
-  return title.length > MAX_TITLE_CHARS
-    ? `${title.slice(0, MAX_TITLE_CHARS - 1).trim()}…`
-    : title;
+function cleanTitleFromText(text: string, position?: string): string {
+  const lines = text
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const isBadTitle = (line: string): boolean => {
+    const t = line.replace(/^[#>\-*\s]+/, "").trim();
+    if (t.length === 0) return true;
+    if (/^\d+$/.test(t)) return true;
+    if (t.length <= 2) return true;
+    return false;
+  };
+
+  for (const line of lines) {
+    const stripped = line.replace(/^[#>\-*\s]+/, "").trim();
+    if (!isBadTitle(stripped)) {
+      const title = stripped;
+      return title.length > MAX_TITLE_CHARS
+        ? `${title.slice(0, MAX_TITLE_CHARS - 1).trim()}…`
+        : title;
+    }
+  }
+
+  if (position?.trim()) {
+    const p = position.trim();
+    return p.length > MAX_TITLE_CHARS
+      ? `${p.slice(0, MAX_TITLE_CHARS - 1).trim()}…`
+      : p;
+  }
+  return "Untitled section";
 }
 
 /** True when a trimmed line looks like a section heading. */
@@ -196,7 +216,7 @@ export function buildIngestChunks(parts: ExtractedStudyContent[]): IngestChunk[]
           id: nextId(),
           sourceFileName: fileName,
           position: positionLabel(part, i, true, slideChunks[i].attribution),
-          title: cleanTitleFromText(body),
+          title: cleanTitleFromText(body, positionLabel(part, i, true, slideChunks[i].attribution)),
           text: body,
           approxChars: body.length,
         });
@@ -211,11 +231,12 @@ export function buildIngestChunks(parts: ExtractedStudyContent[]): IngestChunk[]
         if (chunks.length >= MAX_CHUNKS_TOTAL) break;
         const body = pageChunks[i].body.trim();
         if (body.length === 0) continue;
+        const pos = positionLabel(part, i, true, pageChunks[i].attribution);
         chunks.push({
           id: nextId(),
           sourceFileName: fileName,
-          position: positionLabel(part, i, true, pageChunks[i].attribution),
-          title: cleanTitleFromText(body),
+          position: pos,
+          title: cleanTitleFromText(body, pos),
           text: body,
           approxChars: body.length,
         });
@@ -231,11 +252,12 @@ export function buildIngestChunks(parts: ExtractedStudyContent[]): IngestChunk[]
       if (chunks.length >= MAX_CHUNKS_TOTAL) break;
       const text = sections[i].trim();
       if (text.length === 0) continue;
+      const pos = positionLabel(part, i, false);
       chunks.push({
         id: nextId(),
         sourceFileName: fileName,
-        position: positionLabel(part, i, false),
-        title: cleanTitleFromText(text),
+        position: pos,
+        title: cleanTitleFromText(text, pos),
         text,
         approxChars: text.length,
       });

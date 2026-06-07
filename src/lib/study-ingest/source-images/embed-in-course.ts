@@ -1,11 +1,19 @@
 import type { CourseModule } from "@/types/course";
 import { assignFiguresToLessons, buildFiguresIndex, type FiguresIndex } from "@/lib/figure-attribution";
 import { lessonMarkdownHasImages, splitLeadParagraph } from "@/lib/lesson-content-layout";
+import { filterCroppedFiguresOnly } from "@/lib/study-ingest/source-images/is-page-render";
 import type { SourceIndex } from "@/lib/source-attribution";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 
 function figureMarkdown(img: IngestSourceImageRecord): string {
-  return `![${img.label} from ${img.sourceFileName}](${img.url})`;
+  const locator =
+    img.anchorType === "page"
+      ? `page ${img.anchorIndex}`
+      : img.anchorType === "slide"
+        ? `slide ${img.anchorIndex}`
+        : img.sourceFileName;
+  const alt = img.label || `Table or figure from ${locator}`;
+  return `**From your material** (${locator})\n\n![${alt}](${img.url})`;
 }
 
 /**
@@ -48,9 +56,14 @@ export function embedSourceImagesInModules(
     return { modules, figuresIndex: null };
   }
 
+  const cropsOnly = filterCroppedFiguresOnly(sourceImages);
+  if (!cropsOnly.length) {
+    return { modules, figuresIndex: null };
+  }
+
   const assignment = assignFiguresToLessons(
     modules,
-    sourceImages,
+    cropsOnly,
     sourceIndex ?? null
   );
 
@@ -72,6 +85,6 @@ export function embedSourceImagesInModules(
 
   return {
     modules: next,
-    figuresIndex: buildFiguresIndex(modules, sourceImages, assignment),
+    figuresIndex: buildFiguresIndex(modules, cropsOnly, assignment),
   };
 }

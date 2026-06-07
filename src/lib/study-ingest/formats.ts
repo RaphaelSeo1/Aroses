@@ -164,7 +164,8 @@ export function contentTypeForUpload(
 }
 
 export function shouldRetainStorageAfterIngest(kind: IngestFormatKind): boolean {
-  return kind === "video" || kind === "audio";
+  // PDF must stay in storage until finalize so page render + vision crop can run.
+  return kind === "video" || kind === "audio" || kind === "pdf";
 }
 
 export const INGEST_ACCEPT_ATTRIBUTE = [

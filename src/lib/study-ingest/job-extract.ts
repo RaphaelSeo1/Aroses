@@ -37,6 +37,9 @@ export type JobExtractSuccess = {
   sourceImages: IngestSourceImageRecord[];
   /** Natural-boundary chunks across all files (for content-driven structure planning). */
   chunks: IngestChunk[];
+  /** Primary PDF bytes when the upload included a PDF (for in-process page render). */
+  primaryPdfBuffer: Buffer | null;
+  primaryPdfFileName: string | null;
 };
 
 function formatBytesLimit(kind: IngestFormatKind, bytes: number): string {
@@ -94,6 +97,8 @@ export async function extractContentForIngestJob(input: {
   const rawImages = [];
   let retainStorage = false;
   let mediaMeta: JobExtractSuccess["ingestMedia"] = null;
+  let primaryPdfBuffer: Buffer | null = null;
+  let primaryPdfFileName: string | null = null;
 
   // Extract files concurrently (bounded) so a big stack — e.g. a dozen photos,
   // each needing its own vision call — doesn't run serially and blow past the
@@ -120,15 +125,24 @@ export async function extractContentForIngestJob(input: {
       );
     }
 
-    const buf = await downloadIngestObject(
+    const rawBuf = await downloadIngestObject(
       input.admin,
       ref.storagePath,
       input.onHeartbeat
     );
 
-    if (buf.length > maxBytesForKind(kind)) {
-      throw new Error(`${fileName}: ${formatBytesLimit(kind, buf.length)}`);
+    if (rawBuf.length > maxBytesForKind(kind)) {
+      throw new Error(`${fileName}: ${formatBytesLimit(kind, rawBuf.length)}`);
     }
+
+    // Clone before pdf-parse / legacy PDF.js text extract — they can detach the
+    // underlying ArrayBuffer and break pdfjs-dist page renders on the same buffer.
+    if (kind === "pdf" && !primaryPdfBuffer) {
+      primaryPdfBuffer = Buffer.from(rawBuf);
+      primaryPdfFileName = fileName;
+    }
+
+    const buf = rawBuf;
 
     const imageIndex = kind === "image" ? i : undefined;
     if (kind === "audio" || kind === "video") {
@@ -254,6 +268,8 @@ export async function extractContentForIngestJob(input: {
     ingestMedia: mediaMeta,
     sourcePaths: refs.map((r) => r.storagePath),
     sourceImages,
+    primaryPdfBuffer,
+    primaryPdfFileName,
   };
 }
 

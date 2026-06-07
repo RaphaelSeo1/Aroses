@@ -138,13 +138,26 @@ export function structurePlanCoveragePromptBlock(
 }
 
 function lessonTitleFromChunks(chunks: IngestChunkSummary[]): string {
+  const isBad = (t: string) =>
+    t.length === 0 || /^\d+$/.test(t.trim()) || t.trim().length <= 2;
+
   if (chunks.length === 1) {
     const t = chunks[0]!.title.trim();
-    return t.length > 0 ? t : "Core concepts";
+    if (!isBad(t)) return t;
+    const pos = chunks[0]!.position.trim();
+    if (pos.length > 0) return pos;
+    return "Core concepts";
   }
-  const first = chunks[0]!.title.trim();
-  if (first.length > 0) return first;
-  return `Sections ${chunks[0]!.position}–${chunks[chunks.length - 1]!.position}`;
+  for (const c of chunks) {
+    const t = c.title.trim();
+    if (!isBad(t)) return t;
+  }
+  const first = chunks[0]!;
+  const last = chunks[chunks.length - 1]!;
+  if (first.position.trim()) {
+    return `${first.position} – ${last.position}`.slice(0, 80);
+  }
+  return `Sections ${first.position}–${last.position}`;
 }
 
 /**

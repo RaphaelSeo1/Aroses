@@ -2,6 +2,7 @@ import { Analytics } from "@vercel/analytics/next";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
+import { ActivePdfBuildProvider } from "@/components/ActivePdfBuildProvider";
 import { AppAdminNavGate } from "@/components/AppAdminNavGate";
 import { AppDialogs } from "@/components/AppDialogs";
 import { ScrollRestoration } from "@/components/ScrollRestoration";
@@ -76,7 +77,9 @@ export default function RootLayout({
         </Script>
         <ScrollRestoration />
         <ThemeHydration />
-        <AppAdminNavGate>{children}</AppAdminNavGate>
+        <ActivePdfBuildProvider>
+          <AppAdminNavGate>{children}</AppAdminNavGate>
+        </ActivePdfBuildProvider>
         <AppDialogs />
         <Analytics />
       </body>

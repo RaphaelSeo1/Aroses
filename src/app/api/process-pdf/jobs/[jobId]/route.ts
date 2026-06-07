@@ -354,6 +354,7 @@ export async function GET(_request: Request, ctx: Params) {
     ingestPhaseRaw === "digesting_full_pdf" ||
     ingestPhaseRaw === "planning_preview" ||
     ingestPhaseRaw === "planning_outline" ||
+    ingestPhaseRaw === "enriching_sources" ||
     ingestPhaseRaw === "writing_modules" ||
     ingestPhaseRaw === "reviewing_transcript" ||
     ingestPhaseRaw === "transcribing"

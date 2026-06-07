@@ -1,3 +1,5 @@
+import path from "path";
+import { pathToFileURL } from "url";
 import { createCanvas } from "@napi-rs/canvas";
 import type { RawSourceImage } from "@/lib/study-ingest/source-images/types";
 
@@ -10,14 +12,37 @@ export type RenderedPdfPage = {
   buffer: Buffer;
 };
 
+type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+
+/** Absolute file:// URL — Turbopack breaks relative ./pdf.worker.mjs imports. */
+function resolvePdfWorkerSrc(): string {
+  return pathToFileURL(
+    path.join(
+      process.cwd(),
+      "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+    )
+  ).href;
+}
+
+let pdfjsReady: Promise<PdfJsModule> | null = null;
+
+/** Load pdfjs-dist once with a worker path Turbopack/Next can resolve. */
+async function getPdfJs(): Promise<PdfJsModule> {
+  if (!pdfjsReady) {
+    pdfjsReady = (async () => {
+      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = resolvePdfWorkerSrc();
+      return pdfjsLib;
+    })();
+  }
+  return pdfjsReady;
+}
+
 /** Load a PDF document (shared by extract + render). */
 export async function loadPdfDocument(buffer: Buffer) {
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const data = new Uint8Array(
-    buffer.buffer,
-    buffer.byteOffset,
-    buffer.byteLength
-  );
+  const pdfjsLib = await getPdfJs();
+  // Always copy — legacy pdf-parse PDF.js may detach the source ArrayBuffer.
+  const data = new Uint8Array(Buffer.from(buffer));
   const pdf = await pdfjsLib.getDocument({
     data,
     // Fonts enabled so exported slide PDFs render text and vector labels.
@@ -103,7 +128,8 @@ export async function getPdfPageCount(buffer: Buffer): Promise<number> {
     const n = pdf.numPages;
     await pdf.destroy().catch(() => {});
     return n;
-  } catch {
+  } catch (e) {
+    console.warn("[getPdfPageCount] failed", e);
     return 0;
   }
 }

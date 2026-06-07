@@ -12,6 +12,7 @@ import {
 } from "@/lib/study-ingest/formats";
 import { extractPptxSlides } from "@/lib/study-ingest/pptx";
 import { rtfToPlainText } from "@/lib/study-ingest/rtf";
+import { enhanceTabularPlaintext } from "@/lib/study-ingest/table-text";
 import {
   transcribeMediaBuffer,
   transcriptWithTimestamps,
@@ -79,7 +80,7 @@ function groupPdfPagesForChunks(
   if (pagesPerChunk <= 1) {
     return nonEmpty.map((p) => ({
       attribution: attributionPrefix(fileName, `page ${p.pageNum}`),
-      body: p.text.trim(),
+      body: enhanceTabularPlaintext(p.text.trim()),
     }));
   }
 
@@ -97,7 +98,7 @@ function groupPdfPagesForChunks(
       start === end ? `page ${start}` : `pages ${start}–${end}`;
     chunks.push({
       attribution: attributionPrefix(fileName, detail),
-      body,
+      body: enhanceTabularPlaintext(body),
     });
   }
   return chunks;

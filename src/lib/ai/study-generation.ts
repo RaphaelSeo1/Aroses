@@ -9,6 +9,7 @@ import {
   type CourseStructurePlan,
   parseCourseStructurePlan,
   parseCourseModule,
+  parseCourseModuleLoose,
   parseCourseOutlinePayload,
   parseCoursePayload,
   stripJsonFence,
@@ -17,6 +18,10 @@ import type {
   IngestChunk,
   IngestChunkSummary,
 } from "@/lib/study-ingest/chunking";
+import {
+  enhanceTabularPlaintext,
+  logMaterialTableDiagnostics,
+} from "@/lib/study-ingest/table-text";
 import {
   buildDeterministicStructurePlan,
   structurePlanCoveragePromptBlock,
@@ -228,6 +233,7 @@ export async function buildMaterialDigestFromFullPdfText(
 
 RULES:
 - Preserve **facts**: definitions, formulas, theorems, numbered steps, dates, names, terminology.
+- Preserve **tables, matrices, and enumerated lists VERBATIM**: reproduce any table (e.g. drug tables with names, dosages, half-lives, MAC values, blood/gas partition coefficients, potency ratios, onset/duration, side-effects, contraindications) as a GitHub-flavored **markdown table** (header row + \`|---|\` separator). Keep every proper noun and every number exactly, in the same row/column. NEVER collapse a table into prose or into category names, and never drop, round, or regroup values. Keep each item under the exact category it appears in, and keep mixed-language terms in full, both languages (e.g. "디아제팜(diazepam)").
 - Preserve **structure hints**: chapter/section titles visible in this slice.
 - No JSON, no roleplay.
 
@@ -346,12 +352,55 @@ function outlineMaterialCharLimit(profile: CourseBuildProfile): number {
   return clampInt(envInt("COURSE_FULL_OUTLINE_MATERIAL_CHARS", 56_000), 24_000, moduleCap);
 }
 
+const PRESERVE_MARKER_RE =
+  /--- (?:TABLES|FIGURES) FROM ORIGINAL PDF[\s\S]*?(?=(?:\n\n--- (?:TABLES|FIGURES) FROM ORIGINAL PDF)|(?:\n\n\[from )|$)/g;
+const PIPE_TABLE_RE = /(\|[^\n]+\|\n\|[\s\-:|]+\|(?:\n\|[^\n]+\|)*)/g;
+const MD_IMAGE_RE = /!\[[^\]]*\]\([^)]+\)/g;
+
+/**
+ * Never truncate inside PDF table/figure blocks or markdown tables/images —
+ * drop prose first (critical for express profile + pharmacology PDFs).
+ */
 function truncateMaterial(text: string, maxChars: number = MAX_MATERIAL_CHARS): string {
   const t = text.trim();
   if (t.length <= maxChars) return t;
-  const head = Math.floor(maxChars * 0.72);
-  const tail = maxChars - head - 80;
-  return `${t.slice(0, head)}\n\n[ … middle of document omitted for processing … ]\n\n${t.slice(-tail)}`;
+
+  const preserved: string[] = [];
+  let work = t;
+
+  work = work.replace(PRESERVE_MARKER_RE, (m) => {
+    preserved.push(m.trim());
+    return `\n\n<<<PRESERVE${preserved.length - 1}>>>\n\n`;
+  });
+
+  work = work.replace(PIPE_TABLE_RE, (m) => {
+    preserved.push(m.trim());
+    return `<<<PRESERVE${preserved.length - 1}>>>`;
+  });
+
+  work = work.replace(MD_IMAGE_RE, (m) => {
+    preserved.push(m);
+    return `<<<PRESERVE${preserved.length - 1}>>>`;
+  });
+
+  const preservedJoined = preserved.join("\n\n");
+  const proseBudget = Math.max(2_000, maxChars - preservedJoined.length - 120);
+
+  if (work.length > proseBudget) {
+    const head = Math.floor(proseBudget * 0.72);
+    const tail = proseBudget - head - 80;
+    work = `${work.slice(0, head)}\n\n[ … middle of document omitted for processing … ]\n\n${work.slice(-tail)}`;
+  }
+
+  let out = work;
+  for (let i = 0; i < preserved.length; i++) {
+    out = out.replaceAll(`<<<PRESERVE${i}>>>`, preserved[i]!);
+  }
+
+  if (out.length > maxChars && preservedJoined.length > 0) {
+    return `${preservedJoined}\n\n${work.slice(0, Math.min(proseBudget, 4_000))}`.trim();
+  }
+  return out.trim();
 }
 
 async function sleep(ms: number) {
@@ -383,6 +432,23 @@ function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
     return `${core} Output **exactly one full lesson per planned lesson title** below, in the **same order** and **same count**. Do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material. Teach what the source covers for that slice — neither pad with outside topics nor skip assigned content.`;
   }
   return `${core} Across the full course JSON, every substantive part of the source should appear in some lesson; do not only cover the introduction.`;
+}
+
+/**
+ * Injected into lesson-generating prompts (module + monolith). Forces the
+ * model to carry source tables / enumerated data into the lesson body
+ * verbatim instead of summarizing them into prose. Critical for technical
+ * material (e.g. pharmacology drug tables) where the table IS the
+ * highest-value, most testable content.
+ */
+function dataFidelityRules(): string {
+  return `DATA FIDELITY (critical — preserve source tables and numbers):
+- When AVAILABLE PDF ASSETS lists a **table** asset for this lesson, insert {{asset:ASSET_ID}} on its own line where the table belongs. The app renders the **original cropped table screenshot** from the student's PDF (like NotebookLM) — do NOT also paste a markdown table in "content".
+- When no table asset token exists but the source has tabular data, you may include key numbers in prose; do not invent a markdown grid unless absolutely necessary.
+- Preserve every proper noun and NUMBER from source tables in your prose explanations — drug names, doses, units, MAC values, etc. Do not round, omit, or regroup them.
+- Keep mixed-language terms in full, BOTH languages, exactly as written (e.g. "디아제팜(diazepam)").
+- For **figure/diagram** assets, insert {{asset:ASSET_ID}} on its own line and reference the visual in prose ("see the table from your lecture", "look at this diagram").
+- Blocks marked \`--- TABLE DATA FROM PDF ---\` are for your accuracy when writing — students see cropped images, not that raw text. Do not paste those blocks into lesson "content".`;
 }
 
 function isRetryableApiError(err: unknown): boolean {
@@ -445,6 +511,8 @@ ${titleStyleRules()}
 
 ${sourceCoverageRules("monolith")}
 
+${dataFidelityRules()}
+
 Generate the course in this exact JSON format:
 {
   "title": "course title",
@@ -456,7 +524,7 @@ Generate the course in this exact JSON format:
       "lessons": [
         {
           "title": "lesson title",
-          "content": "deep, thorough explanation written like a great teacher — not bullet points. Use analogies, real world examples, break it down simply",
+          "content": "deep, thorough explanation written like a great teacher. Use analogies, real world examples, break it down simply — and when the source has a table or list of data, INCLUDE it as a markdown table (do not turn it into prose)",
           "key_terms": [{"term": "word", "definition": "definition"}],
           "examples": ["real world example 1", "real world example 2"]
         }
@@ -582,6 +650,12 @@ async function readPdfIngestStreamOnce(
   }
 
   const finalMessage = await stream.finalMessage();
+  const stopReason = (finalMessage as { stop_reason?: string }).stop_reason;
+  if (stopReason === "max_tokens") {
+    console.warn("[study-generation] PDF ingest stream hit max_tokens", {
+      max_tokens: params.max_tokens,
+    });
+  }
   const text = extractTextBlock(finalMessage);
   await streamSink.push(text.slice(-PDF_STREAM_PREVIEW_CAP));
   return text;
@@ -901,10 +975,31 @@ function titleStyleRules(): string {
 Repetition rule: across the whole outline, no two modules (or two lesson titles) may start with the same first word. If you'd produce "Master the X" and "Master the Y", rewrite both as bare topic names.`;
 }
 
-function moduleQuizRules(profile: CourseBuildProfile): string {
+/** Quiz count requested in the module JSON (kept small so tables + lessons fit). */
+function moduleQuizMinForGeneration(profile: CourseBuildProfile): number {
   const target = moduleQuizTarget(profile);
-  const frMin = moduleFreeResponseMin(profile, target);
-  return `QUIZ (this module only): **at least ${target}** questions, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ with exactly 4 choices each.`;
+  if (profile === "express") return Math.min(3, target);
+  if (profile === "fast") return Math.min(4, target);
+  return Math.min(5, target);
+}
+
+function moduleQuizRules(profile: CourseBuildProfile): string {
+  const genMin = moduleQuizMinForGeneration(profile);
+  const frMin = moduleFreeResponseMin(profile, genMin);
+  return `QUIZ (this module only): **at least ${genMin}** questions for now (with **at least ${frMin}** type free_response, reference_answer required). The rest MCQ with exactly 4 choices each. Do not shrink lesson content to fit more quiz items — additional questions are added server-side later.`;
+}
+
+function looksLikeTruncatedJson(text: string): boolean {
+  const t = stripJsonFence(text).trim();
+  if (t.length < 8) return true;
+  if (!t.startsWith("{")) return true;
+  if (!t.endsWith("}")) return true;
+  try {
+    JSON.parse(t);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 function moduleInstruction(
@@ -913,7 +1008,8 @@ function moduleInstruction(
   moduleIndex: number,
   profile: CourseBuildProfile,
   studyContext?: string,
-  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE,
+  assetManifestBlock?: string
 ): string {
   const stub = outline.modules[moduleIndex];
   const n = outline.modules.length;
@@ -946,7 +1042,9 @@ ${sourceCoverageRules("module")}
 ${styleRule}
 ${lessonRequirements}
 
-${moduleQuizRules(profile)}
+${dataFidelityRules()}
+
+${assetManifestBlock?.trim() ? `${assetManifestBlock.trim()}\n\n` : ""}${moduleQuizRules(profile)}
 
 Return ONLY valid JSON in this exact wrapper (no markdown):
 { "module": { "id": ${stub.id}, "title": ${JSON.stringify(stub.title)}, "lessons": [...], "quiz": [...] } }
@@ -1007,43 +1105,56 @@ async function repairModuleJson(
 
 ${requirements}
 
+${moduleQuizRules(profile)}
+
 Broken output (repair):
 ${brokenAssistantText.slice(0, 100_000)}`;
 
-  const moduleRepairMax =
+  const repairBudgets =
     profile === "express"
-      ? 6144
+      ? [12_288, 20_480]
       : profile === "fast"
-        ? 8192
+        ? [16_384, 24_576]
         : profile === "balanced"
-          ? 10_240
-          : 24_576;
+          ? [20_480, 30_720]
+          : [24_576, 32_768];
 
-  const msg = await createMessageWithRetries(
-    anthropic,
-    {
-      model: resolveCourseModel(profile),
-      max_tokens: moduleRepairMax,
-      temperature: 0.1,
-      messages: [{ role: "user", content: prompt }],
-    },
-    {
-      maxAttempts:
-        profile === "express" || profile === "fast" || profile === "balanced"
-          ? 2
-          : 3,
+  let lastText = "";
+  for (const moduleRepairMax of repairBudgets) {
+    const msg = await createMessageWithRetries(
+      anthropic,
+      {
+        model: resolveCourseModel(profile),
+        max_tokens: moduleRepairMax,
+        temperature: 0.1,
+        messages: [{ role: "user", content: prompt }],
+      },
+      {
+        maxAttempts:
+          profile === "express" || profile === "fast" || profile === "balanced"
+            ? 2
+            : 3,
+      }
+    );
+
+    const text = extractTextBlock(msg);
+    lastText = text;
+    try {
+      const parsed = JSON.parse(stripJsonFence(text)) as Record<string, unknown>;
+      const mod = parsed.module;
+      return parseCourseModuleLoose(mod);
+    } catch {
+      if (!looksLikeTruncatedJson(text)) {
+        // Malformed but complete — one more budget may not help; still try.
+        continue;
+      }
     }
-  );
-
-  const text = extractTextBlock(msg);
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(stripJsonFence(text)) as Record<string, unknown>;
-  } catch {
-    throw new Error("Claude did not return valid JSON after module repair");
   }
-  const mod = parsed.module;
-  return parseCourseModule(mod);
+
+  console.warn("[study-generation] module repair exhausted", {
+    tail: lastText.slice(-400),
+  });
+  throw new Error("Claude did not return valid JSON after module repair");
 }
 
 function moduleNeedsLessonGlossary(m: CourseModule): boolean {
@@ -1102,7 +1213,7 @@ ${clipped}`;
     throw new Error("Claude did not return valid JSON after glossary repair");
   }
   const obj = parsed as Record<string, unknown>;
-  return parseCourseModule(obj.module);
+  return parseCourseModuleLoose(obj.module);
 }
 
 async function ensureModuleLessonFields(
@@ -1362,9 +1473,10 @@ export function assembleModuleSourcesFromPlan(
     if (ordered.length === 0) return "";
     const blocks = ordered.map((id) => {
       const c = byId.get(id)!;
-      return `[from ${c.sourceFileName} — ${c.position}]\n${c.text}`;
+      return `[from ${c.sourceFileName} — ${c.position}]\n${enhanceTabularPlaintext(c.text)}`;
     });
-    return truncateMaterial(blocks.join("\n\n"), cap);
+    const joined = enhanceTabularPlaintext(blocks.join("\n\n"));
+    return truncateMaterial(joined, cap);
   });
 }
 
@@ -1432,23 +1544,41 @@ export async function generateCourseOutlineFromMaterial(
 
 function moduleMaxTokens(profile: CourseBuildProfile): number {
   if (profile === "express") {
-    return clampInt(envInt("COURSE_EXPRESS_MODULE_MAX_TOKENS", 5120), 3072, 8192);
+    // Table-heavy PDFs (pharmacology MAC grids, etc.) need headroom beyond 5k.
+    return clampInt(envInt("COURSE_EXPRESS_MODULE_MAX_TOKENS", 10_240), 4096, 20_480);
   }
   if (profile === "fast") {
-    return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 6144), 2048, 12_288);
+    return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 12_288), 6144, 24_576);
   }
   if (profile === "full") return 30_720;
-  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 8192), 6144, 24_576);
+  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 12_288), 8192, 30_720);
+}
+
+/** Escalating output budgets when the first pass truncates mid-JSON. */
+function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
+  const base = moduleMaxTokens(profile);
+  const extra =
+    profile === "express"
+      ? [Math.min(20_480, Math.round(base * 1.6))]
+      : profile === "fast"
+        ? [Math.min(24_576, Math.round(base * 1.5))]
+        : [Math.min(30_720, Math.round(base * 1.4))];
+  return [...new Set([base, ...extra])].sort((a, b) => a - b);
 }
 
 /** Expand one module for chunked PDF ingest (separate server invocation). */
+export type ModuleGenerationOptions = {
+  assetManifestPrompt?: string;
+};
+
 export async function generateCourseModuleFromMaterial(
   materialText: string,
   outline: CourseOutlinePayload,
   moduleIndex: number,
   streamSink?: PdfIngestStreamSink,
   studyContext?: string,
-  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE,
+  moduleOptions?: ModuleGenerationOptions
 ): Promise<CourseModule> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -1465,57 +1595,95 @@ export async function generateCourseModuleFromMaterial(
     maxRetries: 0,
   });
 
-  const trimmed = truncateMaterial(materialText, materialCharLimit(profile));
+  const enhanced = enhanceTabularPlaintext(materialText);
+  const trimmed = truncateMaterial(enhanced, materialCharLimit(profile));
+  logMaterialTableDiagnostics(
+    `module-${moduleIndex + 1}/${outline.modules[moduleIndex]?.title ?? "?"}`,
+    trimmed,
+    moduleIndex
+  );
   const instruction = moduleInstruction(
     trimmed,
     outline,
     moduleIndex,
     profile,
     studyContext,
-    outputLanguage
+    outputLanguage,
+    moduleOptions?.assetManifestPrompt
   );
 
   const maxAttempts =
     profile === "express" || profile === "fast"
-      ? 1
+      ? 2
       : profile === "balanced"
         ? 3
         : 5;
 
-  const rawText = await invokeUserMessageForPdfText(
-    anthropic,
-    {
-      model: resolveCourseModel(profile),
-      max_tokens: moduleMaxTokens(profile),
-      temperature: 0.2,
-      messages: [{ role: "user", content: instruction }],
-    },
-    streamSink,
-    maxAttempts
-  );
+  const tokenBudgets = moduleMaxTokenBudgets(profile);
+  let lastRaw = "";
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonFence(rawText));
-  } catch {
-    let repaired = await repairModuleJson(anthropic, rawText, profile);
-    repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
-    return ensureModuleQuizCount(repaired, profile, outputLanguage);
-  }
-
-  try {
+  const normalizeFromParsed = async (parsed: unknown): Promise<CourseModule> => {
     const obj = parsed as Record<string, unknown>;
     const mod = obj.module;
-    const courseMod = parseCourseModule(mod);
+    const courseMod = parseCourseModuleLoose(mod);
     const expectedId = outline.modules[moduleIndex].id;
-    const normalized = courseMod.id !== expectedId ? { ...courseMod, id: expectedId } : courseMod;
-
+    const normalized =
+      courseMod.id !== expectedId ? { ...courseMod, id: expectedId } : courseMod;
     const withLessons = await ensureModuleLessonFields(anthropic, normalized, profile);
     return ensureModuleQuizCount(withLessons, profile, outputLanguage);
-  } catch (e) {
-    console.warn("[study-generation] module validation failed; repairing", e);
-    let repaired = await repairModuleJson(anthropic, rawText, profile);
-    repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
-    return ensureModuleQuizCount(repaired, profile, outputLanguage);
+  };
+
+  for (let attempt = 0; attempt < tokenBudgets.length; attempt++) {
+    const maxTok = tokenBudgets[attempt]!;
+    const sink = attempt === 0 ? streamSink : undefined;
+    if (attempt > 0) {
+      console.warn(
+        `[study-generation] module ${moduleIndex + 1} retry with max_tokens=${maxTok}`
+      );
+      await streamSink?.clear().catch(() => {});
+    }
+
+    const rawText = await invokeUserMessageForPdfText(
+      anthropic,
+      {
+        model: resolveCourseModel(profile),
+        max_tokens: maxTok,
+        temperature: 0.2,
+        messages: [{ role: "user", content: instruction }],
+      },
+      sink,
+      maxAttempts
+    );
+    lastRaw = rawText;
+
+    const stopTruncated = looksLikeTruncatedJson(rawText);
+    if (stopTruncated && attempt < tokenBudgets.length - 1) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(stripJsonFence(rawText));
+      return await normalizeFromParsed(parsed);
+    } catch (parseErr) {
+      if (stopTruncated && attempt < tokenBudgets.length - 1) {
+        continue;
+      }
+      console.warn(
+        `[study-generation] module ${moduleIndex + 1} JSON parse failed; repairing`,
+        parseErr
+      );
+      try {
+        let repaired = await repairModuleJson(anthropic, rawText, profile);
+        repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
+        return ensureModuleQuizCount(repaired, profile, outputLanguage);
+      } catch (repairErr) {
+        if (attempt < tokenBudgets.length - 1) continue;
+        throw repairErr;
+      }
+    }
   }
+
+  let repaired = await repairModuleJson(anthropic, lastRaw, profile);
+  repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
+  return ensureModuleQuizCount(repaired, profile, outputLanguage);
 }

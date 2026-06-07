@@ -6,12 +6,56 @@ import {
   getPdfPageCount,
   renderPdfPagesToPng,
 } from "@/lib/study-ingest/source-images/render-pdf-page";
+import type { RawSourceImage } from "@/lib/study-ingest/source-images/types";
+import { parsePageNumbersFromPosition } from "@/lib/study-ingest/chunk-position";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
-import { uploadIngestSourceImages } from "@/lib/study-ingest/source-images/upload";
+import { runCropFirstExtract } from "@/lib/pdf-ingest/crop-first-extract";
+import {
+  filterCroppedFiguresOnly,
+} from "@/lib/study-ingest/source-images/is-page-render";
+import type { PageTableExtraction } from "@/lib/study-ingest/source-images/extract-pdf-page-tables";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 
-const MAX_PAGES_RENDERED_PER_PDF = 15;
-const MAX_PAGES_RENDERED_PER_JOB = 20;
+function envPositiveInt(name: string, fallback: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(max, Math.floor(n));
+}
+
+/** Default budgets cover full lecture PDFs (86+ pages) with headroom. */
+const MAX_PAGES_RENDERED_PER_PDF = envPositiveInt(
+  "PDF_INGEST_MAX_PAGE_RENDERS_PER_PDF",
+  120,
+  250
+);
+const MAX_PAGES_RENDERED_PER_JOB = envPositiveInt(
+  "PDF_INGEST_MAX_PAGE_RENDERS_PER_JOB",
+  150,
+  350
+);
+const RENDER_BATCH_SIZE = envPositiveInt(
+  "PDF_INGEST_PAGE_RENDER_BATCH_SIZE",
+  24,
+  40
+);
+
+export type SupplementPdfPagesResult = {
+  images: IngestSourceImageRecord[];
+  pageTableExtractions: PageTableExtraction[];
+  /** In-memory page PNGs from this enrich pass. */
+  renderedPageBuffers: RawSourceImage[];
+  /** PDF bytes for the primary file. */
+  primaryPdfBuffer: Buffer | null;
+  primaryFileName: string;
+  /** Unified pipeline page artifacts (tables + figures). */
+  pageArtifacts: import("@/lib/study-ingest/inject-pdf-tables-into-module").IngestPageArtifacts;
+};
+
+function isFullPageLabel(label: string): boolean {
+  return /^Page \d+$/i.test(label.trim());
+}
 
 function filesMatch(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -19,13 +63,6 @@ function filesMatch(a: string, b: string): boolean {
 
 function parseSectionNumber(position: string): number | null {
   const m = position.match(/\bsection\s+(\d+)\b/i);
-  if (!m) return null;
-  const n = Number.parseInt(m[1]!, 10);
-  return Number.isFinite(n) ? n : null;
-}
-
-function parsePageNumber(position: string): number | null {
-  const m = position.match(/\bpage\s+~?(\d+)\b/i);
   if (!m) return null;
   const n = Number.parseInt(m[1]!, 10);
   return Number.isFinite(n) ? n : null;
@@ -85,15 +122,47 @@ export function targetPdfPagesForFile(input: {
 
   const pages = new Set<number>();
   for (const chunk of fileChunks) {
-    const directPage = parsePageNumber(chunk.position);
-    if (directPage !== null) {
-      pages.add(Math.min(pageCount, Math.max(1, directPage)));
+    const fromPosition = parsePageNumbersFromPosition(chunk.position);
+    if (fromPosition.length > 0) {
+      for (const p of fromPosition) {
+        pages.add(Math.min(pageCount, Math.max(1, p)));
+      }
       continue;
     }
     const section = parseSectionNumber(chunk.position);
     if (section !== null && sectionMax > 0) {
       const estimated = Math.round((section / sectionMax) * pageCount);
       pages.add(Math.min(pageCount, Math.max(1, estimated)));
+    }
+  }
+
+  return [...pages].sort((a, b) => a - b);
+}
+
+/**
+ * Pages to render and scan for visuals — decoupled from structure-plan chunk refs.
+ * Scans 1..min(pageCount, budget) so mid-document figures are not orphaned when
+ * the plan only cites head/tail chunks.
+ */
+export function targetPdfPagesForVision(input: {
+  fileName: string;
+  pageCount: number;
+  chunks: PersistedIngestChunk[];
+  maxPages?: number;
+}): number[] {
+  const max = input.maxPages ?? MAX_PAGES_RENDERED_PER_PDF;
+  const cap = Math.min(input.pageCount, max);
+  if (cap <= 0) return [];
+
+  const pages = new Set<number>();
+  for (let p = 1; p <= cap; p++) pages.add(p);
+
+  const fileChunks = input.chunks.filter((c) =>
+    filesMatch(c.sourceFileName, input.fileName)
+  );
+  for (const chunk of fileChunks) {
+    for (const p of parsePageNumbersFromPosition(chunk.position)) {
+      if (p >= 1 && p <= input.pageCount) pages.add(p);
     }
   }
 
@@ -135,7 +204,11 @@ export async function supplementPdfPageFigures(input: {
   sourceFiles: IngestSourceFileRef[] | null;
   primaryStoragePath: string;
   primaryFileName: string | null;
-}): Promise<IngestSourceImageRecord[]> {
+  /** When set, skip storage download for the primary PDF (same-process ingest). */
+  primaryPdfBuffer?: Buffer | null;
+  /** Page count from text extract when pdf.js render load fails in dev bundles. */
+  knownPageCount?: number;
+}): Promise<SupplementPdfPagesResult> {
   const refs: IngestSourceFileRef[] =
     input.sourceFiles && input.sourceFiles.length > 0
       ? input.sourceFiles
@@ -148,12 +221,40 @@ export async function supplementPdfPageFigures(input: {
         ];
 
   const pdfRefs = refs.filter(isPdfRef);
-  if (pdfRefs.length === 0) return input.existingImages;
+  if (pdfRefs.length === 0) {
+    return {
+      images: input.existingImages,
+      pageTableExtractions: [],
+      renderedPageBuffers: [],
+      primaryPdfBuffer: null,
+      primaryFileName: "upload.pdf",
+      pageArtifacts: { tables: {}, figures: [] },
+    };
+  }
 
   const toUpload: Awaited<ReturnType<typeof renderPdfPagesToPng>> = [];
+  let primaryPdfBuffer: Buffer | null = input.primaryPdfBuffer ?? null;
+  let primaryFileName =
+    typeof input.primaryFileName === "string" && input.primaryFileName.trim()
+      ? input.primaryFileName.trim()
+      : "upload.pdf";
   let renderedCount = 0;
   const remainingBudget = MAX_PAGES_RENDERED_PER_JOB;
-  if (remainingBudget <= 0) return input.existingImages;
+  const skipReasons: string[] = [];
+  if (remainingBudget <= 0) {
+    skipReasons.push("page_render_budget_zero");
+    console.warn("[supplementPdfPageFigures] skipped — render budget is 0", {
+      jobId: input.jobId,
+    });
+    return {
+      images: filterCroppedFiguresOnly(input.existingImages),
+      pageTableExtractions: [],
+      renderedPageBuffers: [],
+      primaryPdfBuffer,
+      primaryFileName,
+      pageArtifacts: { tables: {}, figures: [] },
+    };
+  }
 
   for (const ref of pdfRefs) {
     if (renderedCount >= remainingBudget) break;
@@ -163,52 +264,173 @@ export async function supplementPdfPageFigures(input: {
         ? ref.originalFileName.trim()
         : "upload.pdf";
 
-    const buffer = await downloadPdfBuffer(input.admin, ref.storagePath);
-    if (!buffer) continue;
+    const isPrimary =
+      ref.storagePath === input.primaryStoragePath ||
+      (pdfRefs.length === 1 && !primaryPdfBuffer);
 
-    const pageCount = await getPdfPageCount(buffer);
-    if (pageCount <= 0) continue;
+    let buffer: Buffer | null = null;
+    if (isPrimary && primaryPdfBuffer) {
+      buffer = primaryPdfBuffer;
+    } else {
+      buffer = await downloadPdfBuffer(input.admin, ref.storagePath);
+    }
+    if (!buffer) {
+      skipReasons.push(`download_failed:${ref.storagePath}`);
+      continue;
+    }
 
-    const targetPages = targetPdfPagesForFile({
+    if (!primaryPdfBuffer) {
+      primaryPdfBuffer = buffer;
+      primaryFileName = fileName;
+    }
+
+    let pageCount = await getPdfPageCount(buffer);
+    if (pageCount <= 0 && buffer.length > 1000) {
+      const retryBuf = Buffer.from(buffer);
+      const retryCount = await getPdfPageCount(retryBuf);
+      if (retryCount > 0) {
+        buffer = retryBuf;
+        pageCount = retryCount;
+        primaryPdfBuffer = retryBuf;
+      }
+    }
+    if (pageCount <= 0 && ref.storagePath) {
+      const fresh = await downloadPdfBuffer(input.admin, ref.storagePath);
+      if (fresh && fresh.length > 1000) {
+        const freshCount = await getPdfPageCount(fresh);
+        if (freshCount > 0) {
+          buffer = fresh;
+          pageCount = freshCount;
+          primaryPdfBuffer = fresh;
+          console.info("[supplementPdfPageFigures] recovered PDF via re-download", {
+            jobId: input.jobId,
+            fileName,
+            pageCount: freshCount,
+          });
+        }
+      }
+    }
+    if (pageCount <= 0 && input.knownPageCount && input.knownPageCount > 0) {
+      pageCount = input.knownPageCount;
+      console.info("[supplementPdfPageFigures] using known page count from text extract", {
+        jobId: input.jobId,
+        fileName,
+        pageCount,
+      });
+    }
+    if (pageCount <= 0) {
+      skipReasons.push(`page_count_zero:${fileName}`);
+      continue;
+    }
+
+    const targetPages = targetPdfPagesForVision({
       fileName,
       pageCount,
       chunks: input.chunks,
-      plan: input.plan,
     });
-    if (targetPages.length === 0) continue;
+    if (targetPages.length === 0) {
+      skipReasons.push(`no_target_pages:${fileName}`);
+      continue;
+    }
 
-    const covered = pagesWithEmbeddedImages(input.existingImages, fileName);
-    const missing = targetPages.filter((p) => !covered.has(p));
-    if (missing.length === 0) continue;
+    // Render pages in memory for vision crop (never uploaded as full-page figures).
+    let remainingToRender = [...targetPages];
+    let fileRendered = 0;
 
-    const cap = Math.min(
-      MAX_PAGES_RENDERED_PER_PDF,
-      remainingBudget - renderedCount
-    );
-    const toRender = missing.slice(0, cap);
-    if (toRender.length === 0) continue;
+    while (
+      remainingToRender.length > 0 &&
+      renderedCount < remainingBudget &&
+      fileRendered < MAX_PAGES_RENDERED_PER_PDF
+    ) {
+      const room = Math.min(
+        RENDER_BATCH_SIZE,
+        remainingToRender.length,
+        MAX_PAGES_RENDERED_PER_PDF - fileRendered,
+        remainingBudget - renderedCount
+      );
+      if (room <= 0) break;
 
-    const rendered = await renderPdfPagesToPng(buffer, toRender, fileName);
-    toUpload.push(...rendered);
-    renderedCount += rendered.length;
+      const batch = remainingToRender.slice(0, room);
+      const rendered = await renderPdfPagesToPng(buffer, batch, fileName);
+      toUpload.push(...rendered);
+      renderedCount += rendered.length;
+      fileRendered += rendered.length;
+      remainingToRender = remainingToRender.slice(batch.length);
 
-    console.info("[supplementPdfPageFigures]", {
-      jobId: input.jobId,
-      fileName,
-      requested: toRender.length,
-      rendered: rendered.length,
-    });
+      console.info("[supplementPdfPageFigures]", {
+        jobId: input.jobId,
+        fileName,
+        batch: batch.length,
+        rendered: rendered.length,
+        remaining: remainingToRender.length,
+      });
+    }
   }
 
-  if (toUpload.length === 0) return input.existingImages;
+  if (toUpload.length === 0) {
+    console.warn("[supplementPdfPageFigures] no pages rendered", {
+      jobId: input.jobId,
+      pdfRefs: pdfRefs.length,
+      skipReasons,
+      hadPrimaryBuffer: Boolean(input.primaryPdfBuffer),
+      storagePath: input.primaryStoragePath?.slice(0, 80),
+    });
+    return {
+      images: filterCroppedFiguresOnly(input.existingImages),
+      pageTableExtractions: [],
+      renderedPageBuffers: [],
+      primaryPdfBuffer,
+      primaryFileName,
+      pageArtifacts: { tables: {}, figures: [] },
+    };
+  }
 
-  const uploaded = await uploadIngestSourceImages({
+  if (!primaryPdfBuffer) {
+    throw new Error(
+      `[supplementPdfPageFigures] missing primary PDF buffer job=${input.jobId}`
+    );
+  }
+
+  const allTargetPages = [
+    ...new Set(
+      toUpload.map((r) => (r.anchorType === "page" ? r.anchorIndex : 0)).filter((p) => p > 0)
+    ),
+  ].sort((a, b) => a - b);
+
+  const cropFirst = await runCropFirstExtract({
     admin: input.admin,
     userId: input.userId,
     jobId: input.jobId,
-    images: toUpload,
+    pdfBuffer: primaryPdfBuffer,
+    fileName: primaryFileName,
+    renderedPages: toUpload,
+    targetPageNumbers: allTargetPages,
+    persistToDb: true,
   });
 
-  if (uploaded.length === 0) return input.existingImages;
-  return [...input.existingImages, ...uploaded];
+  const pageTableExtractions = cropFirst.pageTableExtractions;
+
+  const images = [
+    ...filterCroppedFiguresOnly(input.existingImages),
+    ...cropFirst.sourceImages,
+  ];
+
+  console.info("[supplementPdfPageFigures] crop-first complete", {
+    jobId: input.jobId,
+    pagesRendered: toUpload.length,
+    tables: pageTableExtractions.length,
+    cropsUploaded: cropFirst.cropsUploaded,
+    pageSnapshots: cropFirst.pageSnapshots,
+    captionsCreated: cropFirst.captionsCreated,
+    figureArtifacts: cropFirst.pageArtifacts.figures.length,
+  });
+
+  return {
+    images,
+    pageTableExtractions,
+    renderedPageBuffers: toUpload,
+    primaryPdfBuffer,
+    primaryFileName,
+    pageArtifacts: cropFirst.pageArtifacts,
+  };
 }

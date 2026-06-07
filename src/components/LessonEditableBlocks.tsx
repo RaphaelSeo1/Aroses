@@ -83,7 +83,9 @@ export function LessonEditableBlocks({
     ...lesson.examples,
   ]);
 
-  const hasSourceImages = lessonMarkdownHasImages(lesson.content);
+  const hasSourceImages =
+    lessonMarkdownHasImages(lesson.content) ||
+    (lesson.visual_assets?.some((a) => a.imageUrl?.trim()) ?? false);
 
   const streamedBody = useTypewriterString(lesson.content ?? "", {
     mode: "chars",
@@ -177,11 +179,11 @@ export function LessonEditableBlocks({
 
     const bodyEl = animateReveal ? (
       <div className="mt-3">
-        <LessonRichContent markdown={streamedBody} />
+        <LessonRichContent markdown={streamedBody} visualAssets={lesson.visual_assets} />
       </div>
     ) : (
       <div className="mt-3">
-        <LessonRichContent markdown={lesson.content} />
+        <LessonRichContent markdown={lesson.content} visualAssets={lesson.visual_assets} />
       </div>
     );
 
@@ -332,7 +334,12 @@ export function LessonEditableBlocks({
         isEditing={section === "body"}
         onEdit={() => setSection("body")}
         onCancel={cancel}
-        view={<LessonRichContent markdown={lesson.content} />}
+        view={
+          <LessonRichContent
+            markdown={lesson.content}
+            visualAssets={lesson.visual_assets}
+          />
+        }
         edit={
           <div className="space-y-3">
             <LessonMarkdownEditor

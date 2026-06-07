@@ -25,18 +25,29 @@ type PdfDoc = {
 async function pageToText(pageData: PageData): Promise<string> {
   const textContent = await pageData.getTextContent({
     normalizeWhitespace: false,
-    disableCombineTextItems: false,
+    // Keep PDF text items separate so table columns on the same row stay
+    // distinguishable (we insert tabs between wide horizontal gaps).
+    disableCombineTextItems: true,
   });
   let lastY: number | undefined;
+  let lastEndX: number | undefined;
   let text = "";
   for (const item of textContent.items) {
+    const str = item.str;
+    if (!str) continue;
+    const x = item.transform[4];
     const y = item.transform[5];
-    if (lastY === y || lastY === undefined) {
-      text += item.str;
+    if (lastY === undefined) {
+      text += str;
+    } else if (Math.abs(y - lastY) > 2) {
+      text += `\n${str}`;
+    } else if (lastEndX !== undefined && x - lastEndX > 18) {
+      text += `\t${str}`;
     } else {
-      text += `\n${item.str}`;
+      text += text.length > 0 && !text.endsWith("\n") ? ` ${str}` : str;
     }
     lastY = y;
+    lastEndX = x + str.length * 4.5;
   }
   return text;
 }
