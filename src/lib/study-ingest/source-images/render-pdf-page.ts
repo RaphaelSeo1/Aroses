@@ -4,7 +4,7 @@ import { createCanvas } from "@napi-rs/canvas";
 import type { RawSourceImage } from "@/lib/study-ingest/source-images/types";
 
 const MAX_RENDER_WIDTH_PX = 1_400;
-const DEFAULT_SCALE = 1.75;
+const DEFAULT_SCALE = 2.25;
 const MIN_PNG_BYTES = 4_000;
 
 export type RenderedPdfPage = {
@@ -38,6 +38,10 @@ async function getPdfJs(): Promise<PdfJsModule> {
   return pdfjsReady;
 }
 
+function pdfjsAssetDir(subdir: string): string {
+  return path.join(process.cwd(), "node_modules/pdfjs-dist", subdir);
+}
+
 /** Load a PDF document (shared by extract + render). */
 export async function loadPdfDocument(buffer: Buffer) {
   const pdfjsLib = await getPdfJs();
@@ -48,6 +52,12 @@ export async function loadPdfDocument(buffer: Buffer) {
     // Fonts enabled so exported slide PDFs render text and vector labels.
     disableFontFace: false,
     useSystemFonts: true,
+    // Standard 14 fonts + CJK cmaps — reduces □/☒ when PDF embeds are incomplete.
+    standardFontDataUrl: pathToFileURL(
+      pdfjsAssetDir("standard_fonts") + path.sep
+    ).href,
+    cMapUrl: pdfjsAssetDir("cmaps") + path.sep,
+    cMapPacked: true,
   }).promise;
   return { pdf, pdfjsLib };
 }
@@ -75,12 +85,13 @@ export async function renderPdfPagesToPng(
     for (const pageNum of unique) {
       const page = await pdf.getPage(pageNum);
       try {
-        const base = page.getViewport({ scale: 1 });
+        const rotation = (page as { rotate?: number }).rotate ?? 0;
+        const base = page.getViewport({ scale: 1, rotation });
         const scale = Math.min(
           DEFAULT_SCALE,
           base.width > 0 ? MAX_RENDER_WIDTH_PX / base.width : DEFAULT_SCALE
         );
-        const viewport = page.getViewport({ scale });
+        const viewport = page.getViewport({ scale, rotation });
         const canvas = createCanvas(
           Math.ceil(viewport.width),
           Math.ceil(viewport.height)

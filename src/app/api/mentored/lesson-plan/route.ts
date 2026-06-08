@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
-import { generateLessonPlan } from "@/lib/ai/mentored";
+import { generateLessonPlan, LESSON_PLAN_GENERATOR_VERSION } from "@/lib/ai/mentored";
 import { loadStudyContextForMaterial } from "@/lib/load-course-study-context";
+import { resolveTeachingLanguage } from "@/lib/course-output-language";
+import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
 import { formatSelfStudyTutorBlock } from "@/lib/self-study-context";
 import type { CoursePayload } from "@/types/course";
 import type {
@@ -35,6 +37,7 @@ type Body = {
   materialId?: string;
   moduleId?: number;
   forceRegenerate?: boolean;
+  outputLanguage?: unknown;
 };
 
 export async function POST(request: Request) {
@@ -84,7 +87,12 @@ export async function POST(request: Request) {
       .eq("material_id", body.materialId)
       .maybeSingle();
     const cached = existing?.lesson_plan as MentoredLessonPlan | null;
-    if (cached && cached.moduleId === moduleId && cached.chunks.length > 0) {
+    if (
+      cached &&
+      cached.moduleId === moduleId &&
+      cached.chunks.length > 0 &&
+      (cached.generatorVersion ?? 0) >= LESSON_PLAN_GENERATOR_VERSION
+    ) {
       const now = new Date().toISOString();
       await supabase.from("user_mentored_sessions").upsert(
         {
@@ -138,9 +146,13 @@ export async function POST(request: Request) {
         ? "intermediate"
         : "beginner";
 
-  const studyContextRaw = await loadStudyContextForMaterial(
-    supabase,
-    body.materialId
+  const [studyContextRaw, courseLanguage] = await Promise.all([
+    loadStudyContextForMaterial(supabase, body.materialId),
+    loadCourseOutputLanguageForMaterial(supabase, body.materialId),
+  ]);
+  const outputLanguage = resolveTeachingLanguage(
+    courseLanguage,
+    body.outputLanguage
   );
   const studyContext = studyContextRaw
     ? formatSelfStudyTutorBlock(studyContextRaw)
@@ -152,6 +164,7 @@ export async function POST(request: Request) {
       goals,
       knowledgeLevel,
       studyContext,
+      outputLanguage,
     });
     // Cache on the session row so subsequent loads of this module are free.
     await supabase.from("user_mentored_sessions").upsert(

@@ -1,14 +1,12 @@
 "use client";
 
 import "katex/dist/katex.min.css";
-import { LessonFigure } from "@/components/LessonFigure";
 import {
-  extractMarkdownFigures,
   splitLeadParagraph,
+  splitMarkdownBeforeFirstTable,
   stripMarkdownFigures,
 } from "@/lib/lesson-content-layout";
 import { escapeCurrencyDollars } from "@/lib/markdown-math";
-import type { LessonVisualAsset } from "@/types/course";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -73,9 +71,9 @@ const markdownComponents = {
     />
   ),
   table: (props: React.ComponentProps<"table">) => (
-    <div className="mb-4 overflow-x-auto last:mb-0">
+    <div className="mb-4 w-full overflow-x-auto last:mb-0">
       <table
-        className="min-w-full border-collapse text-sm text-zinc-800 dark:text-zinc-200"
+        className="w-full min-w-[28rem] border-collapse text-sm text-zinc-800 dark:text-zinc-200"
         {...props}
       />
     </div>
@@ -132,130 +130,58 @@ function MarkdownBlock({ markdown }: { markdown: string }) {
   );
 }
 
-function LessonBodyWithFigures({ markdown }: { markdown: string }) {
-  const figures = extractMarkdownFigures(markdown);
-  const textOnly = stripMarkdownFigures(markdown);
-  const { lead, body } = splitLeadParagraph(textOnly);
-  const [primary, ...secondary] = figures;
+const textLockClass =
+  "lesson-text-lock w-full min-w-0 text-[15px] leading-relaxed text-zinc-700 [text-size-adjust:100%] [-webkit-text-size-adjust:100%] dark:text-zinc-300 [&_.katex-display]:my-4 [&_.katex]:text-[1.05em]";
 
-  return (
-    <div className="space-y-4">
-      {lead ? <MarkdownBlock markdown={lead} /> : null}
-
-      {primary || body ? (
-        <div className="md:flex md:items-start md:gap-6">
-          {body ? (
-            <div className="order-2 min-w-0 md:order-1 md:flex-1">
-              <MarkdownBlock markdown={body} />
-            </div>
-          ) : null}
-
-          {primary ? (
-            <aside
-              className={
-                body
-                  ? "order-1 mx-auto mb-1 w-full max-w-[280px] shrink-0 md:order-2 md:mx-0 md:mb-0 md:w-[38%] md:max-w-[260px]"
-                  : "mx-auto w-full max-w-md"
-              }
-            >
-              <LessonFigure
-                src={primary.url}
-                alt={primary.alt}
-                variant="primary"
-              />
-            </aside>
-          ) : null}
-        </div>
-      ) : null}
-
-      {secondary.length > 0 ? (
-        <div
-          className={
-            secondary.length === 1
-              ? "mx-auto max-w-md pt-2"
-              : "grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2"
-          }
-        >
-          {secondary.map((fig) => (
-            <LessonFigure
-              key={fig.url}
-              src={fig.url}
-              alt={fig.alt}
-              variant="secondary"
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function StructuredVisualAssets({
-  assets,
-  markdown,
-}: {
-  assets: LessonVisualAsset[];
-  markdown: string;
-}) {
-  const inMarkdown = new Set(extractMarkdownFigures(markdown).map((f) => f.url));
-  const extra = assets.filter((a) => a.imageUrl && !inMarkdown.has(a.imageUrl));
-  if (extra.length === 0) return null;
-
-  return (
-    <div
-      className={
-        extra.length === 1
-          ? "mx-auto max-w-md space-y-2 pt-2"
-          : "grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2"
-      }
-    >
-      {extra.map((asset) => (
-        <figure key={asset.assetId} className="space-y-2">
-          <LessonFigure
-            src={asset.imageUrl}
-            alt={asset.title || asset.caption}
-            variant={extra.length === 1 ? "primary" : "secondary"}
-          />
-          {asset.whyRelevant ? (
-            <figcaption className="text-center text-xs text-zinc-500 dark:text-zinc-400">
-              {asset.whyRelevant}
-            </figcaption>
-          ) : null}
-        </figure>
-      ))}
-    </div>
-  );
-}
-
-export function LessonRichContent({
-  markdown,
-  visualAssets,
-}: {
-  markdown: string;
-  visualAssets?: LessonVisualAsset[];
-}) {
-  if (!markdown.trim() && (!visualAssets || visualAssets.length === 0)) {
+/** Lesson body: opening text, then prose, then tables — no generated figures. */
+export function LessonRichContent({ markdown }: { markdown: string }) {
+  if (!markdown.trim()) {
     return (
       <p className="text-sm italic text-zinc-500 dark:text-zinc-400">
-        No lesson text yet. Use Edit to add notes, images, and equations.
+        No lesson text yet. Use Edit to add notes and equations.
       </p>
     );
   }
 
-  const hasFigures = extractMarkdownFigures(markdown).length > 0;
-  const hasStructured =
-    visualAssets?.some((a) => a.imageUrl?.trim()) ?? false;
+  const textMarkdown = stripMarkdownFigures(markdown);
+  const { lead, body } = splitLeadParagraph(textMarkdown);
+  const hasSplit = Boolean(body.trim());
+  const bodySource = hasSplit ? body : textMarkdown;
+  const { prose: proseBeforeTable, tables: tableMarkdown } =
+    splitMarkdownBeforeFirstTable(bodySource);
+
+  const leadBlock =
+    hasSplit && lead.trim() ? (
+      <div className={textLockClass}>
+        <MarkdownBlock markdown={lead} />
+      </div>
+    ) : null;
+
+  const proseBlock = proseBeforeTable.trim() ? (
+    <div className={textLockClass}>
+      <MarkdownBlock markdown={proseBeforeTable} />
+    </div>
+  ) : null;
+
+  const tableBlock = tableMarkdown.trim() ? (
+    <div className={textLockClass}>
+      <MarkdownBlock markdown={tableMarkdown} />
+    </div>
+  ) : null;
+
+  if (!leadBlock && !proseBlock && !tableBlock) {
+    return (
+      <p className="text-sm italic text-zinc-500 dark:text-zinc-400">
+        No lesson text yet. Use Edit to add notes and equations.
+      </p>
+    );
+  }
 
   return (
-    <div className="lesson-md text-[15px] leading-relaxed text-zinc-700 dark:text-zinc-300 [&_.katex-display]:my-4 [&_.katex]:text-[1.05em]">
-      {hasFigures ? (
-        <LessonBodyWithFigures markdown={markdown} />
-      ) : markdown.trim() ? (
-        <MarkdownBlock markdown={markdown} />
-      ) : null}
-      {hasStructured && visualAssets ? (
-        <StructuredVisualAssets assets={visualAssets} markdown={markdown} />
-      ) : null}
+    <div className="space-y-4">
+      {leadBlock}
+      {proseBlock}
+      {tableBlock}
     </div>
   );
 }

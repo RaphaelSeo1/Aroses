@@ -18,17 +18,26 @@ import type {
   IngestChunk,
   IngestChunkSummary,
 } from "@/lib/study-ingest/chunking";
+import { parsePageNumbersFromPosition } from "@/lib/study-ingest/chunk-position";
+import { filterChunkTableBlocksToPages } from "@/lib/study-ingest/enrich-chunks-with-page-tables";
 import {
   enhanceTabularPlaintext,
   logMaterialTableDiagnostics,
+  sanitizeLessonContent,
 } from "@/lib/study-ingest/table-text";
 import {
   buildDeterministicStructurePlan,
+  normalizeStructurePlanTitles,
   structurePlanCoveragePromptBlock,
   structurePlanTargets,
   validateStructurePlanCoverage,
   type StructurePlanTargets,
 } from "@/lib/structure-plan-coverage";
+import {
+  deriveCourseTitleFromChunkTitles,
+  isGenericIngestPlaceholder,
+  normalizeIngestDisplayTitle,
+} from "@/lib/study-ingest/normalize-ingest-title";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
 import {
   DEFAULT_COURSE_OUTPUT_LANGUAGE,
@@ -112,13 +121,21 @@ async function ensureModuleQuizCount(
 ): Promise<CourseModule> {
   const target = moduleQuizTarget(profile);
   let quiz = [...module.quiz];
+  const minAcceptable =
+    profile === "express" || profile === "fast"
+      ? Math.min(4, target)
+      : profile === "balanced"
+        ? Math.min(6, target)
+        : target;
+  if (quiz.length >= minAcceptable) return module;
   if (quiz.length >= target) return module;
 
   console.info(
     `[study-generation] module ${module.id} quiz backfill: ${quiz.length} → target ${target}`
   );
 
-  const maxRounds = 3;
+  const maxRounds =
+    profile === "express" || profile === "fast" ? 1 : profile === "balanced" ? 2 : 3;
   for (let round = 0; round < maxRounds && quiz.length < target; round++) {
     const need = target - quiz.length;
     const batch = Math.min(16, Math.max(6, need + 4));
@@ -410,7 +427,7 @@ async function sleep(ms: number) {
 /** Shorter outline coverage for express/fast (fewer input tokens); full/balanced use `sourceCoverageRules`. */
 function outlineCoverageBlock(profile: CourseBuildProfile): string {
   if (profile === "express") {
-    return "COVERAGE: From this excerpt only, list the **main ideas** as **2 compact modules** (prefer 2) with short lesson_titles — skip fine detail.";
+    return "COVERAGE: Map **every major section/heading** in the excerpt to its own lesson_title — do not merge unrelated topics. Use enough modules to cover the full deck.";
   }
   if (profile === "fast") {
     return "COVERAGE: Map obvious sections in this excerpt to modules; stay within the caps above.";
@@ -441,14 +458,31 @@ function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
  * material (e.g. pharmacology drug tables) where the table IS the
  * highest-value, most testable content.
  */
+function factualAccuracyRules(): string {
+  return `FACTUAL ACCURACY (critical — no confabulation):
+- Use **only** drug names, spellings, and romanizations that appear in the source material. Do NOT invent English names (wrong: "Fluoxamine" — use 플루복사민(fluvoxamine) exactly as in the PDF).
+- **key_terms**: each "term" and its "definition" MUST describe the **same concept**. Never pair a label with an unrelated mechanism (wrong: term "뇌전증지속상태" with a Parkinson's dopamine definition).
+- Preserve source anatomical terms exactly (e.g. 숨뇌마비기 medullary paralysis — do not substitute other nerve names).
+- Do NOT paste low-quality or garbled markdown tables from the material if cells look like OCR noise; omit them rather than include unreadable grids.
+- Do NOT invent specific numeric doses (mg, μg, mcg, g, mL, units) in examples unless that exact dose appears in the source — use qualitative phrasing ("low dose", "typical analgesic dose") instead of made-up numbers.
+- Cover numbered figures/topics from the source when present (e.g. 중추 도파민 4경로 in schizophrenia / antipsychotic lessons).
+- Preserve **2-column labeled comparison tables** exactly (e.g. \`양성증상 | 음성증상\`, drug | mechanism). Never flatten labeled columns into unlabeled bullet runs or comma lists that lose the column headers.
+- When describing a **named drug or anesthetic agent**, use **only** facts from that agent's **own row** in the source table. Never attribute footnotes, MAC-column notes, or properties from **adjacent rows** (e.g. N₂O / 아산화질소, generic MAC footnotes) to a different agent (e.g. sevoflurane / 세보플루레인).
+- Do **not** invent table columns or rows not present in the source. If the source table has **N** columns, output exactly **N** columns with the same headers — never add invented columns such as "임상적 의미" unless the PDF includes them.`;
+}
+
 function dataFidelityRules(): string {
-  return `DATA FIDELITY (critical — preserve source tables and numbers):
-- When AVAILABLE PDF ASSETS lists a **table** asset for this lesson, insert {{asset:ASSET_ID}} on its own line where the table belongs. The app renders the **original cropped table screenshot** from the student's PDF (like NotebookLM) — do NOT also paste a markdown table in "content".
-- When no table asset token exists but the source has tabular data, you may include key numbers in prose; do not invent a markdown grid unless absolutely necessary.
-- Preserve every proper noun and NUMBER from source tables in your prose explanations — drug names, doses, units, MAC values, etc. Do not round, omit, or regroup them.
+  return `STRUCTURED DATA FIDELITY (critical — full tables, not summaries):
+- Every table, drug list, potency chart, side-effect matrix, seizure-type mapping, and numbered reference grid from the source MUST appear in lesson "content" as **complete GitHub-flavored markdown tables** (header row + \`|---|\` separator + **one row per source row**). Do NOT summarize tables into prose-only bullets.
+- Prose may explain mechanisms and concepts; **tables carry the verbatim reference data** students must memorize (drug names, doses, half-lives, MAC values, potency ratios, side-effects, contraindications, etc.).
+- Include **every row** from 표 N tables — never drop entries (e.g. if the source lists 페티딘, 펜타조신, 부프레노르핀, they must appear in a table row, not only morphine/fentanyl in prose).
+- Blocks marked \`--- TABLE DATA FROM PDF ---\` contain authoritative table markdown — **copy them into the matching lesson "content"** (add a short heading like \`### 표 3-14\` above each when the slide label is known). Do not leave them only in the material block.
+- Do NOT use {{asset:...}} tokens for tables — students read markdown tables in the lesson body.
+- Preserve every proper noun and NUMBER exactly. Do not round, omit, merge rows, or regroup values.
 - Keep mixed-language terms in full, BOTH languages, exactly as written (e.g. "디아제팜(diazepam)").
-- For **figure/diagram** assets, insert {{asset:ASSET_ID}} on its own line and reference the visual in prose ("see the table from your lecture", "look at this diagram").
-- Blocks marked \`--- TABLE DATA FROM PDF ---\` are for your accuracy when writing — students see cropped images, not that raw text. Do not paste those blocks into lesson "content".`;
+- **NUMERIC RANGES**: always write ranges with an en-dash between endpoints: 1–4, 2–3, 10–18, 47–100. NEVER concatenate endpoints (wrong: 14단계, 23시간, 1018시간, 47100시간).
+
+${factualAccuracyRules()}`;
 }
 
 function isRetryableApiError(err: unknown): boolean {
@@ -1036,6 +1070,7 @@ ${generationContextSuffix(studyContext, outputLanguage)}
 Create one full module object: lessons (one per planned lesson title below, in order — same count as lesson_titles, each with rich "content", "key_terms", "examples"), plus quiz.
 
 Planned lesson titles for this module: ${titles}.
+Each lesson's JSON "title" **must match** the planned title at the same index exactly (same wording, same order).
 
 ${sourceCoverageRules("module")}
 
@@ -1216,11 +1251,46 @@ ${clipped}`;
   return parseCourseModuleLoose(obj.module);
 }
 
+function fillMinimalLessonFields(module: CourseModule): CourseModule {
+  return {
+    ...module,
+    lessons: module.lessons.map((lesson) => {
+      const title = lesson.title.trim() || "Lesson topic";
+      const key_terms =
+        lesson.key_terms.length >= 2
+          ? lesson.key_terms
+          : [
+              {
+                term: title.slice(0, 48),
+                definition:
+                  "Primary topic covered in this lesson — see lesson content for source definitions.",
+              },
+              {
+                term: "Source PDF",
+                definition:
+                  "Definitions and drug data follow the uploaded lecture material.",
+              },
+            ];
+      const examples =
+        lesson.examples.length >= 2
+          ? lesson.examples
+          : [
+              "Clinical scenario from the lecture material",
+              "Board-exam style application of this topic",
+            ];
+      return { ...lesson, key_terms, examples };
+    }),
+  };
+}
+
 async function ensureModuleLessonFields(
   anthropic: Anthropic,
   module: CourseModule,
   profile: CourseBuildProfile
 ): Promise<CourseModule> {
+  if (profile === "express" || profile === "fast" || profile === "balanced") {
+    return fillMinimalLessonFields(module);
+  }
   let out = module;
   for (let i = 0; i < 2 && moduleNeedsLessonGlossary(out); i++) {
     out = await repairModuleMissingLessonFields(anthropic, out, profile);
@@ -1332,21 +1402,45 @@ function planMaxTokens(profile: CourseBuildProfile): number {
  * Routed through the same SDK setup as the outline; callers should still wrap
  * this in `withAnthropicRateLimitRetries` like other ingest AI calls.
  */
+function isLlmStructurePlanningEnabled(): boolean {
+  return process.env.STRUCTURE_PLANNING_LLM?.trim() === "1";
+}
+
+function normalizeChunkSummariesForPlanner(
+  chunkSummaries: IngestChunkSummary[]
+): IngestChunkSummary[] {
+  return chunkSummaries.map((c) => ({
+    ...c,
+    title: normalizeIngestDisplayTitle(c.title),
+  }));
+}
+
 export async function planCourseStructureFromChunks(
   chunkSummaries: IngestChunkSummary[],
   streamSink?: PdfIngestStreamSink,
   studyContext?: string,
   outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
 ): Promise<CourseStructurePlan> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing ANTHROPIC_API_KEY");
-  }
   if (chunkSummaries.length === 0) {
     throw new Error("No chunks to plan a course structure from");
   }
 
   const profile = resolveCourseBuildProfile();
+  const normalizedSummaries = normalizeChunkSummariesForPlanner(chunkSummaries);
+
+  if (!isLlmStructurePlanningEnabled()) {
+    console.info("[study-generation] deterministic structure plan", {
+      chunks: normalizedSummaries.length,
+    });
+    return normalizeStructurePlanTitles(
+      buildDeterministicStructurePlan(normalizedSummaries, profile)
+    );
+  }
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing ANTHROPIC_API_KEY");
+  }
   const anthropic = new Anthropic({
     apiKey,
     timeout: getPdfAnthropicTimeoutMs(),
@@ -1360,7 +1454,7 @@ export async function planCourseStructureFromChunks(
 
   for (let attempt = 0; attempt < planAttempts; attempt++) {
     const instruction = structurePlanInstruction(
-      chunkSummaries,
+      normalizedSummaries,
       targets,
       studyContext,
       outputLanguage,
@@ -1396,7 +1490,7 @@ export async function planCourseStructureFromChunks(
 
     const coverageError = validateStructurePlanCoverage(
       plan,
-      chunkSummaries,
+      normalizedSummaries,
       targets
     );
     if (!coverageError) {
@@ -1407,7 +1501,7 @@ export async function planCourseStructureFromChunks(
           modules: plan.modules.length,
         });
       }
-      return plan;
+      return normalizeStructurePlanTitles(plan);
     }
 
     lastCoverageError = coverageError;
@@ -1421,7 +1515,9 @@ export async function planCourseStructureFromChunks(
     "[study-generation] using deterministic structure plan (full chunk coverage)",
     { chunks: chunkSummaries.length, lastError: lastCoverageError }
   );
-  return buildDeterministicStructurePlan(chunkSummaries, profile);
+  return normalizeStructurePlanTitles(
+    buildDeterministicStructurePlan(normalizedSummaries, profile)
+  );
 }
 
 /** Convert a structure plan into the existing outline shape (expand/finalize unchanged). */
@@ -1429,18 +1525,22 @@ export function structurePlanToOutline(
   plan: CourseStructurePlan,
   fallbackTitle?: string
 ): CourseOutlinePayload {
-  const modules = plan.modules.map((m, i) => ({
+  const normalized = normalizeStructurePlanTitles(plan);
+  const modules = normalized.modules.map((m, i) => ({
     id: i + 1,
-    title: m.title,
-    lesson_titles: m.lessons.map((l) => l.title),
+    title: normalizeIngestDisplayTitle(m.title),
+    lesson_titles: m.lessons.map((l) => normalizeIngestDisplayTitle(l.title)),
   }));
   const title =
-    plan.title?.trim() ||
+    normalized.title?.trim() ||
     fallbackTitle?.trim() ||
     modules[0]?.title ||
     "Course";
+  const rawDescription = plan.description?.trim();
   const description =
-    plan.description?.trim() || "A course built from your uploaded materials.";
+    rawDescription && !isGenericIngestPlaceholder(rawDescription)
+      ? rawDescription
+      : title;
   return { title, description, modules };
 }
 
@@ -1473,7 +1573,9 @@ export function assembleModuleSourcesFromPlan(
     if (ordered.length === 0) return "";
     const blocks = ordered.map((id) => {
       const c = byId.get(id)!;
-      return `[from ${c.sourceFileName} — ${c.position}]\n${enhanceTabularPlaintext(c.text)}`;
+      const allowedPages = new Set(parsePageNumbersFromPosition(c.position));
+      const chunkText = filterChunkTableBlocksToPages(c.text, allowedPages);
+      return `[from ${c.sourceFileName} — ${c.position}]\n${enhanceTabularPlaintext(chunkText)}`;
     });
     const joined = enhanceTabularPlaintext(blocks.join("\n\n"));
     return truncateMaterial(joined, cap);
@@ -1481,6 +1583,21 @@ export function assembleModuleSourcesFromPlan(
 }
 
 /** Phase 1 of chunked PDF ingest — small JSON, usually finishes quickly. */
+function normalizeOutlinePayload(outline: CourseOutlinePayload): CourseOutlinePayload {
+  const modules = outline.modules.map((m) => ({
+    ...m,
+    title: normalizeIngestDisplayTitle(m.title),
+    lesson_titles: m.lesson_titles.map((t) => normalizeIngestDisplayTitle(t)),
+  }));
+  const lessonTitles = modules.flatMap((m) => m.lesson_titles);
+  const title =
+    outline.title?.trim() &&
+    !/^a structured course/i.test(outline.title.trim())
+      ? normalizeIngestDisplayTitle(outline.title)
+      : deriveCourseTitleFromChunkTitles(lessonTitles);
+  return { ...outline, title, modules };
+}
+
 export async function generateCourseOutlineFromMaterial(
   materialText: string,
   streamSink?: PdfIngestStreamSink,
@@ -1531,14 +1648,18 @@ export async function generateCourseOutlineFromMaterial(
   try {
     parsed = JSON.parse(stripJsonFence(rawText));
   } catch {
-    return repairOutlineJson(anthropic, rawText, profile);
+    return normalizeOutlinePayload(
+      await repairOutlineJson(anthropic, rawText, profile)
+    );
   }
 
   try {
-    return parseCourseOutlinePayload(parsed);
+    return normalizeOutlinePayload(parseCourseOutlinePayload(parsed));
   } catch (e) {
     console.warn("[study-generation] outline validation failed; repairing", e);
-    return repairOutlineJson(anthropic, rawText, profile);
+    return normalizeOutlinePayload(
+      await repairOutlineJson(anthropic, rawText, profile)
+    );
   }
 }
 
@@ -1566,9 +1687,40 @@ function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
   return [...new Set([base, ...extra])].sort((a, b) => a - b);
 }
 
+function sanitizeGeneratedModuleLessons(mod: CourseModule): CourseModule {
+  return {
+    ...mod,
+    lessons: mod.lessons.map((lesson) => ({
+      ...lesson,
+      content: sanitizeLessonContent(lesson.content ?? ""),
+    })),
+  };
+}
+
+function applyPlannedModuleTitles(
+  mod: CourseModule,
+  outline: CourseOutlinePayload,
+  moduleIndex: number
+): CourseModule {
+  const stub = outline.modules[moduleIndex];
+  if (!stub) return mod;
+  return {
+    ...mod,
+    title: normalizeIngestDisplayTitle(stub.title),
+    lessons: mod.lessons.map((lesson, li) => ({
+      ...lesson,
+      title:
+        stub.lesson_titles[li]?.trim() ||
+        normalizeIngestDisplayTitle(lesson.title),
+    })),
+  };
+}
+
 /** Expand one module for chunked PDF ingest (separate server invocation). */
 export type ModuleGenerationOptions = {
   assetManifestPrompt?: string;
+  /** Skip post-parse quiz LLM backfill (PDF ingest uses append-quiz later). */
+  skipQuizBackfill?: boolean;
 };
 
 export async function generateCourseModuleFromMaterial(
@@ -1630,7 +1782,13 @@ export async function generateCourseModuleFromMaterial(
     const normalized =
       courseMod.id !== expectedId ? { ...courseMod, id: expectedId } : courseMod;
     const withLessons = await ensureModuleLessonFields(anthropic, normalized, profile);
-    return ensureModuleQuizCount(withLessons, profile, outputLanguage);
+    const withQuiz =
+      moduleOptions?.skipQuizBackfill === true
+        ? withLessons
+        : await ensureModuleQuizCount(withLessons, profile, outputLanguage);
+    return sanitizeGeneratedModuleLessons(
+      applyPlannedModuleTitles(withQuiz, outline, moduleIndex)
+    );
   };
 
   for (let attempt = 0; attempt < tokenBudgets.length; attempt++) {
@@ -1675,7 +1833,16 @@ export async function generateCourseModuleFromMaterial(
       try {
         let repaired = await repairModuleJson(anthropic, rawText, profile);
         repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
-        return ensureModuleQuizCount(repaired, profile, outputLanguage);
+        if (moduleOptions?.skipQuizBackfill !== true) {
+          repaired = await ensureModuleQuizCount(
+            repaired,
+            profile,
+            outputLanguage
+          );
+        }
+        return sanitizeGeneratedModuleLessons(
+          applyPlannedModuleTitles(repaired, outline, moduleIndex)
+        );
       } catch (repairErr) {
         if (attempt < tokenBudgets.length - 1) continue;
         throw repairErr;
@@ -1685,5 +1852,10 @@ export async function generateCourseModuleFromMaterial(
 
   let repaired = await repairModuleJson(anthropic, lastRaw, profile);
   repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
-  return ensureModuleQuizCount(repaired, profile, outputLanguage);
+  if (moduleOptions?.skipQuizBackfill !== true) {
+    repaired = await ensureModuleQuizCount(repaired, profile, outputLanguage);
+  }
+  return sanitizeGeneratedModuleLessons(
+    applyPlannedModuleTitles(repaired, outline, moduleIndex)
+  );
 }

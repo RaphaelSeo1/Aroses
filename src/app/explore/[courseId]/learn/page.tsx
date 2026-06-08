@@ -12,8 +12,10 @@ import {
   fetchStudyMaterialForPublicExplore,
   fetchStudyMaterialsOutlineRowsForPublicExplore,
 } from "@/lib/supabase/fetch-explore-study-material";
+import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
 import { loadExploreStudyCourse } from "@/lib/marketplace/explore-study-guard";
 import { createClient } from "@/lib/supabase/server";
+import { parseCoursePayload } from "@/lib/ai/course-payload";
 import type { CoursePayload } from "@/types/course";
 import type {
   CourseMode,
@@ -143,7 +145,14 @@ export default async function ExploreLearnPage({
   }
   if (!matRow) notFound();
 
-  const payload = matRow.course_payload as CoursePayload | null | undefined;
+  let payload: CoursePayload | null = null;
+  try {
+    if (matRow.course_payload) {
+      payload = parseCoursePayload(matRow.course_payload);
+    }
+  } catch (e) {
+    console.error("[explore learn] parse course_payload", e);
+  }
   const hasModules =
     payload &&
     typeof payload.title === "string" &&
@@ -278,6 +287,11 @@ export default async function ExploreLearnPage({
     groupOrderIds.map((id, i) => ({ id, sort_order: i }))
   );
 
+  const outputLanguage = await loadCourseOutputLanguageForMaterial(
+    supabase,
+    materialId
+  );
+
   return (
     <ImmersiveLearnClient
       courseId={courseId}
@@ -286,6 +300,7 @@ export default async function ExploreLearnPage({
       initialModuleId={initialModuleId}
       initialOnboarding={initialOnboarding}
       initialMode={initialMode}
+      outputLanguage={outputLanguage}
       materialIds={materialIds}
       surface="explore"
     />

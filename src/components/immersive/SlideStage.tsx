@@ -1,78 +1,179 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
+import { memo, useEffect, useMemo, useState } from "react";
+import type { WhiteboardAction } from "@/types/mentored";
 
 /**
- * The whiteboard — a live, auto-advancing presentation surface (à la
- * NotebookLM's generated video) that Rose "draws on" as she teaches.
- *
- * Instead of one static list, it cycles through *scenes* and swaps the
- * visual automatically based on what Rose is currently narrating:
- *
- *   • title  — the concept headline, big and centered.
- *   • point  — one key point at a time, blown up like a slide statement
- *              with a step number, so the board changes as she moves on.
- *   • figure — the actual table / diagram / page pulled from the student's
- *              own upload (or a fallback image they asked for), shown large.
- *
- * In voice mode the active scene follows the live narration (we match the
- * sentence Rose just said to the closest key point, and jump to the figure
- * when she references a visual). In text / silent mode it auto-advances on
- * a gentle timer so the board still feels alive.
- *
- * The whole surface is glassy + translucent over the cloud background.
+ * The whiteboard — concept headline, key points, optional markdown table,
+ * and tutor overlay actions (highlights, arrows, labels).
  */
 
 type Beat =
   | { kind: "title" }
   | { kind: "point"; index: number }
-  | { kind: "figure" };
+  | { kind: "table" };
+
+function WhiteboardOverlay({ actions }: { actions: WhiteboardAction[] }) {
+  const visible = actions.filter(
+    (a) =>
+      a.type !== "clear" &&
+      a.type !== "show_asset" &&
+      a.type !== "highlight_bbox"
+  );
+  if (visible.length === 0) return null;
+
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0 h-full w-full"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      aria-hidden
+    >
+      {visible.map((action, i) => {
+        if (action.type === "draw_arrow") {
+          return (
+            <g key={`arr-${i}`}>
+              <line
+                x1={action.from.x}
+                y1={action.from.y}
+                x2={action.to.x}
+                y2={action.to.y}
+                stroke="rgba(217,70,239,0.9)"
+                strokeWidth="0.35"
+                markerEnd="url(#wb-arrowhead)"
+              />
+            </g>
+          );
+        }
+        if (action.type === "add_label") {
+          return (
+            <g key={`lbl-${i}`}>
+              <rect
+                x={action.position.x - 1}
+                y={action.position.y - 2.5}
+                width={Math.min(28, action.text.length * 1.2 + 2)}
+                height="4"
+                rx="0.8"
+                fill="rgba(24,24,27,0.82)"
+              />
+              <text
+                x={action.position.x}
+                y={action.position.y}
+                fill="white"
+                fontSize="2.2"
+                fontWeight="600"
+              >
+                {action.text.slice(0, 40)}
+              </text>
+            </g>
+          );
+        }
+        return null;
+      })}
+      <defs>
+        <marker
+          id="wb-arrowhead"
+          markerWidth="4"
+          markerHeight="4"
+          refX="3"
+          refY="2"
+          orient="auto"
+        >
+          <path d="M0,0 L4,2 L0,4 Z" fill="rgba(217,70,239,0.9)" />
+        </marker>
+      </defs>
+    </svg>
+  );
+}
+
+function MarkdownTablePreview({ markdown }: { markdown: string }) {
+  const rows = useMemo(() => {
+    return markdown
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.includes("|") && !/^[\|\s:-]+$/.test(l))
+      .slice(0, 8)
+      .map((line) =>
+        line
+          .split("|")
+          .map((c) => c.trim())
+          .filter(Boolean)
+      );
+  }, [markdown]);
+
+  if (rows.length === 0) {
+    return (
+      <pre className="max-h-[26rem] overflow-auto p-4 text-xs text-zinc-700">
+        {markdown.slice(0, 1200)}
+      </pre>
+    );
+  }
+
+  return (
+    <div className="max-h-[26rem] overflow-auto">
+      <table className="w-full border-collapse text-left text-xs">
+        <tbody>
+          {rows.map((cells, ri) => (
+            <tr
+              key={ri}
+              className={ri === 0 ? "bg-zinc-100 font-semibold" : "border-t border-zinc-200"}
+            >
+              {cells.map((cell, ci) => (
+                <td key={ci} className="px-3 py-2 align-top text-zinc-800">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 function SlideStageImpl({
   chunkId,
   concept,
   keyPoints,
   narrationText,
-  figure,
-  pageFigure,
+  tableMarkdown,
+  autoAdvanceEnabled = false,
+  preferTableBeat = false,
+  whiteboardActions = [],
 }: {
   chunkId: string;
   concept: string;
   keyPoints: string[];
-  /** Most recent sentence Rose said aloud — drives the active scene. */
   narrationText?: string;
-  /** A table / diagram / page pulled from the student's own upload. */
-  figure?: IngestSourceImageRecord | null;
-  pageFigure?: IngestSourceImageRecord | null;
+  tableMarkdown?: string | null;
+  autoAdvanceEnabled?: boolean;
+  preferTableBeat?: boolean;
+  whiteboardActions?: WhiteboardAction[];
 }) {
   const points = useMemo(
     () => keyPoints.map((p) => p.trim()).filter((p) => p.length > 0),
     [keyPoints]
   );
 
-  const hasFigureScene = Boolean(figure);
+  const hasTableScene = Boolean(tableMarkdown?.trim());
 
   const beats = useMemo<Beat[]>(() => {
     const b: Beat[] = [{ kind: "title" }];
     points.forEach((_, i) => b.push({ kind: "point", index: i }));
-    if (hasFigureScene) b.push({ kind: "figure" });
+    if (hasTableScene) b.push({ kind: "table" });
     return b;
-  }, [points, hasFigureScene]);
+  }, [points, hasTableScene]);
 
   const [beatIdx, setBeatIdx] = useState(0);
 
-  // New concept → start from the title scene.
   useEffect(() => {
     setBeatIdx(0);
   }, [chunkId]);
 
-  // Keep the index in range if the beat list shrinks (e.g. figure clears).
   useEffect(() => {
     setBeatIdx((i) => Math.min(i, Math.max(0, beats.length - 1)));
   }, [beats.length]);
 
-  // Voice mode: follow what Rose is narrating right now.
   useEffect(() => {
     if (!narrationText) return;
     const m = bestMatchIndex(points, narrationText);
@@ -85,16 +186,14 @@ function SlideStageImpl({
         return;
       }
     }
-    if (hasFigureScene && mentionsVisual(narrationText)) {
-      const target = beats.findIndex((b) => b.kind === "figure");
+    if (hasTableScene && mentionsVisual(narrationText)) {
+      const target = beats.findIndex((b) => b.kind === "table");
       if (target >= 0) setBeatIdx(target);
     }
-  }, [narrationText, points, beats, hasFigureScene]);
+  }, [narrationText, points, beats, hasTableScene]);
 
-  // Text / silent mode: gently auto-advance so the board keeps moving.
-  // Disabled while narration is actively driving (voice mode), since the
-  // last spoken sentence stays set and should own the scene.
   useEffect(() => {
+    if (!autoAdvanceEnabled) return;
     if (narrationText) return;
     if (beats.length <= 1) return;
     if (beatIdx >= beats.length - 1) return;
@@ -104,29 +203,27 @@ function SlideStageImpl({
       delay
     );
     return () => window.clearTimeout(id);
-  }, [beatIdx, beats, narrationText]);
+  }, [autoAdvanceEnabled, beatIdx, beats, narrationText]);
+
+  useEffect(() => {
+    if (!preferTableBeat || !hasTableScene) return;
+    const target = beats.findIndex((b) => b.kind === "table");
+    if (target >= 0) setBeatIdx(target);
+  }, [preferTableBeat, hasTableScene, beats]);
 
   const active = beats[Math.min(beatIdx, beats.length - 1)] ?? { kind: "title" };
 
-  // Figure scene state — flip between the cropped figure and the full page.
-  const canTogglePage = Boolean(
-    pageFigure && (!figure || pageFigure.url !== figure.url)
-  );
-  const [figView, setFigView] = useState<"figure" | "page">("figure");
-  useEffect(() => {
-    setFigView("figure");
-  }, [chunkId]);
-  const shownFigure = figView === "page" && pageFigure ? pageFigure : figure;
+  const overlayActions = useMemo(() => {
+    if (active.kind !== "table") return [];
+    return whiteboardActions;
+  }, [whiteboardActions, active.kind]);
 
   return (
     <section
       aria-label="Lesson whiteboard"
       className="slide-board relative mx-auto flex w-full flex-col overflow-hidden rounded-[1.75rem] border border-white/50 bg-white/25 shadow-[0_30px_80px_-30px_rgba(60,60,90,0.35)] ring-1 ring-white/40 backdrop-blur-2xl backdrop-saturate-150"
     >
-      <div
-        aria-hidden
-        className="slide-grid pointer-events-none absolute inset-0"
-      />
+      <div aria-hidden className="slide-grid pointer-events-none absolute inset-0" />
       <span
         aria-hidden
         className="pointer-events-none absolute inset-x-6 top-0 h-px rounded-full"
@@ -136,8 +233,6 @@ function SlideStageImpl({
         }}
       />
 
-      {/* Persistent context strip — always shows what we're teaching so the
-          board never loses its anchor as scenes change. */}
       <div className="relative flex items-center justify-between gap-3 px-6 pt-5 sm:px-8">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-fuchsia-600/80">
@@ -149,7 +244,6 @@ function SlideStageImpl({
         </div>
       </div>
 
-      {/* Stage — the active scene. Keyed by beat so each transition fades. */}
       <div className="relative flex min-h-[clamp(20rem,46vh,30rem)] flex-1 items-center justify-center px-6 py-8 sm:px-10">
         <div key={`${chunkId}-${beatIdx}`} className="slide-scene w-full">
           {active.kind === "title" ? (
@@ -169,77 +263,24 @@ function SlideStageImpl({
             </div>
           ) : (
             <div className="mx-auto w-full max-w-3xl">
-              {figure ? (
+              {tableMarkdown ? (
                 <figure className="overflow-hidden rounded-2xl border border-white/60 bg-white/80 shadow-sm ring-1 ring-white/50">
                   <div className="flex items-center justify-between gap-2 border-b border-white/60 px-3 py-2">
                     <span className="truncate text-[11px] font-medium text-zinc-500">
-                      {shownFigure?.label || locatorLabel(shownFigure)}
+                      Table from your upload
                     </span>
-                    {canTogglePage ? (
-                      <div
-                        className="flex shrink-0 items-center rounded-full border border-zinc-200 bg-white/70 p-0.5 text-[11px] font-medium"
-                        role="tablist"
-                        aria-label="Figure view"
-                      >
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={figView === "figure"}
-                          onClick={() => setFigView("figure")}
-                          className={
-                            figView === "figure"
-                              ? "rounded-full bg-zinc-900 px-2.5 py-0.5 text-white"
-                              : "rounded-full px-2.5 py-0.5 text-zinc-600 hover:text-zinc-900"
-                          }
-                        >
-                          Figure
-                        </button>
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={figView === "page"}
-                          onClick={() => setFigView("page")}
-                          className={
-                            figView === "page"
-                              ? "rounded-full bg-zinc-900 px-2.5 py-0.5 text-white"
-                              : "rounded-full px-2.5 py-0.5 text-zinc-600 hover:text-zinc-900"
-                          }
-                        >
-                          Page
-                        </button>
-                      </div>
-                    ) : null}
                   </div>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    key={shownFigure?.url}
-                    src={shownFigure?.url}
-                    alt={
-                      shownFigure?.label ||
-                      `Figure from ${shownFigure?.sourceFileName}`
-                    }
-                    className="block max-h-[26rem] w-full bg-white object-contain"
-                  />
-                  <figcaption className="px-3 py-2 text-[11px] text-zinc-500">
-                    {shownFigure?.sourceFileName}
-                    {shownFigure && shownFigure.anchorType !== "document"
-                      ? ` · ${locatorLabel(shownFigure)}`
-                      : ""}
-                  </figcaption>
+                  <div className="relative bg-white">
+                    <MarkdownTablePreview markdown={tableMarkdown} />
+                    <WhiteboardOverlay actions={overlayActions} />
+                  </div>
                 </figure>
-              ) : (
-                <div
-                  className="mx-auto h-56 max-w-md animate-pulse rounded-2xl bg-gradient-to-br from-white/70 to-white/40"
-                  aria-busy="true"
-                  aria-label="Rose is sketching this out…"
-                />
-              )}
+              ) : null}
             </div>
           )}
         </div>
       </div>
 
-      {/* Scene progress dots — tap to jump. */}
       {beats.length > 1 ? (
         <div className="relative flex items-center justify-center gap-1.5 pb-5">
           {beats.map((b, i) => (
@@ -249,8 +290,8 @@ function SlideStageImpl({
               aria-label={
                 b.kind === "title"
                   ? "Title"
-                  : b.kind === "figure"
-                    ? "Figure"
+                  : b.kind === "table"
+                    ? "Table"
                     : `Point ${b.index + 1}`
               }
               onClick={() => setBeatIdx(i)}
@@ -300,22 +341,12 @@ function SlideStageImpl({
   );
 }
 
-function locatorLabel(fig?: IngestSourceImageRecord | null): string {
-  if (!fig) return "";
-  if (fig.anchorType === "page") return `page ${fig.anchorIndex}`;
-  if (fig.anchorType === "slide") return `slide ${fig.anchorIndex}`;
-  return "your material";
-}
-
 function mentionsVisual(s: string): boolean {
-  return /\b(diagram|figure|table|image|picture|chart|graph|illustration|shown|shows|look at|see here|this graphic|map|drawing)\b/i.test(
-    s
+  return (
+    /\b(table|chart|grid|shown|shows|look at|see here)\b/i.test(s) ||
+    /(표|도표|여기|보세요|참고)/.test(s)
   );
 }
-
-// ---------------------------------------------------------------------------
-// Narration ↔ point matching (which point is Rose on right now)
-// ---------------------------------------------------------------------------
 
 const STOP_WORDS = new Set([
   "the","a","an","and","or","but","of","in","to","for","on","at","by","with","as",

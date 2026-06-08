@@ -109,6 +109,42 @@ export type MentoredOnboardingPatch = Partial<{
 }>;
 
 // ---------------------------------------------------------------------------
+// Visual assets & whiteboard (shared across mentored, quizzes, review)
+// ---------------------------------------------------------------------------
+
+export type VisualAssetDisplayMode = "inline" | "whiteboard";
+
+/** Reference to an extracted PDF visual inside a lesson segment. */
+export type LessonVisualAssetRef = {
+  assetId: string;
+  type: "diagram" | "table" | "chart" | "image";
+  sourcePage: number;
+  displayMode?: VisualAssetDisplayMode;
+  teachingPurpose?: string;
+};
+
+export type WhiteboardPoint = { x: number; y: number };
+
+/** Tutor-driven whiteboard overlay actions (normalized 0–100 coords). */
+export type WhiteboardAction =
+  | { type: "show_asset"; assetId: string }
+  | {
+      type: "highlight_bbox";
+      assetId: string;
+      bbox: [number, number, number, number];
+    }
+  | { type: "draw_arrow"; from: WhiteboardPoint; to: WhiteboardPoint }
+  | { type: "add_label"; text: string; position: WhiteboardPoint }
+  | { type: "clear" };
+
+export type WhiteboardState = {
+  assetId?: string | null;
+  actions: WhiteboardAction[];
+};
+
+export type TutorMode = "presenting" | "paused" | "answering" | "resuming";
+
+// ---------------------------------------------------------------------------
 // Lesson plan
 // ---------------------------------------------------------------------------
 
@@ -150,6 +186,10 @@ export type MentoredLessonChunk = {
    * preserves the original surface form in the rendered panel.
    */
   keyTerms?: string[];
+  /** PDF visual assets Rose should reference while teaching this chunk. */
+  visualAssetIds?: string[];
+  /** Planned whiteboard sequence (show figure, highlight region, etc.). */
+  whiteboardActions?: WhiteboardAction[];
 };
 
 /** Cached plan for a module — produced by Claude on first entry. */
@@ -193,6 +233,10 @@ export type MentoredSessionRecord = {
   lastRecap: string | null;
   attemptState: MentoredAttemptState;
   history: MentoredHistoryEntry[];
+  /** Live tutor phase — presenting, paused on question, answering, resuming. */
+  tutorMode?: TutorMode;
+  /** Whiteboard overlays preserved across interruptions. */
+  whiteboardState?: WhiteboardState;
   lastSeenAt: string;
   createdAt: string;
   updatedAt: string;
@@ -207,6 +251,8 @@ export type MentoredSessionPatch = Partial<{
   attemptState: MentoredAttemptState;
   /** When provided, the entry is appended to `history`. */
   appendHistory: MentoredHistoryEntry;
+  tutorMode?: TutorMode;
+  whiteboardState?: WhiteboardState;
 }>;
 
 // ---------------------------------------------------------------------------
@@ -266,6 +312,13 @@ export type MentoredTurnRequest = {
    * prior utterance exists yet.
    */
   secondsSinceStudentSpoke?: number | null;
+  /**
+   * In-session teaching language override (from the mentored UI picker).
+   * When set, Rose replies in this language instead of the course default.
+   */
+  outputLanguage?: import("@/lib/course-output-language").CourseOutputLanguage;
+  /** Lesson title for asset retrieval (optional). */
+  lessonTitle?: string;
 };
 
 export type MentoredTurnResponse = {
@@ -279,4 +332,8 @@ export type MentoredTurnResponse = {
    * Focused Review queue. The route handles the insert.
    */
   addToFocusedReview: boolean;
+  /** Rose requests a specific uploaded PDF asset on the whiteboard. */
+  showAsset?: string | null;
+  /** Overlay actions (highlights, arrows, labels) for the whiteboard. */
+  whiteboardActions?: WhiteboardAction[];
 };

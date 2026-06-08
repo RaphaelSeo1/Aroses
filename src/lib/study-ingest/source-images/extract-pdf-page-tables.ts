@@ -1,14 +1,32 @@
 import Anthropic from "@anthropic-ai/sdk";
 import {
+  isStripCropAspect,
+  isTooSmallCrop,
+} from "@/lib/pdf-ingest/filter-crop-quality";
+import {
+  cropPageDiagramFallback,
   cropPngToFigure,
   parseNormalizedBbox,
   type NormalizedFigureBbox,
 } from "@/lib/study-ingest/source-images/crop-page-figure";
+import { loadImage } from "@napi-rs/canvas";
 import {
   pageFigureCropKey,
-  pageTableCropKey,
   pageTableKey,
 } from "@/lib/study-ingest/source-images/page-table-keys";
+import {
+  isTableLikeCaption,
+  shouldKeepFigureCaption,
+} from "@/lib/pdf-ingest/filter-figure-caption";
+import {
+  bboxArea,
+  isUsableCropQuality,
+  maxFiguresPerPage,
+  scoreCropQuality,
+  shouldKeepCroppedFigure,
+  shouldKeepVisionFigureHit,
+} from "@/lib/pdf-ingest/filter-crop-quality";
+import { sanitizeTableMarkdown } from "@/lib/study-ingest/table-text";
 import type { RawSourceImage } from "@/lib/study-ingest/source-images/types";
 
 export type PageTableExtraction = {
@@ -44,6 +62,7 @@ Output GitHub-flavored markdown table(s) ONLY:
 - Preserve EVERY number, unit, and proper noun EXACTLY as shown
 - Keep mixed-language terms in full (e.g. 디아제팜(diazepam))
 - Multiple tables on one page → separate tables with a blank line between
+- Numeric ranges must use an en-dash between endpoints (2–3, 10–18) — never concatenate digits (wrong: 23, 1018)
 
 If there is NO table or structured data grid on this page, output exactly the single word:
 NONE
@@ -60,23 +79,29 @@ Output ONLY valid JSON (no markdown fences):
 {"figures":[{"caption":"short label in the slide language","bbox":[ymin,xmin,ymax,xmax]}]}
 
 bbox uses 0–1000 scale with origin at top-left: ymin,xmin,ymax,xmax.
-Draw a tight box around each figure INCLUDING its labels, arrows, and legend.
+Draw a box around each figure INCLUDING all labels, arrows, legend, and footer text.
+Add ~3% margin on every side; extra margin below so nothing is clipped.
 Multiple figures → multiple entries. If none: {"figures":[]}`;
 
 const UNIFIED_PAGE_PROMPT = `Analyze this single page from a lecture PDF (pharmacology, medicine, science slides).
 
 Return ONLY valid JSON (no markdown fences):
 {
-  "tables": [{"caption":"short table title","bbox":[ymin,xmin,ymax,xmax]}],
+  "tables": [],
   "figures": [{"caption":"short label in slide language","bbox":[ymin,xmin,ymax,xmax]}],
   "tableText": null
 }
 
-tables: EACH data grid / matrix on the page. bbox must tightly wrap the full table INCLUDING column headers and all rows. These become cropped screenshots in the course (NOT markdown).
-figures: diagrams, flowcharts, logos, seals, labeled photos, charts with axes — NOT tabular data grids.
-tableText: optional GFM markdown of cell values for search/indexing ONLY — null if unsure. Never use tableText for display.
+figures ONLY when the page has a REAL illustration: anatomy drawing, organ diagram, mechanism flowchart with arrows between labeled shapes, chemical structure, labeled photo.
+NEVER bbox: ANY data table or grid (including anesthesia stage tables with columns like 단계/작용부위/의식/호흡, drug classification tables, comparison tables, 표 N headers), bar/column charts of categories, bullet lists, paragraph text, title bars, icon/symbol columns, checkbox grids, or narrow vertical strips.
+tableText: if the page has ANY data table/grid (including 표 N drug tables, potency charts, side-effect matrices, seizure-type mappings, MAC/partition tables), output GitHub-flavored markdown (header + |---| + one row per source row). Multiple tables on one page → separate tables with a blank line. Preserve every number, range (use en-dash: 2–3 not 23), and drug name exactly. null only when there is truly no tabular grid.
+Leave "tables" as an empty array — tabular data must NOT be cropped as images.
 bbox uses 0–1000 scale, origin top-left: ymin,xmin,ymax,xmax.
-Exclude slide titles, footers, page numbers. NEVER bbox the entire page.`;
+Up to THREE separate figure bboxes when the page has multiple distinct diagrams.
+If the page has BOTH a data table AND a diagram, bbox ONLY the diagram — never the table grid.
+Minimum diagram box area ~6% of page. NEVER bbox the entire page.
+Include ~5% padding on ALL sides (especially right and bottom) so columns and footer rows are never cut off.
+If unsure whether a region is a table or diagram, do NOT bbox it.`;
 
 export type VisionTableHit = {
   caption: string;
@@ -98,7 +123,7 @@ function visionModel(): string {
   );
 }
 
-function parseVisionHits(raw: unknown): VisionFigureHit[] {
+function parseVisionHits(raw: unknown, strict = true): VisionFigureHit[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((row) => {
     if (!row || typeof row !== "object") return [];
@@ -106,8 +131,93 @@ function parseVisionHits(raw: unknown): VisionFigureHit[] {
     const caption = typeof o.caption === "string" ? o.caption.trim() : "";
     const bbox = parseNormalizedBbox(o.bbox);
     if (caption.length < 2 || !bbox) return [];
+    if (!shouldKeepFigureCaption(caption)) return [];
+    if (isTableLikeCaption(caption)) return [];
+    if (strict && !shouldKeepVisionFigureHit({ caption, bbox })) return [];
     return [{ caption, bbox }];
   });
+}
+
+type ScoredCrop = {
+  buffer: Buffer;
+  caption: string;
+  bbox: NormalizedFigureBbox;
+  quality: number;
+};
+
+/** Try vision bboxes (and fallback band) — keep highest-quality non-☒ crops. */
+async function pickFigureCropsForPage(input: {
+  pagePng: Buffer;
+  pageNum: number;
+  hits: VisionFigureHit[];
+  maxKeep: number;
+}): Promise<ScoredCrop[]> {
+  const candidates: ScoredCrop[] = [];
+  const seenSig = new Set<string>();
+
+  const tryCrop = async (
+    buffer: Buffer | null,
+    caption: string,
+    bbox: NormalizedFigureBbox
+  ) => {
+    if (!buffer) return;
+    const sig = `${bbox.ymin}:${bbox.xmin}:${bbox.ymax}:${bbox.xmax}:${buffer.length}`;
+    if (seenSig.has(sig)) return;
+    seenSig.add(sig);
+
+    const relaxed = bbox.ymax - bbox.ymin >= 700;
+    if (
+      !(await shouldKeepCroppedFigure({
+        buffer,
+        caption,
+        bbox,
+        relaxedBbox: relaxed,
+      }))
+    ) {
+      return;
+    }
+    try {
+      const image = await loadImage(buffer);
+      if (
+        isStripCropAspect(image.width, image.height) ||
+        isTooSmallCrop(image.width, image.height)
+      ) {
+        return;
+      }
+    } catch {
+      return;
+    }
+    const quality = await scoreCropQuality(buffer);
+    if (!isUsableCropQuality(quality)) return;
+    candidates.push({ buffer, caption, bbox, quality });
+  };
+
+  const sortedHits = [...input.hits].sort(
+    (a, b) => bboxArea(b.bbox) - bboxArea(a.bbox)
+  );
+
+  for (const hit of sortedHits) {
+    const cropped = await cropPngToFigure(input.pagePng, hit.bbox);
+    await tryCrop(cropped, hit.caption, hit.bbox);
+  }
+
+  if (candidates.length === 0) {
+    const fallback = await cropPageDiagramFallback(input.pagePng);
+    const fallbackBbox: NormalizedFigureBbox = {
+      ymin: 110,
+      xmin: 40,
+      ymax: 910,
+      xmax: 960,
+    };
+    await tryCrop(
+      fallback,
+      `Diagram page ${input.pageNum}`,
+      fallbackBbox
+    );
+  }
+
+  candidates.sort((a, b) => b.quality - a.quality);
+  return candidates.slice(0, input.maxKeep);
 }
 
 function parseUnifiedVisionJson(raw: string): UnifiedPageVisionResult {
@@ -137,7 +247,7 @@ function parseUnifiedVisionJson(raw: string): UnifiedPageVisionResult {
     }
     const tables =
       typeof parsed.tables === "string" ? [] : parseVisionHits(parsed.tables);
-    const figures = parseVisionHits(parsed.figures);
+    const figures = parseVisionHits(parsed.figures, false);
     return { tables, figures, tableText };
   } catch {
     return { tables: [], figures: [], tableText: null };
@@ -360,11 +470,11 @@ export async function extractPageArtifactsFromRenderedPdfPages(
   if (pageRenders.length === 0) return empty;
 
   const concurrency = Math.min(
-    6,
+    12,
     Math.max(
       1,
-      Number.parseInt(process.env.PDF_INGEST_TABLE_VISION_CONCURRENCY ?? "4", 10) ||
-        4
+      Number.parseInt(process.env.PDF_INGEST_TABLE_VISION_CONCURRENCY ?? "8", 10) ||
+        8
     )
   );
 
@@ -379,53 +489,44 @@ export async function extractPageArtifactsFromRenderedPdfPages(
         pageNum: img.anchorIndex,
         sourceFileName: img.sourceFileName,
       });
-      if (unified.tableText) {
+      const pageHasTable =
+        Boolean(unified.tableText) &&
+        unified.tableText!.includes("|") &&
+        unified.tableText!.split("\n").filter((l) => l.includes("|")).length >=
+          3;
+
+      if (pageHasTable) {
         pageTableExtractions.push({
           key: pageTableKey(img.sourceFileName, img.anchorIndex),
           sourceFileName: img.sourceFileName,
           pageNum: img.anchorIndex,
-          markdown: unified.tableText,
+          markdown: unified.tableText!,
         });
       }
       if (skipFiguresOn?.has(img.anchorIndex)) return null;
 
-      for (let ti = 0; ti < unified.tables.length; ti++) {
-        const hit = unified.tables[ti]!;
-        const cropped = await cropPngToFigure(img.buffer, hit.bbox);
-        if (!cropped || cropped.length < 800) continue;
-        const key = pageTableCropKey(img.sourceFileName, img.anchorIndex, ti);
-        const caption = hit.caption || `Table on page ${img.anchorIndex}`;
-        cropImages.push({
-          buffer: cropped,
-          mimeType: "image/png",
-          fileName: `page-${img.anchorIndex}-table-${ti + 1}.png`,
-          sourceFileName: img.sourceFileName,
-          label: `Table: ${caption}`,
-          anchorType: "page",
-          anchorIndex: img.anchorIndex,
-        });
-        pageFigureExtractions.push({
-          key,
-          sourceFileName: img.sourceFileName,
-          pageNum: img.anchorIndex,
-          caption,
-          figureIndex: ti,
-          bbox: hit.bbox,
-          kind: "table",
-        });
-      }
+      const figureHits = unified.figures.filter(
+        (hit) =>
+          shouldKeepFigureCaption(hit.caption) &&
+          !isTableLikeCaption(hit.caption)
+      );
 
-      for (let fi = 0; fi < unified.figures.length; fi++) {
-        const hit = unified.figures[fi]!;
-        const cropped = await cropPngToFigure(img.buffer, hit.bbox);
-        if (!cropped || cropped.length < 800) continue;
+      const picked = await pickFigureCropsForPage({
+        pagePng: img.buffer,
+        pageNum: img.anchorIndex,
+        hits: figureHits,
+        maxKeep: maxFiguresPerPage(),
+      });
+
+      for (let fi = 0; fi < picked.length; fi++) {
+        const row = picked[fi]!;
         const key = pageFigureCropKey(img.sourceFileName, img.anchorIndex, fi);
         cropImages.push({
-          buffer: cropped,
+          buffer: row.buffer,
           mimeType: "image/png",
           fileName: `page-${img.anchorIndex}-fig-${fi + 1}.png`,
           sourceFileName: img.sourceFileName,
-          label: hit.caption,
+          label: row.caption,
           anchorType: "page",
           anchorIndex: img.anchorIndex,
         });
@@ -433,9 +534,9 @@ export async function extractPageArtifactsFromRenderedPdfPages(
           key,
           sourceFileName: img.sourceFileName,
           pageNum: img.anchorIndex,
-          caption: hit.caption,
+          caption: row.caption,
           figureIndex: fi,
-          bbox: hit.bbox,
+          bbox: row.bbox,
           kind: "figure",
         });
       }
@@ -477,7 +578,8 @@ export function pageTableExtractionsToMap(
 ): Map<string, string> {
   const map = new Map<string, string>();
   for (const e of extractions) {
-    map.set(e.key, e.markdown);
+    const md = sanitizeTableMarkdown(e.markdown);
+    if (md) map.set(e.key, md);
   }
   return map;
 }

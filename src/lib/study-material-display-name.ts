@@ -1,4 +1,5 @@
 import type { CoursePayload } from "@/types/course";
+import { isGenericIngestPlaceholder } from "@/lib/study-ingest/normalize-ingest-title";
 
 const INVALID_FILENAME_CHARS = /[/\\?%*:|"<>]/g;
 
@@ -62,16 +63,20 @@ function firstDescriptionLine(desc: string): string | null {
   const line = desc.split(/\r?\n+/)[0]?.trim() ?? "";
   if (line.length < 16 || line.length > 220) return null;
   const noHash = line.replace(/^#+\s*/, "").trim();
-  return noHash.length >= 16 ? noHash : null;
+  if (noHash.length < 16 || isGenericIngestPlaceholder(noHash)) return null;
+  return noHash;
 }
 
 function scoreStemForMaterialLabel(stem: string, sourceIndex: number): number {
   let score = Math.min(100, stem.length);
+  if (isGenericIngestPlaceholder(stem)) score -= 200;
   if (GENERIC_TITLE_LINE.test(stem)) score -= 42;
   if (GENERIC_LECTURE_NUM.test(stem)) score -= 18;
   if (/^week\s*\d+\b/i.test(stem)) score -= 6;
-  // Later candidates (module 1+, second lesson) tend to be the concrete lecture topic.
-  score += Math.min(24, sourceIndex * 3);
+  // Course title (index 0) beats generic outline descriptions appended later.
+  if (sourceIndex === 0) score += 28;
+  // Later module/lesson candidates tend to be the concrete lecture topic.
+  else score += Math.min(18, sourceIndex * 2);
   return score;
 }
 
@@ -80,6 +85,7 @@ function scoreStemForMaterialLabel(stem: string, sourceIndex: number): number {
  */
 function collectPayloadTitleCandidates(p: Partial<CoursePayload>): string[] {
   const raw: string[] = [];
+  if (typeof p.title === "string" && p.title.trim()) raw.push(p.title);
   const mods = p.modules ?? [];
   for (let i = 0; i < Math.min(mods.length, 6); i++) {
     const mod = mods[i];
@@ -87,7 +93,6 @@ function collectPayloadTitleCandidates(p: Partial<CoursePayload>): string[] {
     const l0 = mod?.lessons?.[0];
     if (l0 && typeof l0.title === "string") raw.push(l0.title);
   }
-  if (typeof p.title === "string") raw.push(p.title);
   if (typeof p.description === "string") {
     const fl = firstDescriptionLine(p.description);
     if (fl) raw.push(fl);
@@ -132,8 +137,41 @@ export function deriveFileStemFromPayload(payload: unknown): string | null {
 /** Full stored label from course payload, or null if nothing usable. */
 export function suggestMaterialLabelFromPayload(payload: unknown): string | null {
   const stem = deriveFileStemFromPayload(payload);
-  if (!stem) return null;
+  if (!stem || isGenericIngestPlaceholder(stem)) return null;
   return finalizeMaterialSectionLabel(stem, 240);
+}
+
+/** Stored study_materials.file_name after PDF ingest (outline title wins over boilerplate). */
+export function resolveMaterialSectionLabel(input: {
+  outlineTitle?: string | null;
+  payload?: unknown;
+  originalFileName?: string | null;
+}): string {
+  const candidates: string[] = [];
+  const outlineTitle = input.outlineTitle?.trim();
+  if (outlineTitle && !isGenericIngestPlaceholder(outlineTitle)) {
+    candidates.push(outlineTitle);
+  }
+  if (input.payload && typeof input.payload === "object") {
+    const p = input.payload as Partial<CoursePayload>;
+    if (typeof p.title === "string" && p.title.trim()) {
+      candidates.push(p.title.trim());
+    }
+  }
+  const fromPayload = deriveFileStemFromPayload(input.payload);
+  if (fromPayload) candidates.push(fromPayload);
+  const upload = input.originalFileName?.trim();
+  if (upload) {
+    const stem = stripKnownDocumentExtension(upload);
+    if (stem) candidates.push(stem);
+    else candidates.push(upload);
+  }
+
+  for (const c of candidates) {
+    const label = finalizeMaterialSectionLabel(c);
+    if (label && !isGenericIngestPlaceholder(label)) return label;
+  }
+  return "Material";
 }
 
 /** @deprecated Stored labels are section titles without `.pdf`; use finalizeMaterialSectionLabel. */

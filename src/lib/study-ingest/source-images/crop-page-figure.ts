@@ -10,6 +10,31 @@ export type NormalizedFigureBbox = {
 
 const MIN_CROP_PX = 48;
 
+function cropPaddingUnits(): { pad: number; extraBottom: number } {
+  const raw = process.env.PDF_INGEST_CROP_PADDING?.trim();
+  const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  const pad = Number.isFinite(n) && n >= 0 ? Math.min(n, 100) : 42;
+  return { pad, extraBottom: Math.min(72, Math.round(pad * 1.5)) };
+}
+
+/** Loosen vision bbox so labels/footers below diagrams are not clipped. */
+export function expandFigureBbox(
+  bbox: NormalizedFigureBbox
+): NormalizedFigureBbox {
+  const { pad, extraBottom } = cropPaddingUnits();
+  const bboxW = bbox.xmax - bbox.xmin;
+  const bboxH = bbox.ymax - bbox.ymin;
+  const extraX = bboxW > 480 ? Math.min(72, Math.round(bboxW * 0.07)) : 0;
+  // Skip slide title bars (☒ font rows) above diagrams.
+  const skipTitle = bboxH > 180 ? Math.min(90, Math.round(bboxH * 0.1)) : 0;
+  return {
+    ymin: Math.max(0, bbox.ymin - Math.max(0, pad - skipTitle) + skipTitle),
+    xmin: Math.max(0, bbox.xmin - pad),
+    ymax: Math.min(1000, bbox.ymax + pad + extraBottom),
+    xmax: Math.min(1000, bbox.xmax + pad + extraX),
+  };
+}
+
 export function parseNormalizedBbox(raw: unknown): NormalizedFigureBbox | null {
   if (!Array.isArray(raw) || raw.length < 4) return null;
   const nums = raw.map((v) => Number(v));
@@ -27,6 +52,7 @@ export function parseNormalizedBbox(raw: unknown): NormalizedFigureBbox | null {
 
 /**
  * Crop a diagram region from a rendered PDF page PNG using vision bbox coords.
+ * No rotation — pixels match the PDF page render.
  */
 export async function cropPngToFigure(
   pagePng: Buffer,
@@ -35,15 +61,16 @@ export async function cropPngToFigure(
   if (!pagePng || pagePng.length < 1_000) return null;
 
   try {
+    const expanded = expandFigureBbox(bbox);
     const image = await loadImage(pagePng);
     const w = image.width;
     const h = image.height;
     if (w < 10 || h < 10) return null;
 
-    let x = Math.floor((bbox.xmin / 1000) * w);
-    let y = Math.floor((bbox.ymin / 1000) * h);
-    let cw = Math.ceil(((bbox.xmax - bbox.xmin) / 1000) * w);
-    let ch = Math.ceil(((bbox.ymax - bbox.ymin) / 1000) * h);
+    let x = Math.floor((expanded.xmin / 1000) * w);
+    let y = Math.floor((expanded.ymin / 1000) * h);
+    let cw = Math.ceil(((expanded.xmax - expanded.xmin) / 1000) * w);
+    let ch = Math.ceil(((expanded.ymax - expanded.ymin) / 1000) * h);
 
     x = Math.max(0, Math.min(w - 1, x));
     y = Math.max(0, Math.min(h - 1, y));
@@ -62,4 +89,16 @@ export async function cropPngToFigure(
     console.warn("[cropPngToFigure]", e);
     return null;
   }
+}
+
+/** Fallback when vision bboxes fail: tight center band only (not full-page whitespace). */
+export async function cropPageDiagramFallback(
+  pagePng: Buffer
+): Promise<Buffer | null> {
+  return cropPngToFigure(pagePng, {
+    ymin: 200,
+    xmin: 60,
+    ymax: 820,
+    xmax: 940,
+  });
 }

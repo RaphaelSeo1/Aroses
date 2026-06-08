@@ -2,7 +2,14 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
 import { buildLivePreviewCourse, tryOutlinePreviewFromStreamTail } from "@/lib/pdf-ingest-preview";
-import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
+import { enrichModulesWithPdfAssets } from "@/lib/pdf-ingest/enrich-modules-with-assets";
+import {
+  countIngestModulesBuilt,
+  runPdfIngestExpandOne,
+  runPdfIngestJob,
+} from "@/lib/pdf-ingest-runner";
+import { parseCourseAssetManifest } from "@/lib/study-ingest/course-assets";
+import { parseIngestPageArtifacts } from "@/lib/study-ingest/inject-pdf-tables-into-module";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import type { CoursePayload } from "@/types/course";
@@ -286,9 +293,7 @@ export async function GET(_request: Request, ctx: Params) {
   const phaseForModuleCheck = (row as { ingest_phase?: unknown }).ingest_phase;
   const outlineForModuleCheck = (row as { ingest_outline?: unknown })
     .ingest_outline;
-  const modulesArrForCheck = Array.isArray(row.ingest_modules)
-    ? (row.ingest_modules as unknown[])
-    : [];
+  const modulesBuiltForCheck = countIngestModulesBuilt(row.ingest_modules);
   const outlineModuleCount =
     outlineForModuleCheck &&
     typeof outlineForModuleCheck === "object" &&
@@ -299,7 +304,7 @@ export async function GET(_request: Request, ctx: Params) {
     phaseForModuleCheck === "writing_modules" &&
     row.status === "running" &&
     outlineModuleCount > 0 &&
-    modulesArrForCheck.length < outlineModuleCount &&
+    modulesBuiltForCheck < outlineModuleCount &&
     Number.isFinite(updatedAt) &&
     Date.now() - updatedAt > MODULE_STALL_MS &&
     currentEpoch < MAX_AUTO_RECOVERIES;
@@ -329,7 +334,7 @@ export async function GET(_request: Request, ctx: Params) {
     outlineReady && Array.isArray(outline.modules) ? outline.modules.length : 0;
   const modulesBuilt =
     outlineReady && row.status === "running"
-      ? modulesArr.length
+      ? countIngestModulesBuilt(row.ingest_modules)
       : row.status === "complete"
         ? modulesTotal
         : 0;
@@ -373,6 +378,46 @@ export async function GET(_request: Request, ctx: Params) {
     typeof outline === "object"
   ) {
     previewCourse = buildLivePreviewCourse(outline, modulesArr);
+    if (
+      previewCourse &&
+      row.status === "running" &&
+      modulesArr.length > 0
+    ) {
+      const admin = createAdminClient();
+      if (admin) {
+        try {
+          const { data: assetRow } = await admin
+            .from("pdf_ingest_jobs")
+            .select("ingest_page_tables, ingest_asset_manifest")
+            .eq("id", jobId)
+            .maybeSingle();
+          const pageArtifacts = parseIngestPageArtifacts(
+            (assetRow as { ingest_page_tables?: unknown } | null)
+              ?.ingest_page_tables
+          );
+          const manifest = parseCourseAssetManifest(
+            (assetRow as { ingest_asset_manifest?: unknown } | null)
+              ?.ingest_asset_manifest
+          );
+          const fileName =
+            typeof row.original_file_name === "string" &&
+            row.original_file_name.trim()
+              ? row.original_file_name.trim()
+              : "upload.pdf";
+          const enriched = await enrichModulesWithPdfAssets({
+            admin,
+            jobId,
+            modules: previewCourse.modules,
+            manifest,
+            pageArtifacts,
+            fileName,
+          });
+          previewCourse = { ...previewCourse, modules: enriched };
+        } catch (e) {
+          console.warn("[jobs/get] preview asset enrich", jobId, e);
+        }
+      }
+    }
   } else if (
     row.status === "running" &&
     previewOutlineRaw != null &&

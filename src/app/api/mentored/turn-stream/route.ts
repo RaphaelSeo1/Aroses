@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import { runMentoredTurnStream } from "@/lib/ai/mentored";
+import { resolveTeachingLanguage } from "@/lib/course-output-language";
+import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
 import { loadMentoredPersonalization } from "@/lib/mentored/load-personalization";
 import type {
   KnowledgeLevel,
@@ -138,6 +140,14 @@ export async function POST(request: Request) {
   // After that the row is cached on subsequent turns.
   let personalization: MentoredPersonalization = {};
   let shouldPersistPersonalization = false;
+  const courseLanguage = await loadCourseOutputLanguageForMaterial(
+    supabase,
+    materialId
+  );
+  const outputLanguage = resolveTeachingLanguage(
+    courseLanguage,
+    body.outputLanguage
+  );
   try {
     const loaded = await loadMentoredPersonalization(
       supabase,
@@ -174,6 +184,7 @@ export async function POST(request: Request) {
           secondsSinceLastCheck,
           secondsSinceStudentSpoke,
           personalization,
+          outputLanguage,
         })) {
           if (evt.type === "text") {
             send("text", { delta: evt.delta });
@@ -184,7 +195,7 @@ export async function POST(request: Request) {
               intent: evt.intent,
               advance: evt.advance,
               addToFocusedReview: evt.addToFocusedReview,
-              imageRequest: evt.imageRequest,
+              whiteboardActions: evt.whiteboardActions,
             });
           }
         }

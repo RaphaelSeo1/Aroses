@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import { runMentoredTurn } from "@/lib/ai/mentored";
+import { resolveTeachingLanguage } from "@/lib/course-output-language";
+import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
 import { loadMentoredPersonalization } from "@/lib/mentored/load-personalization";
 import type {
   KnowledgeLevel,
@@ -92,18 +94,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
-  let personalization = {};
-  try {
-    const loaded = await loadMentoredPersonalization(
-      supabase,
-      user.id,
-      body.materialId
-    );
-    personalization = loaded.personalization;
-  } catch (e) {
-    console.error("[mentored/turn personalization-read]", e);
-  }
+  const [personalizationResult, courseLanguage] = await Promise.all([
+    loadMentoredPersonalization(supabase, user.id, body.materialId).catch(
+      (e) => {
+        console.error("[mentored/turn personalization-read]", e);
+        return { personalization: {}, shouldPersist: false };
+      }
+    ),
+    loadCourseOutputLanguageForMaterial(supabase, body.materialId),
+  ]);
+  const outputLanguage = resolveTeachingLanguage(
+    courseLanguage,
+    body.outputLanguage
+  );
+  const personalization = personalizationResult.personalization;
 
+  const lessonTitle =
+    typeof body.lessonTitle === "string" && body.lessonTitle.trim()
+      ? body.lessonTitle.trim()
+      : body.chunk.concept;
   let turn: MentoredTurnResponse;
   try {
     const result = await runMentoredTurn({
@@ -112,8 +121,15 @@ export async function POST(request: Request) {
       studentUtterance: body.studentUtterance,
       knowledgeLevel: level,
       personalization,
+      outputLanguage,
     });
-    turn = result;
+    turn = {
+      intent: result.intent,
+      reply: result.reply,
+      advance: result.advance,
+      addToFocusedReview: result.addToFocusedReview,
+      whiteboardActions: result.whiteboardActions,
+    };
   } catch (e) {
     console.error("[mentored/turn]", e);
     return NextResponse.json(

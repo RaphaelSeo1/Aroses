@@ -42,7 +42,7 @@ export function EditableSection({
           </button>
         )}
       </div>
-      <div className="px-4 py-4">{isEditing ? edit : view}</div>
+      <div className="px-4 py-3">{isEditing ? edit : view}</div>
     </div>
   );
 }

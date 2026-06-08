@@ -1331,8 +1331,8 @@ export function CoursePlayer({
       </aside>
 
       <div className="min-w-0 flex-1 bg-white dark:bg-zinc-950">
-        <div className="mx-auto max-w-3xl px-4 py-10 sm:px-10">
-          <AiStudyDisclaimer className="mb-6 sm:mb-8" />
+        <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6">
+          <AiStudyDisclaimer className="mb-3" />
           {mode === "lessons" ? (
             <>
               <CourseModeToggle
@@ -1375,11 +1375,11 @@ export function CoursePlayer({
                 }}
                 hint="Mentored Learning opens in a focused tutoring view; Free Exploration is the reading mode you're in now."
               />
-              <header className="border-b border-zinc-100 pb-8 dark:border-zinc-900">
+              <header className="border-b border-zinc-100 pb-4 dark:border-zinc-900">
                 <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
                   Module {activeModule.id}
                 </p>
-                <h2 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+                <h2 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                   {activeModule.title}
                 </h2>
               </header>
@@ -1413,7 +1413,7 @@ export function CoursePlayer({
                 </div>
               ) : null}
 
-              <div className="mt-10 space-y-14">
+              <div className="mt-6 space-y-10">
                 {activeModule.lessons.map((lesson, li) => (
                   <div
                     key={li}

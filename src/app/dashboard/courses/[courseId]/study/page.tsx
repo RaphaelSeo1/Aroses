@@ -25,6 +25,7 @@ import {
   selectStudyMaterialById,
 } from "@/lib/supabase/select-study-material";
 import { createClient } from "@/lib/supabase/server";
+import { parseCoursePayload } from "@/lib/ai/course-payload";
 import type { CoursePayload, SidebarMaterialOutline } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
 
@@ -210,7 +211,14 @@ export default async function StudyPage({ params, searchParams }: Props) {
     );
   }
 
-  const payload = row.course_payload as CoursePayload | null | undefined;
+  let payload: CoursePayload | null = null;
+  try {
+    if (row.course_payload) {
+      payload = parseCoursePayload(row.course_payload);
+    }
+  } catch (e) {
+    console.error("[study page] parse course_payload", e);
+  }
   const hasNewCourse =
     payload &&
     typeof payload.title === "string" &&

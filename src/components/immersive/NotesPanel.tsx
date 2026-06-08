@@ -307,7 +307,7 @@ export function NotesPanel({
       Placeholder.configure({
         placeholder: ({ node }) => {
           if (node.type.name === "heading") return "Heading";
-          return "Type '/' for commands, or just start writing…";
+          return "";
         },
         includeChildren: false,
       }),
@@ -315,7 +315,7 @@ export function NotesPanel({
     editorProps: {
       attributes: {
         class:
-          "tn-prose max-w-none focus:outline-none min-h-[18rem] caret-zinc-700",
+          "tn-prose max-w-none focus:outline-none min-h-[6rem] caret-zinc-700",
       },
       handleKeyDown: (view, event) => {
         // Tab / Shift-Tab nest & un-nest list items (bulleted, numbered, and
@@ -1211,21 +1211,23 @@ export function NotesPanel({
             </BubbleMenu>
           ) : null}
           <EditorContent editor={editor} />
-
-          {/* Tiny hint pinned below empty docs to teach the slash menu */}
-          {editor && editor.isEmpty ? (
-            <p className="mt-4 select-none text-[12px] text-zinc-400">
-              Press{" "}
-              <kbd className="rounded border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">
-                /
-              </kbd>{" "}
-              for commands, or toggle{" "}
-              <span className="text-zinc-500">✨ Auto-generate</span> to let Rose
-              fill these in.
-            </p>
-          ) : null}
         </div>
       </div>
+
+      {/* Slash / auto-generate hint — pinned to panel bottom (not mid-page). */}
+      {editor && editor.isEmpty ? (
+        <div className="shrink-0 border-t border-zinc-100 bg-zinc-50/40 px-5 py-3 xl:px-7">
+          <p className="select-none text-[12px] text-zinc-400">
+            Press{" "}
+            <kbd className="rounded border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">
+              /
+            </kbd>{" "}
+            for commands, or toggle{" "}
+            <span className="text-zinc-500">✨ Auto-generate</span> to let Rose
+            fill these in.
+          </p>
+        </div>
+      ) : null}
 
       {/* AI Suggestions — pinned to bottom. Spans the full panel
           width (no max-w cap) so on the 50/50 desktop layout the

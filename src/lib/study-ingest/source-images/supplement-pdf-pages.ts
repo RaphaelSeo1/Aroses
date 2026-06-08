@@ -24,10 +24,10 @@ function envPositiveInt(name: string, fallback: number, max: number): number {
   return Math.min(max, Math.floor(n));
 }
 
-/** Default budgets cover full lecture PDFs (86+ pages) with headroom. */
+/** Default budgets cover full lecture PDFs with headroom. */
 const MAX_PAGES_RENDERED_PER_PDF = envPositiveInt(
   "PDF_INGEST_MAX_PAGE_RENDERS_PER_PDF",
-  120,
+  80,
   250
 );
 const MAX_PAGES_RENDERED_PER_JOB = envPositiveInt(
@@ -167,6 +167,60 @@ export function targetPdfPagesForVision(input: {
   }
 
   return [...pages].sort((a, b) => a - b);
+}
+
+function isVisionAllPagesEnabled(): boolean {
+  const raw = process.env.PDF_INGEST_VISION_ALL_PAGES?.trim();
+  return raw === "1" || raw?.toLowerCase() === "true";
+}
+
+/**
+ * Balance speed vs coverage: small decks scan every page; large decks focus on
+ * plan-referenced pages plus head/tail unless PDF_INGEST_VISION_ALL_PAGES=1.
+ */
+export function resolveVisionTargetPages(input: {
+  fileName: string;
+  pageCount: number;
+  chunks: PersistedIngestChunk[];
+  plan: CourseStructurePlan | null;
+}): number[] {
+  const fullScanThreshold = envPositiveInt(
+    "PDF_INGEST_FULL_VISION_PAGE_THRESHOLD",
+    28,
+    120
+  );
+  if (isVisionAllPagesEnabled() || input.pageCount <= fullScanThreshold) {
+    return targetPdfPagesForVision(input);
+  }
+
+  const maxVision = envPositiveInt("PDF_INGEST_MAX_VISION_PAGES", 48, 120);
+  const pages = new Set<number>();
+
+  const planPages = targetPdfPagesForFile({
+    fileName: input.fileName,
+    pageCount: input.pageCount,
+    chunks: input.chunks,
+    plan: input.plan,
+  });
+  for (const p of planPages) pages.add(p);
+
+  for (const chunk of input.chunks.filter((c) =>
+    filesMatch(c.sourceFileName, input.fileName)
+  )) {
+    for (const p of parsePageNumbersFromPosition(chunk.position)) {
+      if (p >= 1 && p <= input.pageCount) pages.add(p);
+    }
+  }
+
+  const head = Math.min(8, input.pageCount);
+  for (let p = 1; p <= head; p++) pages.add(p);
+  const tailStart = Math.max(1, input.pageCount - 4);
+  for (let p = tailStart; p <= input.pageCount; p++) pages.add(p);
+
+  return [...pages]
+    .filter((p) => p >= 1 && p <= input.pageCount)
+    .sort((a, b) => a - b)
+    .slice(0, maxVision);
 }
 
 async function downloadPdfBuffer(
@@ -323,10 +377,11 @@ export async function supplementPdfPageFigures(input: {
       continue;
     }
 
-    const targetPages = targetPdfPagesForVision({
+    const targetPages = resolveVisionTargetPages({
       fileName,
       pageCount,
       chunks: input.chunks,
+      plan: input.plan,
     });
     if (targetPages.length === 0) {
       skipReasons.push(`no_target_pages:${fileName}`);

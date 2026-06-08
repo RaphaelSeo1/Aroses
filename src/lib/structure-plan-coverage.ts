@@ -4,8 +4,69 @@ import type {
   CourseStructurePlanModule,
 } from "@/lib/ai/course-payload";
 import type { IngestChunkSummary } from "@/lib/study-ingest/chunking";
+import {
+  deriveCourseTitleFromChunkTitles,
+  moduleTitleFromLessonTitles,
+  normalizeIngestDisplayTitle,
+  substantiveLessonTitles,
+} from "@/lib/study-ingest/normalize-ingest-title";
+import { isDenseSectionedPharmacologyDeck } from "@/lib/study-ingest/pdf-section-split";
 
 type CourseBuildProfile = "express" | "fast" | "balanced" | "full";
+
+const DENSE_MAX_LESSONS = 14;
+const DENSE_TARGET_LESSONS = 11;
+const DENSE_MAX_MODULES = 6;
+
+const PHARM_TOPIC_KEY =
+  /^(개요|전신마취(?:제)?|수면제|항뇌전증(?:제)?|마약(?:성)?진통(?:제)?|항파킨슨(?:병)?(?:제)?|파킨슨(?:병)?(?:제)?|알츠하이머(?:병)?(?:치료제)?|항정신(?:병)?(?:제)?|항불안(?:제)?|기분장애(?:치료제)?|중추신경자극(?:제)?)/i;
+
+function pharmacologyTopicKey(title: string): string {
+  const n = normalizeIngestDisplayTitle(title);
+  const m = n.match(PHARM_TOPIC_KEY);
+  return m ? m[1]!.toLowerCase() : n.slice(0, 24).toLowerCase();
+}
+
+/** Merge adjacent chunks that share the same major pharmacology topic. */
+function groupAdjacentPharmacologyChunks(
+  chunks: IngestChunkSummary[]
+): IngestChunkSummary[][] {
+  const groups: IngestChunkSummary[][] = [];
+  for (const c of chunks) {
+    const key = pharmacologyTopicKey(c.title);
+    const last = groups[groups.length - 1];
+    if (last && pharmacologyTopicKey(last[0]!.title) === key) {
+      last.push(c);
+    } else {
+      groups.push([c]);
+    }
+  }
+  return groups;
+}
+
+/** Fold lesson groups down to a cap by merging the smallest adjacent pair. */
+function capLessonGroups(
+  groups: IngestChunkSummary[][],
+  maxLessons: number
+): IngestChunkSummary[][] {
+  let cur = groups.map((g) => [...g]);
+  while (cur.length > maxLessons && cur.length > 1) {
+    let mergeAt = 0;
+    let smallest = Infinity;
+    for (let i = 0; i < cur.length - 1; i++) {
+      const size =
+        cur[i]!.reduce((n, c) => n + c.approxChars, 0) +
+        cur[i + 1]!.reduce((n, c) => n + c.approxChars, 0);
+      if (size < smallest) {
+        smallest = size;
+        mergeAt = i;
+      }
+    }
+    const merged = [...cur[mergeAt]!, ...cur[mergeAt + 1]!];
+    cur = [...cur.slice(0, mergeAt), merged, ...cur.slice(mergeAt + 2)];
+  }
+  return cur;
+}
 
 export type StructurePlanTargets = {
   chunkCount: number;
@@ -32,14 +93,14 @@ export function structurePlanTargets(
   let maxModules: number;
 
   if (profile === "express") {
-    // ~1 lesson per 2 source chunks; never collapse a multi-section deck to 1 lesson.
     minLessons =
       chunkCount <= 2
         ? 1
-        : clampInt(Math.ceil(chunkCount / 2), 2, 24);
+        : clampInt(Math.ceil(chunkCount / 1.5), 2, 28);
     if (chunkCount >= 60) maxModules = 8;
-    else if (chunkCount >= 30) maxModules = 6;
-    else if (chunkCount >= 15) maxModules = 5;
+    else if (chunkCount >= 20) maxModules = 6;
+    else if (chunkCount >= 10) maxModules = 6;
+    else if (chunkCount >= 5) maxModules = 6;
     else maxModules = 4;
   } else if (profile === "fast") {
     minLessons = clampInt(Math.ceil(chunkCount / 1.75), 2, 18);
@@ -138,18 +199,24 @@ export function structurePlanCoveragePromptBlock(
 }
 
 function lessonTitleFromChunks(chunks: IngestChunkSummary[]): string {
-  const isBad = (t: string) =>
-    t.length === 0 || /^\d+$/.test(t.trim()) || t.trim().length <= 2;
+  const isBad = (t: string) => {
+    const trim = t.trim();
+    if (trim.length === 0 || /^\d+$/.test(trim)) return true;
+    if (trim.length === 1) return true;
+    // Keep 2-character Korean topic labels (개요, 수면, etc.)
+    if (trim.length === 2 && !/^[\uac00-\ud7a3]{2}$/.test(trim)) return true;
+    return false;
+  };
 
   if (chunks.length === 1) {
-    const t = chunks[0]!.title.trim();
+    const t = normalizeIngestDisplayTitle(chunks[0]!.title.trim());
     if (!isBad(t)) return t;
     const pos = chunks[0]!.position.trim();
     if (pos.length > 0) return pos;
     return "Core concepts";
   }
   for (const c of chunks) {
-    const t = c.title.trim();
+    const t = normalizeIngestDisplayTitle(c.title.trim());
     if (!isBad(t)) return t;
   }
   const first = chunks[0]!;
@@ -158,6 +225,33 @@ function lessonTitleFromChunks(chunks: IngestChunkSummary[]): string {
     return `${first.position} – ${last.position}`.slice(0, 80);
   }
   return `Sections ${first.position}–${last.position}`;
+}
+
+const GENERIC_INTRO_CHUNK =
+  /^(약리학|서론|목차|introduction|overview|chapter\s+overview)$/i;
+
+/** Fold short generic intro chunks (e.g. "약리학") into the next section lesson. */
+function shouldFoldIntroChunk(
+  cur: IngestChunkSummary,
+  next: IngestChunkSummary | undefined
+): boolean {
+  if (!next) return false;
+  const curTitle = normalizeIngestDisplayTitle(cur.title);
+  if (!GENERIC_INTRO_CHUNK.test(curTitle)) return false;
+  if (cur.approxChars > 2_400) return false;
+  const nextTitle = normalizeIngestDisplayTitle(next.title);
+  return nextTitle.length > 0;
+}
+
+function lessonTitleForChunkGroup(chunks: IngestChunkSummary[]): string {
+  if (chunks.length === 1) {
+    return lessonTitleFromChunks(chunks);
+  }
+  const substantive = substantiveLessonTitles(chunks.map((c) => c.title));
+  if (substantive.length > 0) {
+    return substantive[0]!;
+  }
+  return lessonTitleFromChunks(chunks);
 }
 
 /**
@@ -174,7 +268,7 @@ export function buildDeterministicStructurePlan(
   if (chunkSummaries.length === 0) {
     return {
       title: "Course",
-      description: "A course built from your uploaded materials.",
+      description: "",
       modules: [
         {
           title: "Overview",
@@ -187,38 +281,95 @@ export function buildDeterministicStructurePlan(
     };
   }
 
-  const chunksPerLesson = Math.max(
-    1,
-    Math.ceil(chunkSummaries.length / targets.minLessons)
-  );
+  const denseSectioned = isDenseSectionedPharmacologyDeck(chunkSummaries);
 
-  for (let i = 0; i < chunkSummaries.length; i += chunksPerLesson) {
-    const group = chunkSummaries.slice(i, i + chunksPerLesson);
-    lessons.push({
-      title: lessonTitleFromChunks(group),
-      summary: "",
-      source_chunk_ids: group.map((c) => c.id),
-    });
+  if (denseSectioned) {
+    let groups = groupAdjacentPharmacologyChunks(chunkSummaries);
+    if (groups.length > DENSE_MAX_LESSONS) {
+      groups = capLessonGroups(groups, DENSE_TARGET_LESSONS);
+    }
+    for (const group of groups) {
+      if (
+        group.length === 2 &&
+        shouldFoldIntroChunk(group[0]!, group[1]!)
+      ) {
+        lessons.push({
+          title: lessonTitleForChunkGroup([group[1]!]),
+          summary: "",
+          source_chunk_ids: group.map((c) => c.id),
+        });
+        continue;
+      }
+      lessons.push({
+        title: lessonTitleForChunkGroup(group),
+        summary: "",
+        source_chunk_ids: group.map((c) => c.id),
+      });
+    }
+  } else {
+    const lessonTarget = targets.minLessons;
+    const chunksPerLesson = Math.max(
+      1,
+      Math.ceil(chunkSummaries.length / lessonTarget)
+    );
+
+    for (let i = 0; i < chunkSummaries.length; ) {
+      const group = chunkSummaries.slice(i, i + chunksPerLesson);
+      lessons.push({
+        title: lessonTitleForChunkGroup(group),
+        summary: "",
+        source_chunk_ids: group.map((c) => c.id),
+      });
+      i += chunksPerLesson;
+    }
   }
 
-  const lessonsPerModule = Math.max(
-    1,
-    Math.ceil(lessons.length / targets.maxModules)
-  );
+  const moduleCap = denseSectioned ? DENSE_MAX_MODULES : targets.maxModules;
+  const lessonsPerModule = denseSectioned
+    ? 2
+    : Math.max(1, Math.ceil(lessons.length / targets.maxModules));
   const modules: CourseStructurePlanModule[] = [];
   for (let i = 0; i < lessons.length; i += lessonsPerModule) {
     const group = lessons.slice(i, i + lessonsPerModule);
     modules.push({
-      title: group[0]!.title,
+      title: moduleTitleFromLessonTitles(group.map((l) => l.title)),
       summary: "",
       lessons: group,
     });
   }
 
-  const firstTitle = chunkSummaries[0]!.title.trim();
   return {
-    title: firstTitle.length > 0 ? firstTitle.slice(0, 60) : "Course",
-    description: "A structured course from your uploaded materials.",
+    title: deriveCourseTitleFromChunkTitles(
+      chunkSummaries.map((c) => c.title)
+    ),
+    description: "",
+    modules,
+  };
+}
+
+/** Apply stable display titles to any structure plan (LLM or deterministic). */
+export function normalizeStructurePlanTitles(
+  plan: CourseStructurePlan
+): CourseStructurePlan {
+  const modules = plan.modules.map((mod) => {
+    const lessons = mod.lessons.map((lesson) => ({
+      ...lesson,
+      title: normalizeIngestDisplayTitle(lesson.title),
+    }));
+    return {
+      ...mod,
+      title: moduleTitleFromLessonTitles(lessons.map((l) => l.title)),
+      lessons,
+    };
+  });
+  const chunkTitles = modules.flatMap((m) => m.lessons.map((l) => l.title));
+  return {
+    ...plan,
+    title:
+      plan.title?.trim() &&
+      !/^a structured course/i.test(plan.title.trim())
+        ? normalizeIngestDisplayTitle(plan.title)
+        : deriveCourseTitleFromChunkTitles(chunkTitles),
     modules,
   };
 }

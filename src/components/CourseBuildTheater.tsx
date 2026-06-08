@@ -45,6 +45,25 @@ function modulesStillBuilding(
   return built < total;
 }
 
+const STOPPABLE_INGEST_PHASES = new Set([
+  "planning_outline",
+  "enriching_sources",
+  "writing_modules",
+]);
+
+/** True while the user can stop generation (outline, sources, or module writing). */
+function canStopPdfBuild(
+  snap: PollPdfIngestJobSnapshot | undefined,
+  terminal: PollOutcome | null | undefined
+): boolean {
+  if (terminal != null) return false;
+  if (!snap || snap.status !== "running") return false;
+  if (snap.ingestPhase && STOPPABLE_INGEST_PHASES.has(snap.ingestPhase)) {
+    return true;
+  }
+  return modulesStillBuilding(snap);
+}
+
 function tabStatusLine(
   terminal: PollOutcome | null | undefined,
   preview: CoursePayload | null | undefined,
@@ -269,6 +288,11 @@ export function CourseBuildTheater({
   const [moduleIdx, setModuleIdx] = useState(0);
   const [retryBusy, setRetryBusy] = useState(false);
   const [retryErr, setRetryErr] = useState<string | null>(null);
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelErr, setCancelErr] = useState<string | null>(null);
+  const [pollStoppedByJob, setPollStoppedByJob] = useState<Record<string, boolean>>(
+    {}
+  );
   const [restartAckByJob, setRestartAckByJob] = useState<Record<string, string>>(
     {}
   );
@@ -408,6 +432,8 @@ export function CourseBuildTheater({
       setPhase("boot");
       setSummary(null);
       setRetryErr(null);
+      setCancelErr(null);
+      setPollStoppedByJob({});
       setRestartAckByJob({});
       setSnapshotByJob({});
       setStreamByJob({});
@@ -584,11 +610,56 @@ export function CourseBuildTheater({
     }
   }, [previewByJob, activeJob, moduleIdx]);
 
+  async function cancelActiveJob() {
+    const id = activeJob;
+    if (!id) return;
+    setCancelBusy(true);
+    setCancelErr(null);
+    try {
+      const r = await fetch(`/api/process-pdf/jobs/${id}/cancel`, {
+        method: "POST",
+      });
+      const raw = await r.text();
+      if (!r.ok) {
+        let msg = "Could not stop this build.";
+        try {
+          const j = JSON.parse(raw) as { error?: string };
+          if (typeof j.error === "string" && j.error.trim()) msg = j.error.trim();
+        } catch {
+          /* ignore */
+        }
+        setCancelErr(msg);
+        return;
+      }
+      const outcome: PollOutcome = { error: "Build stopped." };
+      setPollStoppedByJob((p) => ({ ...p, [id]: true }));
+      if (pdfBuild && sessionIdRef.current) {
+        pdfBuild.updateJobTerminal(sessionIdRef.current, id, outcome);
+      }
+      setTerminalByJob((p) => ({ ...p, [id]: outcome }));
+      setRows((p) => ({
+        ...p,
+        [id]: {
+          ...(p[id] ?? { label: "PDF", line: "", bar: "indeterminate" as const }),
+          line: "Build stopped.",
+          bar: null,
+          error: outcome.error,
+          materialId: undefined,
+        },
+      }));
+      setPhase("done");
+      setSummary("fail");
+    } finally {
+      setCancelBusy(false);
+    }
+  }
+
   async function retryActiveJob() {
     const id = activeJob;
     if (!id) return;
     setRetryBusy(true);
     setRetryErr(null);
+    setCancelErr(null);
     try {
       const r = await fetch(`/api/process-pdf/jobs/${id}/retry`, {
         method: "POST",
@@ -631,6 +702,11 @@ export function CourseBuildTheater({
         return next;
       });
       setTerminalByJob((p) => ({ ...p, [id]: null }));
+      setPollStoppedByJob((p) => {
+        const next = { ...p };
+        delete next[id];
+        return next;
+      });
       setRestartNonce((p) => ({ ...p, [id]: (p[id] ?? 0) + 1 }));
       setRows((p) => ({
         ...p,
@@ -661,22 +737,29 @@ export function CourseBuildTheater({
     !row.materialId &&
     (phase === "running" || (phase === "done" && summary !== "success"));
 
+  const canOfferStop = canStopPdfBuild(
+    snapshotByJob[activeJob],
+    terminalByJob[activeJob]
+  );
+
   return (
     <>
       {phase !== "boot"
-        ? jobIds.map((id, index) => (
-            <StaggeredPdfJobPoll
-              key={`${id}-${restartNonce[id] ?? 0}`}
-              index={index}
-              jobId={id}
-              nonce={restartNonce[id] ?? 0}
-              onProgress={onProgress}
-              onPreview={onPreview}
-              onJobSnapshot={onJobSnapshot}
-              onStreamPreview={onStreamTail}
-              onDone={onDone}
-            />
-          ))
+        ? jobIds.map((id, index) =>
+            pollStoppedByJob[id] ? null : (
+              <StaggeredPdfJobPoll
+                key={`${id}-${restartNonce[id] ?? 0}`}
+                index={index}
+                jobId={id}
+                nonce={restartNonce[id] ?? 0}
+                onProgress={onProgress}
+                onPreview={onPreview}
+                onJobSnapshot={onJobSnapshot}
+                onStreamPreview={onStreamTail}
+                onDone={onDone}
+              />
+            )
+          )
         : null}
       <AppHeader right={<HeaderNavLoggedIn initialDueCounts={initialDueCounts} />} />
       <CourseWorkspaceBackRow courseId={courseId} courseTitle={courseTitle} />
@@ -699,9 +782,9 @@ export function CourseBuildTheater({
         </div>
       ) : null}
       <main className="min-h-[calc(100vh-4rem)] bg-white dark:bg-zinc-950">
-        <div className="mx-auto max-w-3xl px-4 py-8 sm:px-10">
-          <AiStudyDisclaimer className="mb-6" />
-
+        <div
+          className={`mx-auto px-4 pb-6 pt-1 sm:px-6 ${preview ? "max-w-6xl" : "max-w-4xl"}`}
+        >
           {jobIds.length > 1 ? (
             <div className="mb-6 space-y-2 border-b border-zinc-100 pb-4 dark:border-zinc-800">
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -731,6 +814,7 @@ export function CourseBuildTheater({
                         setActiveJob(id);
                         setModuleIdx(0);
                         setRetryErr(null);
+                        setCancelErr(null);
                       }}
                       className={`flex max-w-[min(100%,18rem)] flex-col items-start gap-0.5 rounded-2xl border px-3 py-2 text-left text-xs font-semibold transition ${
                         id === activeJob
@@ -768,28 +852,62 @@ export function CourseBuildTheater({
             </div>
           ) : null}
 
-          {row ? (
-            <div className="mb-6 rounded-xl border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-800 dark:bg-zinc-900/40">
+          {row || preview ? (
+            <div className="sticky top-0 z-20 -mx-4 mb-3 border-b border-zinc-200 bg-white/95 px-4 py-2.5 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/95 sm:-mx-6 sm:px-6">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-                    {row.label}
-                  </p>
-                  <p className="mt-1 whitespace-pre-line text-sm text-zinc-800 dark:text-zinc-200">
-                    {row.line}
-                  </p>
+                <div className="min-w-0 flex-1 space-y-1">
+                  {preview ? (
+                    <h1 className="text-base font-semibold leading-snug tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-lg">
+                      <TypewriterText
+                        text={preview.title}
+                        instantBelow={0}
+                        charDelayMs={28}
+                        charsPerTick={2}
+                      />
+                    </h1>
+                  ) : null}
+                  {row ? (
+                    <>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                        {row.label}
+                      </p>
+                      <p className="whitespace-pre-line text-sm text-zinc-800 dark:text-zinc-200">
+                        {row.line}
+                      </p>
+                    </>
+                  ) : null}
+                  <AiStudyDisclaimer compact className="pt-0.5" />
                 </div>
-                {canOfferRetry ? (
-                  <button
-                    type="button"
-                    disabled={retryBusy}
-                    onClick={() => void retryActiveJob()}
-                    className="shrink-0 rounded-full border border-zinc-300 bg-white px-4 py-2 text-xs font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
-                  >
-                    {retryBusy ? "Restarting…" : "Restart this PDF"}
-                  </button>
+                {canOfferStop || canOfferRetry ? (
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    {canOfferStop ? (
+                      <button
+                        type="button"
+                        disabled={cancelBusy || retryBusy}
+                        onClick={() => void cancelActiveJob()}
+                        className="rounded-full border border-red-200 bg-white px-4 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/60 dark:bg-zinc-900 dark:text-red-300 dark:hover:bg-red-950/40"
+                      >
+                        {cancelBusy ? "Stopping…" : "Stop"}
+                      </button>
+                    ) : null}
+                    {canOfferRetry ? (
+                      <button
+                        type="button"
+                        disabled={retryBusy || cancelBusy}
+                        onClick={() => void retryActiveJob()}
+                        className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-xs font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                      >
+                        {retryBusy ? "Restarting…" : "Restart this PDF"}
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
+              {cancelErr ? (
+                <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                  {cancelErr}
+                </p>
+              ) : null}
               {retryErr ? (
                 <p className="mt-2 text-xs text-red-600 dark:text-red-400">
                   {retryErr}
@@ -798,28 +916,48 @@ export function CourseBuildTheater({
               {restartAckByJob[activeJob] ? (
                 <p className="mt-2 text-xs text-emerald-800 dark:text-emerald-300/90">
                   Restart confirmed at{" "}
-                  {formatIsoLocal(restartAckByJob[activeJob]!)}. This upload is
-                  building again from the start — you will see fresh progress in
-                  the status line above.
+                  {formatIsoLocal(restartAckByJob[activeJob]!)}.
                 </p>
               ) : null}
-              <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-                {row.bar === "indeterminate" ? (
-                  <div
-                    className="absolute inset-y-0 w-[28%] rounded-full bg-brand/90 dark:bg-brand-soft animate-course-upload-indeterminate"
-                    aria-hidden
-                  />
-                ) : typeof row.bar === "number" ? (
-                  <div
-                    className="h-full rounded-full bg-brand transition-[width] duration-300 dark:bg-brand-soft"
-                    style={{
-                      width: `${Math.max(2, Math.min(100, row.bar))}%`,
-                    }}
-                  />
-                ) : null}
-              </div>
+              {row ? (
+                <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                  {row.bar === "indeterminate" ? (
+                    <div
+                      className="absolute inset-y-0 w-[28%] rounded-full bg-brand/90 dark:bg-brand-soft animate-course-upload-indeterminate"
+                      aria-hidden
+                    />
+                  ) : typeof row.bar === "number" ? (
+                    <div
+                      className="h-full rounded-full bg-brand transition-[width] duration-300 dark:bg-brand-soft"
+                      style={{
+                        width: `${Math.max(2, Math.min(100, row.bar))}%`,
+                      }}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+              {preview && preview.modules.length > 1 ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {preview.modules.map((m, i) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setModuleIdx(i)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        i === moduleIdx
+                          ? "bg-brand text-white dark:bg-brand"
+                          : "border border-zinc-200 bg-white text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                      }`}
+                    >
+                      {m.title}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          ) : (
+            <AiStudyDisclaimer className="mb-3" />
+          )}
 
           {snapshotByJob[activeJob]?.ingestPhase === "reviewing_transcript" &&
           snapshotByJob[activeJob]?.ingestTranscript ? (
@@ -855,7 +993,7 @@ export function CourseBuildTheater({
                 </div>
               </div>
             ) : (
-            <div className="flex min-h-[40vh] flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 px-6 py-16 text-center dark:border-zinc-800 dark:bg-zinc-900/20">
+            <div className="flex min-h-[22vh] flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-900/20">
               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 {jobIds.length > 1
                   ? `No live layout yet for “${row?.label ?? "this PDF"}”.`
@@ -879,71 +1017,49 @@ export function CourseBuildTheater({
             </div>
             )
           ) : (
-            <div className="space-y-10">
-              <header className="border-b border-zinc-100 pb-8 dark:border-zinc-900">
-                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  <TypewriterText
-                    text={preview.title}
-                    instantBelow={0}
-                    charDelayMs={42}
-                    charsPerTick={1}
-                  />
-                </h1>
-                <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+            <div className="space-y-6">
+              {preview.description?.trim() ? (
+                <p className="max-w-3xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                   <TypewriterText
                     text={preview.description}
                     mode="words"
-                    wordDelayMs={48}
+                    wordDelayMs={36}
                     instantBelow={0}
                   />
                 </p>
-              </header>
-
-              {preview.modules.length > 1 ? (
-                <div className="flex flex-wrap gap-2">
-                  {preview.modules.map((m, i) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => setModuleIdx(i)}
-                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                        i === moduleIdx
-                          ? "bg-brand text-white dark:bg-brand"
-                          : "border border-zinc-200 bg-white text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-                      }`}
-                    >
-                      {m.title}
-                    </button>
-                  ))}
-                </div>
               ) : null}
 
               {mod ? (
-                <section className="space-y-10">
-                  <header className="border-b border-zinc-100 pb-6 dark:border-zinc-900">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+                <section className="space-y-6">
+                  <header>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
                       Module {mod.id}
                     </p>
-                    <h2 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+                    <h2 className="mt-1 text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                       <TypewriterText
                         text={mod.title}
                         instantBelow={0}
-                        charDelayMs={42}
-                        charsPerTick={1}
+                        charDelayMs={28}
+                        charsPerTick={2}
                       />
                     </h2>
                   </header>
 
-                  <div className="space-y-14">
+                  <div className="space-y-10">
                     {mod.lessons.map((lesson, li) => (
                       <div key={`${mod.id}-${li}`} className="scroll-mt-24">
                         <LessonEditableBlocks
-                          materialId="__live_build__"
+                          materialId={
+                            rows[activeJob]?.materialId ??
+                            firstMaterialId ??
+                            "__live_build__"
+                          }
                           moduleId={mod.id}
                           lessonIndex={li}
                           lesson={lesson}
                           readOnly
                           animateReveal
+                          compactBuild
                         />
                       </div>
                     ))}

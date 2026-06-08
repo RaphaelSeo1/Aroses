@@ -1,49 +1,38 @@
-import type { CourseStructurePlan } from "@/lib/ai/course-payload";
-import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
+import type {
+  CourseStructurePlan,
+  CourseStructurePlanLesson,
+  CourseStructurePlanModule,
+} from "@/lib/ai/course-payload";
 import type { PersistedIngestChunk } from "@/lib/source-attribution";
-import { parsePageNumbersFromPosition } from "@/lib/study-ingest/chunk-position";
+import {
+  pagesForPlanLesson,
+  parsePageNumbersFromPosition,
+  tablePageOverlapsLesson,
+} from "@/lib/study-ingest/chunk-position";
 import {
   pageFigureCropKey,
-  pageTableCropKey,
   pageTableKey,
 } from "@/lib/study-ingest/source-images/page-table-keys";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
-import { isFullPageRenderImage } from "@/lib/study-ingest/source-images/is-page-render";
 import {
-  cosineSimilarity,
-  embedText,
-} from "@/lib/embeddings/text-similarity";
-import type {
-  CourseAsset,
-  CourseAssetManifest,
-} from "@/lib/study-ingest/course-assets";
+  maxFiguresPerPage,
+  shouldKeepFigureCaption,
+} from "@/lib/pdf-ingest/filter-crop-quality";
+import { isFullPageRenderImage } from "@/lib/study-ingest/source-images/is-page-render";
+import type { CourseAssetManifest } from "@/lib/study-ingest/course-assets";
+import {
+  isUsableMarkdownTable,
+  sanitizeLessonContent,
+  sanitizeTableMarkdown,
+  shouldSkipTableInjection,
+} from "@/lib/study-ingest/table-text";
 import type { CourseModule } from "@/types/course";
 
 function filesMatch(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
-/** Parse `pages 5–6`, `pages 7-8`, `page 3` from lesson source locators. */
-export function parsePagesFromSourceLocator(locator: string): number[] {
-  const t = locator.trim();
-  const range = t.match(/\bpages?\s+(\d+)\s*[–-]\s*(\d+)\b/i);
-  if (range) {
-    const start = Number.parseInt(range[1]!, 10);
-    const end = Number.parseInt(range[2]!, 10);
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
-    const lo = Math.min(start, end);
-    const hi = Math.max(start, end);
-    const pages: number[] = [];
-    for (let p = lo; p <= hi; p++) pages.push(p);
-    return pages;
-  }
-  const single = t.match(/\bpage\s+~?(\d+)\b/i);
-  if (single) {
-    const n = Number.parseInt(single[1]!, 10);
-    return Number.isFinite(n) ? [n] : [];
-  }
-  return [];
-}
+export { parsePagesFromSourceLocator } from "@/lib/source-attribution";
 
 /** Merge uploaded ingest images with persisted page-artifact figures. */
 export function mergeIngestPageImageRecords(
@@ -114,31 +103,30 @@ export function pageFiguresFromSourceImages(
 
   const out: IngestPageFigure[] = [];
   for (const [, imgs] of byPage) {
-    let crops = imgs.filter((i) => !isFullPageFallbackLabel(i.label ?? ""));
+    let crops = imgs.filter(
+      (i) =>
+        !isFullPageFallbackLabel(i.label ?? "") &&
+        shouldKeepFigureCaption(i.label ?? "")
+    );
     if (crops.length === 0) {
-      crops = imgs.filter((i) =>
-        /snapshot/i.test(i.label ?? "")
+      crops = imgs.filter(
+        (i) =>
+          /snapshot/i.test(i.label ?? "") &&
+          shouldKeepFigureCaption(i.label ?? "")
       );
     }
     let fi = 0;
-    for (const img of crops) {
-      const isTable =
-        (img.label ?? "").trim().toLowerCase().startsWith("table:") ||
-        (img.label ?? "").toLowerCase().includes("table");
+    for (const img of crops.slice(0, maxFiguresPerPage())) {
       const caption =
         img.label?.replace(/^Table:\s*/i, "").trim() ||
-        (isTable
-          ? `Table from page ${img.anchorIndex}`
-          : `Diagram from page ${img.anchorIndex}`);
+        `Diagram from page ${img.anchorIndex}`;
       out.push({
-        key: isTable
-          ? pageTableCropKey(img.sourceFileName, img.anchorIndex, fi)
-          : pageFigureCropKey(img.sourceFileName, img.anchorIndex, fi),
+        key: pageFigureCropKey(img.sourceFileName, img.anchorIndex, fi),
         sourceFileName: img.sourceFileName,
         pageNum: img.anchorIndex,
         url: img.url,
         caption,
-        kind: isTable ? "table" : "figure",
+        kind: "figure",
       });
       fi++;
     }
@@ -234,26 +222,48 @@ export function serializePageTablesMap(
   return Object.fromEntries(map);
 }
 
-/** Pull table markdown blocks embedded in module source text (pre-truncation). */
-export function extractPdfTableBlocksFromSource(sourceText: string): string[] {
-  if (!sourceText.includes("TABLES FROM ORIGINAL PDF")) return [];
-  const parts = sourceText.split(
-    /--- TABLES FROM ORIGINAL PDF \(page \d+[^)]*\) ---\n/
-  );
-  const blocks: string[] = [];
+export type PageTaggedTableBlock = {
+  pageNum: number;
+  markdown: string;
+};
+
+/** Pull page-tagged table markdown blocks embedded in module source text. */
+export function extractPdfTableBlocksFromSource(
+  sourceText: string
+): PageTaggedTableBlock[] {
+  const blocks: PageTaggedTableBlock[] = [];
   const seen = new Set<string>();
-  for (let i = 1; i < parts.length; i++) {
-    const chunk = parts[i]!;
-    const end = chunk.search(
-      /\n\n--- (?:TABLES|FIGURES) FROM ORIGINAL PDF|\n\n\[from /
-    );
-    const md = (end >= 0 ? chunk.slice(0, end) : chunk).trim();
-    if (!md.includes("|") || md.length < 12) continue;
-    const fp = tableFingerprint(md);
-    if (seen.has(fp)) continue;
-    seen.add(fp);
-    blocks.push(md);
+
+  const patterns: Array<{ re: RegExp; pageGroup: number }> = [
+    {
+      re: /--- TABLES FROM ORIGINAL PDF \(page (\d+)[^)]*\) ---\n/g,
+      pageGroup: 1,
+    },
+    {
+      re: /--- TABLE DATA FROM PDF \(page (\d+)[^)]*\) ---\n/g,
+      pageGroup: 1,
+    },
+  ];
+
+  for (const { re } of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(sourceText)) !== null) {
+      const pageNum = Number.parseInt(match[1]!, 10);
+      if (!Number.isFinite(pageNum) || pageNum <= 0) continue;
+      const start = match.index + match[0].length;
+      const tail = sourceText.slice(start);
+      const end = tail.search(
+        /\n\n--- (?:TABLES|TABLE DATA|FIGURES) FROM|\n\n\[from /
+      );
+      const md = (end >= 0 ? tail.slice(0, end) : tail).trim();
+      if (!md.includes("|") || md.length < 12) continue;
+      const fp = tableFingerprint(md);
+      if (seen.has(fp)) continue;
+      seen.add(fp);
+      blocks.push({ pageNum, markdown: md });
+    }
   }
+
   return blocks;
 }
 
@@ -279,178 +289,14 @@ function tableAlreadyInContent(content: string, md: string): boolean {
   return false;
 }
 
-function figureAlreadyInContent(content: string, fig: IngestPageFigure): boolean {
-  if (content.includes(fig.url)) return true;
-  if (fig.caption.length > 8 && content.includes(fig.caption.slice(0, 40))) {
-    return true;
-  }
-  return false;
-}
-
-function tokenizeForRelevance(text: string): Set<string> {
-  const words = text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
-  return new Set(words);
-}
-
-function relevanceScore(text: string, caption: string): number {
-  const textTokens = tokenizeForRelevance(text);
-  let score = 0;
-  for (const t of tokenizeForRelevance(caption)) {
-    if (textTokens.has(t)) score++;
-  }
-  return score;
-}
-
-function insertFigureInLessonContent(
-  content: string,
-  fig: IngestPageFigure
-): string {
-  const block = `![${fig.caption}](${fig.url})`;
-  if (!content.trim()) return `### From your PDF\n\n${block}\n`;
-  if (figureAlreadyInContent(content, fig)) return content;
-
-  const lines = content.split("\n");
-  let bestHeadingIdx = -1;
-  let bestHeadingScore = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (!line.startsWith("## ")) continue;
-    const score = relevanceScore(line, fig.caption);
-    if (score > bestHeadingScore) {
-      bestHeadingScore = score;
-      bestHeadingIdx = i;
-    }
-  }
-
-  const figureMd = `\n\n${block}\n`;
-  if (bestHeadingIdx >= 0 && bestHeadingScore > 0) {
-    let insertAt = bestHeadingIdx + 1;
-    while (insertAt < lines.length && lines[insertAt]!.trim() === "") {
-      insertAt++;
-    }
-    while (
-      insertAt < lines.length &&
-      !lines[insertAt]!.startsWith("#") &&
-      lines[insertAt]!.trim() !== ""
-    ) {
-      insertAt++;
-    }
-    const before = lines.slice(0, insertAt).join("\n");
-    const after = lines.slice(insertAt).join("\n");
-    return `${before}${figureMd}${after}`.trim();
-  }
-
-  const paras = content.split(/\n\n+/);
-  if (paras.length > 1) {
-    return `${paras[0]}\n\n${block}\n\n${paras.slice(1).join("\n\n")}`.trim();
-  }
-  return `${content.trim()}${figureMd}`.trim();
-}
-
-/**
- * Place figures that page-locator injection missed by caption ↔ lesson topic match.
- */
-function figureFromAsset(asset: CourseAsset): IngestPageFigure {
-  return {
-    key: asset.assetId,
-    sourceFileName: asset.sourceFileName,
-    pageNum: asset.sourcePage,
-    url: asset.url,
-    caption: asset.caption,
-  };
-}
-
-async function scoreLessonForAsset(
-  lessonText: string,
-  asset: CourseAsset
-): Promise<number> {
-  if (asset.embedding.length > 0) {
-    const lessonEmb = await embedText(lessonText.slice(0, 2500));
-    return cosineSimilarity(lessonEmb, asset.embedding);
-  }
-  return relevanceScore(lessonText, asset.caption);
-}
-
 export async function injectUnplacedFiguresByRelevance(
   modules: CourseModule[],
-  figures: IngestPageFigure[],
-  manifest?: CourseAssetManifest | null
+  _figures: IngestPageFigure[],
+  _manifest?: CourseAssetManifest | null
 ): Promise<CourseModule[]> {
-  const figureAssets =
-    manifest?.assets.filter((a) => a.type === "figure" && a.url) ?? [];
-  const unplacedFigures = figures.filter(
-    (f) =>
-      !modules.some((m) =>
-        m.lessons.some((l) => figureAlreadyInContent(l.content ?? "", f))
-      )
-  );
-  const unplacedAssets = figureAssets.filter(
-    (a) =>
-      !modules.some((m) =>
-        m.lessons.some((l) =>
-          figureAlreadyInContent(l.content ?? "", figureFromAsset(a))
-        )
-      )
-  );
-  if (
-    (unplacedFigures.length === 0 && unplacedAssets.length === 0) ||
-    !modules.length
-  ) {
-    return modules;
-  }
-
-  const flat: {
-    modIdx: number;
-    lessonIdx: number;
-    lesson: CourseModule["lessons"][number];
-  }[] = [];
-  modules.forEach((mod, modIdx) => {
-    mod.lessons.forEach((lesson, lessonIdx) => {
-      flat.push({ modIdx, lessonIdx, lesson });
-    });
-  });
-
-  const next = modules.map((m) => ({
-    ...m,
-    lessons: m.lessons.map((l) => ({ ...l })),
-  }));
-
-  const placeFigure = (fig: IngestPageFigure, scoreFn: (text: string) => number) => {
-    let best = { score: -1, modIdx: 0, lessonIdx: 0 };
-    for (const { modIdx, lessonIdx, lesson } of flat) {
-      const text = `${lesson.title}\n${(lesson.content ?? "").slice(0, 2500)}`;
-      const score = scoreFn(text);
-      if (score > best.score) best = { score, modIdx, lessonIdx };
-    }
-    const mod = next[best.modIdx]!;
-    const lesson = mod.lessons[best.lessonIdx]!;
-    mod.lessons[best.lessonIdx] = {
-      ...lesson,
-      content: insertFigureInLessonContent(lesson.content ?? "", fig),
-    };
-  };
-
-  for (const fig of unplacedFigures) {
-    placeFigure(fig, (text) => relevanceScore(text, fig.caption));
-  }
-
-  for (const asset of unplacedAssets) {
-    const fig = figureFromAsset(asset);
-    let best = { score: -1, modIdx: 0, lessonIdx: 0 };
-    for (const { modIdx, lessonIdx, lesson } of flat) {
-      const text = `${lesson.title}\n${(lesson.content ?? "").slice(0, 2500)}`;
-      const score = await scoreLessonForAsset(text, asset);
-      if (score > best.score) best = { score, modIdx, lessonIdx };
-    }
-    const mod = next[best.modIdx]!;
-    const lesson = mod.lessons[best.lessonIdx]!;
-    mod.lessons[best.lessonIdx] = {
-      ...lesson,
-      content: insertFigureInLessonContent(lesson.content ?? "", fig),
-    };
-  }
-
-  return next;
+  void _figures;
+  void _manifest;
+  return modules;
 }
 
 function collectArtifactsForModule(
@@ -544,80 +390,162 @@ function dedupeTables(tables: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const t of tables) {
-    const fp = tableFingerprint(t);
+    const cleaned = sanitizeTableMarkdown(t);
+    if (!cleaned || !isUsableMarkdownTable(cleaned)) continue;
+    const fp = tableFingerprint(cleaned);
     if (seen.has(fp)) continue;
     seen.add(fp);
-    out.push(t);
+    out.push(cleaned);
   }
   return out;
 }
 
+function appendTablesToContent(content: string, tables: string[]): string {
+  let next = content.trim();
+  for (const md of tables) {
+    if (shouldSkipTableInjection(next, md)) continue;
+    const cleaned = sanitizeTableMarkdown(md).trim();
+    if (!cleaned.includes("|")) continue;
+    if (tableAlreadyInContent(next, cleaned)) continue;
+    next = next ? `${next}\n\n${cleaned}\n` : cleaned;
+  }
+  return sanitizeLessonContent(next);
+}
+
+function collectTablesForPlanLesson(
+  planLesson: CourseStructurePlanLesson | undefined,
+  chunksById: Map<string, PersistedIngestChunk>,
+  pageTables: Map<string, string>,
+  extraBlocks: PageTaggedTableBlock[] = []
+): string[] {
+  if (!planLesson) return [];
+  const lessonPages = pagesForPlanLesson(planLesson, chunksById);
+  if (lessonPages.size === 0) return [];
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of planLesson.source_chunk_ids) {
+    const chunk = chunksById.get(id);
+    if (!chunk) continue;
+    for (const pageNum of parsePageNumbersFromPosition(chunk.position)) {
+      if (!tablePageOverlapsLesson(pageNum, lessonPages)) continue;
+      const key = pageTableKey(chunk.sourceFileName, pageNum);
+      if (seen.has(key)) continue;
+      const md = pageTables.get(key);
+      if (!md?.trim()) continue;
+      seen.add(key);
+      out.push(md);
+    }
+  }
+
+  for (const block of extraBlocks) {
+    if (!tablePageOverlapsLesson(block.pageNum, lessonPages)) continue;
+    const fp = tableFingerprint(block.markdown);
+    if (seen.has(fp)) continue;
+    seen.add(fp);
+    out.push(block.markdown);
+  }
+
+  return dedupeTables(out);
+}
+
 /**
- * Tables display as cropped PNG screenshots (in `figures`), not markdown grids.
- * Markdown in `artifacts.tables` is chunk-indexing only.
+ * Inject vision-extracted tables into lessons that cover the same PDF pages
+ * (via structure-plan chunk ids). Falls back to round-robin when no plan.
  */
 export function injectPdfTablesIntoModule(
   mod: CourseModule,
-  _tables: string[]
-): CourseModule {
-  void _tables;
-  return mod;
-}
-
-function figureBlockMarkdown(fig: IngestPageFigure): string {
-  const isTable = fig.kind === "table";
-  const heading = isTable
-    ? `Table from your PDF (page ${fig.pageNum})`
-    : `Figure from your PDF (page ${fig.pageNum})`;
-  return `\n\n### ${heading}\n\n![${fig.caption}](${fig.url})\n`;
-}
-
-/** Inject cropped page visuals (figures + table screenshots) when embed omitted them. */
-export function injectPdfFiguresIntoModule(
-  mod: CourseModule,
-  figures: IngestPageFigure[]
-): CourseModule {
-  const missing = figures.filter(
-    (f) =>
-      !mod.lessons.some((l) => figureAlreadyInContent(l.content ?? "", f))
-  );
-  if (missing.length === 0 || mod.lessons.length === 0) return mod;
-
-  let figIdx = 0;
-  const lessons = mod.lessons.map((lesson) => {
-    let content = (lesson.content ?? "").trim();
-    if (figIdx < missing.length) {
-      const fig = missing[figIdx]!;
-      if (!figureAlreadyInContent(content, fig)) {
-        content += figureBlockMarkdown(fig);
-      }
-      figIdx++;
-    }
-    return { ...lesson, content };
-  });
-
-  if (figIdx < missing.length) {
-    const lastIdx = lessons.length - 1;
-    let content = lessons[lastIdx]!.content ?? "";
-    while (figIdx < missing.length) {
-      const fig = missing[figIdx]!;
-      if (!figureAlreadyInContent(content, fig)) {
-        content += figureBlockMarkdown(fig);
-      }
-      figIdx++;
-    }
-    lessons[lastIdx] = { ...lessons[lastIdx]!, content };
+  tables: string[] | PageTaggedTableBlock[],
+  ctx?: {
+    planModule?: CourseStructurePlanModule;
+    chunks?: PersistedIngestChunk[];
+    pageTables?: Map<string, string>;
   }
+): CourseModule {
+  if (mod.lessons.length === 0) return mod;
+
+  const pageTables = ctx?.pageTables ?? new Map<string, string>();
+  const planModule = ctx?.planModule;
+  const chunks = ctx?.chunks;
+
+  const taggedExtra: PageTaggedTableBlock[] = tables.map((t) =>
+    typeof t === "string"
+      ? { pageNum: 0, markdown: t }
+      : t
+  );
+  const untagged = taggedExtra.filter((b) => b.pageNum <= 0);
+  const tagged = taggedExtra.filter((b) => b.pageNum > 0);
+
+  if (planModule && chunks) {
+    const chunksById = new Map(chunks.map((c) => [c.id, c]));
+    const lessons = mod.lessons.map((lesson, li) => {
+      const planLesson = planModule.lessons[li];
+      const forLesson = collectTablesForPlanLesson(
+        planLesson,
+        chunksById,
+        pageTables,
+        tagged
+      );
+      const content = appendTablesToContent(lesson.content ?? "", forLesson);
+      return { ...lesson, content };
+    });
+
+    // Orphan tables are dropped — never dump unrelated grids into the last lesson.
+    void untagged;
+    return { ...mod, lessons };
+  }
+
+  const deduped = dedupeTables(
+    tables.map((t) => (typeof t === "string" ? t : t.markdown))
+  );
+  if (deduped.length === 0) {
+    return {
+      ...mod,
+      lessons: mod.lessons.map((lesson) => ({
+        ...lesson,
+        content: sanitizeLessonContent(lesson.content ?? ""),
+      })),
+    };
+  }
+
+  let tableIdx = 0;
+  const lessons = mod.lessons.map((lesson) => {
+    const batch =
+      tableIdx < deduped.length ? [deduped[tableIdx]!] : ([] as string[]);
+    if (tableIdx < deduped.length) tableIdx++;
+    return {
+      ...lesson,
+      content: appendTablesToContent(lesson.content ?? "", batch),
+    };
+  });
 
   return { ...mod, lessons };
 }
 
+function collectPdfTablesFromPageMap(pageTables: Map<string, string>): string[] {
+  return dedupeTables([...pageTables.values()]);
+}
+
+/** Figures attach via `visual_assets` — not inlined into lesson markdown. */
+export function injectPdfFiguresIntoModule(
+  mod: CourseModule,
+  _figures: IngestPageFigure[]
+): CourseModule {
+  void _figures;
+  return mod;
+}
+
 export function injectPdfArtifactsIntoModule(
   mod: CourseModule,
-  tables: string[],
-  figures: IngestPageFigure[]
+  tables: string[] | PageTaggedTableBlock[],
+  figures: IngestPageFigure[],
+  ctx?: {
+    planModule?: CourseStructurePlanModule;
+    chunks?: PersistedIngestChunk[];
+    pageTables?: Map<string, string>;
+  }
 ): CourseModule {
-  let next = injectPdfTablesIntoModule(mod, tables);
+  let next = injectPdfTablesIntoModule(mod, tables, ctx);
   next = injectPdfFiguresIntoModule(next, figures);
   return next;
 }
@@ -636,7 +564,11 @@ export function injectPdfTablesIntoModules(
       plan && pageTables.size > 0
         ? collectPdfTablesForModule(i, plan, chunks, pageTables)
         : [];
-    return injectPdfTablesIntoModule(mod, fromMap);
+    return injectPdfTablesIntoModule(mod, fromMap, {
+      planModule: plan?.modules[i],
+      chunks,
+      pageTables,
+    });
   });
 }
 
@@ -647,51 +579,10 @@ export function injectPdfTablesIntoModules(
  */
 export function injectPageImagesFromLessonSources(
   modules: CourseModule[],
-  sourceImages: IngestSourceImageRecord[]
+  _sourceImages: IngestSourceImageRecord[]
 ): CourseModule[] {
-  if (!sourceImages.length || !modules.length) return modules;
-
-  return modules.map((mod) => ({
-    ...mod,
-    lessons: mod.lessons.map((lesson) => {
-      if (!lesson.sources?.length) return lesson;
-
-      const wanted: { fileName: string; pageNum: number }[] = [];
-      for (const src of lesson.sources) {
-        const pages = parsePagesFromSourceLocator(src.locator);
-        for (const pageNum of pages) {
-          wanted.push({ fileName: src.fileName, pageNum });
-        }
-      }
-      if (wanted.length === 0) return lesson;
-
-      const images: IngestSourceImageRecord[] = [];
-      for (const { fileName, pageNum } of wanted) {
-        for (const img of imagesForLessonPage(sourceImages, fileName, pageNum)) {
-          if (!images.some((x) => x.url === img.url)) images.push(img);
-        }
-      }
-      if (images.length === 0) return lesson;
-
-      let content = (lesson.content ?? "").trim();
-      const blocks: string[] = [];
-      for (const img of images) {
-        if (content.includes(img.url)) continue;
-        const alt = img.label?.trim() || `Page ${img.anchorIndex}`;
-        blocks.push(`![${alt}](${img.url})`);
-      }
-      if (blocks.length === 0) return lesson;
-
-      const figureBlock = `### From your PDF\n\n${blocks.join("\n\n")}\n\n`;
-      if (!content) {
-        return { ...lesson, content: figureBlock.trim() };
-      }
-      if (lessonMarkdownHasImages(content)) {
-        return { ...lesson, content: `${content}\n\n${figureBlock}`.trim() };
-      }
-      return { ...lesson, content: `${figureBlock}${content}`.trim() };
-    }),
-  }));
+  void _sourceImages;
+  return modules;
 }
 
 export function injectPdfArtifactsIntoModules(
@@ -714,6 +605,10 @@ export function injectPdfArtifactsIntoModules(
       plan && figures.length > 0
         ? collectPdfFiguresForModule(i, plan, chunks, figures)
         : [];
-    return injectPdfArtifactsIntoModule(mod, tables, figs);
+    return injectPdfArtifactsIntoModule(mod, tables, figs, {
+      planModule: plan?.modules[i],
+      chunks,
+      pageTables: tableMap,
+    });
   });
 }

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Lesson visual smoke test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 1.5rem; }
+    figure { margin: 1.5rem 0; max-width: 640px; }
+    img { max-width: 100%; border: 1px solid #ccc; border-radius: 8px; }
+    figcaption { font-size: 12px; color: #555; margin-top: 0.5rem; }
+    .ok { color: green; }
+    .err { color: red; }
+  </style>
+</head>
+<body>
+  <h1>Pharmacology material — 8 stored figures</h1>
+  <p>Material <code>46fd5862-d4fc-4015-a2f5-4513eec94326</code></p>
+  <div id="log"></div>
+  <div id="figures"></div>
+  <script>
+    const urls = [
+      "https://xdcausdtstbckgqpafxh.supabase.co/storage/v1/object/public/study-material-images/0a5da40a-2d32-4bb9-9ef0-107d6557a88f/ingest/8ea18fe0-2147-4c85-9494-c0a69a32caa8/1-ed14f8b4-563f-4239-89eb-b5200ac2dd9c.png",
+      "https://xdcausdtstbckgqpafxh.supabase.co/storage/v1/object/public/study-material-images/0a5da40a-2d32-4bb9-9ef0-107d6557a88f/ingest/8ea18fe0-2147-4c85-9494-c0a69a32caa8/2-ed16b022-e5e9-4117-989c-787e247844bf.png",
+      "https://xdcausdtstbckgqpafxh.supabase.co/storage/v1/object/public/study-material-images/0a5da40a-2d32-4bb9-9ef0-107d6557a88f/ingest/8ea18fe0-2147-4c85-9494-c0a69a32caa8/3-523bb929-6cb2-4210-ad4c-70fb860e89b6.png",
+      "https://xdcausdtstbckgqpafxh.supabase.co/storage/v1/object/public/study-material-images/0a5da40a-2d32-4bb9-9ef0-107d6557a88f/ingest/8ea18fe0-2147-4c85-9494-c0a69a32caa8/4-a39f4caf-e50a-4f12-bf8f-be41d405e5d0.png",
+      "https://xdcausdtstbckgqpafxh.supabase.co/storage/v1/object/public/study-material-images/0a5da40a-2d32-4bb9-9ef0-107d6557a88f/ingest/8ea18fe0-2147-4c85-9494-c0a69a32caa8/5-a3364cde-193c-46ff-95a5-0c02104e4c94.png",
+      "https://xdcausdtstbckgqpafxh.supabase.co/storage/v1/object/public/study-material-images/0a5da40a-2d32-4bb9-9ef0-107d6557a88f/ingest/8ea18fe0-2147-4c85-9494-c0a69a32caa8/6-5f81487f-2047-4698-bfd8-69958aea611f.png",
+      "https://xdcausdtstbckgqpafxh.supabase.co/storage/v1/object/public/study-material-images/0a5da40a-2d32-4bb9-9ef0-107d6557a88f/ingest/8ea18fe0-2147-4c85-9494-c0a69a32caa8/7-9ed9cfda-940f-4019-8f98-25daac1a979c.png",
+      "https://xdcausdtstbckgqpafxh.supabase.co/storage/v1/object/public/study-material-images/0a5da40a-2d32-4bb9-9ef0-107d6557a88f/ingest/8ea18fe0-2147-4c85-9494-c0a69a32caa8/8-186fd402-cba7-4b93-aa3a-b887a1f9a968.png"
+    ];
+    const log = document.getElementById("log");
+    const root = document.getElementById("figures");
+    let loaded = 0;
+    let failed = 0;
+    urls.forEach((url, i) => {
+      const fig = document.createElement("figure");
+      const img = document.createElement("img");
+      const cap = document.createElement("figcaption");
+      cap.textContent = `Figure ${i + 1}`;
+      img.onload = () => { loaded++; update(); };
+      img.onerror = () => { failed++; cap.textContent += " — FAILED"; update(); };
+      img.src = url;
+      fig.append(img, cap);
+      root.append(fig);
+    });
+    function update() {
+      log.innerHTML = `Loaded <span class="ok">${loaded}</span> / ${urls.length}, failed <span class="err">${failed}</span>`;
+    }
+    update();
+  </script>
+</body>
+</html>

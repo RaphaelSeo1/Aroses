@@ -4,12 +4,8 @@ import {
 } from "@/lib/embeddings/text-similarity";
 import type { CourseModule } from "@/types/course";
 import type { LessonVisualAsset, LessonVisualAssetType } from "@/types/course";
-import {
-  retrieveAssetsForQuery,
-  type CourseAsset,
-  type CourseAssetManifest,
-} from "@/lib/study-ingest/course-assets";
-import { splitLeadParagraph } from "@/lib/lesson-content-layout";
+import type { CourseAsset, CourseAssetManifest } from "@/lib/study-ingest/course-assets";
+import { shouldKeepFigureCaption } from "@/lib/pdf-ingest/filter-crop-quality";
 
 export type AttachVisualAssetsResult = {
   modules: CourseModule[];
@@ -25,6 +21,30 @@ export type AttachVisualAssetsResult = {
     inserted: number;
   }[];
 };
+
+const MIN_SEMANTIC_SCORE = 0.24;
+const SOURCE_PAGE_BOOST = 0.55;
+
+function wordOverlapScore(text: string, caption: string): number {
+  const words =
+    caption.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+  if (words.length === 0) return 0;
+  const hay = text.toLowerCase();
+  const hits = words.filter((w) => hay.includes(w)).length;
+  return hits / words.length;
+}
+
+function isEmbeddableFigureAsset(asset: CourseAsset): boolean {
+  if (!asset.url?.trim()) return false;
+  if (asset.type === "table") return false;
+  if (!shouldKeepFigureCaption(asset.caption)) return false;
+  const c = asset.caption.toLowerCase();
+  if (c.includes("snapshot")) {
+    const raw = process.env.PDF_INGEST_PAGE_SNAPSHOTS?.trim();
+    if (raw !== "1" && raw?.toLowerCase() !== "true") return false;
+  }
+  return true;
+}
 
 function mapAssetType(asset: CourseAsset): LessonVisualAssetType {
   if (asset.type === "table") return "table";
@@ -46,8 +66,8 @@ function paragraphCount(content: string): number {
 
 function whyRelevant(lessonTitle: string, asset: CourseAsset): string {
   const page =
-    asset.sourcePage > 0 ? ` from page ${asset.sourcePage} of your upload` : "";
-  return `This ${asset.type === "table" ? "table" : "visual"}${page} supports "${lessonTitle.trim()}".`;
+    asset.sourcePage > 0 ? ` (page ${asset.sourcePage} of your upload)` : "";
+  return `${asset.caption.trim()}${page} — supports "${lessonTitle.trim()}".`;
 }
 
 function visualAssetFromCourseAsset(
@@ -69,23 +89,6 @@ function visualAssetFromCourseAsset(
   };
 }
 
-function contentHasAssetUrl(content: string, url: string): boolean {
-  return content.includes(url);
-}
-
-function embedVisualInContent(
-  content: string,
-  visual: LessonVisualAsset
-): string {
-  if (contentHasAssetUrl(content, visual.imageUrl)) return content;
-  const block = `\n\n![${visual.title}](${visual.imageUrl})\n\n`;
-  const trimmed = content.trim();
-  if (!trimmed) return block.trim();
-  const { lead, body } = splitLeadParagraph(trimmed);
-  if (lead && body) return `${lead}${block}${body}`.trim();
-  return `${trimmed}${block}`.trim();
-}
-
 function parsePagesFromLocator(locator: string): number[] {
   const pages: number[] = [];
   const range = locator.match(/pages?\s*(\d+)\s*[–-]\s*(\d+)/i);
@@ -105,9 +108,142 @@ function parsePagesFromLocator(locator: string): number[] {
   return pages;
 }
 
+function assetScore(
+  queryEmb: number[],
+  query: string,
+  asset: CourseAsset
+): number {
+  if (asset.embedding.length > 0) {
+    return cosineSimilarity(queryEmb, asset.embedding);
+  }
+  return wordOverlapScore(query, asset.caption);
+}
+
+type LessonSlot = {
+  moduleId: number;
+  lessonIndex: number;
+  lessonTitle: string;
+  query: string;
+  queryEmb: number[];
+  sourcePages: Set<number>;
+};
+
+function lessonKey(moduleId: number, lessonIndex: number): string {
+  return `${moduleId}:${lessonIndex}`;
+}
+
 /**
- * Attach 1–3 retrieved PDF visual assets to each lesson (NotebookLM-style).
- * Also embeds image markdown in content for legacy renderers.
+ * Phase 1: assign figures from each lesson's cited source pages.
+ * Phase 2: fill remaining slots via semantic match (no duplicate assets).
+ */
+async function assignFiguresAcrossCourse(input: {
+  modules: CourseModule[];
+  pool: CourseAsset[];
+  maxPerLesson: number;
+}): Promise<Map<string, CourseAsset[]>> {
+  const { modules, pool, maxPerLesson } = input;
+  const out = new Map<string, CourseAsset[]>();
+  if (pool.length === 0) return out;
+
+  const slots: LessonSlot[] = [];
+  for (const mod of modules) {
+    for (let li = 0; li < mod.lessons.length; li++) {
+      const lesson = mod.lessons[li]!;
+      const content = lesson.content ?? "";
+      const query = `${mod.title}\n${lesson.title}\n${content.slice(0, 2000)}`;
+      const sourcePages = new Set<number>();
+      for (const src of lesson.sources ?? []) {
+        for (const p of parsePagesFromLocator(src.locator)) sourcePages.add(p);
+      }
+      const queryEmb = await embedText(query.slice(0, 2500));
+      slots.push({
+        moduleId: mod.id,
+        lessonIndex: li,
+        lessonTitle: lesson.title,
+        query,
+        queryEmb,
+        sourcePages,
+      });
+    }
+  }
+
+  const usedAssets = new Set<string>();
+  const usedUrls = new Set<string>();
+
+  const addToLesson = (
+    moduleId: number,
+    lessonIndex: number,
+    asset: CourseAsset
+  ): boolean => {
+    if (usedAssets.has(asset.assetId)) return false;
+    if (asset.url && usedUrls.has(asset.url)) return false;
+    const key = lessonKey(moduleId, lessonIndex);
+    const list = out.get(key) ?? [];
+    if (list.length >= maxPerLesson) return false;
+    list.push(asset);
+    out.set(key, list);
+    usedAssets.add(asset.assetId);
+    if (asset.url) usedUrls.add(asset.url);
+    return true;
+  };
+
+  // Phase 1 — source-page figures land on the lesson that cites that page.
+  for (const slot of slots) {
+    if (slot.sourcePages.size === 0) continue;
+    const onPage = pool
+      .filter(
+        (a) =>
+          slot.sourcePages.has(a.sourcePage) && !usedAssets.has(a.assetId)
+      )
+      .map((asset) => ({
+        asset,
+        score: assetScore(slot.queryEmb, slot.query, asset) + SOURCE_PAGE_BOOST,
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    for (const row of onPage) {
+      if (addToLesson(slot.moduleId, slot.lessonIndex, row.asset)) break;
+    }
+  }
+
+  // Phase 2 — semantic match for lessons still missing a diagram.
+  type Edge = {
+    moduleId: number;
+    lessonIndex: number;
+    asset: CourseAsset;
+    score: number;
+  };
+  const edges: Edge[] = [];
+  for (const slot of slots) {
+    const key = lessonKey(slot.moduleId, slot.lessonIndex);
+    if ((out.get(key)?.length ?? 0) >= maxPerLesson) continue;
+
+    for (const asset of pool) {
+      if (usedAssets.has(asset.assetId)) continue;
+      const score = assetScore(slot.queryEmb, slot.query, asset);
+      if (score >= MIN_SEMANTIC_SCORE) {
+        edges.push({
+          moduleId: slot.moduleId,
+          lessonIndex: slot.lessonIndex,
+          asset,
+          score,
+        });
+      }
+    }
+  }
+
+  edges.sort((a, b) => b.score - a.score);
+  for (const edge of edges) {
+    const key = lessonKey(edge.moduleId, edge.lessonIndex);
+    if ((out.get(key)?.length ?? 0) >= maxPerLesson) continue;
+    addToLesson(edge.moduleId, edge.lessonIndex, edge.asset);
+  }
+
+  return out;
+}
+
+/**
+ * Attach clean PDF figures to the lessons that cite or semantically match them.
  */
 export async function attachVisualAssetsToModules(input: {
   modules: CourseModule[];
@@ -117,10 +253,9 @@ export async function attachVisualAssetsToModules(input: {
   minPerLesson?: number;
   maxPerLesson?: number;
 }): Promise<AttachVisualAssetsResult> {
-  const minPer = input.minPerLesson ?? 1;
-  const maxPer = input.maxPerLesson ?? 3;
+  const maxPer = input.maxPerLesson ?? 2;
   const manifest = input.manifest;
-  const assetsWithUrl = (manifest?.assets ?? []).filter((a) => a.url?.trim());
+  const assetsWithUrl = (manifest?.assets ?? []).filter(isEmbeddableFigureAsset);
 
   const perLesson: AttachVisualAssetsResult["perLesson"] = [];
   let totalVisualsInserted = 0;
@@ -147,56 +282,27 @@ export async function attachVisualAssetsToModules(input: {
     lessons: m.lessons.map((l) => ({ ...l })),
   }));
 
-  let roundRobin = 0;
+  const assignments = await assignFiguresAcrossCourse({
+    modules: next,
+    pool: assetsWithUrl,
+    maxPerLesson: maxPer,
+  });
 
   for (const mod of next) {
-    for (const lesson of mod.lessons) {
+    for (let li = 0; li < mod.lessons.length; li++) {
+      const lesson = mod.lessons[li]!;
       lessonsProcessed++;
-      const content = lesson.content ?? "";
-      const query = `${mod.title}\n${lesson.title}\n${content.slice(0, 2000)}`;
-
-      let retrieved = await retrieveAssetsForQuery(manifest!, query, maxPer);
-      retrieved = retrieved.filter((a) => a.url?.trim());
-
-      // Page hints from source attribution
-      const sourcePages = new Set<number>();
-      for (const src of lesson.sources ?? []) {
-        for (const p of parsePagesFromLocator(src.locator)) sourcePages.add(p);
-      }
-      if (sourcePages.size > 0 && retrieved.length < minPer) {
-        for (const page of sourcePages) {
-          const onPage = assetsWithUrl.filter((a) => a.sourcePage === page);
-          for (const a of onPage) {
-            if (!retrieved.some((r) => r.assetId === a.assetId)) {
-              retrieved.push(a);
-            }
-          }
-        }
-      }
-
-      // MVP guarantee: at least one visual per lesson when assets exist
-      if (retrieved.length < minPer) {
-        const fallback = assetsWithUrl[roundRobin % assetsWithUrl.length]!;
-        roundRobin++;
-        if (!retrieved.some((r) => r.assetId === fallback.assetId)) {
-          retrieved.push(fallback);
-        }
-      }
-
-      retrieved = retrieved.slice(0, maxPer);
+      const key = lessonKey(mod.id, li);
+      const retrieved = assignments.get(key) ?? [];
 
       const visuals: LessonVisualAsset[] = [];
-      let contentOut = content;
       for (const asset of retrieved) {
-        const v = visualAssetFromCourseAsset(asset, lesson.title, contentOut);
+        const v = visualAssetFromCourseAsset(asset, lesson.title, lesson.content ?? "");
         if (!v) continue;
-        if (visuals.some((x) => x.assetId === v.assetId)) continue;
         visuals.push(v);
-        contentOut = embedVisualInContent(contentOut, v);
       }
 
       lesson.visual_assets = visuals.length > 0 ? visuals : undefined;
-      lesson.content = contentOut;
       totalVisualsInserted += visuals.length;
 
       perLesson.push({
@@ -205,29 +311,19 @@ export async function attachVisualAssetsToModules(input: {
         retrieved: retrieved.length,
         inserted: visuals.length,
       });
-
-      console.info("[lesson-visual-assets] lesson attach", {
-        jobId: input.jobId,
-        moduleId: mod.id,
-        lesson: lesson.title.slice(0, 60),
-        retrieved: retrieved.length,
-        inserted: visuals.length,
-        assetIds: visuals.map((v) => v.assetId),
-      });
     }
   }
 
   console.info("[lesson-visual-assets] attach complete", {
     jobId: input.jobId,
-    pagesRendered: input.pagesRendered ?? 0,
     assetsAvailable: assetsWithUrl.length,
-    captionsAvailable: manifest?.assets.filter((a) => a.caption?.trim()).length ?? 0,
     lessonsProcessed,
     totalVisualsInserted,
-    avgPerLesson:
-      lessonsProcessed > 0
-        ? (totalVisualsInserted / lessonsProcessed).toFixed(2)
-        : 0,
+    uniqueAssetsUsed: new Set(
+      next.flatMap((m) =>
+        m.lessons.flatMap((l) => (l.visual_assets ?? []).map((v) => v.assetId))
+      )
+    ).size,
   });
 
   return {

@@ -72,9 +72,10 @@ function groupPdfPagesForChunks(
   const nonEmpty = pages.filter((p) => p.text.trim().length > 0);
   if (nonEmpty.length === 0) return [];
 
+  // 2 pages/chunk keeps section boundaries intact; section-split handles the rest.
   const pagesPerChunk =
     nonEmpty.length > 30
-      ? Math.min(4, Math.max(2, Math.ceil(nonEmpty.length / 50)))
+      ? Math.min(3, Math.max(2, Math.ceil(nonEmpty.length / 40)))
       : 1;
 
   if (pagesPerChunk <= 1) {

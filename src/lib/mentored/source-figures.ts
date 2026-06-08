@@ -1,5 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FiguresIndex } from "@/lib/figure-attribution";
+import {
+  parseCourseAssetManifest,
+  retrieveAssetsForQuery,
+  type CourseAssetManifest,
+  type CourseAssetSummary,
+} from "@/lib/study-ingest/course-assets";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 
 /**
@@ -108,4 +114,48 @@ export async function loadSourceFiguresForModule(
   );
   if (!index) return {};
   return lessonFiguresForModule(index, moduleId);
+}
+
+export async function loadAssetManifest(
+  supabase: SupabaseClient,
+  materialId: string
+): Promise<CourseAssetManifest | null> {
+  const { data, error } = await supabase
+    .from("study_materials")
+    .select("asset_manifest")
+    .eq("id", materialId)
+    .maybeSingle();
+
+  if (error) return null;
+  return parseCourseAssetManifest(
+    (data as { asset_manifest?: unknown } | null)?.asset_manifest
+  );
+}
+
+/** Top-k PDF assets for a mentored lesson chunk by caption/topic similarity. */
+export async function loadAssetsForLessonChunk(input: {
+  supabase: SupabaseClient;
+  materialId: string;
+  lessonTitle: string;
+  chunkConcept: string;
+  limit?: number;
+}): Promise<CourseAssetSummary[]> {
+  const manifest = await loadAssetManifest(input.supabase, input.materialId);
+  if (!manifest) return [];
+  const query = `${input.lessonTitle}\n${input.chunkConcept}`;
+  const assets = await retrieveAssetsForQuery(
+    manifest,
+    query,
+    input.limit ?? 6
+  );
+  return assets.map((a) => ({
+    assetId: a.assetId,
+    type: a.type,
+    url: a.url,
+    caption: a.caption,
+    sourcePage: a.sourcePage,
+    markdown: a.markdown,
+    bbox: a.bbox,
+    teachingPurpose: a.teachingPurpose,
+  }));
 }

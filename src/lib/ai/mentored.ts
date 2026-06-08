@@ -1,5 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import {
+  formatMentoredTeachingLanguageBlock,
+  type CourseOutputLanguage,
+} from "@/lib/course-output-language";
+import {
   normalizeQuizItemsLoose,
   stripJsonFence,
 } from "@/lib/ai/course-payload";
@@ -16,6 +20,8 @@ import type {
   MentoredLessonChunk,
   MentoredLessonPlan,
   MentoredPersonalization,
+  WhiteboardAction,
+  WhiteboardPoint,
 } from "@/types/mentored";
 
 const MODEL = "claude-sonnet-4-6";
@@ -108,12 +114,15 @@ export type LessonPlanInput = {
   knowledgeLevel: KnowledgeLevel;
   /** Self-study course goal — used when onboarding goals are empty. */
   studyContext?: string;
+  /** Course output / teaching language from upload settings. */
+  outputLanguage?: CourseOutputLanguage;
 };
 
 // Bump when the prompt or parser changes in a way that invalidates cached
 // plans. v2 adds `keyTerms` so the immersive runner can glow phrases in the
 // source-lesson panel.
-const LESSON_PLAN_VERSION = 3;
+export const LESSON_PLAN_GENERATOR_VERSION = 5;
+const LESSON_PLAN_VERSION = LESSON_PLAN_GENERATOR_VERSION;
 
 function levelGuidance(level: KnowledgeLevel): string {
   switch (level) {
@@ -126,99 +135,100 @@ function levelGuidance(level: KnowledgeLevel): string {
   }
 }
 
-function shortIdFor(seed: string, idx: number): string {
-  const cleaned = seed
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 28);
-  return `${cleaned || "chunk"}-${idx}`;
+const LESSON_PLAN_TOOL = {
+  name: "submit_lesson_plan",
+  description:
+    "Submit the module teaching plan as structured chunks for Mentored Learning.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      chunks: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            concept: { type: "string" },
+            explanation: { type: "string" },
+            analogy: { type: "string" },
+            checkQuestion: { type: "string" },
+            referenceAnswer: { type: "string" },
+            keyPoints: { type: "array", items: { type: "string" } },
+            sourceLessonIndex: { type: "integer" },
+            keyTerms: { type: "array", items: { type: "string" } },
+            whiteboardActions: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  type: {
+                    type: "string",
+                    enum: ["draw_arrow", "add_label"],
+                  },
+                  from: {
+                    type: "object",
+                    properties: { x: { type: "number" }, y: { type: "number" } },
+                  },
+                  to: {
+                    type: "object",
+                    properties: { x: { type: "number" }, y: { type: "number" } },
+                  },
+                  text: { type: "string" },
+                  position: {
+                    type: "object",
+                    properties: { x: { type: "number" }, y: { type: "number" } },
+                  },
+                },
+              },
+            },
+          },
+          required: [
+            "concept",
+            "explanation",
+            "checkQuestion",
+            "referenceAnswer",
+            "keyPoints",
+            "sourceLessonIndex",
+          ],
+        },
+      },
+    },
+    required: ["chunks"],
+  },
+};
+
+function parseLessonPlanJson(raw: string): unknown {
+  const cleaned = stripJsonFence(raw);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf("[");
+    const end = cleaned.lastIndexOf("]");
+    if (start >= 0 && end > start) {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    }
+    throw new Error("invalid json");
+  }
 }
 
-export async function generateLessonPlan(
-  input: LessonPlanInput
-): Promise<MentoredLessonPlan> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
-
-  const lessons = input.module.lessons
-    .map(
-      (l, i) =>
-        `=== Lesson ${i + 1}: ${l.title} ===\n${(l.content ?? "").slice(0, 4000)}`
-    )
-    .join("\n\n")
-    .slice(0, MAX_CONTEXT_CHARS);
-
-  const goalsFromOnboarding =
-    input.goals.length > 0
-      ? input.goals.map((g) => `Q: ${g.question}\nA: ${g.answer}`).join("\n\n")
-      : "";
-
-  const goalsText =
-    goalsFromOnboarding ||
-    (input.studyContext?.trim()
-      ? `SELF-STUDY GOAL:\n${input.studyContext.trim().slice(0, 2_000)}`
-      : "(none provided)");
-
-  const prompt = `You are a one-on-one tutor planning how to TEACH a specific module to a student.
-
-MODULE: ${input.module.title}
-
-STUDENT BACKGROUND:
-${goalsText}
-
-CALIBRATION:
-${levelGuidance(input.knowledgeLevel)}
-${
-  input.studyContext?.trim()
-    ? `
-SELF-STUDY CALIBRATION: The student stated a personal goal above. Plan MORE chunks on their focus areas and FEWER on topics they say they already know. Match check questions to what they are trying to master.`
-    : ""
-}
-
-SOURCE LESSON CONTENT (use as ground truth — do not invent facts):
-${lessons}
-
-Break this module into SMALL teaching chunks. Each chunk = ONE atomic concept the student should walk away understanding, plus ONE check question to verify it landed.
-
-Output a JSON array only (no markdown fences). Each object:
-{
-  "concept": "1-line concept name (becomes the on-screen heading)",
-  "explanation": "3-6 sentences a tutor would say out loud to teach this single idea. Plain prose. No markdown, no lists.",
-  "analogy": "optional — one short analogy the tutor can fall back on if the student misses the question",
-  "checkQuestion": "ONE question that tests this exact concept (not the next one, not the previous one)",
-  "referenceAnswer": "what a strong answer should say (used internally to grade; 1-3 sentences)",
-  "keyPoints": ["3-5 short phrases the student's answer should hit — each should be a mini-explanation (e.g. 'Income statement — shows profit/loss over a period'), NOT bare terms alone"],
-  "sourceLessonIndex": 0-based index of the lesson this chunk corresponds to (integer),
-  "keyTerms": ["2-5 short phrases (1-4 words each) that appear VERBATIM in the SOURCE LESSON CONTENT above. These are the exact words the student should see glow in their source material while this chunk is being taught. Match the surface form exactly, including capitalization."]
-}
-
-Strict rules:
-1) GRANULARITY: 5-10 chunks per module typical. Too few = too dense; too many = busywork.
-2) ORDER: Chunks must teach in pedagogical order — prerequisites before what depends on them.
-3) NO REPETITION: Don't re-ask the same fact across chunks.
-4) CHECK = MEANINGFUL: Each checkQuestion must be answerable with 1-3 sentences of explanation, not a trivia recall.
-5) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.
-6) KEY TERMS APPEAR IN SOURCE: Every keyTerm MUST be a substring of the lesson the chunk maps to. Do not invent terms. If a chunk is hard to anchor (e.g. pure overview), it's fine to return fewer keyTerms or an empty array.`;
-
-  const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 0 });
-  const msg = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 6000,
-    temperature: 0.45,
-    messages: [{ role: "user", content: prompt }],
-  });
-
+function extractLessonPlanArray(msg: Anthropic.Message): unknown {
+  const toolUse = msg.content.find(
+    (b) => b.type === "tool_use" && b.name === LESSON_PLAN_TOOL.name
+  );
+  if (toolUse?.type === "tool_use") {
+    const input = toolUse.input as { chunks?: unknown };
+    if (Array.isArray(input.chunks)) return input.chunks;
+  }
   const block = msg.content.find((b) => b.type === "text");
   if (!block || block.type !== "text") {
     throw new Error("Unexpected response from Claude");
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonFence(block.text));
-  } catch {
-    throw new Error("Claude did not return valid JSON");
-  }
+  return parseLessonPlanJson(block.text);
+}
+
+function buildLessonChunksFromArray(
+  input: LessonPlanInput,
+  parsed: unknown
+): MentoredLessonChunk[] {
   if (!Array.isArray(parsed)) throw new Error("Expected JSON array");
 
   const chunks: MentoredLessonChunk[] = [];
@@ -249,12 +259,12 @@ Strict rules:
     const sourceIndex =
       typeof raw.sourceLessonIndex === "number" &&
       Number.isFinite(raw.sourceLessonIndex)
-        ? Math.max(0, Math.min(input.module.lessons.length - 1, raw.sourceLessonIndex))
+        ? Math.max(
+            0,
+            Math.min(input.module.lessons.length - 1, raw.sourceLessonIndex)
+          )
         : undefined;
 
-    // Filter keyTerms down to phrases that actually appear in the source
-    // lesson content (case-insensitive). If the AI hallucinated terms that
-    // don't exist verbatim, drop them — they'd just fail to highlight.
     const sourceText =
       typeof sourceIndex === "number"
         ? (input.module.lessons[sourceIndex]?.content ?? "")
@@ -269,6 +279,8 @@ Strict rules:
       .filter((t) => sourceLower.includes(t.toLowerCase()))
       .slice(0, 5);
 
+    const whiteboardActions = parseWhiteboardActions(raw.whiteboardActions);
+
     chunks.push({
       id: shortIdFor(concept, i),
       concept,
@@ -279,7 +291,199 @@ Strict rules:
       analogy,
       sourceLessonIndex: sourceIndex,
       keyTerms: keyTerms.length > 0 ? keyTerms : undefined,
+      whiteboardActions:
+        whiteboardActions.length > 0 ? whiteboardActions : undefined,
     });
+  }
+
+  return chunks;
+}
+
+function shortIdFor(seed: string, idx: number): string {
+  const cleaned = seed
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 28);
+  return `${cleaned || "chunk"}-${idx}`;
+}
+
+function parseWhiteboardPoint(v: unknown): WhiteboardPoint | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.x !== "number" || typeof o.y !== "number") return null;
+  return {
+    x: Math.max(0, Math.min(100, o.x)),
+    y: Math.max(0, Math.min(100, o.y)),
+  };
+}
+
+export function parseWhiteboardActions(raw: unknown): WhiteboardAction[] {
+  if (!raw) return [];
+  const items = Array.isArray(raw) ? raw : [raw];
+  const out: WhiteboardAction[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const type = o.type;
+    if (type === "clear") {
+      out.push({ type: "clear" });
+      continue;
+    }
+    if (type === "draw_arrow") {
+      const from = parseWhiteboardPoint(o.from);
+      const to = parseWhiteboardPoint(o.to);
+      if (from && to) out.push({ type: "draw_arrow", from, to });
+      continue;
+    }
+    if (type === "add_label" && typeof o.text === "string") {
+      const text = o.text.trim().slice(0, 80);
+      const position = parseWhiteboardPoint(o.position);
+      if (text && position) out.push({ type: "add_label", text, position });
+    }
+  }
+  return out.slice(0, 10);
+}
+
+export async function generateLessonPlan(
+  input: LessonPlanInput
+): Promise<MentoredLessonPlan> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+
+  const lessons = input.module.lessons
+    .map(
+      (l, i) =>
+        `=== Lesson ${i + 1}: ${l.title} ===\n${(l.content ?? "").slice(0, 4000)}`
+    )
+    .join("\n\n")
+    .slice(0, MAX_CONTEXT_CHARS);
+
+  const goalsFromOnboarding =
+    input.goals.length > 0
+      ? input.goals.map((g) => `Q: ${g.question}\nA: ${g.answer}`).join("\n\n")
+      : "";
+
+  const goalsText =
+    goalsFromOnboarding ||
+    (input.studyContext?.trim()
+      ? `SELF-STUDY GOAL:\n${input.studyContext.trim().slice(0, 2_000)}`
+      : "(none provided)");
+
+  const prompt = `You are a one-on-one tutor planning how to TEACH a specific module to a student.
+
+${formatMentoredTeachingLanguageBlock(input.outputLanguage ?? "auto")}
+
+MODULE: ${input.module.title}
+
+STUDENT BACKGROUND:
+${goalsText}
+
+CALIBRATION:
+${levelGuidance(input.knowledgeLevel)}
+${
+  input.studyContext?.trim()
+    ? `
+SELF-STUDY CALIBRATION: The student stated a personal goal above. Plan MORE chunks on their focus areas and FEWER on topics they say they already know. Match check questions to what they are trying to master.`
+    : ""
+}
+
+SOURCE LESSON CONTENT (use as ground truth — do not invent facts):
+${lessons}
+
+Break this module into SMALL teaching chunks. Each chunk = ONE atomic concept the student should walk away understanding, plus ONE check question to verify it landed.
+
+Call the submit_lesson_plan tool with a "chunks" array. Each chunk object:
+- concept: 1-line concept name (on-screen heading)
+- explanation: 3-6 sentences a tutor would say out loud. Plain prose, no markdown.
+- analogy (optional): one short fallback analogy if the student misses the question
+- checkQuestion: ONE question testing this exact concept
+- referenceAnswer: what a strong answer should say (1-3 sentences, internal grading only)
+- keyPoints: 3-5 short phrases the student's answer should hit
+- sourceLessonIndex: 0-based lesson index this chunk maps to
+- keyTerms (optional): 2-5 phrases that appear VERBATIM in the source lesson
+- whiteboardActions (optional): planned tutor actions — draw_arrow, add_label (coords 0–100 on the whiteboard)
+
+Strict rules:
+1) GRANULARITY: 5-10 chunks per module typical. Too few = too dense; too many = busywork.
+2) ORDER: Chunks must teach in pedagogical order — prerequisites before what depends on them.
+3) NO REPETITION: Don't re-ask the same fact across chunks.
+4) CHECK = MEANINGFUL: Each checkQuestion must be answerable with 1-3 sentences of explanation, not a trivia recall.
+5) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.
+6) DEPTH: Explanations must teach mechanisms and reasoning (why/how), not just name a concept. Include at least one concrete detail from the source (pathway, drug, number, comparison). Avoid generic openers — start with substance.
+7) KEY TERMS APPEAR IN SOURCE: Every keyTerm MUST be a substring of the lesson the chunk maps to. Do not invent terms. If a chunk is hard to anchor (e.g. pure overview), it's fine to return fewer keyTerms or an empty array.`;
+
+  const anthropic = new Anthropic({ apiKey, timeout: 180_000, maxRetries: 0 });
+
+  async function callPlan(
+    userPrompt: string,
+    maxTokens: number
+  ): Promise<Anthropic.Message> {
+    return anthropic.messages.create({
+      model: MODEL,
+      max_tokens: maxTokens,
+      temperature: 0.45,
+      tools: [LESSON_PLAN_TOOL],
+      tool_choice: { type: "tool", name: LESSON_PLAN_TOOL.name },
+      messages: [{ role: "user", content: userPrompt }],
+    });
+  }
+
+  function logPlanFailure(phase: string, msg: Anthropic.Message, err: unknown) {
+    const toolUse = msg.content.find((b) => b.type === "tool_use");
+    console.error("[mentored generateLessonPlan]", phase, {
+      stopReason: msg.stop_reason,
+      contentTypes: msg.content.map((b) => b.type),
+      toolName: toolUse?.type === "tool_use" ? toolUse.name : null,
+      err,
+    });
+  }
+
+  let chunks: MentoredLessonChunk[];
+  const msg = await callPlan(prompt, 16_000);
+  try {
+    chunks = buildLessonChunksFromArray(input, extractLessonPlanArray(msg));
+  } catch (e) {
+    logPlanFailure("initial", msg, e);
+    const textBlock = msg.content.find((b) => b.type === "text");
+    const broken =
+      textBlock?.type === "text"
+        ? textBlock.text
+        : JSON.stringify(
+            msg.content.find((b) => b.type === "tool_use") ?? msg.content
+          );
+    const repairMsg = await callPlan(
+      `${prompt}
+
+---
+Your previous lesson-plan response could not be parsed. Call submit_lesson_plan again with 5–8 valid chunks. Every chunk needs non-empty concept, explanation, checkQuestion, referenceAnswer, and keyPoints (string array).
+
+Broken output:
+${broken.slice(0, 40_000)}`,
+      16_000
+    );
+    try {
+      chunks = buildLessonChunksFromArray(
+        input,
+        extractLessonPlanArray(repairMsg)
+      );
+    } catch (e2) {
+      logPlanFailure("repair", repairMsg, e2);
+      const compactPrompt = `${prompt}
+
+---
+IMPORTANT: Produce exactly **5 or 6** chunks (not more) so the plan fits. Shorter explanations (2-4 sentences each). Call submit_lesson_plan now.`;
+      const compactMsg = await callPlan(compactPrompt, 12_000);
+      try {
+        chunks = buildLessonChunksFromArray(
+          input,
+          extractLessonPlanArray(compactMsg)
+        );
+      } catch (e3) {
+        logPlanFailure("compact", compactMsg, e3);
+        throw new Error("Claude did not return valid JSON");
+      }
+    }
   }
 
   if (chunks.length === 0) {
@@ -328,6 +532,8 @@ export type TurnInput = {
    * extracted — the prompt falls back to the bare `knowledgeLevel`.
    */
   personalization?: MentoredPersonalization;
+  /** Course output / teaching language from upload settings. */
+  outputLanguage?: CourseOutputLanguage;
 };
 
 export type TurnOutput = {
@@ -335,12 +541,8 @@ export type TurnOutput = {
   reply: string;
   advance: boolean;
   addToFocusedReview: boolean;
-  /**
-   * Set when Rose decides a visual would help (or the student asked
-   * for one). The route forwards this to the client which fetches
-   * the matching Wikimedia image. `null` means no image needed.
-   */
-  imageRequest: TurnImageRequest | null;
+  /** Live whiteboard overlay actions from the tutor turn. */
+  whiteboardActions: WhiteboardAction[];
 };
 
 const INTENT_VALUES: MentoredIntent[] = [
@@ -453,7 +655,13 @@ CHECK QUESTION STATUS: The student has already attempted an answer on this chunk
       : `
 CHECK QUESTION STATUS: The student has NOT yet answered the check question for this chunk. Their latest message probably does NOT count as an answer unless they explained the idea in their own words.`;
 
+  const languageBlock = formatMentoredTeachingLanguageBlock(
+    input.outputLanguage ?? "auto"
+  );
+
   return `You are an AI tutor mid-lesson. The student is on this CHUNK:
+
+${languageBlock}
 
 CONCEPT: ${input.chunk.concept}
 EXPLANATION YOU JUST GAVE: ${input.chunk.explanation}
@@ -477,15 +685,15 @@ Output format (STRICT):
    - Use the PACING SIGNALS to avoid piling questions back-to-back; don't ask a brand-new check right after one you already asked.
    - Do NOT say "you nailed it", "exactly right", or "you've got it" unless the student actually demonstrated understanding OR you are advancing.
 2. Then on a new line write exactly: ${TURN_META_SENTINEL}
-3. Then on a new line emit a JSON object with classification + optional image request:
-{"intent":"answer_correct|answer_partial|answer_wrong|pace_slower|pace_faster|skip_concept|move_on|tangent_question|request_repeat|request_pause|request_clarify|check_in|other","advance":true|false,"addToFocusedReview":true|false,"imageRequest":{"query":"<short noun phrase>","type":"diagram"|"photo"|"illustration"}|null}
+3. Then on a new line emit a JSON object with classification + optional whiteboard overlays:
+{"intent":"answer_correct|...|other","advance":true|false,"addToFocusedReview":true|false,"whiteboardActions":[...]|[]}
 
-imageRequest: set this when a VISUAL would genuinely help the student understand THIS concept — e.g. anatomy, biology, chemistry structures, physical processes, diagrams, maps, labeled apparatus, geometry, or anything inherently spatial/visual. Use a short, concrete noun phrase as the query (e.g. "blood brain barrier diagram", "neuron structure"). The app shows the student's OWN uploaded figure for this lesson when one exists and falls back to a web image otherwise, so a relevant request is low-risk. Set imageRequest to null for abstract, prose, math-symbolic, grammar, or finance/accounting concepts where a generic picture would not help. Do NOT request an image every turn — only when it adds real understanding, and at most once per concept.
+whiteboardActions: optional array of overlay actions while teaching (draw_arrow with from/to {x,y} 0–100, add_label with text + position). Empty array if none. Do not request images or figures.
 
 Example:
 Nice work — you nailed the key idea there. Let's keep going.
 ${TURN_META_SENTINEL}
-{"intent":"answer_correct","advance":true,"addToFocusedReview":false,"imageRequest":null}
+{"intent":"answer_correct","advance":true,"addToFocusedReview":false,"whiteboardActions":[]}
 
 CRITICAL — when NOT to advance:
 - If your spoken reply ENDS with a question that asks the student
@@ -517,11 +725,6 @@ Tone: real human tutor. Conversational. Never lecture-y. Teach from the source m
 Never deliver a monologue and stop — always leave the student with a clear question to respond to unless you are advancing.`;
 }
 
-export type TurnImageRequest = {
-  query: string;
-  type: "diagram" | "photo" | "illustration";
-};
-
 function parseTurnMetaJson(
   raw: string,
   intentFallback: MentoredIntent = "other"
@@ -529,7 +732,7 @@ function parseTurnMetaJson(
   intent: MentoredIntent;
   advance: boolean;
   addToFocusedReview: boolean;
-  imageRequest: TurnImageRequest | null;
+  whiteboardActions: WhiteboardAction[];
 } {
   // Tolerate stray prose around the JSON by extracting the first balanced
   // brace block. If parsing fails entirely, fall back to sensible defaults.
@@ -542,19 +745,6 @@ function parseTurnMetaJson(
     const intent: MentoredIntent = isIntent(parsed.intent)
       ? parsed.intent
       : intentFallback;
-    // Image request: trust only well-shaped objects.
-    let imageRequest: TurnImageRequest | null = null;
-    if (parsed.imageRequest && typeof parsed.imageRequest === "object") {
-      const ir = parsed.imageRequest as Record<string, unknown>;
-      const q = typeof ir.query === "string" ? ir.query.trim() : "";
-      const t =
-        ir.type === "diagram" || ir.type === "photo" || ir.type === "illustration"
-          ? ir.type
-          : "illustration";
-      if (q.length >= 3 && q.length <= 80) {
-        imageRequest = { query: q, type: t };
-      }
-    }
     return {
       intent,
       advance:
@@ -563,14 +753,14 @@ function parseTurnMetaJson(
         intent === "skip_concept" ||
         intent === "move_on",
       addToFocusedReview: parsed.addToFocusedReview === true,
-      imageRequest,
+      whiteboardActions: parseWhiteboardActions(parsed.whiteboardActions),
     };
   } catch {
     return {
       intent: intentFallback,
       advance: false,
       addToFocusedReview: false,
-      imageRequest: null,
+      whiteboardActions: [],
     };
   }
 }
@@ -596,7 +786,7 @@ export async function runMentoredTurn(input: TurnInput): Promise<TurnOutput> {
   const replyText =
     sentinelIdx >= 0 ? full.slice(0, sentinelIdx).trim() : full.trim();
   const metaText = sentinelIdx >= 0 ? full.slice(sentinelIdx + TURN_META_SENTINEL.length) : "";
-  const meta = parseTurnMetaJson(metaText);
+  const meta = parseTurnMetaJson(metaText, "other");
   const reply = replyText.length > 0 ? replyText : "Let's keep going.";
   return { reply, ...meta };
 }
@@ -619,7 +809,7 @@ export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
       intent: MentoredIntent;
       advance: boolean;
       addToFocusedReview: boolean;
-      imageRequest: TurnImageRequest | null;
+      whiteboardActions: WhiteboardAction[];
     },
   void,
   void
@@ -685,19 +875,19 @@ export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
       intent: "other",
       advance: false,
       addToFocusedReview: false,
-      imageRequest: null,
+      whiteboardActions: [],
     };
     return;
   }
 
   const metaSlice = buffered.slice(textForwardedUpTo);
-  const meta = parseTurnMetaJson(metaSlice);
+  const meta = parseTurnMetaJson(metaSlice, "other");
   yield {
     type: "meta",
     intent: meta.intent,
     advance: meta.advance,
     addToFocusedReview: meta.addToFocusedReview,
-    imageRequest: meta.imageRequest,
+    whiteboardActions: meta.whiteboardActions,
   };
 }
 
@@ -723,6 +913,8 @@ export type SessionGreetingInput = {
   lastLessonTitle?: string;
   /** Self-study goal — personalize the greeting when present. */
   studyContext?: string;
+  /** Course output / teaching language from upload settings. */
+  outputLanguage?: CourseOutputLanguage;
 };
 
 const GREETING_SYSTEM = `You are Rose, a friendly, encouraging AI tutor inside a one-on-one Mentored Learning session. Generate a brief, warm GREETING for a student who just opened a course. Sound human and conversational, like a real tutor would when a student walks in. Do not use overly formal language. Do not list bullet points. Do not say "as an AI". Do not narrate what you'll do — just greet them.
@@ -777,11 +969,17 @@ Tone: cheerful "look who's back, you finished it!" Warmly acknowledge the comple
     }
   })();
 
-  const user = `COURSE TITLE: ${input.courseTitle.slice(0, 200)}${desc}${studyBlock}
+  const languageBlock = formatMentoredTeachingLanguageBlock(
+    input.outputLanguage ?? "auto"
+  );
+
+  const user = `${languageBlock}
+
+COURSE TITLE: ${input.courseTitle.slice(0, 200)}${desc}${studyBlock}
 
 ${scenarioBlock}
 
-Output ONLY the greeting text Rose should say out loud. No preamble, no closing tag, no quotes.`;
+Output ONLY the greeting text Rose should say out loud in the required teaching language. No preamble, no closing tag, no quotes.`;
 
   const anthropic = new Anthropic({ apiKey, timeout: 30_000, maxRetries: 0 });
   const msg = await anthropic.messages.create({

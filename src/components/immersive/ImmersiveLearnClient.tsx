@@ -8,6 +8,7 @@ import { ImmersiveModePicker } from "@/components/immersive/ImmersiveModePicker"
 import { ImmersiveShell } from "@/components/immersive/ImmersiveShell";
 import { MentoredOnboardingFlow } from "@/components/MentoredOnboardingFlow";
 import { touchCourseProgress } from "@/lib/course-progress/touch-client";
+import type { CourseOutputLanguage } from "@/lib/course-output-language";
 import type { CoursePayload } from "@/types/course";
 import type {
   CourseMode,
@@ -35,6 +36,7 @@ export function ImmersiveLearnClient({
   initialModuleId,
   initialOnboarding,
   initialMode,
+  outputLanguage = "auto",
   materialIds = [],
   surface = "dashboard",
 }: {
@@ -44,6 +46,7 @@ export function ImmersiveLearnClient({
   initialModuleId: number;
   initialOnboarding: MentoredOnboardingRecord | null;
   initialMode: CourseMode | null;
+  outputLanguage?: CourseOutputLanguage;
   /**
    * All study material ids in this course, in learning order. Lets mentored
    * learning roll the student into the next material/section once they finish
@@ -294,6 +297,7 @@ export function ImmersiveLearnClient({
       course={course}
       activeModule={activeModule}
       onboarding={onboarding}
+      outputLanguage={outputLanguage}
       onSwitchToFree={onSwitchToFreeFromRunner}
       onExit={onExit}
       onAdvanceModule={(nextId) => setActiveModuleId(nextId)}

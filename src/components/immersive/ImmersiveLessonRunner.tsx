@@ -26,10 +26,19 @@ import type {
   MentoredSessionPatch,
   MentoredSessionRecord,
   MentoredTurnResponse,
+  TutorMode,
+  WhiteboardAction,
 } from "@/types/mentored";
+import {
+  COURSE_OUTPUT_LANGUAGE_OPTIONS,
+  courseOutputLanguageToVoiceLanguage,
+  greetingFallbackLine,
+  parseCourseOutputLanguage,
+  softCheckInLine,
+  type CourseOutputLanguage,
+} from "@/lib/course-output-language";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
-import { isPageFigure } from "@/lib/mentored/source-figures";
-import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
+import { splitMarkdownBeforeFirstTable } from "@/lib/lesson-content-layout";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
@@ -62,6 +71,7 @@ export function ImmersiveLessonRunner({
   course,
   activeModule,
   onboarding,
+  outputLanguage = "auto",
   onSwitchToFree,
   onExit,
   onAdvanceModule,
@@ -73,6 +83,8 @@ export function ImmersiveLessonRunner({
   course: CoursePayload;
   activeModule: CourseModule;
   onboarding: MentoredOnboardingRecord;
+  /** Course teaching language from upload settings. */
+  outputLanguage?: CourseOutputLanguage;
   onSwitchToFree: () => void;
   /** Hard exit from the immersive view (back to course detail). */
   onExit: () => void;
@@ -166,6 +178,39 @@ export function ImmersiveLessonRunner({
     }
   }, []);
 
+  const teachingLangStorageKey = `rose:mentored:lang:${materialId}`;
+  const [teachingLanguage, setTeachingLanguage] = useState<CourseOutputLanguage>(
+    () => {
+      if (typeof window === "undefined") return outputLanguage;
+      try {
+        const stored = window.localStorage.getItem(teachingLangStorageKey);
+        if (stored) return parseCourseOutputLanguage(stored);
+      } catch {
+        /* ignore */
+      }
+      return outputLanguage;
+    }
+  );
+  const teachingLanguageRef = useRef(teachingLanguage);
+  useEffect(() => {
+    teachingLanguageRef.current = teachingLanguage;
+  }, [teachingLanguage]);
+
+  const updateTeachingLanguage = useCallback(
+    (next: CourseOutputLanguage) => {
+      setTeachingLanguage(next);
+      teachingLanguageRef.current = next;
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(teachingLangStorageKey, next);
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+    [teachingLangStorageKey]
+  );
+
   /** Returning students must tap Continue before Rose starts the lesson. */
   const [awaitingContinue, setAwaitingContinue] = useState(false);
   const awaitingContinueRef = useRef(false);
@@ -175,8 +220,14 @@ export function ImmersiveLessonRunner({
     awaitingContinueRef.current = awaitingContinue;
   }, [awaitingContinue]);
 
+  const voiceLanguage = useMemo(
+    () => courseOutputLanguageToVoiceLanguage(teachingLanguage),
+    [teachingLanguage]
+  );
+
   const voice = useMentoredVoice({
     materialId,
+    voiceLanguage,
     onBargeIn: () => onBargeInRef.current(),
     playbackRate,
     // Barge-in (VAD on the mic while Rose is speaking) is ONLY safe
@@ -207,6 +258,10 @@ export function ImmersiveLessonRunner({
   const [interruptedContext, setInterruptedContext] = useState<string | null>(
     null
   );
+  /** Abort in-flight /api/mentored/turn-stream when the student interrupts. */
+  const activeTurnStreamRef = useRef<AbortController | null>(null);
+  /** Bumps on each new submit so stale turn handlers exit before persist. */
+  const turnGenerationRef = useRef(0);
 
   // ---- smart question timing (§4) ----
   // Timestamps drive the pacing signals we pass into Rose's turn
@@ -225,46 +280,11 @@ export function ImmersiveLessonRunner({
   // changes don't trigger unnecessary work here.
   const [narrationText, setNarrationText] = useState<string>("");
 
-  // On-demand web images (Wikimedia) have been removed. The whiteboard
-  // shows only figures/tables extracted from the student's own upload.
-
-  // ---- source figures from the upload (Phase 1) ----
-  // The actual figures / full-page renders extracted from the student's PDF,
-  // keyed by 0-based lesson index within the active module. Rose shows these
-  // while teaching (Phase 2) and the source walkthrough renders the page view
-  // from them (Phase 3). Empty for text-only or pre-migration uploads.
-  const [sourceFiguresByLesson, setSourceFiguresByLesson] = useState<
-    Record<number, IngestSourceImageRecord[]>
-  >({});
-  // Chunk id the student dismissed the proactive figure for, so "Hide" sticks
-  // for that concept but a fresh figure shows on the next one.
-  const [figureDismissedForChunk, setFigureDismissedForChunk] = useState<
-    string | null
-  >(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setSourceFiguresByLesson({});
-    void (async () => {
-      try {
-        const res = await fetch(
-          `/api/mentored/source-figures/${materialId}?moduleId=${activeModule.id}`
-        );
-        if (!res.ok) return;
-        const body = (await res.json()) as {
-          figuresByLesson?: Record<number, IngestSourceImageRecord[]>;
-        };
-        if (!cancelled && body.figuresByLesson) {
-          setSourceFiguresByLesson(body.figuresByLesson);
-        }
-      } catch (e) {
-        console.error("[imm runner source-figures]", e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [materialId, activeModule.id]);
+  const [preferTableBeat, setPreferTableBeat] = useState(false);
+  const [whiteboardActions, setWhiteboardActions] = useState<WhiteboardAction[]>(
+    []
+  );
+  const [tutorMode, setTutorMode] = useState<TutorMode>("presenting");
 
   // ---- notes panel (§2) ----
   // The "seed" suggestion for the current chunk is derived from the
@@ -475,6 +495,7 @@ export function ImmersiveLessonRunner({
         body: JSON.stringify({
           materialId,
           moduleId: activeModule.id,
+          outputLanguage: teachingLanguageRef.current,
         }),
       });
       if (!res.ok) {
@@ -578,6 +599,13 @@ export function ImmersiveLessonRunner({
   }, [materialId]);
 
   const chunk: MentoredLessonChunk | null = plan?.chunks[chunkIdx] ?? null;
+
+  useEffect(() => {
+    setPreferTableBeat(false);
+    setWhiteboardActions(chunk?.whiteboardActions ?? []);
+    setTutorMode("presenting");
+  }, [chunk?.id, chunk?.whiteboardActions]);
+
   const moduleCount = course.modules.length;
   const moduleIdx = course.modules.findIndex((m) => m.id === activeModule.id);
 
@@ -590,34 +618,17 @@ export function ImmersiveLessonRunner({
     return activeModule.lessons.flatMap((l) => l.key_terms ?? []);
   }, [activeModule.lessons, chunk]);
 
-  // Figures from the student's upload assigned to the lesson this chunk teaches.
-  const chunkFigures = useMemo<IngestSourceImageRecord[]>(() => {
-    if (!chunk || typeof chunk.sourceLessonIndex !== "number") return [];
-    return sourceFiguresByLesson[chunk.sourceLessonIndex] ?? [];
-  }, [chunk, sourceFiguresByLesson]);
+  const whiteboardTableMarkdown = useMemo(() => {
+    if (!chunk || typeof chunk.sourceLessonIndex !== "number") return null;
+    const lesson = activeModule.lessons[chunk.sourceLessonIndex];
+    if (!lesson?.content?.trim()) return null;
+    const { tables } = splitMarkdownBeforeFirstTable(lesson.content);
+    return tables.trim() || null;
+  }, [chunk, activeModule.lessons]);
 
-  // Full-page render / slide for this lesson — drives the SourceLessonPanel
-  // "Page" toggle (Phase 3 source walkthrough).
-  const chunkPageFigure = useMemo<IngestSourceImageRecord | null>(() => {
-    return chunkFigures.find(isPageFigure) ?? null;
-  }, [chunkFigures]);
-
-  // Preferred single figure to surface alongside the explanation (Phase 2
-  // proactive show): prefer an embedded diagram so it doesn't merely duplicate
-  // the page render that already lives behind the source "Page" toggle; fall
-  // back to the page render when that's all the upload has.
-  const primaryChunkFigure = useMemo<IngestSourceImageRecord | null>(() => {
-    if (chunkFigures.length === 0) return null;
-    return (
-      chunkFigures.find((f) => !isPageFigure(f)) ?? chunkPageFigure ?? null
-    );
-  }, [chunkFigures, chunkPageFigure]);
-  // Ref mirror so the streaming-turn closure reads the current figure without
-  // capturing a stale value when Rose's imageRequest arrives.
-  const primaryChunkFigureRef = useRef<IngestSourceImageRecord | null>(null);
   useEffect(() => {
-    primaryChunkFigureRef.current = primaryChunkFigure;
-  }, [primaryChunkFigure]);
+    setPreferTableBeat(Boolean(whiteboardTableMarkdown));
+  }, [chunk?.id, whiteboardTableMarkdown]);
 
   useEffect(() => {
     if (!showNotesPanel || !showDockedNotes) {
@@ -738,6 +749,7 @@ export function ImmersiveLessonRunner({
             firstLessonTitle,
             lastLessonTitle: scenario === "returning" ? lastLessonTitle : undefined,
             scenario,
+            outputLanguage: teachingLanguageRef.current,
           }),
         });
         if (res.ok) {
@@ -748,15 +760,13 @@ export function ImmersiveLessonRunner({
         console.error("[imm runner greeting fetch]", e);
       }
       if (!text) {
-        // Safe fallback — never leave the student in silence.
-        text =
-          scenario === "first_time"
-            ? `Welcome to ${course.title}. Ready to dive in?`
-            : scenario === "all_complete"
-              ? `Welcome back — looks like you've already worked through this whole course. Want to review anything specific?`
-              : lastLessonTitle
-                ? `Welcome back. Last time we were on "${lastLessonTitle}". Ready to keep going?`
-                : `Welcome back. Ready to keep going?`;
+        text = greetingFallbackLine(
+          teachingLanguageRef.current,
+          scenario,
+          course.title,
+          lastLessonTitle,
+          activeModule.lessons[0]?.content ?? course.title
+        );
       }
 
       appendTranscriptLine({ role: "rose", text });
@@ -984,17 +994,37 @@ export function ImmersiveLessonRunner({
     // graded question on every concept. Rose poses the real CHECK QUESTION
     // mid-conversation only when it matters (key concept, vague answer,
     // long silence) — driven by the turn prompt + pacing signals.
-    const softCheck = softCheckInLine(captured);
+    const softCheck = softCheckInLine(
+      captured,
+      teachingLanguageRef.current,
+      explanation
+    );
 
     void (async () => {
       if (interactionModeRef.current !== "voice") return;
-      await voice.speak(explanation, {
-        onPlay: () => {
-          lastSpokenRef.current = explanation;
-          setNarrationText(explanation);
-          appendTranscriptLineOnce({ role: "rose", text: explanation });
-        },
-      });
+      const explanationSentences = explanation
+        .split(/(?<=[.!?])\s+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 3);
+      const speakUnits =
+        explanationSentences.length > 0 ? explanationSentences : [explanation];
+      let spokenSoFar = "";
+
+      for (const unit of speakUnits) {
+        if (interactionModeRef.current !== "voice") return;
+        if (lastSpokenChunkIdRef.current !== captured) return;
+        await voice.speak(unit, {
+          onPlay: () => {
+            spokenSoFar = spokenSoFar ? `${spokenSoFar} ${unit}` : unit;
+            lastSpokenRef.current = spokenSoFar;
+            setNarrationText(spokenSoFar);
+            if (spokenSoFar === unit) {
+              appendTranscriptLineOnce({ role: "rose", text: explanation });
+            }
+          },
+        });
+      }
+
       if (interactionModeRef.current !== "voice") return;
       // Bail if the chunk changed under us (advance / resume) so we never
       // speak this chunk's check-in after the student has moved on.
@@ -1002,6 +1032,7 @@ export function ImmersiveLessonRunner({
       await voice.speak(softCheck, {
         onPlay: () => {
           lastSpokenRef.current = `${explanation}\n\n${softCheck}`;
+          setNarrationText(`${spokenSoFar} ${softCheck}`.trim());
           lastCheckAtRef.current = Date.now();
           appendTranscriptLineOnce({ role: "rose", text: softCheck });
         },
@@ -1041,7 +1072,14 @@ export function ImmersiveLessonRunner({
     // Softer flow (Phase 4): lead with a natural check-in rather than
     // auto-revealing the formal graded question. The student can answer
     // conversationally, or open the real check via "Show check question".
-    appendTranscriptLineOnce({ role: "rose", text: softCheckInLine(chunk.id) });
+    appendTranscriptLineOnce({
+      role: "rose",
+      text: softCheckInLine(
+        chunk.id,
+        teachingLanguageRef.current,
+        chunk.explanation
+      ),
+    });
   }, [
     appendTranscriptLineOnce,
     chunk,
@@ -1108,6 +1146,31 @@ export function ImmersiveLessonRunner({
 
       if (!chunk || !plan) return;
 
+      // Typed or voice interrupt while a turn is still streaming / speaking.
+      // Use the stream ref (not `submitting` state) so rapid double-sends
+      // don't miss the in-flight turn before React re-renders.
+      let interruptedAfter: string | undefined;
+      if (activeTurnStreamRef.current) {
+        const spokenSoFar = lastSpokenRef.current.trim();
+        if (spokenSoFar.length >= 8) {
+          interruptedAfter = spokenSoFar;
+        }
+        activeTurnStreamRef.current.abort();
+        voice.cancelSpeak();
+        if (activeRoseLineIdRef.current) {
+          patchActiveRoseLine(spokenSoFar, false);
+          activeRoseLineIdRef.current = null;
+        }
+      } else if (interruptedContext) {
+        interruptedAfter = interruptedContext;
+        setInterruptedContext(null);
+      }
+
+      const turnGen = ++turnGenerationRef.current;
+      const streamAc = new AbortController();
+      activeTurnStreamRef.current = streamAc;
+      const isStale = () => turnGenerationRef.current !== turnGen;
+
       answerAtSubmitRef.current = text;
       setSubmitting(true);
       setReplyTurn((n) => n + 1);
@@ -1118,10 +1181,8 @@ export function ImmersiveLessonRunner({
         streaming: true,
       });
       patchActiveRoseLine("", true);
-      // Snapshot + clear any pending interruption context so it only
-      // applies to THIS turn (the one responding to the barge-in).
-      const interruptedAfter = interruptedContext;
-      if (interruptedAfter !== null) setInterruptedContext(null);
+      lastSpokenRef.current = "";
+      setNarrationText("");
 
       // Compute pacing deltas for the smart question-timing prompt.
       // The student is submitting NOW so we update the "spoke at"
@@ -1149,14 +1210,20 @@ export function ImmersiveLessonRunner({
             attempts,
             studentUtterance: text,
             knowledgeLevel: onboarding.knowledgeLevel,
+            lessonTitle:
+              typeof chunk.sourceLessonIndex === "number"
+                ? activeModule.lessons[chunk.sourceLessonIndex]?.title
+                : chunk.concept,
             // Optional: when the student cut Rose off mid-sentence,
             // this is what she had already said out loud. The
             // turn-stream / Claude prompt uses it to acknowledge
             // the interruption and offer to resume from there.
-            interruptedAfter: interruptedAfter ?? undefined,
+            interruptedAfter,
             secondsSinceLastCheck,
             secondsSinceStudentSpoke,
+            outputLanguage: teachingLanguageRef.current,
           }),
+          signal: streamAc.signal,
         });
         if (!res.ok || !res.body) {
           const body = (await res.json().catch(() => ({}))) as {
@@ -1180,9 +1247,7 @@ export function ImmersiveLessonRunner({
               type: "meta";
               intent: MentoredTurnResponse["intent"];
               advance: boolean;
-              imageRequest:
-                | { query: string; type: "diagram" | "photo" | "illustration" }
-                | null;
+              whiteboardActions?: WhiteboardAction[];
             }
           | { type: "done" }
           | { type: "error"; message: string },
@@ -1211,26 +1276,9 @@ export function ImmersiveLessonRunner({
                 if (event === "text" && typeof parsed.delta === "string") {
                   yield { type: "text", delta: parsed.delta };
                 } else if (event === "meta") {
-                  let imageRequest:
-                    | {
-                        query: string;
-                        type: "diagram" | "photo" | "illustration";
-                      }
-                    | null = null;
-                  if (
-                    parsed.imageRequest &&
-                    typeof parsed.imageRequest === "object"
-                  ) {
-                    const ir = parsed.imageRequest as Record<string, unknown>;
-                    const q = typeof ir.query === "string" ? ir.query.trim() : "";
-                    const t =
-                      ir.type === "diagram" ||
-                      ir.type === "photo" ||
-                      ir.type === "illustration"
-                        ? ir.type
-                        : "illustration";
-                    if (q.length >= 3) imageRequest = { query: q, type: t };
-                  }
+                  const wbActions = Array.isArray(parsed.whiteboardActions)
+                    ? (parsed.whiteboardActions as WhiteboardAction[])
+                    : [];
                   yield {
                     type: "meta",
                     intent:
@@ -1238,7 +1286,7 @@ export function ImmersiveLessonRunner({
                         ? (parsed.intent as MentoredTurnResponse["intent"])
                         : "other",
                     advance: parsed.advance === true,
-                    imageRequest,
+                    whiteboardActions: wbActions,
                   };
                 } else if (event === "done") {
                   yield { type: "done" };
@@ -1324,11 +1372,38 @@ export function ImmersiveLessonRunner({
             } else if (ev.type === "meta") {
               finalIntent = ev.intent;
               finalAdvance = ev.advance;
-              // Proactive visual: when Rose signals a visual would help,
-              // surface the student's OWN uploaded figure for this lesson
-              // (un-hide it if they dismissed it). No web-image fallback.
-              if (ev.imageRequest && primaryChunkFigureRef.current) {
-                setFigureDismissedForChunk(null);
+              if (
+                ev.intent === "request_pause" ||
+                ev.intent === "tangent_question" ||
+                ev.intent === "request_clarify"
+              ) {
+                setTutorMode(
+                  ev.intent === "request_pause" ? "paused" : "answering"
+                );
+              } else if (ev.advance) {
+                setTutorMode("presenting");
+              } else if (
+                ev.intent === "answer_correct" ||
+                ev.intent === "check_in" ||
+                ev.intent === "move_on"
+              ) {
+                setTutorMode("resuming");
+              }
+              if (ev.whiteboardActions?.length) {
+                setWhiteboardActions((prev) => {
+                  const merged = [...prev];
+                  for (const action of ev.whiteboardActions!) {
+                    if (action.type === "clear") return [];
+                    if (
+                      action.type === "show_asset" ||
+                      action.type === "highlight_bbox"
+                    ) {
+                      continue;
+                    }
+                    merged.push(action);
+                  }
+                  return merged.slice(-12);
+                });
               }
             } else if (ev.type === "done") {
               // Flush any buffered sentences + the incomplete tail as one
@@ -1387,6 +1462,8 @@ export function ImmersiveLessonRunner({
             void _;
           }
         }
+
+        if (isStale() || streamAc.signal.aborted) return;
 
         const historyEval: MentoredHistoryEntry["evaluation"] =
           finalIntent === "answer_correct"
@@ -1479,7 +1556,6 @@ export function ImmersiveLessonRunner({
           clearSubmittedAnswerDraft();
           setNarrationText("");
           setTutorReply(null);
-          setFigureDismissedForChunk(null);
           setTextCheckRevealed(false);
           setTextPendingAdvance(false);
 
@@ -1530,6 +1606,7 @@ export function ImmersiveLessonRunner({
           });
         }
       } catch (e) {
+        if (streamAc.signal.aborted || isStale()) return;
         console.error("[imm runner submitAnswer]", e);
         const msg =
           e instanceof Error ? e.message : "Could not reach the tutor.";
@@ -1540,8 +1617,14 @@ export function ImmersiveLessonRunner({
           appendTranscriptLine({ role: "rose", text: msg });
         }
         setTutorReply(msg);
+      } finally {
+        if (turnGenerationRef.current === turnGen) {
+          if (activeTurnStreamRef.current === streamAc) {
+            activeTurnStreamRef.current = null;
+          }
+          setSubmitting(false);
+        }
       }
-      setSubmitting(false);
     },
     [
       acknowledgeAndContinue,
@@ -1872,6 +1955,10 @@ export function ImmersiveLessonRunner({
   // so the choice is discoverable without a glance to the top-right.
   const topBar = (
     <div className="flex items-center gap-2">
+      <TeachingLanguageControl
+        value={teachingLanguage}
+        onChange={updateTeachingLanguage}
+      />
       <SpeedControl
         rate={playbackRate}
         onChange={updatePlaybackRate}
@@ -2355,21 +2442,16 @@ export function ImmersiveLessonRunner({
         <div ref={lessonColumnRef} className="mt-6 flex min-w-0 flex-col gap-6">
       {!awaitingContinue && chunk ? (
         <>
-      {/* Whiteboard — the surface Rose "writes" on as she teaches: the
-          concept headline, key points appearing one-by-one, and the
-          table / figure pulled from the student's own upload. The
-          detailed explanation, source text and dialogue live in the
-          cards below, exactly where they were before. */}
       <SlideStage
         key={`slide-${chunk.id}`}
         chunkId={chunk.id}
         concept={chunk.concept}
         keyPoints={chunk.keyPoints}
         narrationText={narrationText}
-        figure={
-          figureDismissedForChunk === chunk.id ? null : primaryChunkFigure
-        }
-        pageFigure={chunkPageFigure}
+        autoAdvanceEnabled={interactionMode === "text"}
+        preferTableBeat={preferTableBeat}
+        whiteboardActions={whiteboardActions}
+        tableMarkdown={whiteboardTableMarkdown}
       />
 
       {/* Concept + explanation */}
@@ -2438,7 +2520,6 @@ export function ImmersiveLessonRunner({
               keyTerms={terms}
               narrationText={narrationText}
               footer={dialogue}
-              pageFigure={chunkPageFigure}
             />
           );
         }
@@ -2581,28 +2662,6 @@ export function ImmersiveLessonRunner({
 // Pieces
 // ===========================================================================
 
-/**
- * A short, natural "does that land?" check-in spoken after each explanation
- * (Phase 4 softer flow). Varies a little by chunk so it doesn't feel canned.
- * The formal graded check question is still asked by Rose mid-conversation
- * when it actually matters.
- */
-const SOFT_CHECK_INS = [
-  "Does that make sense so far?",
-  "Still with me on that?",
-  "How's that landing — make sense?",
-  "Following so far, or want me to go deeper?",
-  "That track for you?",
-];
-
-function softCheckInLine(chunkId: string): string {
-  let h = 0;
-  for (let i = 0; i < chunkId.length; i++) {
-    h = (h * 31 + chunkId.charCodeAt(i)) >>> 0;
-  }
-  return SOFT_CHECK_INS[h % SOFT_CHECK_INS.length]!;
-}
-
 function chunkQuestionInTranscript(
   lines: TranscriptLine[],
   question: string
@@ -2668,6 +2727,98 @@ function ProgressHeader({
       <h1 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl">
         {moduleTitle}
       </h1>
+    </div>
+  );
+}
+
+/**
+ * Custom teaching-language picker — matches the glass pill controls
+ * (Speed, Voice, Exit) instead of a native OS `<select>`.
+ */
+function TeachingLanguageControl({
+  value,
+  onChange,
+}: {
+  value: CourseOutputLanguage;
+  onChange: (next: CourseOutputLanguage) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected =
+    COURSE_OUTPUT_LANGUAGE_OPTIONS.find((o) => o.value === value) ??
+    COURSE_OUTPUT_LANGUAGE_OPTIONS[0];
+
+  useEffect(() => {
+    if (!open) return;
+    function onClickOutside(e: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex max-w-[10rem] items-center gap-1.5 rounded-full border border-white/50 bg-white/45 px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/60"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Teaching language"
+        title="Language Rose teaches in"
+      >
+        <span aria-hidden>🌐</span>
+        <span className="truncate">{selected.label}</span>
+        <span aria-hidden className="text-[10px] text-zinc-500">
+          {open ? "▴" : "▾"}
+        </span>
+      </button>
+      {open ? (
+        <ul
+          role="listbox"
+          aria-label="Teaching language"
+          className="absolute right-0 top-[calc(100%+0.35rem)] z-50 min-w-[11rem] overflow-hidden rounded-2xl border border-white/60 bg-white/90 py-1 shadow-lg ring-1 ring-zinc-200/60 backdrop-blur-xl"
+        >
+          {COURSE_OUTPUT_LANGUAGE_OPTIONS.map((opt) => {
+            const isSelected = opt.value === value;
+            return (
+              <li key={opt.value} role="option" aria-selected={isSelected}>
+                <button
+                  type="button"
+                  title={opt.description}
+                  onClick={() => {
+                    onChange(parseCourseOutputLanguage(opt.value));
+                    setOpen(false);
+                  }}
+                  className={[
+                    "flex w-full items-center justify-between gap-3 px-3.5 py-2 text-left text-xs font-medium transition",
+                    isSelected
+                      ? "bg-fuchsia-50/90 text-fuchsia-800"
+                      : "text-zinc-700 hover:bg-white/80",
+                  ].join(" ")}
+                >
+                  <span>{opt.label}</span>
+                  {isSelected ? (
+                    <span aria-hidden className="text-fuchsia-600">
+                      ✓
+                    </span>
+                  ) : null}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
     </div>
   );
 }
@@ -2816,8 +2967,15 @@ function AnswerComposer({
   error: string | null;
   placeholderOverride?: string;
 }) {
-  const canSubmit = text.trim().length >= 2 && !submitting;
-  const busy = submitting || transcribing;
+  const turnInFlight = submitting;
+  const canInterrupt = turnInFlight && text.trim().length >= 2;
+  const canSubmit = text.trim().length >= 2 && (!turnInFlight || canInterrupt);
+  const busy = (turnInFlight && !canInterrupt) || transcribing;
+  const submitLabel = canInterrupt
+    ? "Interrupt"
+    : turnInFlight
+      ? "Sending…"
+      : "Send";
   // In live mode the mic is handled by the auto-listen effect; the manual
   // hold-to-talk button only makes sense in push mode. We still keep the
   // textarea so the student can fall back to typing whenever they like.
@@ -2904,7 +3062,7 @@ function AnswerComposer({
             onClick={onSubmitText}
             className="rounded-2xl bg-zinc-900/90 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {submitting ? "Sending…" : "Submit"}
+            {submitLabel}
           </button>
           {showMicButton ? (
             <button

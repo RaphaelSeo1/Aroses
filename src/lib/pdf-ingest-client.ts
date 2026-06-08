@@ -31,10 +31,10 @@ function jobStartedAtMs(createdAt?: string): number | null {
 }
 
 /** Gap between consecutive expand calls per PDF (ms). */
-const EXPAND_MODULE_GAP_MS = 50;
+const EXPAND_MODULE_GAP_MS = 25;
 
 /** Poll job row while a long /expand call runs so module counts tick up live. */
-const EXPAND_PROGRESS_POLL_MS = 1_400;
+const EXPAND_PROGRESS_POLL_MS = 900;
 
 async function pollJobProgressWhileExpandRuns(
   jobId: string,

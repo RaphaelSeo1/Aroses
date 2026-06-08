@@ -213,7 +213,15 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
     );
   }
 
-  const payload = row.course_payload as CoursePayload | null | undefined;
+  let payload: CoursePayload | null = null;
+  try {
+    if (row.course_payload) {
+      const { parseCoursePayload } = await import("@/lib/ai/course-payload");
+      payload = parseCoursePayload(row.course_payload);
+    }
+  } catch (e) {
+    console.error("[explore study] parse course_payload", e);
+  }
   const hasNewCourse =
     payload &&
     typeof payload.title === "string" &&

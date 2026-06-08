@@ -42,6 +42,10 @@ import {
 } from "@/lib/study-ingest/inject-pdf-tables-into-module";
 import { pageTableExtractionsToMap } from "@/lib/study-ingest/source-images/extract-pdf-page-tables";
 import {
+  isPdfTableVisionEnabled,
+  supplementPdfTablesOnly,
+} from "@/lib/study-ingest/supplement-pdf-tables";
+import {
   buildCourseAssetManifest,
   formatAssetManifestForPrompt,
   mergeManifestWithDbAssets,
@@ -50,8 +54,8 @@ import {
   retrieveAssetsForModuleOutline,
   type CourseAssetManifest,
 } from "@/lib/study-ingest/course-assets";
-import { attachVisualAssetsToModules } from "@/lib/study-ingest/lesson-visual-assets";
 import { ensurePdfVisualsAtFinalize } from "@/lib/pdf-ingest/ensure-pdf-visuals";
+import { enrichModulesWithPdfAssets } from "@/lib/pdf-ingest/enrich-modules-with-assets";
 import { placeAllPdfAssetsIntoModules } from "@/lib/pdf-ingest/place-course-assets";
 import {
   linkCourseAssetsToMaterial,
@@ -100,10 +104,9 @@ import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { logActivity, pruneActivityEvents } from "@/lib/activity-log";
 import {
-  deriveFileStemFromPayload,
-  finalizeMaterialSectionLabel,
-  stripKnownDocumentExtension,
+  resolveMaterialSectionLabel,
 } from "@/lib/study-material-display-name";
+import { isGenericIngestPlaceholder } from "@/lib/study-ingest/normalize-ingest-title";
 
 function normalizeStoragePaths(storagePath: string | string[]): string[] {
   return Array.isArray(storagePath) ? storagePath : [storagePath];
@@ -400,9 +403,46 @@ function mapAiFailureToMessage(jobId: string, e: unknown): string {
   return "AI processing failed (network or model timeout). Try again in a moment.";
 }
 
-function parseStoredModules(raw: unknown): CourseModule[] {
+type IndexedStoredModules = (CourseModule | null)[];
+
+function parseStoredModulesIndexed(raw: unknown): IndexedStoredModules {
   if (!Array.isArray(raw)) return [];
-  return raw.map((m) => parseCourseModule(m));
+  const out: IndexedStoredModules = [];
+  for (const item of raw) {
+    if (item == null) {
+      out.push(null);
+      continue;
+    }
+    try {
+      out.push(parseCourseModule(item));
+    } catch {
+      out.push(null);
+    }
+  }
+  return out;
+}
+
+function contiguousPrefixLength(modules: IndexedStoredModules): number {
+  let i = 0;
+  while (i < modules.length && modules[i] != null) i++;
+  return i;
+}
+
+function moduleHasLessonContent(mod: CourseModule): boolean {
+  return mod.lessons.some((l) => (l.content ?? "").trim().length > 0);
+}
+
+/** Modules with generated lesson bodies (may be out of order in `ingest_modules`). */
+export function countIngestModulesBuilt(raw: unknown): number {
+  return parseStoredModulesIndexed(raw).filter(
+    (m): m is CourseModule => m != null && moduleHasLessonContent(m)
+  ).length;
+}
+
+function parseStoredModules(raw: unknown): CourseModule[] {
+  return parseStoredModulesIndexed(raw).filter(
+    (m): m is CourseModule => m != null
+  );
 }
 
 function storagePathsForJob(job: {
@@ -429,15 +469,16 @@ function pdfIngestModuleBatchSize(remaining: number, peerCount: number): number 
   // when peers exist — the global budget absorbs the combined stream load and
   // backs off precisely when the org limit is near, instead of this heuristic
   // guessing. We still parallelize a couple of modules per call for speed.
-  //   - Solo PDF (peerCount=0): 3 modules in parallel.
-  //   - With peers: 2 per call (the limiter throttles if the org budget is hit).
+  //   - Solo PDF (peerCount=0): up to 8 modules per /expand call (all modules
+  //     when the outline has ≤8).
+  //   - With peers: 4 per call (the limiter throttles if the org budget is hit).
   //   - Env override (`PDF_INGEST_MODULE_BATCH_SIZE`) wins when set.
   const raw = process.env.PDF_INGEST_MODULE_BATCH_SIZE?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   const fromEnv = Number.isFinite(parsed) ? Math.trunc(parsed) : null;
-  // Tier 2/3+ headroom (the global limiter gates real TPM): write several
-  // modules per /expand call so a course needs fewer client round-trips.
-  const target = fromEnv != null ? fromEnv : peerCount === 0 ? 4 : 3;
+  if (fromEnv != null) return Math.max(1, Math.min(remaining, fromEnv));
+  if (peerCount === 0 && remaining <= 8) return remaining;
+  const target = peerCount === 0 ? 8 : 4;
   return Math.max(1, Math.min(remaining, target));
 }
 
@@ -585,7 +626,30 @@ async function finalizePdfIngest(
         });
         pageArtifacts = ensured.pageArtifacts;
         sourceImagesForFinalize = ensured.sourceImages;
-        if (ensured.manifest) assetManifest = ensured.manifest;
+        if (ensured.manifest) {
+          assetManifest = ensured.manifest;
+          await admin
+            .from("pdf_ingest_jobs")
+            .update({
+              ingest_asset_manifest: ensured.manifest,
+              ingest_page_tables: pageArtifacts,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", jobId)
+            .then(({ error }) => {
+              if (
+                error &&
+                isMissingDbColumnError(
+                  error,
+                  "ingest_asset_manifest",
+                  "ingest_page_tables"
+                )
+              ) {
+                return { error: null };
+              }
+              return { error };
+            }, () => ({ error: null }));
+        }
       } catch (e) {
         console.error("[pdf-ingest] ensurePdfVisualsAtFinalize", jobId, e);
       }
@@ -669,13 +733,7 @@ async function finalizePdfIngest(
     pageArtifacts.figures.map((f) => f.pageNum).filter((p) => p > 0)
   ).size;
 
-  const attachResult = await attachVisualAssetsToModules({
-    modules: placed.modules,
-    manifest: effectiveManifest,
-    pagesRendered,
-    jobId,
-  });
-  const modules = attachResult.modules;
+  const modules = placed.modules;
 
   const allLessons = modules.flatMap((m) => m.lessons);
   const lessonsWithVisualAssets = allLessons.filter(
@@ -695,10 +753,8 @@ async function finalizePdfIngest(
     lessonsReceiving: placed.placeCounts.lessonsReceiving,
     pageImages: allPageImages.length,
     pagesRendered,
-    assetsAvailable: attachResult.assetsAvailable,
-    captionsAvailable: attachResult.captionsAvailable,
     lessonsWithVisualAssets,
-    totalVisualsInserted: attachResult.totalVisualsInserted,
+    totalVisualsInserted: 0,
     lessonsWithImages,
     lessonsWithTables,
     manifestAssets: effectiveManifest?.assets.length ?? 0,
@@ -766,19 +822,21 @@ async function finalizePdfIngest(
       ? maxRow.sort_order + 1
       : 0;
 
-  const stemFromContent = deriveFileStemFromPayload(payload);
   const uploadLabel =
     typeof originalFileName === "string" && originalFileName.trim().length > 0
       ? originalFileName.trim()
       : "upload.pdf";
-  const fromUploadStem =
-    stripKnownDocumentExtension(uploadLabel) ||
-    finalizeMaterialSectionLabel(uploadLabel);
-  const storedFileName = stemFromContent
-    ? finalizeMaterialSectionLabel(stemFromContent)
-    : fromUploadStem.length > 0
-      ? fromUploadStem
-      : "Material";
+  const storedFileName = resolveMaterialSectionLabel({
+    outlineTitle: outline.title,
+    payload,
+    originalFileName: uploadLabel,
+  });
+  const materialSummary =
+    typeof payload.description === "string" &&
+    payload.description.trim() &&
+    !isGenericIngestPlaceholder(payload.description)
+      ? payload.description.trim()
+      : payload.title?.trim() || storedFileName;
 
   // Insert study_materials first, then atomically flip job status to `complete`
   // in a single UPDATE that also sets material_id. Doing both in one operation
@@ -789,7 +847,7 @@ async function finalizePdfIngest(
     course_id: courseId,
     exam_group_id: examGroupId,
     file_name: storedFileName,
-    summary: payload.description,
+    summary: materialSummary,
     key_concepts: [] as string[],
     questions: [] as unknown[],
     course_payload: payload,
@@ -1136,9 +1194,9 @@ export async function runPdfIngestExpandOne(
     );
     return { kind: "failed", message: "Invalid stored outline." };
   }
-  let modulesBuilt: CourseModule[];
+  let storedModules: IndexedStoredModules;
   try {
-    modulesBuilt = parseStoredModules(job.ingest_modules);
+    storedModules = parseStoredModulesIndexed(job.ingest_modules);
   } catch (e) {
     console.error("[pdf-ingest] corrupt ingest_modules", jobId, e);
     await failJobUnlessStale(
@@ -1152,7 +1210,10 @@ export async function runPdfIngestExpandOne(
   }
 
   const n = outline.modules.length;
-  const prefix = modulesBuilt.slice(0, n);
+  const idx = contiguousPrefixLength(storedModules);
+  const prefix = storedModules.slice(0, idx).filter(
+    (m): m is CourseModule => m != null
+  );
 
   const retainStorage = Boolean(
     (job as { retain_storage?: unknown }).retain_storage
@@ -1195,7 +1256,6 @@ export async function runPdfIngestExpandOne(
     return { kind: "complete", materialId: fin.materialId };
   }
 
-  const idx = prefix.length;
   await touchJobProgress(admin, jobId);
 
   if (await isStaleIngestEpoch(admin, jobId, expandEpoch)) {
@@ -1277,37 +1337,66 @@ export async function runPdfIngestExpandOne(
   }
   const batchCount = pdfIngestModuleBatchSize(n - idx, modulePeerCount);
   const batchIndices = Array.from({ length: batchCount }, (_, offset) => idx + offset);
+  const expandBatchStartedAt = Date.now();
+  console.info("[pdf-ingest] expand module batch", {
+    jobId,
+    batchCount,
+    moduleIndices: batchIndices,
+    remaining: n - idx,
+    skipQuizBackfill: true,
+  });
   const moduleHeartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
   }, 22_000);
 
-  // Persist each module the instant it resolves (saving the longest contiguous
-  // run starting at `idx`), rather than waiting for the whole batch to finish
-  // before a single write at the end. Previously, if the serverless function
-  // was killed mid-batch — which happens for big documents whose batch of
-  // modules can't all finish within `maxDuration` — NOTHING was saved, so every
-  // re-kick re-attempted the same batch from zero and the build wedged at
-  // "N/total" forever. Saving as-we-go guarantees forward progress: a re-kick
-  // resumes from the last saved module.
+  // Persist each module at its outline index as soon as it resolves (even when
+  // batch peers finish out of order) so the UI can tick 1/5, 2/5, … instead of
+  // jumping 0→3 when a whole parallel batch lands. Resume still advances only
+  // along the contiguous prefix from index 0.
   const resolvedModules = new Map<number, CourseModule>();
   let persistChain: Promise<void> = Promise.resolve();
-  const contiguousResolved = (): CourseModule[] => {
-    const built: CourseModule[] = [];
-    for (let i = idx; i < idx + batchCount; i++) {
-      const m = resolvedModules.get(i);
-      if (!m) break;
-      built.push(m);
+  const previewFileName =
+    typeof job.original_file_name === "string" && job.original_file_name.trim()
+      ? job.original_file_name.trim()
+      : "upload.pdf";
+
+  const persistIndexedModules = async () => {
+    const slots: IndexedStoredModules = Array.from({ length: n }, (_, i) => {
+      if (i < storedModules.length && storedModules[i] != null) {
+        return storedModules[i];
+      }
+      return resolvedModules.get(i) ?? null;
+    });
+    const enrichIndices: number[] = [];
+    const toEnrich: CourseModule[] = [];
+    for (let i = 0; i < slots.length; i++) {
+      const m = slots[i];
+      if (m == null) continue;
+      enrichIndices.push(i);
+      toEnrich.push(m);
     }
-    return built;
-  };
-  const flushContiguousProgress = async () => {
-    const built = contiguousResolved();
-    if (built.length === 0) return;
-    const merged = [...prefix, ...built].slice(0, n);
+    if (toEnrich.length > 0) {
+      try {
+        const enriched = await enrichModulesWithPdfAssets({
+          admin,
+          jobId,
+          modules: toEnrich,
+          manifest: ingestAssetManifest,
+          pageArtifacts: ingestPageArtifacts,
+          fileName: previewFileName,
+        });
+        for (let j = 0; j < enrichIndices.length; j++) {
+          slots[enrichIndices[j]!] = enriched[j]!;
+        }
+      } catch (e) {
+        console.warn("[pdf-ingest] enrich modules for live preview", jobId, e);
+      }
+    }
+    storedModules = slots;
     await admin
       .from("pdf_ingest_jobs")
       .update({
-        ingest_modules: merged,
+        ingest_modules: slots,
         stream_preview: null,
         updated_at: new Date().toISOString(),
       })
@@ -1315,7 +1404,6 @@ export async function runPdfIngestExpandOne(
       .eq("ingest_epoch", expandEpoch);
   };
 
-  let newModules: CourseModule[];
   try {
     await Promise.all(
       batchIndices.map((moduleIndex, offset) =>
@@ -1329,15 +1417,26 @@ export async function runPdfIngestExpandOne(
                 ? planned
                 : job.ingest_source_text;
             const modOutline = outline.modules[moduleIndex];
-            let moduleGenOptions: ModuleGenerationOptions | undefined;
-            if (ingestAssetManifest && modOutline) {
+            let moduleGenOptions: ModuleGenerationOptions = {
+              skipQuizBackfill: true,
+            };
+            if (
+              ingestAssetManifest &&
+              ingestAssetManifest.assets.length > 0 &&
+              modOutline
+            ) {
               const retrieved = await retrieveAssetsForModuleOutline({
                 manifest: ingestAssetManifest,
                 moduleTitle: modOutline.title,
                 lessonTitles: modOutline.lesson_titles,
               });
               const prompt = formatAssetManifestForPrompt(retrieved);
-              if (prompt.trim()) moduleGenOptions = { assetManifestPrompt: prompt };
+              if (prompt.trim()) {
+                moduleGenOptions = {
+                  ...moduleGenOptions,
+                  assetManifestPrompt: prompt,
+                };
+              }
             }
             return generateCourseModuleFromMaterial(
               materialForModule,
@@ -1376,7 +1475,11 @@ export async function runPdfIngestExpandOne(
               chunks,
               ingestPageArtifacts.figures
             );
-            injected = injectPdfArtifactsIntoModule(injected, tables, figures);
+            injected = injectPdfArtifactsIntoModule(injected, tables, figures, {
+              planModule: plan.modules[moduleIndex],
+              chunks,
+              pageTables: tableMap,
+            });
           }
           if (typeof planned === "string" && planned.trim().length > 0) {
             const fromSource = extractPdfTableBlocksFromSource(planned);
@@ -1384,19 +1487,31 @@ export async function runPdfIngestExpandOne(
               injected = injectPdfArtifactsIntoModule(
                 injected,
                 fromSource,
-                []
+                [],
+                plan
+                  ? {
+                      planModule: plan.modules[moduleIndex],
+                      chunks,
+                      pageTables: tableMap,
+                    }
+                  : undefined
               );
             }
           }
           resolvedModules.set(moduleIndex, injected);
           // Serialize DB writes so concurrently-resolving modules don't race.
-          persistChain = persistChain.then(flushContiguousProgress);
+          persistChain = persistChain.then(persistIndexedModules);
           return persistChain;
         })
       )
     );
     await persistChain;
-    newModules = contiguousResolved();
+    console.info("[pdf-ingest] expand module batch done", {
+      jobId,
+      batchCount,
+      elapsedMs: Date.now() - expandBatchStartedAt,
+      estimatedQuizBackfillSavedMs: batchCount * 45_000,
+    });
   } catch (e) {
     // Flush any contiguous modules that DID resolve before the failure, so a
     // retry resumes from there instead of rebuilding saved modules.
@@ -1415,12 +1530,14 @@ export async function runPdfIngestExpandOne(
     clearInterval(moduleHeartbeat);
   }
 
-  const nextModules = [...prefix, ...newModules];
-  const cappedNext = nextModules.slice(0, n);
+  const contiguousEnd = contiguousPrefixLength(storedModules);
+  const cappedNext = storedModules
+    .slice(0, contiguousEnd)
+    .filter((m): m is CourseModule => m != null);
   const { data: modRow, error: upErr } = await admin
     .from("pdf_ingest_jobs")
     .update({
-      ingest_modules: nextModules,
+      ingest_modules: storedModules.slice(0, n),
       stream_preview: null,
       updated_at: new Date().toISOString(),
     })
@@ -1486,7 +1603,7 @@ export async function runPdfIngestExpandOne(
 
   return {
     kind: "progress",
-    modulesBuilt: nextModules.length,
+    modulesBuilt: countIngestModulesBuilt(storedModules),
     modulesTotal: n,
   };
 }
@@ -1970,6 +2087,8 @@ export async function runPdfIngestContinueAfterTranscript(
 }
 
 function isPdfPageRenderEnabled(): boolean {
+  // Figure / page-render extraction disabled — whiteboard is text + tables only.
+  return false;
   const raw = process.env.PDF_INGEST_PAGE_RENDER?.trim();
   if (raw === "0" || raw?.toLowerCase() === "false") return false;
   return true;
@@ -2231,10 +2350,38 @@ async function runPdfIngestOutlinePhase(
           );
           return;
         }
+      } else if (
+        isPdfTableVisionEnabled() &&
+        primaryPdfBuffer &&
+        primaryPdfBuffer.length > 0
+      ) {
+        try {
+          const extractions = await supplementPdfTablesOnly({
+            pdfBuffer: primaryPdfBuffer,
+            sourceFileName: primaryFileName?.trim() || "upload.pdf",
+            chunks,
+            jobId,
+          });
+          const pageTables = pageTableExtractionsToMap(extractions);
+          if (pageTables.size > 0) {
+            pageArtifactsForJob = {
+              tables: Object.fromEntries(pageTables),
+              figures: [],
+            };
+            chunksForGeneration = enrichChunksWithPageTables(chunks, pageTables);
+            console.info("[pdf-ingest] table-only vision enrich", {
+              jobId,
+              tablePages: pageTables.size,
+            });
+          }
+        } catch (e) {
+          console.warn("[pdf-ingest] supplementPdfTablesOnly", jobId, e);
+        }
       } else {
         console.warn("[pdf-ingest] visual enrich skipped at outline", {
           jobId,
           pageRenderEnabled: isPdfPageRenderEnabled(),
+          tableVisionEnabled: isPdfTableVisionEnabled(),
           hasStoragePath: Boolean(primaryStoragePath),
           hasPdfBuffer: Boolean(primaryPdfBuffer),
         });

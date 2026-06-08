@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { generateSessionGreeting } from "@/lib/ai/mentored";
+import { resolveTeachingLanguage } from "@/lib/course-output-language";
+import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
 import { loadStudyContextForMaterial } from "@/lib/load-course-study-context";
 import { formatSelfStudyTutorBlock } from "@/lib/self-study-context";
 import { createClient } from "@/lib/supabase/server";
@@ -53,6 +55,7 @@ export async function POST(request: Request) {
     firstLessonTitle?: unknown;
     lastLessonTitle?: unknown;
     scenario?: unknown;
+    outputLanguage?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -90,9 +93,13 @@ export async function POST(request: Request) {
   }
 
   try {
-    const studyContextRaw = await loadStudyContextForMaterial(
-      supabase,
-      body.materialId
+    const [studyContextRaw, courseLanguage] = await Promise.all([
+      loadStudyContextForMaterial(supabase, body.materialId),
+      loadCourseOutputLanguageForMaterial(supabase, body.materialId),
+    ]);
+    const outputLanguage = resolveTeachingLanguage(
+      courseLanguage,
+      body.outputLanguage
     );
     const studyContext = studyContextRaw
       ? formatSelfStudyTutorBlock(studyContextRaw)
@@ -114,6 +121,7 @@ export async function POST(request: Request) {
           : undefined,
       scenario: body.scenario,
       studyContext,
+      outputLanguage,
     });
     return NextResponse.json({ greeting });
   } catch (e) {

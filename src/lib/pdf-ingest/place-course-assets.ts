@@ -2,6 +2,8 @@ import {
   cosineSimilarity,
   embedText,
 } from "@/lib/embeddings/text-similarity";
+import { parsePagesFromSourceLocator } from "@/lib/source-attribution";
+import { tablePageOverlapsLesson } from "@/lib/study-ingest/chunk-position";
 import type { CourseModule } from "@/types/course";
 import {
   logPlaceCounts,
@@ -12,6 +14,7 @@ import type {
   CourseAsset,
   CourseAssetManifest,
 } from "@/lib/study-ingest/course-assets";
+import { shouldKeepFigureCaption } from "@/lib/pdf-ingest/filter-crop-quality";
 import type { IngestPageArtifacts } from "@/lib/study-ingest/inject-pdf-tables-into-module";
 
 function tableFingerprint(md: string): string {
@@ -32,14 +35,6 @@ function assetAlreadyInLesson(content: string, asset: CourseAssetRow): boolean {
 }
 
 function markdownBlockForAsset(asset: CourseAssetRow): string {
-  if (asset.asset_url) {
-    const alt =
-      asset.caption.trim() ||
-      (asset.type === "table"
-        ? `Table from page ${asset.source_page}`
-        : `Figure from page ${asset.source_page}`);
-    return `\n\n![${alt}](${asset.asset_url})\n\n`;
-  }
   if (asset.type === "table" && asset.markdown?.trim()) {
     return `\n\n${asset.markdown.trim()}\n\n`;
   }
@@ -179,6 +174,28 @@ export function pageArtifactsToAssetRows(
   return rows;
 }
 
+function lessonSourcePages(lesson: {
+  sources?: { locator: string }[];
+}): Set<number> {
+  const pages = new Set<number>();
+  for (const src of lesson.sources ?? []) {
+    for (const p of parsePagesFromSourceLocator(src.locator)) {
+      pages.add(p);
+    }
+  }
+  return pages;
+}
+
+function assetOverlapsLessonPages(
+  asset: CourseAssetRow,
+  lessonPages: Set<number>
+): boolean {
+  if (lessonPages.size === 0) return true;
+  const page = asset.source_page;
+  if (!Number.isFinite(page) || page <= 0) return false;
+  return tablePageOverlapsLesson(page, lessonPages);
+}
+
 function dedupeAssetRows(rows: CourseAssetRow[]): CourseAssetRow[] {
   const seen = new Set<string>();
   const out: CourseAssetRow[] = [];
@@ -224,11 +241,17 @@ export async function placeCourseAssetsIntoModules(
   const receiving = new Set<string>();
 
   for (const asset of assets) {
+    if (asset.type !== "table" && asset.asset_url) {
+      if (!shouldKeepFigureCaption(asset.caption)) continue;
+      continue;
+    }
     const block = markdownBlockForAsset(asset);
     if (!block.trim()) {
-      console.warn(
-        `[pdf-asset-pipeline] PLACE skip page=${asset.source_page} type=${asset.type}: no markdown/url`
-      );
+      if (asset.type === "table") {
+        console.warn(
+          `[pdf-asset-pipeline] PLACE skip page=${asset.source_page} type=${asset.type}: no markdown`
+        );
+      }
       continue;
     }
 
@@ -239,6 +262,8 @@ export async function placeCourseAssetsIntoModules(
         const lesson = mod.lessons[lessonIdx]!;
         const content = lesson.content ?? "";
         if (assetAlreadyInLesson(content, asset)) continue;
+        const pages = lessonSourcePages(lesson);
+        if (!assetOverlapsLessonPages(asset, pages)) continue;
         const score = await scoreLessonForAsset(
           lesson.title,
           content,
@@ -246,6 +271,13 @@ export async function placeCourseAssetsIntoModules(
         );
         if (score > best.score) best = { score, modIdx, lessonIdx };
       }
+    }
+
+    if (best.score < 0) {
+      console.info(
+        `[pdf-asset-pipeline] PLACE skip page=${asset.source_page} type=${asset.type}: no lesson with overlapping source pages`
+      );
+      continue;
     }
 
     const mod = next[best.modIdx]!;

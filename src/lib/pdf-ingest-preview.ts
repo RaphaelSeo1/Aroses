@@ -51,6 +51,7 @@ export function buildLivePreviewCourse(
   let built: CourseModule[] = [];
   if (Array.isArray(modulesJson)) {
     for (const raw of modulesJson) {
+      if (raw == null) continue;
       try {
         built.push(parseCourseModule(raw));
       } catch {

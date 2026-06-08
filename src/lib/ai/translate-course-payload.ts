@@ -34,7 +34,20 @@ async function mapWithConcurrency<T, R>(
 }
 
 function localeLabel(locale: CourseContentLocale): string {
-  return locale === "ko" ? "Korean (한국어)" : "English";
+  switch (locale) {
+    case "ko":
+      return "Korean (한국어)";
+    case "es":
+      return "Spanish (Español)";
+    case "fr":
+      return "French (Français)";
+    case "ja":
+      return "Japanese (日本語)";
+    case "zh":
+      return "Chinese (中文)";
+    default:
+      return "English";
+  }
 }
 
 function translationRules(

@@ -31,12 +31,12 @@ Return ONLY valid JSON (no markdown fences):
 }
 
 Rules:
-- table: data grid with rows/columns of values.
+- table: data grid with rows/columns — set keep:false (tables become course text, not images).
 - figure: diagram, flowchart, mechanism, anatomy, chart with axes.
 - image: photograph or raster illustration without tabular grid.
-- page_snapshot: full slide/page when no distinct crop is available but content is pedagogical.
-- decorative: logos, headers, footers, page numbers — set keep:false.
-- keep:true for anything pedagogically useful.`;
+- page_snapshot: full slide/page — set keep:false unless a distinct diagram cannot be cropped.
+- decorative: logos, headers, footers, page numbers, bullet-text-only regions — set keep:false.
+- keep:true only for distinct pedagogical diagrams/illustrations.`;
 
 function parseVisionJson(raw: string): AssetVisionCaption | null {
   let text = raw.trim();
@@ -73,7 +73,11 @@ function parseVisionJson(raw: string): AssetVisionCaption | null {
           .filter(Boolean)
           .slice(0, 8)
       : [];
-    const keep = o.keep !== false && type !== "decorative";
+    const keep =
+      o.keep !== false &&
+      type !== "decorative" &&
+      type !== "table" &&
+      type !== "page_snapshot";
     return {
       type,
       title: str("title", 80) || str("caption", 80),
@@ -83,7 +87,10 @@ function parseVisionJson(raw: string): AssetVisionCaption | null {
       teachingPurpose: str("teachingPurpose", 300),
       relatedTopics,
       whenToUse: str("whenToUse", 300),
-      keep: type === "decorative" ? false : keep,
+      keep:
+        type === "decorative" || type === "table" || type === "page_snapshot"
+          ? false
+          : keep,
     };
   } catch {
     return null;

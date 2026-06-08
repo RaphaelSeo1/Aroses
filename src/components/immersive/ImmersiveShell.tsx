@@ -53,7 +53,7 @@ export function ImmersiveShell({
           rendered by the teaching view. We deliberately apply it on the
           scroll container (not via a spacer in `children`) so callers
           don't need to know about the dock height. */}
-      <main className="immersive-main relative z-0 flex flex-1 flex-col items-center overflow-y-auto px-4 pb-[clamp(260px,32vh,360px)] pt-20 sm:px-6 sm:pt-24">
+      <main className="immersive-main relative z-0 flex flex-1 flex-col items-center overflow-y-auto px-4 pb-[clamp(260px,32vh,360px)] pt-12 sm:px-6 sm:pt-14">
         <div className={`immersive-fade-in w-full ${widthClass}`}>{children}</div>
       </main>
 

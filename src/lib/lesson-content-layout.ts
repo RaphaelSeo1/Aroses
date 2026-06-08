@@ -53,3 +53,25 @@ export function figureCaption(alt: string): string {
 export function lessonMarkdownHasImages(content: string): boolean {
   return extractMarkdownFigures(content).length > 0;
 }
+
+/** Split prose from the first GFM table so figures never float over tables. */
+export function splitMarkdownBeforeFirstTable(markdown: string): {
+  prose: string;
+  tables: string;
+} {
+  const lines = markdown.split("\n");
+  let tableStart = -1;
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/^\s*\|/.test(lines[i]!) && /^\s*\|[\s\-:|]+\|/.test(lines[i + 1]!)) {
+      tableStart = i;
+      break;
+    }
+  }
+  if (tableStart < 0) {
+    return { prose: markdown.trim(), tables: "" };
+  }
+  return {
+    prose: lines.slice(0, tableStart).join("\n").trim(),
+    tables: lines.slice(tableStart).join("\n").trim(),
+  };
+}

@@ -3,6 +3,7 @@ import {
   embedText,
   embedTextsBatch,
 } from "@/lib/embeddings/text-similarity";
+import { sanitizeTableMarkdown } from "@/lib/study-ingest/table-text";
 import type { IngestPageArtifacts } from "@/lib/study-ingest/inject-pdf-tables-into-module";
 import { pageFigureCropKey, pageTableKey } from "@/lib/study-ingest/source-images/page-table-keys";
 import type { CourseModule } from "@/types/course";
@@ -203,13 +204,13 @@ export function formatAssetManifestForPrompt(assets: CourseAsset[]): string {
     const purpose = a.teachingPurpose ? ` — use when: ${a.teachingPurpose}` : "";
     return `[asset:${a.assetId}] ${kind}${page} — ${a.caption}${purpose}`;
   });
-  return `AVAILABLE PDF ASSETS (from the student's upload):
+  return `AVAILABLE PDF TABLES (from the student's upload):
 ${lines.join("\n")}
 
-ASSET PLACEMENT (required when an asset matches lesson content):
-- Insert {{asset:ASSET_ID}} on its own line where the table or figure belongs in that lesson's "content".
-- Do NOT describe a table/figure in prose without inserting its token.
-- Prefer {{asset:...}} tokens over retyping large grids — the renderer embeds the original visual or markdown table.`;
+TABLE PLACEMENT (required when a table matches lesson content):
+- Reproduce each matching table as a **full GitHub-flavored markdown table** in that lesson's "content" (header + |---| + every row). Use the table's markdown from TABLE DATA blocks when present.
+- Do NOT summarize table rows into prose only — include the complete grid.
+- Do NOT use {{asset:...}} tokens — students read markdown tables in the lesson body.`;
 }
 
 export function mergeManifestWithDbAssets(
@@ -297,11 +298,12 @@ export function resolveAssetTokensInContent(
     const id = rawId.trim();
     const asset = byId.get(id);
     if (!asset) return "";
+    // Figures attach via visual_assets only — never inline PNGs in lesson text.
     if (asset.url) {
-      return `\n\n![${asset.caption}](${asset.url})\n\n`;
+      return "";
     }
     if (asset.type === "table" && asset.markdown?.trim()) {
-      return `\n\n${asset.markdown.trim()}\n\n`;
+      return `\n\n${sanitizeTableMarkdown(asset.markdown).trim()}\n\n`;
     }
     return "";
   });

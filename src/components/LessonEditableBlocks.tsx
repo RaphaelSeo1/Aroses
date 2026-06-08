@@ -1,15 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { EditableSection } from "@/components/EditableSection";
-import { LessonImage } from "@/components/LessonImage";
 import { LessonMarkdownEditor } from "@/components/LessonMarkdownEditor";
 import { LessonQuoteCaptureRegion } from "@/components/LessonQuoteCaptureRegion";
 import { LessonSourceAttribution } from "@/components/LessonSourceAttribution";
 import { LessonRichContent } from "@/components/LessonRichContent";
 import { TypewriterText, useTypewriterString } from "@/components/TypewriterText";
-import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
 import type { CourseLesson, KeyTerm } from "@/types/course";
 
 function KeyTermReadOnlyCard({
@@ -60,6 +58,7 @@ export function LessonEditableBlocks({
   lesson,
   readOnly = false,
   animateReveal = false,
+  compactBuild = false,
 }: {
   materialId: string;
   moduleId: number;
@@ -68,6 +67,8 @@ export function LessonEditableBlocks({
   readOnly?: boolean;
   /** When `readOnly`, progressively reveal text (live PDF build theater). */
   animateReveal?: boolean;
+  /** Tighter layout while the PDF build preview is streaming in. */
+  compactBuild?: boolean;
 }) {
   const router = useRouter();
   const [section, setSection] = useState<Section>(null);
@@ -82,10 +83,6 @@ export function LessonEditableBlocks({
   const [draftExamples, setDraftExamples] = useState<string[]>(() => [
     ...lesson.examples,
   ]);
-
-  const hasSourceImages =
-    lessonMarkdownHasImages(lesson.content) ||
-    (lesson.visual_assets?.some((a) => a.imageUrl?.trim()) ?? false);
 
   const streamedBody = useTypewriterString(lesson.content ?? "", {
     mode: "chars",
@@ -158,7 +155,7 @@ export function LessonEditableBlocks({
 
   if (readOnly) {
     const titleEl = animateReveal ? (
-      <h3 className="mt-2 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+      <h3 className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
         <TypewriterText
           text={lesson.title}
           instantBelow={0}
@@ -167,7 +164,7 @@ export function LessonEditableBlocks({
         />
       </h3>
     ) : (
-      <h3 className="mt-2 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+      <h3 className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
         {lesson.title}
       </h3>
     );
@@ -178,44 +175,35 @@ export function LessonEditableBlocks({
       ) : null;
 
     const bodyEl = animateReveal ? (
-      <div className="mt-3">
-        <LessonRichContent markdown={streamedBody} visualAssets={lesson.visual_assets} />
+      <div className="mt-1.5">
+        <LessonRichContent markdown={streamedBody} />
       </div>
     ) : (
-      <div className="mt-3">
-        <LessonRichContent markdown={lesson.content} visualAssets={lesson.visual_assets} />
+      <div className="mt-1.5">
+        <LessonRichContent markdown={lesson.content} />
       </div>
     );
 
+    const sectionGap = compactBuild ? "space-y-4" : "space-y-6";
+
     return (
-      <article className="space-y-6">
+      <article className={sectionGap}>
         <LessonQuoteCaptureRegion
           lessonIndex={lessonIndex}
-          className="space-y-6"
+          className={sectionGap}
         >
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+              Lesson content
+            </p>
+            {bodyEl}
+          </div>
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
               Lesson title
             </p>
             {titleEl}
             {sourcesEl}
-          </div>
-          {/* Lazily-loaded licensed image from Wikimedia Commons.
-              Renders nothing when the classifier said this lesson
-              doesn't need one or no usable match was found. */}
-          {!hasSourceImages ? (
-            <LessonImage
-              materialId={materialId}
-              moduleId={moduleId}
-              lessonIndex={lessonIndex}
-              canManage={!readOnly}
-            />
-          ) : null}
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
-              Lesson content
-            </p>
-            {bodyEl}
           </div>
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
@@ -320,26 +308,12 @@ export function LessonEditableBlocks({
         <LessonSourceAttribution sources={lesson.sources} />
       ) : null}
 
-      {!hasSourceImages ? (
-        <LessonImage
-          materialId={materialId}
-          moduleId={moduleId}
-          lessonIndex={lessonIndex}
-          canManage={!readOnly}
-        />
-      ) : null}
-
       <EditableSection
         label="Lesson content"
         isEditing={section === "body"}
         onEdit={() => setSection("body")}
         onCancel={cancel}
-        view={
-          <LessonRichContent
-            markdown={lesson.content}
-            visualAssets={lesson.visual_assets}
-          />
-        }
+        view={<LessonRichContent markdown={lesson.content} />}
         edit={
           <div className="space-y-3">
             <LessonMarkdownEditor

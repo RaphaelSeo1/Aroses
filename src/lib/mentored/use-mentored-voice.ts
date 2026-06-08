@@ -49,6 +49,8 @@ const MIN_SPEECH_MS = 180;
 const TTS_VOICE_ID =
   process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID || "Rachel";
 
+type MentoredVoiceLanguage = "auto" | "en" | "es" | "fr" | "ko" | "ja" | "zh";
+
 export function useMentoredVoice(opts: {
   /**
    * Identifier passed to the TTS + transcribe routes for access
@@ -62,6 +64,12 @@ export function useMentoredVoice(opts: {
    */
   materialId?: string;
   sessionId?: string;
+  /**
+   * Teaching language for TTS + Whisper. When set to a specific code
+   * (e.g. "ko", "es") Rose speaks and listens in that language.
+   * "auto" leaves language detection to the models.
+   */
+  voiceLanguage?: MentoredVoiceLanguage;
   /** 0.5 .. 2.0 — adjusts both TTS pitch and recorded playback */
   playbackRate?: number;
   /**
@@ -292,6 +300,12 @@ export function useMentoredVoice(opts: {
     setState((s) => ({ ...s, speaking: false }));
   }, [stopBargeMonitor]);
 
+  const voiceLanguage = opts.voiceLanguage ?? "auto";
+  const voiceLanguageRef = useRef(voiceLanguage);
+  useEffect(() => {
+    voiceLanguageRef.current = voiceLanguage;
+  }, [voiceLanguage]);
+
   const ttsFetch = useCallback(
     (text: string, previousText: string | undefined, signal: AbortSignal) =>
       fetch("/api/voice-tutor/tts", {
@@ -305,6 +319,9 @@ export function useMentoredVoice(opts: {
           voiceId: TTS_VOICE_ID,
           stream: true,
           ...(previousText ? { previousText: previousText.slice(-1500) } : {}),
+          ...(voiceLanguageRef.current !== "auto"
+            ? { voiceLanguage: voiceLanguageRef.current }
+            : {}),
         }),
         signal,
       }),
@@ -854,6 +871,9 @@ export function useMentoredVoice(opts: {
           form.set("sessionId", opts.sessionId);
         } else if (opts.materialId) {
           form.set("materialId", opts.materialId);
+        }
+        if (voiceLanguageRef.current !== "auto") {
+          form.set("language", voiceLanguageRef.current);
         }
         const res = await fetch("/api/voice-tutor/transcribe", {
           method: "POST",

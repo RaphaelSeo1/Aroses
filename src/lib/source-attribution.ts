@@ -2,6 +2,10 @@ import {
   parseCourseStructurePlan,
   type CourseStructurePlan,
 } from "@/lib/ai/course-payload";
+import {
+  parsePageNumbersFromPosition,
+  parseSlideNumbersFromPosition,
+} from "@/lib/study-ingest/chunk-position";
 import type { CourseModule, SourceRef } from "@/types/course";
 
 /** Chunk metadata persisted on ingest jobs (no full text). */
@@ -93,6 +97,16 @@ function formatLocatorForPositions(positions: string[]): string {
   const trimmed = positions.map((p) => p.trim()).filter((p) => p.length > 0);
   if (trimmed.length === 0) return "document";
 
+  const slideNums = trimmed.flatMap((p) => parseSlideNumbersFromPosition(p));
+  if (slideNums.length === trimmed.length && slideNums.length > 0) {
+    return formatNumericRange("slides", slideNums);
+  }
+
+  const pageNums = trimmed.flatMap((p) => parsePageNumbersFromPosition(p));
+  if (pageNums.length > 0) {
+    return formatNumericRange("pages", pageNums);
+  }
+
   const slides = trimmed.map(parseSlideNumber);
   if (slides.every((n) => n !== null)) {
     return formatNumericRange("slides", slides as number[]);
@@ -106,6 +120,34 @@ function formatLocatorForPositions(positions: string[]): string {
   const unique = [...new Set(trimmed)];
   if (unique.length === 1) return unique[0]!;
   return unique.join(", ");
+}
+
+/** Parse `pages 5–6` / `page 3` from lesson `sources` locators. */
+export function parsePagesFromSourceLocator(locator: string): number[] {
+  const t = locator.trim();
+  const range = t.match(/\bpages?\s+(\d+)\s*[–-]\s*(\d+)\b/i);
+  if (range) {
+    const start = Number.parseInt(range[1]!, 10);
+    const end = Number.parseInt(range[2]!, 10);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+    const lo = Math.min(start, end);
+    const hi = Math.max(start, end);
+    const pages: number[] = [];
+    for (let p = lo; p <= hi; p++) pages.push(p);
+    return pages;
+  }
+  const singles = [...t.matchAll(/\bpages?\s+(\d+)\b/gi)];
+  if (singles.length > 0) {
+    return singles
+      .map((m) => Number.parseInt(m[1]!, 10))
+      .filter((n) => Number.isFinite(n));
+  }
+  const single = t.match(/\bpage\s+~?(\d+)\b/i);
+  if (single) {
+    const n = Number.parseInt(single[1]!, 10);
+    return Number.isFinite(n) ? [n] : [];
+  }
+  return [];
 }
 
 /** Turn chunk ids into grouped file + locator citations. */

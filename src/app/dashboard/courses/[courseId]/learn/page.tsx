@@ -7,8 +7,10 @@ import {
 import { orderMaterialIds } from "@/lib/study/order-material-ids";
 import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-module";
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
+import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
+import { parseCoursePayload } from "@/lib/ai/course-payload";
 import type { CoursePayload } from "@/types/course";
 import type {
   CourseMode,
@@ -111,7 +113,7 @@ export default async function LearnPage({ params, searchParams }: Props) {
   // ---- load course payload ----
   const { data: matRow, error: matErr } = await supabase
     .from("study_materials")
-    .select("id, course_id, course_payload")
+    .select("id, course_id, course_payload, asset_manifest")
     .eq("id", materialId)
     .eq("course_id", courseRow.id)
     .maybeSingle();
@@ -122,7 +124,14 @@ export default async function LearnPage({ params, searchParams }: Props) {
   }
   if (!matRow) notFound();
 
-  const payload = matRow.course_payload as CoursePayload | null | undefined;
+  let payload: CoursePayload | null = null;
+  try {
+    if (matRow.course_payload) {
+      payload = parseCoursePayload(matRow.course_payload);
+    }
+  } catch (e) {
+    console.error("[learn page] parse course_payload", e);
+  }
   const hasModules =
     payload &&
     typeof payload.title === "string" &&
@@ -262,6 +271,11 @@ export default async function LearnPage({ params, searchParams }: Props) {
   ]);
   const materialIds = orderMaterialIds(courseMaterials ?? [], examGroups ?? []);
 
+  const outputLanguage = await loadCourseOutputLanguageForMaterial(
+    supabase,
+    materialId
+  );
+
   return (
     <ImmersiveLearnClient
       courseId={courseId}
@@ -270,6 +284,7 @@ export default async function LearnPage({ params, searchParams }: Props) {
       initialModuleId={initialModuleId}
       initialOnboarding={initialOnboarding}
       initialMode={initialMode}
+      outputLanguage={outputLanguage}
       materialIds={materialIds}
     />
   );

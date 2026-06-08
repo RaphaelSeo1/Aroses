@@ -2,6 +2,8 @@ import type {
   ExtractedStudyContent,
   ExtractedStudyChunk,
 } from "@/lib/study-ingest/extract";
+import { normalizeIngestDisplayTitle } from "@/lib/study-ingest/normalize-ingest-title";
+import { splitBodyOnMajorSectionHeadings } from "@/lib/study-ingest/pdf-section-split";
 
 /** Behind STRUCTURE_PLANNING — AI decides course structure from content, not file count. */
 export function isStructurePlanningEnabled(): boolean {
@@ -53,14 +55,18 @@ function cleanTitleFromText(text: string, position?: string): string {
     const t = line.replace(/^[#>\-*\s]+/, "").trim();
     if (t.length === 0) return true;
     if (/^\d+$/.test(t)) return true;
-    if (t.length <= 2) return true;
+    if (t.length === 1) return true;
+    if (t.length === 2 && !/^[\uac00-\ud7a3]{2}$/.test(t)) return true;
+    if (t.length > 50) return true;
     return false;
   };
 
   for (const line of lines) {
     const stripped = line.replace(/^[#>\-*\s]+/, "").trim();
+    if (stripped.length > MAX_TITLE_CHARS) continue;
     if (!isBadTitle(stripped)) {
-      const title = stripped;
+      const title = normalizeIngestDisplayTitle(stripped);
+      if (title.length === 0 || isBadTitle(title)) continue;
       return title.length > MAX_TITLE_CHARS
         ? `${title.slice(0, MAX_TITLE_CHARS - 1).trim()}…`
         : title;
@@ -165,6 +171,27 @@ function positionLabel(
   return `section ${chunkOrdinal + 1}`;
 }
 
+/** Merge consecutive ingest chunks that share the same normalized title. */
+function mergeAdjacentChunksByTitle(chunks: IngestChunk[]): IngestChunk[] {
+  const out: IngestChunk[] = [];
+  for (const chunk of chunks) {
+    const title = normalizeIngestDisplayTitle(chunk.title);
+    const prev = out[out.length - 1];
+    if (prev && title.length > 0 && normalizeIngestDisplayTitle(prev.title) === title) {
+      const mergedText = `${prev.text}\n\n${chunk.text}`;
+      out[out.length - 1] = {
+        ...prev,
+        text: mergedText,
+        approxChars: mergedText.length,
+        position: `${prev.position} – ${chunk.position}`,
+      };
+      continue;
+    }
+    out.push(chunk);
+  }
+  return out;
+}
+
 /** Merge adjacent tiny slide chunks so the planner isn't flooded with stubs. */
 function coalesceSmall(chunks: ExtractedStudyChunk[]): ExtractedStudyChunk[] {
   const out: ExtractedStudyChunk[] = [];
@@ -227,20 +254,33 @@ export function buildIngestChunks(parts: ExtractedStudyContent[]): IngestChunk[]
     // Long PDFs arrive chunked per page — reuse so the planner covers every page.
     if (kind === "pdf" && part.chunks.length > 1) {
       const pageChunks = coalesceSmall(part.chunks);
+      const pdfChunkStart = chunks.length;
       for (let i = 0; i < pageChunks.length; i++) {
         if (chunks.length >= MAX_CHUNKS_TOTAL) break;
         const body = pageChunks[i].body.trim();
         if (body.length === 0) continue;
         const pos = positionLabel(part, i, true, pageChunks[i].attribution);
-        chunks.push({
-          id: nextId(),
-          sourceFileName: fileName,
-          position: pos,
-          title: cleanTitleFromText(body, pos),
-          text: body,
-          approxChars: body.length,
-        });
+        const sectionBodies = splitBodyOnMajorSectionHeadings(body);
+        for (let si = 0; si < sectionBodies.length; si++) {
+          if (chunks.length >= MAX_CHUNKS_TOTAL) break;
+          const text = sectionBodies[si]!.trim();
+          if (text.length === 0) continue;
+          const sectionPos =
+            sectionBodies.length > 1 ? `${pos} §${si + 1}` : pos;
+          chunks.push({
+            id: nextId(),
+            sourceFileName: fileName,
+            position: sectionPos,
+            title: cleanTitleFromText(text, sectionPos),
+            text,
+            approxChars: text.length,
+          });
+        }
       }
+      const pdfSlice = mergeAdjacentChunksByTitle(
+        chunks.slice(pdfChunkStart)
+      );
+      chunks.splice(pdfChunkStart, chunks.length - pdfChunkStart, ...pdfSlice);
       continue;
     }
 
