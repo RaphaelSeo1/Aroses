@@ -97,9 +97,25 @@ export type AutoGenerateBlock = {
   chunkId?: string;
 };
 
+export type StreamedNotesOptions = {
+  chunkId: string;
+  /** Optional H2 — typically the chunk concept. */
+  heading?: string;
+  dividerBefore?: boolean;
+  skipDedupe?: boolean;
+};
+
 export type NotesPanelHandle = {
   /** Append a structured block (heading + optional intro + bullets + optional callout). */
   appendBlock: (input: AutoGenerateBlock) => boolean;
+  /** Start a streaming AI notes block (typewriter into the editor). */
+  beginStreamedNotes: (input: StreamedNotesOptions) => boolean;
+  /** Append streamed text deltas from the notes API. */
+  appendStreamedNotesDelta: (delta: string) => void;
+  /** Mark streaming complete and persist chunk dedupe metadata. */
+  finishStreamedNotes: (chunkId: string) => void;
+  /** Cancel an in-progress stream (e.g. chunk changed). */
+  abortStreamedNotes: () => void;
   /** True when the editor has any saved note content. */
   hasContent: () => boolean;
   /** True when this chunk was already auto-appended (in doc metadata or heading). */
@@ -381,6 +397,49 @@ export function NotesPanel({
   });
   editorInstanceRef.current = editor;
 
+  const [streamingNotes, setStreamingNotes] = useState(false);
+  const streamingChunkIdRef = useRef<string | null>(null);
+
+  /** Insert text at doc end, splitting on paragraph / line breaks. */
+  const insertStreamText = useCallback(
+    (text: string) => {
+      if (!editor || editor.isDestroyed || !text) return;
+      let i = 0;
+      while (i < text.length) {
+        const paraBreak = text.indexOf("\n\n", i);
+        if (paraBreak === -1) {
+          const tail = text.slice(i);
+          if (!tail) break;
+          const lines = tail.split("\n");
+          lines.forEach((line, idx) => {
+            if (line) {
+              editor.chain().focus("end").insertContent(line).run();
+            }
+            if (idx < lines.length - 1) {
+              editor.chain().focus("end").setHardBreak().run();
+            }
+          });
+          break;
+        }
+        const before = text.slice(i, paraBreak);
+        if (before) {
+          const lines = before.split("\n");
+          lines.forEach((line, idx) => {
+            if (line) {
+              editor.chain().focus("end").insertContent(line).run();
+            }
+            if (idx < lines.length - 1) {
+              editor.chain().focus("end").setHardBreak().run();
+            }
+          });
+        }
+        editor.chain().focus("end").insertContent({ type: "paragraph" }).run();
+        i = paraBreak + 2;
+      }
+    },
+    [editor]
+  );
+
   // Imperative handle for the parent — auto-generate uses this to
   // append structured "Rose just covered X" blocks directly into the
   // doc. Layout is now Notion-style: H2 heading, optional intro,
@@ -650,6 +709,92 @@ export function NotesPanel({
         });
         return true;
       },
+      beginStreamedNotes: ({
+        chunkId,
+        heading,
+        dividerBefore,
+        skipDedupe,
+      }: StreamedNotesOptions) => {
+        if (!editor || editor.isDestroyed) return false;
+
+        if (
+          chunkId &&
+          !skipDedupe &&
+          isChunkAppended(chunkId, heading)
+        ) {
+          autoGenLog("stream skipped — chunk already in doc", { chunkId });
+          return false;
+        }
+
+        if (heading && !skipDedupe) {
+          const doc = editor.getJSON();
+          const nodes =
+            (
+              doc as {
+                content?: Array<{
+                  type?: string;
+                  content?: Array<{ text?: string; content?: unknown[] }>;
+                }>;
+              }
+            ).content ?? [];
+          const target = heading.trim();
+          if (
+            nodes.some(
+              (n) => n.type === "heading" && nodePlainText(n).trim() === target
+            )
+          ) {
+            autoGenLog("stream skipped — heading already present", { heading: target });
+            if (chunkId) {
+              const existing = readRoseAppendedChunkIds(doc);
+              if (!existing.includes(chunkId)) {
+                editor.commands.updateAttributes("doc", {
+                  roseAppendedChunkIds: [...existing, chunkId],
+                });
+              }
+            }
+            return false;
+          }
+        }
+
+        const chain = editor.chain().focus("end");
+        if (dividerBefore) {
+          chain.insertContent({ type: "horizontalRule" });
+        }
+        if (heading?.trim()) {
+          chain.insertContent({
+            type: "heading",
+            attrs: { level: 2 },
+            content: [{ type: "text", text: heading.trim() }],
+          });
+        }
+        chain.insertContent({ type: "paragraph" }).run();
+
+        streamingChunkIdRef.current = chunkId;
+        setStreamingNotes(true);
+        autoGenLog("stream started", { chunkId, heading });
+        return true;
+      },
+      appendStreamedNotesDelta: (delta: string) => {
+        insertStreamText(delta);
+      },
+      finishStreamedNotes: (chunkId: string) => {
+        if (editor && !editor.isDestroyed && chunkId) {
+          const existing = readRoseAppendedChunkIds(editor.getJSON());
+          if (!existing.includes(chunkId)) {
+            editor.commands.updateAttributes("doc", {
+              roseAppendedChunkIds: [...existing, chunkId],
+            });
+          }
+        }
+        streamingChunkIdRef.current = null;
+        setStreamingNotes(false);
+        autoGenLog("stream finished", { chunkId });
+      },
+      abortStreamedNotes: () => {
+        streamingChunkIdRef.current = null;
+        setStreamingNotes(false);
+        autoGenLog("stream aborted");
+      },
       hasContent: () => {
         if (!editor || editor.isDestroyed) return false;
         return docToPlainText(editor.getJSON()).trim().length > 0;
@@ -663,7 +808,7 @@ export function NotesPanel({
         autoGenLog("editor imperative handle cleared (this instance unmounted)");
       }
     };
-  }, [editor, editorRef]);
+  }, [editor, editorRef, insertStreamText]);
 
   const editorReadyFiredRef = useRef(false);
 
@@ -1023,7 +1168,7 @@ export function NotesPanel({
                     : "bg-zinc-300"
             }`}
           />
-          {savedLabel}
+          {streamingNotes ? "Rose is writing notes…" : savedLabel}
         </span>
         <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700">
           <input
@@ -1223,8 +1368,8 @@ export function NotesPanel({
               /
             </kbd>{" "}
             for commands, or toggle{" "}
-            <span className="text-zinc-500">✨ Auto-generate</span> to let Rose
-            fill these in.
+            <span className="text-zinc-500">✨ Auto-generate</span> to ask Rose
+            to write in-depth notes as she teaches.
           </p>
         </div>
       ) : null}

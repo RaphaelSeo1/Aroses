@@ -272,6 +272,56 @@ const GREETING_FALLBACK: Record<
   },
 };
 
+export type SessionReadyAckVariant = "fresh" | "resume";
+
+/** Warm line after the student says they're ready to start the lesson. */
+export function sessionReadyAckLine(
+  lang: CourseOutputLanguage,
+  opts?: {
+    contentSample?: string;
+    variant?: SessionReadyAckVariant;
+    /** Slang / high-energy replies (e.g. "yessurski") — not plain "yes". */
+    enthusiastic?: boolean;
+  }
+): string {
+  const resolved: TeachingLang =
+    lang === "auto"
+      ? inferLanguageFromSample(opts?.contentSample ?? "")
+      : lang;
+  const variant = opts?.variant ?? "fresh";
+  if (variant === "resume") {
+    const resume: Record<TeachingLang, string> = {
+      en: "Welcome back — let's pick up where we left off.",
+      ko: "다시 오셨네요 — 이어서 진행해 볼게요.",
+      es: "Bienvenido de nuevo — sigamos donde lo dejamos.",
+      fr: "Bon retour — reprenons où nous en étions.",
+      ja: "おかえりなさい — 前回の続きから始めましょう。",
+      zh: "欢迎回来——我们从上次停下的地方继续。",
+    };
+    return resume[resolved];
+  }
+  if (opts?.enthusiastic) {
+    const energetic: Record<TeachingLang, string> = {
+      en: "Love the energy — let's dive in.",
+      ko: "좋아요, 바로 시작해 볼게요.",
+      es: "¡Genial — empecemos!",
+      fr: "Parfait — on y va.",
+      ja: "いいですね、始めましょう。",
+      zh: "好，我们开始吧。",
+    };
+    return energetic[resolved];
+  }
+  const fresh: Record<TeachingLang, string> = {
+    en: "Great — let's get started.",
+    ko: "좋아요, 시작해 볼게요.",
+    es: "Perfecto — ¡empecemos!",
+    fr: "Parfait — on commence.",
+    ja: "では、始めましょう。",
+    zh: "好，我们开始吧。",
+  };
+  return fresh[resolved];
+}
+
 export function greetingFallbackLine(
   lang: CourseOutputLanguage,
   scenario: "first_time" | "returning" | "all_complete",

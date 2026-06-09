@@ -94,7 +94,7 @@ export async function POST(request: Request) {
 
   // When the user is out of voice time, stop the mic too (not just playback) so
   // the experience consistently falls back to text. 402 → client switches mode.
-  const allowance = await checkVoiceAllowance(user.id);
+  const allowance = await checkVoiceAllowance(user.id, { email: user.email });
   if (!allowance.allowed) {
     return NextResponse.json(voiceCapBody(), { status: 402 });
   }

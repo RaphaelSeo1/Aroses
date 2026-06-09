@@ -8,6 +8,8 @@ import type {
   MentoredLessonPlan,
   MentoredSessionPatch,
   MentoredSessionRecord,
+  TutorMode,
+  WhiteboardState,
 } from "@/types/mentored";
 
 /**
@@ -30,6 +32,23 @@ const DEFAULT_ATTEMPT_STATE: MentoredAttemptState = {
   lastEval: null,
 };
 
+function isTutorMode(v: unknown): v is TutorMode {
+  return (
+    v === "presenting" ||
+    v === "paused" ||
+    v === "answering" ||
+    v === "resuming"
+  );
+}
+
+function isWhiteboardState(v: unknown): v is WhiteboardState {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    Array.isArray((v as WhiteboardState).actions)
+  );
+}
+
 function normalize(row: {
   id: string;
   user_id: string;
@@ -40,10 +59,13 @@ function normalize(row: {
   last_recap: string | null;
   attempt_state: MentoredAttemptState | Record<string, unknown>;
   history: MentoredHistoryEntry[] | unknown;
+  tutor_mode?: string | null;
+  whiteboard_state_json?: WhiteboardState | Record<string, unknown> | null;
   last_seen_at: string;
   created_at: string;
   updated_at: string;
 }): MentoredSessionRecord {
+  const wb = row.whiteboard_state_json;
   return {
     id: row.id,
     userId: row.user_id,
@@ -57,6 +79,8 @@ function normalize(row: {
         ? row.attempt_state
         : { ...DEFAULT_ATTEMPT_STATE },
     history: Array.isArray(row.history) ? (row.history as MentoredHistoryEntry[]) : [],
+    tutorMode: isTutorMode(row.tutor_mode) ? row.tutor_mode : undefined,
+    whiteboardState: isWhiteboardState(wb) ? wb : undefined,
     lastSeenAt: row.last_seen_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -94,7 +118,7 @@ export async function GET(_request: Request, ctx: Params) {
   const { data, error } = await supabase
     .from("user_mentored_sessions")
     .select(
-      "id, user_id, material_id, module_id, chunk_index, lesson_plan, last_recap, attempt_state, history, last_seen_at, created_at, updated_at"
+      "id, user_id, material_id, module_id, chunk_index, lesson_plan, last_recap, attempt_state, history, tutor_mode, whiteboard_state_json, last_seen_at, created_at, updated_at"
     )
     .eq("user_id", user.id)
     .eq("material_id", materialId)
@@ -166,12 +190,16 @@ export async function PUT(request: Request, ctx: Params) {
   if (body.lastRecap !== undefined) update.last_recap = body.lastRecap;
   if (body.attemptState !== undefined) update.attempt_state = body.attemptState;
   if (body.appendHistory) update.history = nextHistory;
+  if (body.tutorMode !== undefined) update.tutor_mode = body.tutorMode;
+  if (body.whiteboardState !== undefined) {
+    update.whiteboard_state_json = body.whiteboardState;
+  }
 
   const { data, error } = await supabase
     .from("user_mentored_sessions")
     .upsert(update, { onConflict: "user_id,material_id" })
     .select(
-      "id, user_id, material_id, module_id, chunk_index, lesson_plan, last_recap, attempt_state, history, last_seen_at, created_at, updated_at"
+      "id, user_id, material_id, module_id, chunk_index, lesson_plan, last_recap, attempt_state, history, tutor_mode, whiteboard_state_json, last_seen_at, created_at, updated_at"
     )
     .maybeSingle();
 
@@ -189,7 +217,9 @@ export async function PUT(request: Request, ctx: Params) {
     body.lessonPlan !== undefined ||
     body.attemptState !== undefined ||
     body.lastRecap !== undefined ||
-    body.appendHistory !== undefined;
+    body.appendHistory !== undefined ||
+    body.whiteboardState !== undefined ||
+    body.tutorMode !== undefined;
 
   await syncCourseProgressFromMaterial(supabase, user.id, materialId, {
     materialId,

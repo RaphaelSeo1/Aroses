@@ -22,8 +22,9 @@ import type {
  * hearing the tutor within 1-2s.
  *
  * Event stream:
- *   event: text   data: { delta: string }   — incremental reply tokens
- *   event: meta   data: { intent, advance, addToFocusedReview }
+ *   event: text        data: { delta: string }   — incremental reply tokens
+ *   event: whiteboard  data: { actions: [...] }  — mid-reply live canvas marks
+ *   event: meta        data: { intent, advance, addToFocusedReview, whiteboardActions }
  *   event: done   data: {}
  *   event: error  data: { message }
  *
@@ -118,6 +119,7 @@ export async function POST(request: Request) {
     body.secondsSinceStudentSpoke >= 0
       ? body.secondsSinceStudentSpoke
       : null;
+  const chunkTeachingStarted = body.chunkTeachingStarted !== false;
 
   const supabase = await createClient();
   const {
@@ -185,9 +187,12 @@ export async function POST(request: Request) {
           secondsSinceStudentSpoke,
           personalization,
           outputLanguage,
+          chunkTeachingStarted,
         })) {
           if (evt.type === "text") {
             send("text", { delta: evt.delta });
+          } else if (evt.type === "whiteboard") {
+            send("whiteboard", { actions: evt.actions });
           } else if (evt.type === "meta") {
             addToFocusedReview = evt.addToFocusedReview;
             finalIntent = evt.intent;

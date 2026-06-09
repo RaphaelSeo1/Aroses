@@ -1,7 +1,15 @@
 "use client";
 
 import { memo, useEffect, useMemo, useState } from "react";
+import {
+  LiveOverlaySvg,
+  LiveWhiteboardLayer,
+} from "@/components/immersive/LiveWhiteboardLayer";
 import type { WhiteboardAction } from "@/types/mentored";
+import {
+  overlayDrawableActions,
+  visibleLiveActions,
+} from "@/lib/mentored/whiteboard-utils";
 
 /**
  * The whiteboard — concept headline, key points, optional markdown table,
@@ -11,6 +19,7 @@ import type { WhiteboardAction } from "@/types/mentored";
 type Beat =
   | { kind: "title" }
   | { kind: "point"; index: number }
+  | { kind: "figure" }
   | { kind: "table" };
 
 function WhiteboardOverlay({ actions }: { actions: WhiteboardAction[] }) {
@@ -24,7 +33,7 @@ function WhiteboardOverlay({ actions }: { actions: WhiteboardAction[] }) {
 
   return (
     <svg
-      className="pointer-events-none absolute inset-0 h-full w-full"
+      className="pointer-events-none absolute inset-0"
       viewBox="0 0 100 100"
       preserveAspectRatio="none"
       aria-hidden
@@ -110,8 +119,8 @@ function MarkdownTablePreview({ markdown }: { markdown: string }) {
   }
 
   return (
-    <div className="max-h-[26rem] overflow-auto">
-      <table className="w-full border-collapse text-left text-xs">
+    <div className="max-h-[min(26rem,42vh)] overflow-y-auto overscroll-y-contain">
+      <table className="w-full table-auto border-collapse text-left text-xs leading-normal">
         <tbody>
           {rows.map((cells, ri) => (
             <tr
@@ -119,7 +128,10 @@ function MarkdownTablePreview({ markdown }: { markdown: string }) {
               className={ri === 0 ? "bg-zinc-100 font-semibold" : "border-t border-zinc-200"}
             >
               {cells.map((cell, ci) => (
-                <td key={ci} className="px-3 py-2 align-top text-zinc-800">
+                <td
+                  key={ci}
+                  className="whitespace-normal px-3 py-2 align-top text-zinc-800"
+                >
                   {cell}
                 </td>
               ))}
@@ -140,6 +152,10 @@ function SlideStageImpl({
   autoAdvanceEnabled = false,
   preferTableBeat = false,
   whiteboardActions = [],
+  liveCanvasEnabled = false,
+  liveCanvasState,
+  assetImageUrl,
+  assetCaption,
 }: {
   chunkId: string;
   concept: string;
@@ -149,6 +165,17 @@ function SlideStageImpl({
   autoAdvanceEnabled?: boolean;
   preferTableBeat?: boolean;
   whiteboardActions?: WhiteboardAction[];
+  /** When true, renders the persistent live canvas overlay (additive). */
+  liveCanvasEnabled?: boolean;
+  /** Accumulated live-canvas actions + reveal state from the runner. */
+  liveCanvasState?: {
+    actions: WhiteboardAction[];
+    tableAnchored?: boolean;
+    revealedCount?: number;
+    assetId?: string | null;
+  };
+  assetImageUrl?: string | null;
+  assetCaption?: string | null;
 }) {
   const points = useMemo(
     () => keyPoints.map((p) => p.trim()).filter((p) => p.length > 0),
@@ -156,13 +183,15 @@ function SlideStageImpl({
   );
 
   const hasTableScene = Boolean(tableMarkdown?.trim());
+  const hasFigureScene = Boolean(assetImageUrl?.trim());
 
   const beats = useMemo<Beat[]>(() => {
     const b: Beat[] = [{ kind: "title" }];
     points.forEach((_, i) => b.push({ kind: "point", index: i }));
+    if (hasFigureScene) b.push({ kind: "figure" });
     if (hasTableScene) b.push({ kind: "table" });
     return b;
-  }, [points, hasTableScene]);
+  }, [hasFigureScene, hasTableScene, points]);
 
   const [beatIdx, setBeatIdx] = useState(0);
 
@@ -186,11 +215,13 @@ function SlideStageImpl({
         return;
       }
     }
-    if (hasTableScene && mentionsVisual(narrationText)) {
-      const target = beats.findIndex((b) => b.kind === "table");
+    if (mentionsVisual(narrationText)) {
+      const tableTarget = beats.findIndex((b) => b.kind === "table");
+      const figureTarget = beats.findIndex((b) => b.kind === "figure");
+      const target = tableTarget >= 0 ? tableTarget : figureTarget;
       if (target >= 0) setBeatIdx(target);
     }
-  }, [narrationText, points, beats, hasTableScene]);
+  }, [narrationText, points, beats]);
 
   useEffect(() => {
     if (!autoAdvanceEnabled) return;
@@ -213,10 +244,33 @@ function SlideStageImpl({
 
   const active = beats[Math.min(beatIdx, beats.length - 1)] ?? { kind: "title" };
 
+  const liveCanvas = useMemo(() => {
+    if (!liveCanvasEnabled || !liveCanvasState) {
+      return { actions: [] as WhiteboardAction[], tableAnchored: false };
+    }
+    return visibleLiveActions(
+      {
+        actions: liveCanvasState.actions,
+        tableAnchored: liveCanvasState.tableAnchored,
+        revealedCount: liveCanvasState.revealedCount,
+      },
+      narrationText ?? ""
+    );
+  }, [liveCanvasEnabled, liveCanvasState, narrationText]);
+
   const overlayActions = useMemo(() => {
-    if (active.kind !== "table") return [];
-    return whiteboardActions;
-  }, [whiteboardActions, active.kind]);
+    if (active.kind !== "table" && active.kind !== "figure") return [];
+    if (liveCanvasEnabled && liveCanvas.actions.length > 0) {
+      return overlayDrawableActions(liveCanvas.actions);
+    }
+    return whiteboardActions.filter(
+      (a) =>
+        a.type !== "clear" &&
+        a.type !== "show_asset" &&
+        a.type !== "show_table" &&
+        a.type !== "clear_except"
+    );
+  }, [active.kind, liveCanvas.actions, liveCanvasEnabled, whiteboardActions]);
 
   return (
     <section
@@ -244,8 +298,11 @@ function SlideStageImpl({
         </div>
       </div>
 
-      <div className="relative flex min-h-[clamp(20rem,46vh,30rem)] flex-1 items-center justify-center px-6 py-8 sm:px-10">
-        <div key={`${chunkId}-${beatIdx}`} className="slide-scene w-full">
+      <div className="relative grid min-h-[clamp(20rem,46vh,30rem)] flex-1 grid-rows-[minmax(0,1fr)_auto] gap-y-4 px-6 py-8 sm:px-10">
+        <div
+          key={`${chunkId}-${beatIdx}`}
+          className="slide-scene flex min-h-0 w-full items-center justify-center self-center"
+        >
           {active.kind === "title" ? (
             <div className="mx-auto max-w-3xl text-center">
               <h2 className="text-3xl font-semibold leading-tight tracking-tight text-zinc-900 sm:text-4xl">
@@ -261,6 +318,29 @@ function SlideStageImpl({
                 {points[active.index]}
               </p>
             </div>
+          ) : active.kind === "figure" && assetImageUrl ? (
+            <div className="mx-auto w-full max-w-3xl">
+              <figure className="overflow-hidden rounded-2xl border border-white/60 bg-white/80 shadow-sm ring-1 ring-white/50">
+                <div className="flex items-center justify-between gap-2 border-b border-white/60 px-3 py-2">
+                  <span className="truncate text-[11px] font-medium text-zinc-500">
+                    {assetCaption?.trim() || "Figure from your upload"}
+                  </span>
+                </div>
+                <div className="relative bg-white">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={assetImageUrl}
+                    alt={assetCaption?.trim() || "Figure from your upload"}
+                    className="block h-auto max-h-[26rem] w-full object-contain"
+                  />
+                  {liveCanvasEnabled ? (
+                    <LiveOverlaySvg actions={overlayActions} />
+                  ) : (
+                    <WhiteboardOverlay actions={overlayActions} />
+                  )}
+                </div>
+              </figure>
+            </div>
           ) : (
             <div className="mx-auto w-full max-w-3xl">
               {tableMarkdown ? (
@@ -272,13 +352,31 @@ function SlideStageImpl({
                   </div>
                   <div className="relative bg-white">
                     <MarkdownTablePreview markdown={tableMarkdown} />
-                    <WhiteboardOverlay actions={overlayActions} />
+                    {liveCanvasEnabled ? (
+                      <LiveOverlaySvg actions={overlayActions} />
+                    ) : (
+                      <WhiteboardOverlay actions={overlayActions} />
+                    )}
                   </div>
                 </figure>
               ) : null}
             </div>
           )}
         </div>
+        {liveCanvasEnabled ? (
+          <div className="relative z-10 w-full shrink-0 self-end">
+            <LiveWhiteboardLayer
+              tableMarkdown={tableMarkdown}
+              tableAnchored={
+                liveCanvas.tableAnchored && Boolean(tableMarkdown?.trim())
+              }
+              liveActions={liveCanvas.actions}
+              assetImageUrl={assetImageUrl}
+              assetCaption={assetCaption}
+              hideSubstrate={active.kind === "table" || active.kind === "figure"}
+            />
+          </div>
+        ) : null}
       </div>
 
       {beats.length > 1 ? (
@@ -290,9 +388,11 @@ function SlideStageImpl({
               aria-label={
                 b.kind === "title"
                   ? "Title"
-                  : b.kind === "table"
-                    ? "Table"
-                    : `Point ${b.index + 1}`
+                  : b.kind === "figure"
+                    ? "Figure"
+                    : b.kind === "table"
+                      ? "Table"
+                      : `Point ${b.index + 1}`
               }
               onClick={() => setBeatIdx(i)}
               className={

@@ -3,7 +3,7 @@
  * Leave enabled until the feature is confirmed stable in production.
  *
  * Tutor sessions: POST /api/tutor-session/[id]/synthesize-notes (Sonnet).
- * Mentored lessons: client-side chunk → structured block (no extra AI call).
+ * Mentored lessons: POST /api/mentored/notes/[materialId]/generate-stream (Sonnet, SSE).
  */
 
 export type AutoGenLogPayload = Record<string, unknown>;

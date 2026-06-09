@@ -1,4 +1,5 @@
 import "server-only";
+import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { getUserSubscription } from "@/lib/billing/subscription";
 import { voiceCapSeconds, type PlanTier } from "@/lib/billing/plans";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -62,13 +63,46 @@ function resolvePeriod(sub: {
   return { start, end: end.toISOString() };
 }
 
+async function isVoiceCapExemptUser(
+  userId: string,
+  email?: string | null
+): Promise<boolean> {
+  // Local dev: never meter voice — avoids false 402s when admin env isn't wired.
+  if (process.env.NODE_ENV === "development") return true;
+
+  if (isAppAdminEnvUser({ id: userId, email })) return true;
+
+  const admin = createAdminClient();
+  if (!admin) return false;
+
+  const { data } = await admin
+    .from("app_super_admins")
+    .select("user_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return Boolean(data);
+}
+
 /** Check whether the user may use voice right now (reads usage, doesn't mutate). */
 export async function checkVoiceAllowance(
-  userId: string
+  userId: string,
+  opts?: { email?: string | null }
 ): Promise<VoiceAllowance> {
   const sub = await getUserSubscription(userId);
   const capSeconds = voiceCapSeconds(sub.tier);
   const { start, end } = resolvePeriod(sub);
+
+  if (await isVoiceCapExemptUser(userId, opts?.email)) {
+    return {
+      allowed: true,
+      tier: sub.tier,
+      capSeconds,
+      usedSeconds: 0,
+      remainingSeconds: Number.MAX_SAFE_INTEGER,
+      periodStart: start.toISOString(),
+      periodEnd: end,
+    };
+  }
 
   const admin = createAdminClient();
   if (!admin) {

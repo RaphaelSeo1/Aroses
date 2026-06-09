@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { AnimatedWaveform } from "@/components/immersive/AnimatedWaveform";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { ImmersiveShell } from "@/components/immersive/ImmersiveShell";
@@ -28,21 +28,23 @@ import type {
   MentoredTurnResponse,
   TutorMode,
   WhiteboardAction,
+  WhiteboardState,
 } from "@/types/mentored";
 import {
   COURSE_OUTPUT_LANGUAGE_OPTIONS,
   courseOutputLanguageToVoiceLanguage,
   greetingFallbackLine,
   parseCourseOutputLanguage,
+  sessionReadyAckLine,
   softCheckInLine,
   type CourseOutputLanguage,
 } from "@/lib/course-output-language";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
-import { splitMarkdownBeforeFirstTable } from "@/lib/lesson-content-layout";
+import { applyWhiteboardActions } from "@/lib/mentored/whiteboard-utils";
+import { resolveChunkTableMarkdown } from "@/lib/lesson-content-layout";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
-import { buildAutoNotesFromChunk } from "@/lib/mentored/build-auto-notes";
 import { useMinWidth } from "@/hooks/use-min-width";
 
 /**
@@ -114,21 +116,13 @@ export function ImmersiveLessonRunner({
   const [answerText, setAnswerText] = useState("");
   /** Latest textarea value — safe to read inside async voice handlers. */
   const answerDraftRef = useRef("");
-  /** Utterance tied to the in-flight submit — only clear the box if unchanged. */
-  const answerAtSubmitRef = useRef<string | null>(null);
   const handleAnswerTextChange = useCallback((value: string) => {
     answerDraftRef.current = value;
     setAnswerText(value);
   }, []);
-  const clearSubmittedAnswerDraft = useCallback(() => {
-    const submitted = answerAtSubmitRef.current;
-    answerAtSubmitRef.current = null;
-    if (submitted === null) return;
-    setAnswerText((current) => {
-      if (current.trim() !== submitted) return current;
-      answerDraftRef.current = "";
-      return "";
-    });
+  const clearAnswerDraft = useCallback(() => {
+    answerDraftRef.current = "";
+    setAnswerText("");
   }, []);
   const [submitting, setSubmitting] = useState(false);
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(
@@ -152,6 +146,22 @@ export function ImmersiveLessonRunner({
   // Set when the monthly voice allowance is exhausted (server returns 402).
   // We softly drop to text mode — never a hard block mid-study.
   const [voiceCapped, setVoiceCapped] = useState(false);
+
+  // Reconcile cap banner with server on load (e.g. admin bypass added, dev reload).
+  useEffect(() => {
+    if (interactionMode !== "voice") return;
+    let cancelled = false;
+    void fetch("/api/voice-tutor/allowance")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: { allowed?: boolean } | null) => {
+        if (cancelled || !body?.allowed) return;
+        setVoiceCapped(false);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [interactionMode, materialId]);
 
   // Barge-in handler — defined after `submitAnswer` would create a forward
   // reference, so we use a ref the hook reads at fire time. Set below.
@@ -179,22 +189,23 @@ export function ImmersiveLessonRunner({
   }, []);
 
   const teachingLangStorageKey = `rose:mentored:lang:${materialId}`;
-  const [teachingLanguage, setTeachingLanguage] = useState<CourseOutputLanguage>(
-    () => {
-      if (typeof window === "undefined") return outputLanguage;
-      try {
-        const stored = window.localStorage.getItem(teachingLangStorageKey);
-        if (stored) return parseCourseOutputLanguage(stored);
-      } catch {
-        /* ignore */
-      }
-      return outputLanguage;
-    }
-  );
+  const [teachingLanguage, setTeachingLanguage] =
+    useState<CourseOutputLanguage>(outputLanguage);
   const teachingLanguageRef = useRef(teachingLanguage);
   useEffect(() => {
     teachingLanguageRef.current = teachingLanguage;
   }, [teachingLanguage]);
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(teachingLangStorageKey);
+      if (!stored) return;
+      const parsed = parseCourseOutputLanguage(stored);
+      setTeachingLanguage(parsed);
+      teachingLanguageRef.current = parsed;
+    } catch {
+      /* ignore */
+    }
+  }, [teachingLangStorageKey]);
 
   const updateTeachingLanguage = useCallback(
     (next: CourseOutputLanguage) => {
@@ -284,6 +295,13 @@ export function ImmersiveLessonRunner({
   const [whiteboardActions, setWhiteboardActions] = useState<WhiteboardAction[]>(
     []
   );
+  /** Persistent live canvas (additive layer on SlideStage). */
+  const [liveCanvasState, setLiveCanvasState] = useState<WhiteboardState>({
+    actions: [],
+  });
+  const liveCanvasPersistRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const [tutorMode, setTutorMode] = useState<TutorMode>("presenting");
 
   // ---- notes panel (§2) ----
@@ -300,6 +318,7 @@ export function ImmersiveLessonRunner({
   const lessonColumnRef = useRef<HTMLDivElement>(null);
   const [pairedColumnHeight, setPairedColumnHeight] = useState<number | null>(null);
   const notesAppendedChunkRef = useRef<string | null>(null);
+  const notesGenerationAcRef = useRef<AbortController | null>(null);
   const liveCycleGuardRef = useRef(false);
   const [notesEditorReady, setNotesEditorReady] = useState(false);
   const onNotesEditorReady = useCallback(() => {
@@ -346,6 +365,12 @@ export function ImmersiveLessonRunner({
   // doesn't talk over the welcome line.
   const [greetingPlayed, setGreetingPlayed] = useState(false);
   const greetingFiredRef = useRef(false);
+  const greetingScenarioRef = useRef<
+    "first_time" | "returning" | "all_complete"
+  >("first_time");
+  const isResumingSessionRef = useRef(false);
+  /** Stable id for the session-opening greeting line (always index 0). */
+  const sessionGreetingLineIdRef = useRef<string | null>(null);
   // True when this mount is resuming a returning student into the chunk they
   // left off on. Consumed by the chunk-speak effect so we surface the check
   // question (popup + voice) again instead of silently replaying the whole
@@ -371,6 +396,7 @@ export function ImmersiveLessonRunner({
   >(null);
   // ---- scrollable dialogue (persists across turns) ----
   const dialogueStorageKey = `mentored-dialogue:${materialId}:${activeModule.id}`;
+  const transcriptIdRef = useRef(0);
   const [transcriptLines, setTranscriptLines] = useState<TranscriptLine[]>(() => {
     try {
       const raw = sessionStorage.getItem(
@@ -378,13 +404,14 @@ export function ImmersiveLessonRunner({
       );
       if (!raw) return [];
       const parsed = JSON.parse(raw) as TranscriptLine[];
-      return Array.isArray(parsed) ? parsed : [];
+      const lines = Array.isArray(parsed) ? parsed : [];
+      syncTranscriptIdCounter(transcriptIdRef, lines);
+      return lines;
     } catch {
       return [];
     }
   });
   const activeRoseLineIdRef = useRef<string | null>(null);
-  const transcriptIdRef = useRef(0);
   const nextTranscriptId = useCallback(() => {
     transcriptIdRef.current += 1;
     return `t-${transcriptIdRef.current}`;
@@ -432,6 +459,22 @@ export function ImmersiveLessonRunner({
     [nextTranscriptId]
   );
 
+  /** Session greeting always belongs first — prepend or update in place. */
+  const prependOrUpdateSessionGreeting = useCallback(
+    (text: string) => {
+      setTranscriptLines((prev) => {
+        const gid = sessionGreetingLineIdRef.current;
+        if (gid) {
+          return prev.map((l) => (l.id === gid ? { ...l, text } : l));
+        }
+        const id = nextTranscriptId();
+        sessionGreetingLineIdRef.current = id;
+        return [{ role: "rose", text, id }, ...prev];
+      });
+    },
+    [nextTranscriptId]
+  );
+
   // ----- load session -----
   const loadSession = useCallback(async () => {
     setPhase("loading-session");
@@ -453,6 +496,9 @@ export function ImmersiveLessonRunner({
       if (body.session && moduleMatches) {
         setChunkIdx(body.session.chunkIndex ?? 0);
         setAttempts(body.session.attemptState?.attempts ?? 0);
+        if (body.session.whiteboardState?.actions?.length) {
+          setLiveCanvasState(body.session.whiteboardState);
+        }
         if (body.session.lessonPlan?.moduleId === activeModule.id) {
           setPlan(body.session.lessonPlan);
         }
@@ -577,6 +623,53 @@ export function ImmersiveLessonRunner({
     [materialId]
   );
 
+  const scheduleLiveCanvasPersist = useCallback(
+    (state: WhiteboardState) => {
+      if (liveCanvasPersistRef.current) {
+        clearTimeout(liveCanvasPersistRef.current);
+      }
+      liveCanvasPersistRef.current = setTimeout(() => {
+        void persist({ whiteboardState: state });
+      }, 600);
+    },
+    [persist]
+  );
+
+  const mergeLegacyWhiteboardActions = useCallback(
+    (incoming: WhiteboardAction[]) => {
+      setWhiteboardActions((prev) => {
+        const merged = [...prev];
+        for (const action of incoming) {
+          if (action.type === "clear") return [];
+          if (
+            action.type === "show_asset" ||
+            action.type === "show_table" ||
+            action.type === "highlight_bbox" ||
+            action.type === "clear_except"
+          ) {
+            continue;
+          }
+          merged.push(action);
+        }
+        return merged.slice(-12);
+      });
+    },
+    []
+  );
+
+  const applyLiveCanvasActions = useCallback(
+    (incoming: WhiteboardAction[]) => {
+      if (incoming.length === 0) return;
+      setLiveCanvasState((prev) => {
+        const next = applyWhiteboardActions(prev, incoming);
+        scheduleLiveCanvasPersist(next);
+        return next;
+      });
+      mergeLegacyWhiteboardActions(incoming);
+    },
+    [mergeLegacyWhiteboardActions, scheduleLiveCanvasPersist]
+  );
+
   const progressRef = useRef({ moduleId: activeModule.id, chunkIdx: 0 });
   progressRef.current = { moduleId: activeModule.id, chunkIdx };
 
@@ -602,9 +695,59 @@ export function ImmersiveLessonRunner({
 
   useEffect(() => {
     setPreferTableBeat(false);
-    setWhiteboardActions(chunk?.whiteboardActions ?? []);
+    const planned = chunk?.whiteboardActions ?? [];
+    setWhiteboardActions(planned);
     setTutorMode("presenting");
-  }, [chunk?.id, chunk?.whiteboardActions]);
+
+    const sourceLesson =
+      typeof chunk?.sourceLessonIndex === "number"
+        ? activeModule.lessons[chunk.sourceLessonIndex]
+        : undefined;
+    const preferredIdx =
+      typeof chunk?.sourceLessonIndex === "number"
+        ? chunk.sourceLessonIndex
+        : undefined;
+    const tableMarkdown = chunk
+      ? resolveChunkTableMarkdown(activeModule.lessons, preferredIdx, chunk)
+      : null;
+    const hasTable = Boolean(tableMarkdown);
+    const needsTableAnchor =
+      hasTable && !planned.some((a) => a.type === "show_table");
+    const seedActions: WhiteboardAction[] = needsTableAnchor
+      ? [{ type: "show_table" }, ...planned]
+      : planned;
+
+    const seedState: WhiteboardState = {
+      actions: seedActions,
+      tableAnchored: hasTable,
+      revealedCount: 0,
+    };
+
+    const restored =
+      session?.whiteboardState?.actions?.length &&
+      session?.chunkIndex === chunkIdx
+        ? session.whiteboardState
+        : null;
+
+    setLiveCanvasState(
+      restored
+        ? {
+            ...seedState,
+            ...restored,
+            actions: restored.actions ?? seedState.actions,
+            tableAnchored: hasTable,
+          }
+        : seedState
+    );
+  }, [
+    activeModule.lessons,
+    chunk?.id,
+    chunk?.sourceLessonIndex,
+    chunk?.whiteboardActions,
+    chunkIdx,
+    session?.chunkIndex,
+    session?.whiteboardState,
+  ]);
 
   const moduleCount = course.modules.length;
   const moduleIdx = course.modules.findIndex((m) => m.id === activeModule.id);
@@ -619,12 +762,39 @@ export function ImmersiveLessonRunner({
   }, [activeModule.lessons, chunk]);
 
   const whiteboardTableMarkdown = useMemo(() => {
+    if (!chunk) return null;
+    const preferredIdx =
+      typeof chunk.sourceLessonIndex === "number"
+        ? chunk.sourceLessonIndex
+        : undefined;
+    return resolveChunkTableMarkdown(activeModule.lessons, preferredIdx, chunk);
+  }, [chunk, activeModule.lessons]);
+
+  const whiteboardAssetImage = useMemo(() => {
     if (!chunk || typeof chunk.sourceLessonIndex !== "number") return null;
     const lesson = activeModule.lessons[chunk.sourceLessonIndex];
-    if (!lesson?.content?.trim()) return null;
-    const { tables } = splitMarkdownBeforeFirstTable(lesson.content);
-    return tables.trim() || null;
-  }, [chunk, activeModule.lessons]);
+    const assets = lesson?.visual_assets ?? [];
+    if (assets.length === 0) return null;
+
+    const assetId =
+      liveCanvasState.assetId ??
+      liveCanvasState.actions.find((a) => a.type === "show_asset")?.assetId;
+
+    const preferFigures = Boolean(whiteboardTableMarkdown);
+    const pool = preferFigures
+      ? assets.filter((a) => a.type !== "table" && a.imageUrl?.trim())
+      : assets.filter((a) => a.imageUrl?.trim());
+    const candidates = pool.length > 0 ? pool : assets.filter((a) => a.imageUrl?.trim());
+
+    const match = assetId
+      ? candidates.find((a) => a.assetId === assetId)
+      : candidates.find((a) => a.imageUrl?.trim());
+    if (!match?.imageUrl?.trim()) return null;
+    return {
+      url: match.imageUrl,
+      caption: match.caption || match.title,
+    };
+  }, [activeModule.lessons, chunk, liveCanvasState, whiteboardTableMarkdown]);
 
   useEffect(() => {
     setPreferTableBeat(Boolean(whiteboardTableMarkdown));
@@ -706,6 +876,12 @@ export function ImmersiveLessonRunner({
       : isFirstTime
         ? "first_time"
         : "returning";
+    greetingScenarioRef.current = scenario;
+    isResumingSessionRef.current =
+      scenario !== "first_time" ||
+      (session?.chunkIndex ?? 0) > 0 ||
+      chunkIdx > 0 ||
+      transcriptLines.length > 0;
 
     // Returning into a mid-lesson chunk: flag a resume so the chunk-speak
     // effect re-surfaces the check question instead of replaying everything.
@@ -736,8 +912,21 @@ export function ImmersiveLessonRunner({
     const firstLessonTitle =
       activeModule.lessons[0]?.title ?? activeModule.title ?? undefined;
 
+    const fallbackGreeting = greetingFallbackLine(
+      teachingLanguageRef.current,
+      scenario,
+      course.title,
+      lastLessonTitle,
+      activeModule.lessons[0]?.content ?? course.title
+    );
+    // Show the greeting immediately so Continue / chunk teaching can't
+    // race ahead of the async /api/mentored/greeting fetch and append
+    // teaching lines first.
+    prependOrUpdateSessionGreeting(fallbackGreeting);
+    setTutorReply(fallbackGreeting);
+
     void (async () => {
-      let text = "";
+      let text = fallbackGreeting;
       try {
         const res = await fetch("/api/mentored/greeting", {
           method: "POST",
@@ -754,25 +943,23 @@ export function ImmersiveLessonRunner({
         });
         if (res.ok) {
           const body = (await res.json()) as { greeting?: string };
-          text = (body.greeting ?? "").trim();
+          const fetched = (body.greeting ?? "").trim();
+          if (fetched) text = fetched;
         }
       } catch (e) {
         console.error("[imm runner greeting fetch]", e);
       }
-      if (!text) {
-        text = greetingFallbackLine(
-          teachingLanguageRef.current,
-          scenario,
-          course.title,
-          lastLessonTitle,
-          activeModule.lessons[0]?.content ?? course.title
-        );
-      }
 
-      appendTranscriptLine({ role: "rose", text });
+      prependOrUpdateSessionGreeting(text);
       setTutorReply(text);
       lastSpokenRef.current = text;
-      if (interactionModeRef.current === "voice") {
+      const greetingAlreadyInDialogue = transcriptLines.some(
+        (l) => l.role === "rose" && l.text.trim() === text.trim()
+      );
+      if (
+        interactionModeRef.current === "voice" &&
+        !greetingAlreadyInDialogue
+      ) {
         try {
           await voice.speak(text);
         } catch (e) {
@@ -843,24 +1030,130 @@ export function ImmersiveLessonRunner({
         return;
       }
 
-      const block = buildAutoNotesFromChunk(chunk, lessonKeyTerms);
-      if (!block) {
-        autoGenLog("append aborted — no structured note content", {
-          keyPoints: chunk.keyPoints,
-          concept: chunk.concept,
+      notesGenerationAcRef.current?.abort();
+      const ac = new AbortController();
+      notesGenerationAcRef.current = ac;
+
+      const sourceLesson =
+        typeof chunk.sourceLessonIndex === "number"
+          ? activeModule.lessons[chunk.sourceLessonIndex]
+          : undefined;
+      const lessonExcerpt = sourceLesson?.content?.slice(0, 4_000) ?? "";
+      const roseSpoken = transcriptLines
+        .filter((l) => l.role === "rose" && l.text.trim().length > 0)
+        .map((l) => l.text.trim())
+        .join("\n\n")
+        .slice(-4_000);
+
+      const began = notesPanelRef.current.beginStreamedNotes({
+        chunkId: chunk.id,
+        heading: chunk.concept,
+        dividerBefore: notesPanelRef.current.hasContent(),
+        skipDedupe: opts?.skipDedupe,
+      });
+      if (!began) {
+        autoGenLog("append aborted — beginStreamedNotes returned false", {
+          chunkId: chunk.id,
         });
         return;
       }
 
-      const appended = notesPanelRef.current.appendBlock({
-        ...block,
-        chunkId: chunk.id,
-        skipDedupe: opts?.skipDedupe,
-      });
-      autoGenLog("appendBlock returned", { appended, chunkId: chunk.id });
-      if (appended) notesAppendedChunkRef.current = chunk.id;
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/mentored/notes/${materialId}/generate-stream`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chunk,
+                courseTitle: course.title,
+                moduleTitle: activeModule.title,
+                lessonTitle: sourceLesson?.title ?? chunk.concept,
+                lessonExcerpt,
+                courseKeyTerms: lessonKeyTerms,
+                roseSpoken: roseSpoken || undefined,
+              }),
+              signal: ac.signal,
+            }
+          );
+
+          if (!res.ok || !res.body) {
+            const body = (await res.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            throw new Error(body.error || `HTTP ${res.status}`);
+          }
+
+          const decoder = new TextDecoder();
+          const reader = res.body.getReader();
+          let buf = "";
+          let gotText = false;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let sepIdx: number;
+            while ((sepIdx = buf.indexOf("\n\n")) >= 0) {
+              const raw = buf.slice(0, sepIdx);
+              buf = buf.slice(sepIdx + 2);
+              let event = "message";
+              let data = "";
+              for (const line of raw.split("\n")) {
+                if (line.startsWith("event:")) event = line.slice(6).trim();
+                else if (line.startsWith("data:")) data += line.slice(5).trim();
+              }
+              if (!data) continue;
+              const parsed = JSON.parse(data) as Record<string, unknown>;
+              if (event === "text" && typeof parsed.delta === "string") {
+                gotText = true;
+                notesPanelRef.current?.appendStreamedNotesDelta(parsed.delta);
+              } else if (event === "error") {
+                throw new Error(
+                  typeof parsed.message === "string"
+                    ? parsed.message
+                    : "Notes generation failed"
+                );
+              }
+            }
+          }
+
+          if (gotText) {
+            notesPanelRef.current?.finishStreamedNotes(chunk.id);
+            notesAppendedChunkRef.current = chunk.id;
+            autoGenLog("stream append complete", { chunkId: chunk.id });
+          } else {
+            notesPanelRef.current?.abortStreamedNotes();
+            autoGenLog("append aborted — empty stream", { chunkId: chunk.id });
+          }
+        } catch (e) {
+          if (ac.signal.aborted) {
+            notesPanelRef.current?.abortStreamedNotes();
+            autoGenLog("stream aborted", { chunkId: chunk.id });
+            return;
+          }
+          autoGenLogError("stream notes failed", e, { chunkId: chunk.id });
+          notesPanelRef.current?.abortStreamedNotes();
+        } finally {
+          if (notesGenerationAcRef.current === ac) {
+            notesGenerationAcRef.current = null;
+          }
+        }
+      })();
     },
-    [autoGenerateNotes, chunk, lessonKeyTerms, notesEditorReady, phase]
+    [
+      activeModule.lessons,
+      activeModule.title,
+      autoGenerateNotes,
+      chunk,
+      course.title,
+      lessonKeyTerms,
+      materialId,
+      notesEditorReady,
+      phase,
+      transcriptLines,
+    ]
   );
 
   const handleAutoGenerateUserToggle = useCallback(
@@ -894,6 +1187,12 @@ export function ImmersiveLessonRunner({
     if (consumedSuggestionIds.has(id)) return [];
     return [{ id, heading, text }];
   }, [chunk, phase, consumedSuggestionIds]);
+
+  useEffect(() => {
+    notesGenerationAcRef.current?.abort();
+    notesPanelRef.current?.abortStreamedNotes();
+    notesAppendedChunkRef.current = null;
+  }, [chunk?.id]);
 
   useEffect(() => {
     appendAutoNotesForChunk();
@@ -932,15 +1231,20 @@ export function ImmersiveLessonRunner({
     setTextCheckRevealed(false);
     setTextPendingAdvance(false);
     activeRoseLineIdRef.current = null;
+    sessionGreetingLineIdRef.current = null;
     try {
       const raw = sessionStorage.getItem(dialogueStorageKey);
       if (raw) {
         const parsed = JSON.parse(raw) as TranscriptLine[];
-        setTranscriptLines(Array.isArray(parsed) ? parsed : []);
+        const lines = Array.isArray(parsed) ? parsed : [];
+        syncTranscriptIdCounter(transcriptIdRef, lines);
+        setTranscriptLines(lines);
       } else {
+        transcriptIdRef.current = 0;
         setTranscriptLines([]);
       }
     } catch {
+      transcriptIdRef.current = 0;
       setTranscriptLines([]);
     }
   }, [activeModule.id, dialogueStorageKey]);
@@ -1092,14 +1396,50 @@ export function ImmersiveLessonRunner({
     transcriptLines,
   ]);
 
-  const acknowledgeAndContinue = useCallback(() => {
-    awaitingContinueRef.current = false;
-    setAwaitingContinue(false);
-    setGreetingPlayed(true);
-    lessonJustOpenedAtRef.current = Date.now();
-    lastSpokenChunkIdRef.current = null;
-    voice.cancelSpeak();
-  }, [voice]);
+  // Text mode: keep live-canvas progressive reveal synced to visible dialogue.
+  useEffect(() => {
+    if (phase !== "teaching" || interactionMode !== "text" || !chunk) return;
+    const roseText = transcriptLines
+      .filter((l) => l.role === "rose")
+      .map((l) => l.text ?? "")
+      .join(" ")
+      .trim();
+    if (roseText) setNarrationText(roseText);
+  }, [chunk, interactionMode, phase, transcriptLines]);
+
+  const sessionAckOpts = useCallback(
+    (utterance?: string) => ({
+      contentSample: chunk?.explanation ?? activeModule.lessons[0]?.content,
+      variant: (isResumingSessionRef.current ? "resume" : "fresh") as
+        | "fresh"
+        | "resume",
+      enthusiastic: utterance ? isEnthusiasticReadyReply(utterance) : false,
+    }),
+    [activeModule.lessons, chunk?.explanation]
+  );
+
+  /** Continue after the opening greeting — always ack in dialogue (+ voice). */
+  const continueFromGreeting = useCallback(
+    (utterance?: string) => {
+      awaitingContinueRef.current = false;
+      setAwaitingContinue(false);
+      setGreetingPlayed(true);
+      lessonJustOpenedAtRef.current = Date.now();
+      lastSpokenChunkIdRef.current = null;
+      voice.cancelSpeak();
+      const ackText = sessionReadyAckLine(
+        teachingLanguageRef.current,
+        sessionAckOpts(utterance?.trim())
+      );
+      appendTranscriptLineOnce({ role: "rose", text: ackText });
+      if (interactionModeRef.current === "voice") {
+        void voice.speak(ackText).catch((e) => {
+          console.error("[imm runner continue ack speak]", e);
+        });
+      }
+    },
+    [appendTranscriptLineOnce, sessionAckOpts, voice]
+  );
 
   // ----- submit (streaming turn → sentence-streamed TTS) -----
   //
@@ -1116,10 +1456,35 @@ export function ImmersiveLessonRunner({
       const text = utterance.trim();
       if (text.length < 2) return;
 
-      // Welcome / resume: "yes I'm ready" is not an answer to the check Q.
+      // Welcome / resume: casual yes is not an answer to the check Q.
       if (awaitingContinueRef.current) {
         appendTranscriptLine({ role: "student", text });
-        acknowledgeAndContinue();
+        clearAnswerDraft();
+        continueFromGreeting(text);
+        return;
+      }
+
+      const chunkTeachingStarted = chunk
+        ? hasChunkTeachingStarted(chunk, transcriptLines, lastCheckAtRef.current)
+        : false;
+
+      if (
+        chunk &&
+        !chunkTeachingStarted &&
+        attempts === 0 &&
+        lastCheckAtRef.current == null &&
+        (isSessionReadyAcknowledgement(text) || isVagueAffirmative(text))
+      ) {
+        appendTranscriptLine({ role: "student", text });
+        clearAnswerDraft();
+        appendTranscriptLine({
+          role: "rose",
+          text: sessionReadyAckLine(
+            teachingLanguageRef.current,
+            sessionAckOpts(text)
+          ),
+        });
+        lessonJustOpenedAtRef.current = Date.now();
         return;
       }
 
@@ -1136,9 +1501,13 @@ export function ImmersiveLessonRunner({
         isSessionReadyAcknowledgement(text)
       ) {
         appendTranscriptLine({ role: "student", text });
+        clearAnswerDraft();
         appendTranscriptLine({
           role: "rose",
-          text: "Sounds good — let's keep going.",
+          text: sessionReadyAckLine(
+            teachingLanguageRef.current,
+            sessionAckOpts(text)
+          ),
         });
         lessonJustOpenedAtRef.current = null;
         return;
@@ -1171,10 +1540,10 @@ export function ImmersiveLessonRunner({
       activeTurnStreamRef.current = streamAc;
       const isStale = () => turnGenerationRef.current !== turnGen;
 
-      answerAtSubmitRef.current = text;
       setSubmitting(true);
       setReplyTurn((n) => n + 1);
       appendTranscriptLine({ role: "student", text });
+      clearAnswerDraft();
       activeRoseLineIdRef.current = appendTranscriptLine({
         role: "rose",
         text: "",
@@ -1222,6 +1591,7 @@ export function ImmersiveLessonRunner({
             secondsSinceLastCheck,
             secondsSinceStudentSpoke,
             outputLanguage: teachingLanguageRef.current,
+            chunkTeachingStarted,
           }),
           signal: streamAc.signal,
         });
@@ -1243,6 +1613,7 @@ export function ImmersiveLessonRunner({
 
         async function* eachSseEvent(): AsyncGenerator<
           | { type: "text"; delta: string }
+          | { type: "whiteboard"; actions: WhiteboardAction[] }
           | {
               type: "meta";
               intent: MentoredTurnResponse["intent"];
@@ -1275,6 +1646,13 @@ export function ImmersiveLessonRunner({
                 const parsed = JSON.parse(data) as Record<string, unknown>;
                 if (event === "text" && typeof parsed.delta === "string") {
                   yield { type: "text", delta: parsed.delta };
+                } else if (event === "whiteboard") {
+                  const wbActions = Array.isArray(parsed.actions)
+                    ? (parsed.actions as WhiteboardAction[])
+                    : [];
+                  if (wbActions.length > 0) {
+                    yield { type: "whiteboard", actions: wbActions };
+                  }
                 } else if (event === "meta") {
                   const wbActions = Array.isArray(parsed.whiteboardActions)
                     ? (parsed.whiteboardActions as WhiteboardAction[])
@@ -1342,7 +1720,11 @@ export function ImmersiveLessonRunner({
                       : l
                   );
                 });
-                setTutorReply((prev) => (prev ?? "") + ev.delta);
+                setTutorReply((prev) => {
+                  const next = (prev ?? "") + ev.delta;
+                  setNarrationText(next);
+                  return next;
+                });
               }
               // Flush complete sentences (ending in . ! ? or newline).
               // We require a terminator + whitespace OR end-of-buffer so
@@ -1369,6 +1751,8 @@ export function ImmersiveLessonRunner({
                 lastIdx = re.lastIndex;
               }
               if (lastIdx > 0) pendingBuf = pendingBuf.slice(lastIdx);
+            } else if (ev.type === "whiteboard") {
+              applyLiveCanvasActions(ev.actions);
             } else if (ev.type === "meta") {
               finalIntent = ev.intent;
               finalAdvance = ev.advance;
@@ -1390,20 +1774,7 @@ export function ImmersiveLessonRunner({
                 setTutorMode("resuming");
               }
               if (ev.whiteboardActions?.length) {
-                setWhiteboardActions((prev) => {
-                  const merged = [...prev];
-                  for (const action of ev.whiteboardActions!) {
-                    if (action.type === "clear") return [];
-                    if (
-                      action.type === "show_asset" ||
-                      action.type === "highlight_bbox"
-                    ) {
-                      continue;
-                    }
-                    merged.push(action);
-                  }
-                  return merged.slice(-12);
-                });
+                applyLiveCanvasActions(ev.whiteboardActions);
               }
             } else if (ev.type === "done") {
               // Flush any buffered sentences + the incomplete tail as one
@@ -1533,7 +1904,6 @@ export function ImmersiveLessonRunner({
           // Text mode: student reads feedback, then taps to advance.
           setTextPendingAdvance(true);
           setAttempts(0);
-          clearSubmittedAnswerDraft();
           await persist({
             attemptState: {
               chunkIndex: chunkIdx,
@@ -1553,11 +1923,11 @@ export function ImmersiveLessonRunner({
           const nextIdx = chunkIdx + 1;
           setChunkIdx(nextIdx);
           setAttempts(0);
-          clearSubmittedAnswerDraft();
           setNarrationText("");
           setTutorReply(null);
           setTextCheckRevealed(false);
           setTextPendingAdvance(false);
+          setLiveCanvasState({ actions: [] });
 
           await persist({
             chunkIndex: nextIdx,
@@ -1566,6 +1936,7 @@ export function ImmersiveLessonRunner({
               attempts: 0,
               lastEval: attemptEval,
             },
+            whiteboardState: { actions: [] },
             lastRecap: `Module ${activeModule.id} — last covered "${chunk.concept}".`,
             appendHistory: {
               at: new Date().toISOString(),
@@ -1596,7 +1967,6 @@ export function ImmersiveLessonRunner({
             finalIntent === "answer_wrong" || finalIntent === "answer_partial";
           const nextAttempts = wasAnswerAttempt ? attempts + 1 : attempts;
           setAttempts(nextAttempts);
-          clearSubmittedAnswerDraft();
           await persist({
             attemptState: {
               chunkIndex: chunkIdx,
@@ -1627,13 +1997,14 @@ export function ImmersiveLessonRunner({
       }
     },
     [
-      acknowledgeAndContinue,
+      continueFromGreeting,
       activeModule.id,
       appendTranscriptLine,
+      applyLiveCanvasActions,
       attempts,
       chunk,
       chunkIdx,
-      clearSubmittedAnswerDraft,
+      clearAnswerDraft,
       interactionMode,
       interruptedContext,
       materialId,
@@ -1641,6 +2012,8 @@ export function ImmersiveLessonRunner({
       patchActiveRoseLine,
       persist,
       plan,
+      sessionAckOpts,
+      transcriptLines,
       voice,
     ]
   );
@@ -1909,9 +2282,7 @@ export function ImmersiveLessonRunner({
     const nextIdx = chunkIdx + 1;
     setChunkIdx(nextIdx);
     setAttempts(0);
-    answerAtSubmitRef.current = null;
-    answerDraftRef.current = "";
-    setAnswerText("");
+    clearAnswerDraft();
     setNarrationText("");
     setTutorReply(null);
     setTextCheckRevealed(false);
@@ -1943,6 +2314,7 @@ export function ImmersiveLessonRunner({
     appendTranscriptLine,
     chunk,
     chunkIdx,
+    clearAnswerDraft,
     persist,
     plan,
     textPendingAdvance,
@@ -2419,7 +2791,7 @@ export function ImmersiveLessonRunner({
           <div className="mt-4 flex flex-wrap gap-3">
             <button
               type="button"
-              onClick={acknowledgeAndContinue}
+              onClick={() => continueFromGreeting()}
               className="rounded-full bg-fuchsia-500 px-5 py-2 text-sm font-semibold text-white shadow-md hover:bg-fuchsia-400"
             >
               Continue lesson
@@ -2452,6 +2824,10 @@ export function ImmersiveLessonRunner({
         preferTableBeat={preferTableBeat}
         whiteboardActions={whiteboardActions}
         tableMarkdown={whiteboardTableMarkdown}
+        assetImageUrl={whiteboardAssetImage?.url ?? null}
+        assetCaption={whiteboardAssetImage?.caption ?? null}
+        liveCanvasEnabled
+        liveCanvasState={liveCanvasState}
       />
 
       {/* Concept + explanation */}
@@ -2662,6 +3038,18 @@ export function ImmersiveLessonRunner({
 // Pieces
 // ===========================================================================
 
+function syncTranscriptIdCounter(
+  ref: MutableRefObject<number>,
+  lines: TranscriptLine[]
+) {
+  let max = ref.current;
+  for (const line of lines) {
+    const match = /^t-(\d+)$/.exec(line.id);
+    if (match) max = Math.max(max, Number.parseInt(match[1]!, 10));
+  }
+  ref.current = max;
+}
+
 function chunkQuestionInTranscript(
   lines: TranscriptLine[],
   question: string
@@ -2673,6 +3061,42 @@ function chunkQuestionInTranscript(
   );
 }
 
+function hasChunkTeachingStarted(
+  chunk: MentoredLessonChunk,
+  lines: TranscriptLine[],
+  lastCheckAt: number | null
+): boolean {
+  if (lastCheckAt != null) return true;
+  const explanation = chunk.explanation.trim();
+  if (!explanation) return false;
+  const head = explanation.slice(0, 48);
+  return lines.some(
+    (l) =>
+      l.role === "rose" &&
+      typeof l.text === "string" &&
+      (l.text === explanation || l.text.includes(head))
+  );
+}
+
+/** Slang / high-energy "I'm ready" replies — not plain yes/ok. */
+function isEnthusiasticReadyReply(utterance: string): boolean {
+  const s = utterance
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?,…]/g, "")
+    .replace(/\s+/g, " ");
+  if (s.length === 0 || s.length > 72) return false;
+  if (
+    /^y(e(s+|a+h?)|a+h+|e+p|up+|ess?)([\s-]*(sir|ski|sur|maam|please|let\s*go|lets\s*go))*$/.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/^yess?u?r?ski$/.test(s.replace(/\s/g, ""))) return true;
+  return /^let'?s\s+(go|dive\s+in)/.test(s);
+}
+
 /** "Yes I'm ready" / "let's go" — answers to the welcome, not the check Q. */
 function isSessionReadyAcknowledgement(utterance: string): boolean {
   if (isVagueAffirmative(utterance)) return true;
@@ -2682,12 +3106,16 @@ function isSessionReadyAcknowledgement(utterance: string): boolean {
     .replace(/[.!?,…]/g, "")
     .replace(/\s+/g, " ");
   if (s.length === 0 || s.length > 72) return false;
+  if (/^y(e(s+|a+h?)|a+h+|e+p|up+|ess?)([\s-]*(sir|ski|sur|maam|please|let\s*go|lets\s*go))*$/.test(s)) {
+    return true;
+  }
+  if (/^yess?u?r?ski$/.test(s.replace(/\s/g, ""))) return true;
   return (
     /^(yes|yeah|yep|yup|sure|ok|okay)(\s+i\s+am|\s+im|\s+ready)?$/.test(s) ||
     /^(i\s+am|im)\s+ready$/.test(s) ||
-    /^ready(\s+to\s+(go|continue|keep\s+going|pick\s+up))?$/.test(s) ||
-    /^let'?s\s+(go|continue|do\s+it|pick\s+up|start)/.test(s) ||
-    /^(go\s+ahead|sounds\s+good|pick\s+up|keep\s+going)$/.test(s)
+    /^ready(\s+to\s+(go|continue|keep\s+going|pick\s+up|dive\s+in))?$/.test(s) ||
+    /^let'?s\s+(go|continue|do\s+it|pick\s+up|start|dive\s+in)/.test(s) ||
+    /^(go\s+ahead|sounds\s+good|pick\s+up|keep\s+going|absolutely|definitely|for\s+sure)$/.test(s)
   );
 }
 

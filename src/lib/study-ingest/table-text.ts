@@ -240,6 +240,12 @@ function looksLikePotencyOrDrugTable(md: string): boolean {
   return false;
 }
 
+function looksLikeFeatureComparisonTable(md: string): boolean {
+  return /prokaryot|eukaryot|versus|\bvs\.?\b|comparison|compare|feature|characteristic|organelle|原核|真核|比較|비교/i.test(
+    md
+  );
+}
+
 /** True when markdown looks like a readable reference table, not OCR garbage. */
 export function isUsableMarkdownTable(md: string): boolean {
   const t = md.trim();
@@ -257,6 +263,10 @@ export function isUsableMarkdownTable(md: string): boolean {
 
   const cells = tableCellTexts(t);
   if (cells.length < 4) return false;
+
+  if (looksLikeFeatureComparisonTable(t)) {
+    return passesClassificationTableQualityCheck(t);
+  }
 
   const potencyTable = looksLikePotencyOrDrugTable(t);
 

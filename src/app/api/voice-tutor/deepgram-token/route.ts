@@ -55,7 +55,7 @@ export async function POST(request: Request) {
   }
 
   // Live (Deepgram) STT bypasses /transcribe, so enforce the voice cap here too.
-  const allowance = await checkVoiceAllowance(user.id);
+  const allowance = await checkVoiceAllowance(user.id, { email: user.email });
   if (!allowance.allowed) {
     return NextResponse.json(voiceCapBody(), { status: 402 });
   }

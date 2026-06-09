@@ -125,21 +125,56 @@ export type LessonVisualAssetRef = {
 
 export type WhiteboardPoint = { x: number; y: number };
 
+/** Semantic colors reused across a course (excitatory / inhibitory / exam). */
+export type WhiteboardActionColor =
+  | "default"
+  | "excitatory"
+  | "inhibitory"
+  | "highlight";
+
 /** Tutor-driven whiteboard overlay actions (normalized 0–100 coords). */
 export type WhiteboardAction =
-  | { type: "show_asset"; assetId: string }
+  | { type: "show_asset"; assetId: string; cue?: string; id?: string }
+  | {
+      type: "show_table";
+      /** Optional phrase Rose says when anchoring the source table. */
+      cue?: string;
+      id?: string;
+    }
   | {
       type: "highlight_bbox";
-      assetId: string;
+      assetId?: string;
       bbox: [number, number, number, number];
+      cue?: string;
+      color?: WhiteboardActionColor;
+      id?: string;
     }
-  | { type: "draw_arrow"; from: WhiteboardPoint; to: WhiteboardPoint }
-  | { type: "add_label"; text: string; position: WhiteboardPoint }
-  | { type: "clear" };
+  | {
+      type: "draw_arrow";
+      from: WhiteboardPoint;
+      to: WhiteboardPoint;
+      cue?: string;
+      color?: WhiteboardActionColor;
+      id?: string;
+    }
+  | {
+      type: "add_label";
+      text: string;
+      position: WhiteboardPoint;
+      cue?: string;
+      color?: WhiteboardActionColor;
+      id?: string;
+    }
+  | { type: "clear"; id?: string }
+  | { type: "clear_except"; keepIds: string[]; id?: string };
 
 export type WhiteboardState = {
   assetId?: string | null;
+  /** True when the source lesson table is pinned as the board substrate. */
+  tableAnchored?: boolean;
   actions: WhiteboardAction[];
+  /** How many actions are visible during progressive reveal (live canvas). */
+  revealedCount?: number;
 };
 
 export type TutorMode = "presenting" | "paused" | "answering" | "resuming";
@@ -319,6 +354,11 @@ export type MentoredTurnRequest = {
   outputLanguage?: import("@/lib/course-output-language").CourseOutputLanguage;
   /** Lesson title for asset retrieval (optional). */
   lessonTitle?: string;
+  /**
+   * False when this chunk's explanation has not been delivered yet — the
+   * student may still be answering the session-opening welcome.
+   */
+  chunkTeachingStarted?: boolean;
 };
 
 export type MentoredTurnResponse = {

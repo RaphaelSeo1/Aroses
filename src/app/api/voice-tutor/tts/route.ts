@@ -122,7 +122,7 @@ export async function POST(request: Request) {
 
   // Voice cap (applies to every surface — mentored, tutor sessions, dock).
   // Over the monthly allowance → 402 so the client falls back to text mode.
-  const allowance = await checkVoiceAllowance(user.id);
+  const allowance = await checkVoiceAllowance(user.id, { email: user.email });
   if (!allowance.allowed) {
     return NextResponse.json(voiceCapBody(), { status: 402 });
   }

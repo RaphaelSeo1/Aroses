@@ -13,6 +13,7 @@ import type {
   CourseModule,
   CoursePayload,
 } from "@/types/course";
+import { TURN_WB_SENTINEL } from "@/lib/mentored/whiteboard-utils";
 import type {
   GoalsAnswer,
   KnowledgeLevel,
@@ -21,6 +22,7 @@ import type {
   MentoredLessonPlan,
   MentoredPersonalization,
   WhiteboardAction,
+  WhiteboardActionColor,
   WhiteboardPoint,
 } from "@/types/mentored";
 
@@ -318,6 +320,36 @@ function parseWhiteboardPoint(v: unknown): WhiteboardPoint | null {
   };
 }
 
+function parseWhiteboardColor(v: unknown): WhiteboardActionColor | undefined {
+  if (
+    v === "excitatory" ||
+    v === "inhibitory" ||
+    v === "highlight" ||
+    v === "default"
+  ) {
+    return v;
+  }
+  return undefined;
+}
+
+function parseWhiteboardCue(o: Record<string, unknown>): string | undefined {
+  return typeof o.cue === "string" && o.cue.trim().length > 0
+    ? o.cue.trim().slice(0, 60)
+    : undefined;
+}
+
+function parseBbox(v: unknown): [number, number, number, number] | null {
+  if (!Array.isArray(v) || v.length !== 4) return null;
+  const nums = v.map((n) => (typeof n === "number" ? n : NaN));
+  if (nums.some((n) => !Number.isFinite(n))) return null;
+  return [
+    Math.max(0, Math.min(100, nums[0]!)),
+    Math.max(0, Math.min(100, nums[1]!)),
+    Math.max(0, Math.min(100, nums[2]!)),
+    Math.max(0, Math.min(100, nums[3]!)),
+  ];
+}
+
 export function parseWhiteboardActions(raw: unknown): WhiteboardAction[] {
   if (!raw) return [];
   const items = Array.isArray(raw) ? raw : [raw];
@@ -326,23 +358,70 @@ export function parseWhiteboardActions(raw: unknown): WhiteboardAction[] {
     if (!item || typeof item !== "object") continue;
     const o = item as Record<string, unknown>;
     const type = o.type;
+    const cue = parseWhiteboardCue(o);
+    const color = parseWhiteboardColor(o.color);
     if (type === "clear") {
       out.push({ type: "clear" });
+      continue;
+    }
+    if (type === "clear_except" && Array.isArray(o.keepIds)) {
+      const keepIds = (o.keepIds as unknown[])
+        .filter((id): id is string => typeof id === "string")
+        .slice(0, 12);
+      if (keepIds.length > 0) out.push({ type: "clear_except", keepIds });
+      continue;
+    }
+    if (type === "show_table") {
+      out.push({ type: "show_table", ...(cue ? { cue } : {}) });
+      continue;
+    }
+    if (type === "show_asset" && typeof o.assetId === "string") {
+      const assetId = o.assetId.trim().slice(0, 80);
+      if (assetId) out.push({ type: "show_asset", assetId, ...(cue ? { cue } : {}) });
+      continue;
+    }
+    if (type === "highlight_bbox") {
+      const bbox = parseBbox(o.bbox);
+      if (bbox) {
+        out.push({
+          type: "highlight_bbox",
+          ...(typeof o.assetId === "string" ? { assetId: o.assetId } : {}),
+          bbox,
+          ...(cue ? { cue } : {}),
+          ...(color ? { color } : {}),
+        });
+      }
       continue;
     }
     if (type === "draw_arrow") {
       const from = parseWhiteboardPoint(o.from);
       const to = parseWhiteboardPoint(o.to);
-      if (from && to) out.push({ type: "draw_arrow", from, to });
+      if (from && to) {
+        out.push({
+          type: "draw_arrow",
+          from,
+          to,
+          ...(cue ? { cue } : {}),
+          ...(color ? { color } : {}),
+        });
+      }
       continue;
     }
     if (type === "add_label" && typeof o.text === "string") {
       const text = o.text.trim().slice(0, 80);
       const position = parseWhiteboardPoint(o.position);
-      if (text && position) out.push({ type: "add_label", text, position });
+      if (text && position) {
+        out.push({
+          type: "add_label",
+          text,
+          position,
+          ...(cue ? { cue } : {}),
+          ...(color ? { color } : {}),
+        });
+      }
     }
   }
-  return out.slice(0, 10);
+  return out.slice(0, 16);
 }
 
 export async function generateLessonPlan(
@@ -402,7 +481,7 @@ Call the submit_lesson_plan tool with a "chunks" array. Each chunk object:
 - keyPoints: 3-5 short phrases the student's answer should hit
 - sourceLessonIndex: 0-based lesson index this chunk maps to
 - keyTerms (optional): 2-5 phrases that appear VERBATIM in the source lesson
-- whiteboardActions (optional): planned tutor actions — draw_arrow, add_label (coords 0–100 on the whiteboard)
+- whiteboardActions (optional): planned live-whiteboard sequence. Types: show_table (anchor source table first), highlight_bbox, draw_arrow, add_label. Coords 0–100. Each action may include a short "cue" phrase Rose says when drawing it (for progressive reveal sync).
 
 Strict rules:
 1) GRANULARITY: 5-10 chunks per module typical. Too few = too dense; too many = busywork.
@@ -534,6 +613,12 @@ export type TurnInput = {
   personalization?: MentoredPersonalization;
   /** Course output / teaching language from upload settings. */
   outputLanguage?: CourseOutputLanguage;
+  /**
+   * False when Rose has not yet spoken this chunk's explanation (session
+   * still in greeting / ready-to-start). Affirmative replies must not be
+   * graded as check-question answers.
+   */
+  chunkTeachingStarted?: boolean;
 };
 
 export type TurnOutput = {
@@ -652,7 +737,10 @@ Smart-timing rules:
     input.attempts > 0
       ? `
 CHECK QUESTION STATUS: The student has already attempted an answer on this chunk (attempt ${input.attempts + 1}).`
-      : `
+      : input.chunkTeachingStarted === false
+        ? `
+SESSION START: You have NOT taught this chunk yet — the student is still responding to your welcome ("ready to dive in?"). Their message is almost certainly a casual "yes / let's go", NOT an answer to the CHECK QUESTION below. Reply with brief warm acknowledgment, then BEGIN teaching the CONCEPT naturally (use the EXPLANATION as your guide). Classify as check_in with "advance": false — do NOT scold, do NOT re-ask the check question, do NOT demand they walk through their thinking.`
+        : `
 CHECK QUESTION STATUS: The student has NOT yet answered the check question for this chunk. Their latest message probably does NOT count as an answer unless they explained the idea in their own words.`;
 
   const languageBlock = formatMentoredTeachingLanguageBlock(
@@ -684,13 +772,17 @@ Output format (STRICT):
    - Once you HAVE posed the formal check question, keep ending on it until they answer it substantively (don't swap in a softer substitute mid-check).
    - Use the PACING SIGNALS to avoid piling questions back-to-back; don't ask a brand-new check right after one you already asked.
    - Do NOT say "you nailed it", "exactly right", or "you've got it" unless the student actually demonstrated understanding OR you are advancing.
-2. Then on a new line write exactly: ${TURN_META_SENTINEL}
-3. Then on a new line emit a JSON object with classification + optional whiteboard overlays:
+2. WHITEBOARD (optional, mid-reply): When you draw on the board WHILE explaining, insert inline markers at the moment you would draw — NOT all at the end. Format: on its own line write ${TURN_WB_SENTINEL} then a JSON array of 1–2 actions. Action types: show_table (anchor source table), highlight_bbox {bbox:[x,y,w,h]}, draw_arrow {from:{x,y},to:{x,y}}, add_label {text,position:{x,y}}, clear, clear_except {keepIds:[]}. Coords 0–100. Colors: excitatory|inhibitory|highlight. Each action should include a short "cue" phrase you just said (for sync). Place markers BETWEEN sentences at the teaching moment. Do NOT dump all overlays at once.
+3. Then on a new line write exactly: ${TURN_META_SENTINEL}
+4. Then on a new line emit a JSON object with classification + any remaining whiteboard actions not yet streamed:
 {"intent":"answer_correct|...|other","advance":true|false,"addToFocusedReview":true|false,"whiteboardActions":[...]|[]}
 
-whiteboardActions: optional array of overlay actions while teaching (draw_arrow with from/to {x,y} 0–100, add_label with text + position). Empty array if none. Do not request images or figures.
+whiteboardActions in META: only actions you did NOT already stream via ${TURN_WB_SENTINEL}. Usually [].
 
 Example:
+Let me circle the key column on the table.
+${TURN_WB_SENTINEL}
+[{"type":"show_table","cue":"key column"},{"type":"highlight_bbox","bbox":[12,8,28,72],"color":"highlight","cue":"key column"}]
 Nice work — you nailed the key idea there. Let's keep going.
 ${TURN_META_SENTINEL}
 {"intent":"answer_correct","advance":true,"addToFocusedReview":false,"whiteboardActions":[]}
@@ -802,8 +894,33 @@ export async function runMentoredTurn(input: TurnInput): Promise<TurnOutput> {
  * speaking the reply BEFORE Claude finishes — first audible token in
  * 1-2s instead of waiting the full ~3-6s for the whole turn.
  */
+function tryParseInlineWhiteboardJson(
+  slice: string
+): { actions: WhiteboardAction[]; consumed: number } | null {
+  const trimmed = slice.trimStart();
+  const offset = slice.length - trimmed.length;
+  const start = trimmed.indexOf("[");
+  const end = trimmed.lastIndexOf("]");
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(trimmed.slice(start, end + 1));
+    const actions = parseWhiteboardActions(parsed);
+    if (actions.length === 0) return null;
+    const consumed = offset + end + 1;
+    return { actions, consumed };
+  } catch {
+    return null;
+  }
+}
+
+const SENTINEL_HOLD_BACK = Math.max(
+  TURN_META_SENTINEL.length,
+  TURN_WB_SENTINEL.length
+);
+
 export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
   | { type: "text"; delta: string }
+  | { type: "whiteboard"; actions: WhiteboardAction[] }
   | {
       type: "meta";
       intent: MentoredIntent;
@@ -825,51 +942,103 @@ export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
     messages: [{ role: "user", content: buildTurnPrompt(input) }],
   });
 
-  // We accumulate the entire stream so we can detect the sentinel safely
-  // across token boundaries (e.g. Claude might split "---META---" across
-  // two deltas). Anything BEFORE the sentinel is forwarded as text; once
-  // we see the sentinel we stop forwarding text and start buffering for
-  // metadata.
   let buffered = "";
-  let inMeta = false;
-  let textForwardedUpTo = 0;
+  type StreamPhase = "reply" | "wb" | "meta";
+  const streamState = { phase: "reply" as StreamPhase };
+  let cursor = 0;
+
+  const processReplyBuffer = function* (): Generator<
+    | { type: "text"; delta: string }
+    | { type: "whiteboard"; actions: WhiteboardAction[] },
+    void,
+    void
+  > {
+    while (streamState.phase === "reply" && cursor < buffered.length) {
+      const wbIdx = buffered.indexOf(TURN_WB_SENTINEL, cursor);
+      const metaIdx = buffered.indexOf(TURN_META_SENTINEL, cursor);
+      let nextIdx = -1;
+      let nextKind: "wb" | "meta" | null = null;
+      if (wbIdx >= 0 && (metaIdx < 0 || wbIdx <= metaIdx)) {
+        nextIdx = wbIdx;
+        nextKind = "wb";
+      } else if (metaIdx >= 0) {
+        nextIdx = metaIdx;
+        nextKind = "meta";
+      }
+
+      if (nextIdx < 0) {
+        const safeUpTo = Math.max(cursor, buffered.length - SENTINEL_HOLD_BACK);
+        const tail = buffered.slice(cursor, safeUpTo);
+        cursor = safeUpTo;
+        if (tail) yield { type: "text", delta: tail };
+        return;
+      }
+
+      const before = buffered.slice(cursor, nextIdx);
+      cursor = nextIdx;
+      if (before) yield { type: "text", delta: before };
+
+      if (nextKind === "wb") {
+        cursor += TURN_WB_SENTINEL.length;
+        streamState.phase = "wb";
+        const parsed = tryParseInlineWhiteboardJson(buffered.slice(cursor));
+        if (parsed) {
+          yield { type: "whiteboard", actions: parsed.actions };
+          cursor += parsed.consumed;
+          streamState.phase = "reply";
+        }
+        continue;
+      }
+
+      cursor += TURN_META_SENTINEL.length;
+      streamState.phase = "meta";
+      return;
+    }
+
+    if (streamState.phase === "wb") {
+      const parsed = tryParseInlineWhiteboardJson(buffered.slice(cursor));
+      if (parsed) {
+        yield { type: "whiteboard", actions: parsed.actions };
+        cursor += parsed.consumed;
+        streamState.phase = "reply";
+      }
+    }
+  };
 
   for await (const event of stream) {
     if (
-      event.type === "content_block_delta" &&
-      event.delta.type === "text_delta" &&
-      event.delta.text
+      event.type !== "content_block_delta" ||
+      event.delta.type !== "text_delta" ||
+      !event.delta.text
     ) {
-      buffered += event.delta.text;
-
-      if (!inMeta) {
-        const idx = buffered.indexOf(TURN_META_SENTINEL);
-        if (idx >= 0) {
-          // Flush any text up to the sentinel, then switch to meta mode.
-          const tail = buffered.slice(textForwardedUpTo, idx);
-          if (tail) yield { type: "text", delta: tail };
-          inMeta = true;
-          textForwardedUpTo = idx + TURN_META_SENTINEL.length;
-        } else {
-          // Hold back the last few chars in case the sentinel is straddling
-          // a chunk boundary. 16 chars is plenty (sentinel is 11 chars).
-          const safeUpTo = Math.max(textForwardedUpTo, buffered.length - 16);
-          if (safeUpTo > textForwardedUpTo) {
-            yield {
-              type: "text",
-              delta: buffered.slice(textForwardedUpTo, safeUpTo),
-            };
-            textForwardedUpTo = safeUpTo;
-          }
-        }
-      }
+      continue;
+    }
+    buffered += event.delta.text;
+    if (streamState.phase !== "meta") {
+      yield* processReplyBuffer();
     }
   }
 
-  if (!inMeta) {
-    // Sentinel never showed up — flush remaining text and emit best-guess meta.
-    const tail = buffered.slice(textForwardedUpTo);
+  if (streamState.phase === "reply") {
+    const tail = buffered.slice(cursor);
+    cursor = buffered.length;
     if (tail) yield { type: "text", delta: tail };
+  } else if (streamState.phase === "wb") {
+    yield* processReplyBuffer();
+    const tail = buffered.slice(cursor);
+    cursor = buffered.length;
+    if (tail) yield { type: "text", delta: tail };
+  }
+
+  const metaAt = buffered.indexOf(TURN_META_SENTINEL, cursor);
+  if (metaAt >= 0) {
+    const tail = buffered.slice(cursor, metaAt);
+    if (tail) yield { type: "text", delta: tail };
+    cursor = metaAt + TURN_META_SENTINEL.length;
+    streamState.phase = "meta";
+  }
+
+  if (streamState.phase !== "meta") {
     yield {
       type: "meta",
       intent: "other",
@@ -880,8 +1049,7 @@ export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
     return;
   }
 
-  const metaSlice = buffered.slice(textForwardedUpTo);
-  const meta = parseTurnMetaJson(metaSlice, "other");
+  const meta = parseTurnMetaJson(buffered.slice(cursor), "other");
   yield {
     type: "meta",
     intent: meta.intent,
