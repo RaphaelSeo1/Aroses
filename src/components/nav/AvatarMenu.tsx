@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LanguageToggleRow } from "@/components/LanguageSwitcher";
 import { LogoutButton } from "@/components/LogoutButton";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
  * Top-right account menu. Click the avatar to open Profile / Admin (admins
@@ -23,6 +25,7 @@ export function AvatarMenu({
   avatarUrl?: string | null;
   adminHubHref?: string;
 }) {
+  const t = useT();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -61,7 +64,7 @@ export function AvatarMenu({
     pathname.startsWith("/dashboard/admin");
 
   const initials = deriveInitials(displayName, email);
-  const label = displayName?.trim() || email || "Account";
+  const label = displayName?.trim() || email || t.nav.account;
 
   return (
     <div ref={containerRef} className="relative inline-block">
@@ -70,7 +73,7 @@ export function AvatarMenu({
         onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Account menu"
+        aria-label={t.nav.accountMenu}
         title={label}
         className={`inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-sm font-semibold transition ${
           onAccountPage
@@ -98,12 +101,12 @@ export function AvatarMenu({
       {open ? (
         <div
           role="menu"
-          aria-label="Account options"
+          aria-label={t.nav.accountOptions}
           className="absolute right-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-xl border border-zinc-200 bg-white py-1 shadow-lg shadow-zinc-900/10 ring-1 ring-zinc-900/[0.04] dark:border-zinc-700 dark:bg-zinc-900 dark:ring-white/10"
         >
           <div className="border-b border-zinc-100 px-3.5 py-2.5 dark:border-zinc-800">
             <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-              {displayName?.trim() || "Your account"}
+              {displayName?.trim() || t.nav.yourAccount}
             </p>
             {email ? (
               <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
@@ -130,7 +133,7 @@ export function AvatarMenu({
               <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
               <circle cx="12" cy="7" r="4" />
             </svg>
-            Profile
+            {t.nav.profile}
           </Link>
           <Link
             href="/dashboard/profile?tab=friends"
@@ -153,7 +156,7 @@ export function AvatarMenu({
               <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
-            Friends
+            {t.nav.friends}
           </Link>
           <Link
             href="/dashboard/profile?tab=messages"
@@ -173,7 +176,7 @@ export function AvatarMenu({
             >
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
-            Messages
+            {t.nav.messages}
           </Link>
           {isBillingUiEnabled() ? (
             <Link
@@ -195,7 +198,7 @@ export function AvatarMenu({
                 <rect x="2" y="5" width="20" height="14" rx="2" />
                 <path d="M2 10h20" />
               </svg>
-              Plans &amp; billing
+              {t.nav.plansBilling}
             </Link>
           ) : null}
           {adminHubHref ? (
@@ -203,7 +206,7 @@ export function AvatarMenu({
               href={adminHubHref}
               role="menuitem"
               onClick={close}
-              title="Admin controls"
+              title={t.nav.adminControls}
               className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
             >
               <svg
@@ -218,9 +221,11 @@ export function AvatarMenu({
               >
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
               </svg>
-              Admin
+              {t.nav.admin}
             </Link>
           ) : null}
+          <div className="my-1 h-px bg-zinc-100 dark:bg-zinc-800" />
+          <LanguageToggleRow />
           <div className="my-1 h-px bg-zinc-100 dark:bg-zinc-800" />
           <LogoutButton className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-800" />
         </div>

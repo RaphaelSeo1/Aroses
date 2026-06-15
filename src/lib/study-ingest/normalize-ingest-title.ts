@@ -66,7 +66,130 @@ export function normalizeIngestDisplayTitle(raw: string): string {
     t = `${t.slice(0, MAX_TITLE_LEN - 1).trim()}…`;
   }
 
+  t = titleCaseIfAllCaps(t);
+
   return t || raw.trim();
+}
+
+const SPEAKER_PREFIX = /^[A-Z][A-Z0-9\s.'-]{2,48}:\s*/;
+const SECTION_PLACEHOLDER = /^section\s+\d+(?:\s*[§-]\s*\d+)?$/i;
+const TRANSCRIPT_FRAGMENT =
+  /\b(that's|we're|you're|going to|let's|when you|where we|i'm|don't|isn't|aren't|gonna|we'll|you'll|i'll|because|although|however)\b/i;
+
+/** True when raw text should not become a module/lesson label in the sidebar. */
+export function isBadIngestTitle(raw: string): boolean {
+  const t = normalizeIngestDisplayTitle(raw).trim();
+  if (!t) return true;
+  if (/^\d+$/.test(t)) return true;
+  if (t.length === 1) return true;
+  if (t.length === 2 && !/^[\uac00-\ud7a3]{2}$/.test(t)) return true;
+  if (SECTION_PLACEHOLDER.test(t)) return true;
+  if (/^untitled section$/i.test(t)) return true;
+  if (SPEAKER_PREFIX.test(t)) return true;
+  if (/^[A-Z][A-Z0-9\s.'-]{2,48}:$/.test(t)) return true;
+  if (TRANSCRIPT_FRAGMENT.test(t)) return true;
+  // Spoken lecture lines — long lowercase prose, not headings.
+  if (
+    t.length > 42 &&
+    /[a-z]/.test(t) &&
+    /\b(the|and|or|to|a|an|is|are|was|were|of|in|on|for|that|this|with)\b/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function titleCaseIfAllCaps(raw: string): string {
+  const t = raw.trim();
+  if (t.length < 4 || t.length > 60) return t;
+  const words = t.split(/\s+/);
+  if (words.length === 0 || words.length > 10) return t;
+  const letters = t.replace(/[^A-Za-z]/g, "");
+  if (letters.length < 3) return t;
+  const upper = letters.replace(/[^A-Z]/g, "").length;
+  if (upper / letters.length < 0.82) return t;
+  return words
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function titleFromPosition(position?: string): string | null {
+  const p = position?.trim();
+  if (!p || SECTION_PLACEHOLDER.test(p)) return null;
+  const page = p.match(/\bpage\s+(\d+)/i);
+  if (page) return `Page ${page[1]}`;
+  const slide = p.match(/\bslide\s+(\d+)/i);
+  if (slide) return `Slide ${slide[1]}`;
+  const part = p.match(/\bpart\s+(\d+)/i);
+  if (part) return `Part ${part[1]}`;
+  return null;
+}
+
+/**
+ * Pick the best short heading from chunk text — skips speaker lines and
+ * transcript fragments that used to become lesson titles.
+ */
+export function pickBestTitleFromText(
+  text: string,
+  position?: string
+): string {
+  const lines = text
+    .split(/\n+/)
+    .map((l) => l.replace(/^[#>\-*\s]+/, "").trim())
+    .filter((l) => l.length > 0);
+
+  let best: { title: string; score: number } | null = null;
+  for (const line of lines.slice(0, 24)) {
+    if (line.length > 90) continue;
+    const title = normalizeIngestDisplayTitle(line);
+    if (isBadIngestTitle(title)) continue;
+
+    let score = 0;
+    if (/^lecture\s*\d/i.test(title)) score += 3;
+    if (/^\d+[\.\):]\s/.test(line)) score += 5;
+    if (title.split(/\s+/).length <= 7) score += 2;
+    if (line.length <= 48) score += 2;
+    if (/^[A-Z0-9]/.test(title) && !TRANSCRIPT_FRAGMENT.test(title)) score += 1;
+
+    if (!best || score > best.score) best = { title, score };
+  }
+
+  if (best) return best.title;
+
+  const fromPos = titleFromPosition(position);
+  if (fromPos) return fromPos;
+
+  return "Core concepts";
+}
+
+/** Ensure lesson titles within one module are distinct and readable. */
+export function polishLessonTitlesForModule(
+  lessonTitles: string[],
+  moduleTitle?: string
+): string[] {
+  const modKey = moduleTitle
+    ? normalizeIngestDisplayTitle(moduleTitle).toLowerCase()
+    : "";
+  const used = new Set<string>();
+
+  return lessonTitles.map((raw, i) => {
+    let title = normalizeIngestDisplayTitle(raw);
+    if (isBadIngestTitle(title)) {
+      title = `Part ${i + 1}`;
+    }
+
+    const key = title.toLowerCase();
+    if (modKey && key === modKey && i === 0) {
+      title = "Overview";
+    } else if (used.has(key)) {
+      title = `${title} (${i + 1})`;
+    }
+
+    used.add(title.toLowerCase());
+    return title;
+  });
 }
 
 const GENERIC_COURSE_TITLE =
@@ -93,6 +216,7 @@ export function substantiveLessonTitles(lessonTitles: string[]): string[] {
   for (const raw of lessonTitles) {
     const t = normalizeIngestDisplayTitle(raw);
     if (t.length === 0 || GENERIC_INTRO_LESSON.test(t)) continue;
+    if (isBadIngestTitle(t)) continue;
     if (out[out.length - 1] === t) continue;
     out.push(t);
   }
@@ -103,7 +227,7 @@ export function substantiveLessonTitles(lessonTitles: string[]): string[] {
 export function deriveCourseTitleFromChunkTitles(titles: string[]): string {
   const normalized = titles
     .map((t) => normalizeIngestDisplayTitle(t))
-    .filter((t) => t.length >= 2);
+    .filter((t) => t.length >= 2 && !isBadIngestTitle(t));
 
   const joined = normalized.join(" ");
   if (
@@ -128,7 +252,7 @@ export function deriveCourseTitleFromChunkTitles(titles: string[]): string {
 export function moduleTitleFromLessonTitles(lessonTitles: string[]): string {
   const titles = lessonTitles
     .map((t) => normalizeIngestDisplayTitle(t))
-    .filter((t) => t.length > 0);
+    .filter((t) => t.length > 0 && !isBadIngestTitle(t));
   if (titles.length === 0) return "Module";
   if (titles.length === 1) return titles[0]!;
 

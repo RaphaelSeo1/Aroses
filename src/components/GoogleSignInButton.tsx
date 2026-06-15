@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useT } from "@/lib/i18n/LocaleProvider";
 import { getBrowserAuthOrigin } from "@/lib/site-url";
 
 import {
@@ -30,10 +31,11 @@ type Props = {
 export function GoogleSignInButton({
   nextPath,
   disabled = false,
-  label = "Continue with Google",
+  label,
   hostedDomain: hostedDomainProp,
   restrictToSchoolWorkspace = false,
 }: Props) {
+  const t = useT();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,7 +79,7 @@ export function GoogleSignInButton({
         className="flex w-full items-center justify-center gap-3 rounded-full border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-800 shadow-sm transition hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
       >
         <GoogleGlyph className="h-5 w-5 shrink-0" aria-hidden />
-        {loading ? "Redirecting…" : label}
+        {loading ? t.auth.redirecting : (label ?? t.auth.continueWithGoogle)}
       </button>
       {error ? (
         <p className="text-center text-sm text-red-600 dark:text-red-400">

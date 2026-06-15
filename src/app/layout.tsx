@@ -1,6 +1,6 @@
 import { Analytics } from "@vercel/analytics/next";
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Noto_Sans_KR } from "next/font/google";
 import Script from "next/script";
 import { ActivePdfBuildProvider } from "@/components/ActivePdfBuildProvider";
 import { AppAdminNavGate } from "@/components/AppAdminNavGate";
@@ -8,6 +8,9 @@ import { AppDialogs } from "@/components/AppDialogs";
 import { ScrollRestoration } from "@/components/ScrollRestoration";
 import { ThemeHydration } from "@/components/ThemeHydration";
 import { APP_NAME } from "@/lib/brand";
+import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
+import { getUiLocale } from "@/lib/i18n/server";
+import { getDictionary } from "@/locales";
 import { getPublicSiteOrigin } from "@/lib/site-url";
 import { THEME_INLINE_SCRIPT } from "@/lib/theme-inline-script";
 import "./globals.css";
@@ -24,6 +27,16 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+/**
+ * Korean glyph fallback — Geist is latin-only, so Korean UI text falls
+ * through to Noto Sans KR (loaded on demand via unicode-range slices).
+ */
+const notoSansKr = Noto_Sans_KR({
+  variable: "--font-noto-kr",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
 export const metadata: Metadata = {
@@ -55,16 +68,19 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = await getUiLocale();
+  const dict = getDictionary(locale);
+
   return (
     <html
-      lang="en"
+      lang={locale}
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${notoSansKr.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col font-sans">
         <Script id="theme-init" strategy="beforeInteractive">
@@ -77,10 +93,12 @@ export default function RootLayout({
         </Script>
         <ScrollRestoration />
         <ThemeHydration />
-        <ActivePdfBuildProvider>
-          <AppAdminNavGate>{children}</AppAdminNavGate>
-        </ActivePdfBuildProvider>
-        <AppDialogs />
+        <LocaleProvider locale={locale} dict={dict}>
+          <ActivePdfBuildProvider>
+            <AppAdminNavGate>{children}</AppAdminNavGate>
+          </ActivePdfBuildProvider>
+          <AppDialogs />
+        </LocaleProvider>
         <Analytics />
       </body>
     </html>

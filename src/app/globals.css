@@ -40,8 +40,10 @@ html.dark {
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-serif: Georgia, "Times New Roman", ui-serif, serif;
+  --font-sans: var(--font-geist-sans), var(--font-noto-kr), "Apple SD Gothic Neo",
+    "Malgun Gothic", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: Georgia, "Times New Roman", var(--font-noto-kr),
+    "Apple SD Gothic Neo", ui-serif, serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
   --color-brand: #dc2626;

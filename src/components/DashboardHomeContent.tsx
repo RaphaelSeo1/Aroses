@@ -11,8 +11,10 @@ import { ReviewDueBanner } from "@/components/ReviewDueBanner";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
 import { PendingCollaboratorInvites } from "@/components/PendingCollaboratorInvites";
 import type { SharedCourse, StudyingCourse } from "@/lib/load-dashboard-courses";
+import { getT } from "@/lib/i18n/server";
+import { tf } from "@/lib/i18n/format";
 
-export function DashboardHomeContent({
+export async function DashboardHomeContent({
   userEmail,
   viewerUserId,
   ownedCourses,
@@ -30,6 +32,7 @@ export function DashboardHomeContent({
   /** When true, only render main workspace (parent supplies `<AppHeader />`). */
   omitHeader?: boolean;
 }) {
+  const t = await getT();
   const hasOwned = ownedCourses.length > 0;
   const hasShared = sharedCourses.length > 0;
   // The "Continue studying" carousel is driven by `progress.recentPractice`,
@@ -60,21 +63,21 @@ export function DashboardHomeContent({
             <div className="relative flex flex-col gap-8 sm:flex-row sm:items-end sm:justify-between">
               <div className="max-w-xl">
                 <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-                  Home
+                  {t.dashboard.homeEyebrow}
                 </p>
                 <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-4xl">
-                  Your workspace
+                  {t.dashboard.yourWorkspace}
                 </h1>
                 <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  Courses you create and community courses you&apos;ve practiced.
-                  Signed in as{" "}
+                  {t.dashboard.workspaceIntro}{" "}
+                  {t.dashboard.signedInAsPrefix}
                   <Link
                     href="/dashboard/profile"
                     className="font-medium text-zinc-900 underline-offset-2 hover:text-brand hover:underline dark:text-zinc-200 dark:hover:text-brand-soft"
                   >
                     {userEmail}
                   </Link>
-                  .
+                  {t.dashboard.signedInAsSuffix}
                 </p>
                 {!empty && hasOwned ? (
                   <p className="mt-4 inline-flex items-center gap-2 rounded-full border border-zinc-200/90 bg-zinc-50/90 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/80 dark:text-zinc-400">
@@ -82,8 +85,12 @@ export function DashboardHomeContent({
                       className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]"
                       aria-hidden
                     />
-                    {ownedCourses.length}{" "}
-                    {ownedCourses.length === 1 ? "course" : "courses"} you manage
+                    {tf(
+                      ownedCourses.length === 1
+                        ? t.dashboard.managedCoursesOne
+                        : t.dashboard.managedCoursesMany,
+                      { count: ownedCourses.length }
+                    )}
                   </p>
                 ) : null}
               </div>
@@ -91,7 +98,7 @@ export function DashboardHomeContent({
                 href="/dashboard/courses/new"
                 className="inline-flex shrink-0 items-center justify-center rounded-full bg-brand px-7 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/30 ring-2 ring-white/20 transition hover:bg-brand-hover hover:shadow-xl hover:shadow-red-600/35 dark:bg-brand dark:ring-white/10 dark:hover:bg-brand-soft"
               >
-                + Create course
+                {t.dashboard.createCourseCta}
               </Link>
             </div>
           </div>
@@ -104,7 +111,7 @@ export function DashboardHomeContent({
               <section className="mt-8">
                 <header className="mb-3 flex items-baseline justify-between">
                   <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                    Start something new
+                    {t.dashboard.startSomethingNew}
                   </h2>
                 </header>
                 <div className="grid gap-4 md:grid-cols-2">
@@ -121,15 +128,14 @@ export function DashboardHomeContent({
                         </svg>
                       </span>
                       <h3 className="mt-3 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-                        Create a course
+                        {t.dashboard.createACourse}
                       </h3>
                       <p className="mt-1.5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                        Upload your study material and I&apos;ll build a structured
-                        course you can work through lesson by lesson with Rose.
+                        {t.dashboard.createCourseCardDesc}
                       </p>
                     </div>
                     <div className="relative mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-rose-700 transition group-hover:gap-2 dark:text-rose-300">
-                      Upload material
+                      {t.dashboard.uploadMaterial}
                       <span aria-hidden>→</span>
                     </div>
                   </Link>
@@ -146,15 +152,14 @@ export function DashboardHomeContent({
                         </svg>
                       </span>
                       <h3 className="mt-3 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-                        Start a tutor session
+                        {t.dashboard.startTutorSession}
                       </h3>
                       <p className="mt-1.5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                        Got a topic, problem, or concept you need help with right
-                        now? Jump into a one-on-one conversation with Rose.
+                        {t.dashboard.tutorSessionCardDesc}
                       </p>
                     </div>
                     <div className="relative mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-violet-700 transition group-hover:gap-2 dark:text-violet-300">
-                      Start session
+                      {t.dashboard.startSession}
                       <span aria-hidden>→</span>
                     </div>
                   </Link>
@@ -164,7 +169,7 @@ export function DashboardHomeContent({
                     href="/sessions"
                     className="text-xs font-medium text-zinc-500 underline-offset-2 hover:text-violet-700 hover:underline dark:text-zinc-500 dark:hover:text-violet-300"
                   >
-                    Past tutor sessions →
+                    {t.dashboard.pastTutorSessions} →
                   </Link>
                 </div>
               </section>
@@ -174,24 +179,23 @@ export function DashboardHomeContent({
           {empty ? (
             <div className="mx-auto mt-12 max-w-lg rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center shadow-lg shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-950/90 dark:shadow-black/20">
               <p className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-                Nothing here yet
+                {t.dashboard.nothingHereYet}
               </p>
               <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                Create your own course or open something from Explore — once you
-                study, it will show up here.
+                {t.dashboard.nothingHereYetDesc}
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
                 <Link
                   href="/dashboard/courses/new"
                   className="inline-flex justify-center rounded-full bg-zinc-900 px-8 py-3 text-sm font-semibold text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
                 >
-                  Create a course
+                  {t.dashboard.createACourse}
                 </Link>
                 <Link
                   href="/explore"
                   className="inline-flex justify-center rounded-full border border-zinc-300 px-8 py-3 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-900"
                 >
-                  Browse Explore
+                  {t.dashboard.browseExplore}
                 </Link>
               </div>
             </div>
@@ -206,11 +210,10 @@ export function DashboardHomeContent({
                     />
                     <div>
                       <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
-                        Your courses
+                        {t.dashboard.yourCourses}
                       </h2>
                       <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                        Upload materials, run quizzes, and manage visibility —
-                        full creator controls.
+                        {t.dashboard.yourCoursesDesc}
                       </p>
                     </div>
                   </div>
@@ -224,16 +227,16 @@ export function DashboardHomeContent({
               ) : (
                 <section className="rounded-2xl border border-dashed border-zinc-300 bg-white/60 px-6 py-8 dark:border-zinc-600 dark:bg-zinc-950/40">
                   <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                    No courses you&apos;ve created yet
+                    {t.dashboard.noCreatedCourses}
                   </p>
                   <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                    Start one anytime — or keep learning from Explore below.
+                    {t.dashboard.noCreatedCoursesDesc}
                   </p>
                   <Link
                     href="/dashboard/courses/new"
                     className="mt-4 inline-flex rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-hover"
                   >
-                    Create a course
+                    {t.dashboard.createACourse}
                   </Link>
                 </section>
               )}
@@ -247,10 +250,10 @@ export function DashboardHomeContent({
                     />
                     <div>
                       <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
-                        Shared with you
+                        {t.dashboard.sharedWithYou}
                       </h2>
                       <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                        Courses others invited you to — your study progress stays private.
+                        {t.dashboard.sharedWithYouDesc}
                       </p>
                     </div>
                   </div>

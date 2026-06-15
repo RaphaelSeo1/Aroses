@@ -20,12 +20,16 @@ import {
   DEFAULT_COURSE_OUTPUT_LANGUAGE,
   type CourseOutputLanguage,
 } from "@/lib/course-output-language";
+import { useLocale } from "@/lib/i18n/LocaleProvider";
 import {
   estimatedProcessingHint,
   formatLabel,
   INGEST_ACCEPT_ATTRIBUTE,
   type IngestFormatKind,
 } from "@/lib/study-ingest/formats";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
+import type { Dictionary } from "@/locales";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -54,7 +58,11 @@ function fileKindIcon(kind: IngestFormatKind): string {
 }
 
 /** Prefer API `{ error: string }`; otherwise explain status / body so we never hide gateway/HTML failures. */
-function messageFromUploadResponse(res: Response, rawBody: string): string {
+function messageFromUploadResponse(
+  res: Response,
+  rawBody: string,
+  d: Dictionary["dashboard"]
+): string {
   try {
     const parsed = JSON.parse(rawBody) as { error?: unknown };
     if (typeof parsed.error === "string" && parsed.error.trim()) {
@@ -65,13 +73,13 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
   }
 
   if (res.status === 413) {
-    return "File is too large for the server. Try a smaller PDF or split the document.";
+    return d.errFileTooLarge;
   }
   if (res.status === 401) {
-    return "Session expired. Sign in again and retry.";
+    return d.errSessionExpired;
   }
   if (res.status === 408 || res.status === 504) {
-    return "Request timed out. Try a smaller PDF or upload again in a moment.";
+    return d.errTimedOut;
   }
 
   const trimmed = rawBody.trim().replace(/\s+/g, " ");
@@ -85,14 +93,16 @@ function messageFromUploadResponse(res: Response, rawBody: string): string {
     noUsefulBody &&
     (res.status === 500 || res.status === 502 || res.status === 503)
   ) {
-    return `Upload failed (${res.status}): the server stopped before sending a proper response. Check your host logs, confirm ANTHROPIC_API_KEY and SUPABASE_SERVICE_ROLE_KEY on production, and that migrations 020 and 021 (pdf ingest) are applied in Supabase.`;
+    return tf(d.errServerStopped, { status: res.status });
   }
 
   if (trimmed.length > 0 && !looksLikeHtml && trimmed.length < 400) {
     return `${res.status} ${res.statusText}: ${trimmed}`;
   }
 
-  return `Request failed (${res.status} ${res.statusText || "error"}). Try a smaller file or retry later.`;
+  return tf(d.errRequestFailed, {
+    status: `${res.status} ${res.statusText || "error"}`,
+  });
 }
 
 export function CourseUploadForm({
@@ -110,6 +120,8 @@ export function CourseUploadForm({
   /** Last choice for this course; updated on each upload. */
   defaultOutputLanguage?: CourseOutputLanguage;
 }) {
+  const t = useT();
+  const uiLocale = useLocale();
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const dragDepthRef = useRef(0);
@@ -122,8 +134,12 @@ export function CourseUploadForm({
   // own focus statement, not a stale course-wide one. For self-study courses
   // we open the block by default so the learner remembers to fill it in.
   const [studyGoal, setStudyGoal] = useState<string>("");
+  const initialOutputLanguage =
+    defaultOutputLanguage === DEFAULT_COURSE_OUTPUT_LANGUAGE && uiLocale === "ko"
+      ? "ko"
+      : defaultOutputLanguage;
   const [outputLanguage, setOutputLanguage] =
-    useState<CourseOutputLanguage>(defaultOutputLanguage);
+    useState<CourseOutputLanguage>(initialOutputLanguage);
   const [showGoal, setShowGoal] = useState<boolean>(isSelfStudy);
   const [polishingGoal, setPolishingGoal] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
@@ -151,8 +167,12 @@ export function CourseUploadForm({
   const [dropTarget, setDropTarget] = useState<string | null>(null);
 
   useEffect(() => {
-    setOutputLanguage(defaultOutputLanguage);
-  }, [defaultOutputLanguage]);
+    setOutputLanguage(
+      defaultOutputLanguage === DEFAULT_COURSE_OUTPUT_LANGUAGE && uiLocale === "ko"
+        ? "ko"
+        : defaultOutputLanguage
+    );
+  }, [defaultOutputLanguage, uiLocale]);
 
   const fileKey = (f: File) => `${f.name}:${f.size}`;
 
@@ -300,7 +320,7 @@ export function CourseUploadForm({
   const polishGoalInPlace = useCallback(async () => {
     const raw = studyGoal.trim();
     if (!raw) {
-      setGoalError("Type your goal first, then polish it.");
+      setGoalError(t.dashboard.errTypeGoalFirst);
       return;
     }
     setGoalError(null);
@@ -319,17 +339,17 @@ export function CourseUploadForm({
         setGoalError(
           typeof body.error === "string"
             ? body.error
-            : "Couldn't polish — try editing manually."
+            : t.dashboard.errCouldNotPolish
         );
         return;
       }
       setStudyGoal(body.summary.trim());
     } catch {
-      setGoalError("Network error while polishing.");
+      setGoalError(t.dashboard.errPolishNetwork);
     } finally {
       setPolishingGoal(false);
     }
-  }, [studyGoal]);
+  }, [studyGoal, t]);
 
   const addIngestFiles = useCallback(
     (
@@ -346,14 +366,16 @@ export function CourseUploadForm({
       if (accepted.length === 0) {
         setError(
           rejected.length > 0
-            ? `Unsupported file type${rejected.length > 1 ? "s" : ""}: ${rejected.slice(0, 3).join(", ")}${rejected.length > 3 ? "…" : ""}. Try PDF, Word, slides, text, images, audio, or video.`
-            : "Choose a supported file type."
+            ? tf(t.dashboard.errUnsupportedTypes, {
+                names: `${rejected.slice(0, 3).join(", ")}${rejected.length > 3 ? "…" : ""}`,
+              })
+            : t.dashboard.errChooseSupported
         );
         return;
       }
       if (rejected.length > 0) {
         setError(
-          `${rejected.length} unsupported file(s) skipped. Supported: PDF, Word, PowerPoint, text, images, audio, video.`
+          tf(t.dashboard.errSkippedUnsupported, { count: rejected.length })
         );
       } else {
         setError(null);
@@ -373,7 +395,7 @@ export function CourseUploadForm({
         return next;
       });
     },
-    []
+    [t]
   );
 
   function removeFileByKey(key: string) {
@@ -437,11 +459,11 @@ export function CourseUploadForm({
     setError(null);
     setSuccess(null);
     if (!examGroupId) {
-      setError("Select a section first.");
+      setError(t.dashboard.errSelectSection);
       return;
     }
     if (files.length === 0) {
-      setError("Choose or drop at least one file.");
+      setError(t.dashboard.errChooseFile);
       return;
     }
 
@@ -451,7 +473,7 @@ export function CourseUploadForm({
       .filter((g) => g.keys.length > 0)
       .map((g, i) => ({
         ...g,
-        displayName: g.name.trim() || `Lecture ${i + 1}`,
+        displayName: g.name.trim() || tf(t.dashboard.lectureN, { n: i + 1 }),
       }));
     for (const g of lectureGroups) {
       const descriptors = g.keys
@@ -470,8 +492,8 @@ export function CourseUploadForm({
     setBuildProgress({
       line:
         files.length > 1
-          ? `Uploading ${files.length} files…`
-          : `${files[0].name} — Uploading…`,
+          ? tf(t.dashboard.uploadingFiles, { count: files.length })
+          : tf(t.dashboard.uploadingFile, { name: files[0].name }),
       bar: "indeterminate",
     });
 
@@ -484,7 +506,7 @@ export function CourseUploadForm({
       } = await supabase.auth.getUser();
 
       if (!user) {
-        setError("Session expired. Sign in again and retry.");
+        setError(t.dashboard.errSessionExpired);
         setLoading(false);
         return;
       }
@@ -501,7 +523,7 @@ export function CourseUploadForm({
       for (const file of files) {
         const pathInfo = ingestStoragePathForFile(userId, file);
         if (!pathInfo) {
-          setError(`${file.name}: unsupported format.`);
+          setError(tf(t.dashboard.errUnsupportedFormat, { name: file.name }));
           setLoading(false);
           return;
         }
@@ -595,8 +617,10 @@ export function CourseUploadForm({
       setBuildProgress({
         line:
           buildGroups.length > 1
-            ? `Starting ${buildGroups.length} lecture builds…`
-            : "Starting course build…",
+            ? tf(t.dashboard.startingLectureBuilds, {
+                count: buildGroups.length,
+              })
+            : t.dashboard.startingCourseBuild,
         bar: "indeterminate",
       });
 
@@ -624,7 +648,10 @@ export function CourseUploadForm({
             });
             const raw = await res.text();
             if (!res.ok) {
-              return { group: g, error: messageFromUploadResponse(res, raw) };
+              return {
+                group: g,
+                error: messageFromUploadResponse(res, raw, t.dashboard),
+              };
             }
             const body = JSON.parse(raw) as {
               materialId?: string;
@@ -637,7 +664,7 @@ export function CourseUploadForm({
                 typeof body.materialId === "string" ? body.materialId : undefined,
             };
           } catch {
-            return { group: g, error: "Network error while starting build." };
+            return { group: g, error: t.dashboard.errNetworkStartingBuild };
           }
         })
       );
@@ -683,10 +710,10 @@ export function CourseUploadForm({
         return;
       }
 
-      setError("Invalid response from server (missing job id).");
+      setError(t.dashboard.errInvalidServerResponse);
     } catch {
       setBuildProgress(null);
-      setError("Network error. Check your connection.");
+      setError(t.dashboard.errNetworkCheckConnection);
     }
 
     setLoading(false);
@@ -727,7 +754,7 @@ export function CourseUploadForm({
   if (!examGroupId) {
     return (
       <p className="text-sm text-zinc-500">
-        Select a section tab above to enable uploads.
+        {t.dashboard.selectSectionTab}
       </p>
     );
   }
@@ -739,15 +766,15 @@ export function CourseUploadForm({
           <span aria-hidden className="mr-1">
             🌐
           </span>
-          Course language
+          {t.dashboard.courseLanguage}
         </p>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-          Lessons and quizzes will be written in this language.
+          {t.dashboard.courseLanguageDesc}
         </p>
         <div
           className="mt-3 flex flex-wrap gap-2"
           role="radiogroup"
-          aria-label="Course output language"
+          aria-label={t.dashboard.courseOutputLanguageAria}
         >
           {COURSE_OUTPUT_LANGUAGE_OPTIONS.map((opt) => {
             const selected = outputLanguage === opt.value;
@@ -785,10 +812,10 @@ export function CourseUploadForm({
           >
             <span className="flex items-center gap-2">
               <span aria-hidden>🎯</span>
-              Tell the AI what to focus on (optional)
+              {t.dashboard.tellAiFocus}
             </span>
             <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">
-              Add a goal
+              {t.dashboard.addAGoal}
             </span>
           </button>
         ) : (
@@ -799,11 +826,13 @@ export function CourseUploadForm({
                 className="text-sm font-medium text-zinc-800 dark:text-zinc-200"
               >
                 <span aria-hidden className="mr-1">🎯</span>
-                Goal for this upload
+                {t.dashboard.goalForThisUpload}
                 <span className="ml-2 text-xs font-normal text-zinc-500">
                   ({groups.length > 1
-                    ? `applies to all ${groups.length} lectures`
-                    : "applies to this lecture"}
+                    ? tf(t.dashboard.appliesToAllLectures, {
+                        count: groups.length,
+                      })
+                    : t.dashboard.appliesToThisLecture}
                   )
                 </span>
               </label>
@@ -812,7 +841,7 @@ export function CourseUploadForm({
                 onClick={() => setShowGoal(false)}
                 className="text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
               >
-                Hide
+                {t.dashboard.hide}
               </button>
             </div>
             <textarea
@@ -824,7 +853,7 @@ export function CourseUploadForm({
                 if (goalError) setGoalError(null);
               }}
               maxLength={4000}
-              placeholder="e.g. Focus on the mechanism of ionic bonding — I already know Coulomb's law."
+              placeholder={t.dashboard.goalPlaceholder}
               className="block w-full resize-none rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
             />
             <div className="flex flex-wrap items-center gap-3">
@@ -834,7 +863,9 @@ export function CourseUploadForm({
                 disabled={polishingGoal || !studyGoal.trim()}
                 className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
               >
-                {polishingGoal ? "Polishing…" : "✨ Polish into a one-liner"}
+                {polishingGoal
+                  ? t.dashboard.polishing
+                  : t.dashboard.polishOneLiner}
               </button>
               {goalError ? (
                 <span className="text-xs text-red-600 dark:text-red-400">
@@ -848,7 +879,7 @@ export function CourseUploadForm({
 
       <div>
         <span className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          Study materials
+          {t.dashboard.studyMaterials}
         </span>
 
         <input
@@ -880,15 +911,14 @@ export function CourseUploadForm({
         >
           <span className="pointer-events-none text-sm font-medium text-zinc-800 dark:text-zinc-100">
             {dragOver
-              ? "Drop files here"
-              : "Drag and drop your study material here"}
+              ? t.dashboard.dropFilesHere
+              : t.dashboard.dragDropPrompt}
           </span>
           <span className="pointer-events-none mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-            PDFs, Word docs, slides, videos, audio, or images — group related
-            files into one lecture
+            {t.dashboard.supportedFormatsHint}
           </span>
           <span className="pointer-events-none mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-            Limits: {INGEST_SIZE_HINT}
+            {t.dashboard.limitsLabel} {INGEST_SIZE_HINT}
           </span>
         </button>
 
@@ -897,10 +927,13 @@ export function CourseUploadForm({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 {files.length === 1
-                  ? "1 file → 1 lecture."
-                  : `${files.length} files → ${groups.length} lecture${
-                      groups.length > 1 ? "s" : ""
-                    }. Drag a file onto another lecture to combine them — the AI then weaves them into one course.`}
+                  ? t.dashboard.oneFileOneLecture
+                  : `${tf(
+                      groups.length === 1
+                        ? t.dashboard.filesToLecturesOne
+                        : t.dashboard.filesToLecturesMany,
+                      { files: files.length, lectures: groups.length }
+                    )} ${t.dashboard.combineHint}`}
               </p>
               {files.length > 1 ? (
                 <div className="flex shrink-0 gap-2">
@@ -910,7 +943,7 @@ export function CourseUploadForm({
                     disabled={loading || groups.length <= 1}
                     className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
-                    Combine into one
+                    {t.dashboard.combineIntoOne}
                   </button>
                   <button
                     type="button"
@@ -918,7 +951,7 @@ export function CourseUploadForm({
                     disabled={loading || groups.length === files.length}
                     className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
-                    One per file
+                    {t.dashboard.onePerFile}
                   </button>
                 </div>
               ) : null}
@@ -957,12 +990,14 @@ export function CourseUploadForm({
                         value={group.name}
                         disabled={loading}
                         onChange={(e) => renameGroup(group.id, e.target.value)}
-                        placeholder="Name this lecture (optional)"
+                        placeholder={t.dashboard.nameThisLecture}
                         className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-zinc-900 outline-none hover:border-zinc-200 focus:border-brand focus:bg-white dark:text-zinc-100 dark:hover:border-zinc-700 dark:focus:bg-zinc-950"
                       />
                       {combined ? (
                         <span className="shrink-0 rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-bold text-brand dark:bg-brand-soft/15 dark:text-brand-soft">
-                          {groupFiles.length} files combined
+                          {tf(t.dashboard.filesCombined, {
+                            count: groupFiles.length,
+                          })}
                         </span>
                       ) : null}
                     </div>
@@ -1017,7 +1052,7 @@ export function CourseUploadForm({
                                 {formatLabel(describeIngestFile(file)?.kind ?? "pdf")}{" "}
                                 · {formatFileSize(file.size)}
                                 {fileMeta[key]?.durationSec != null
-                                  ? ` · ${Math.round(fileMeta[key]!.durationSec! / 60)} min`
+                                  ? ` · ${tf(t.dashboard.durationMinutes, { count: Math.round(fileMeta[key]!.durationSec! / 60) })}`
                                   : ""}
                                 {fileMeta[key]?.hint
                                   ? ` · ${fileMeta[key]!.hint}`
@@ -1030,7 +1065,7 @@ export function CourseUploadForm({
                               onClick={() => removeFileByKey(key)}
                               className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                             >
-                              Remove
+                              {t.dashboard.remove}
                             </button>
                           </li>
                         );
@@ -1054,7 +1089,7 @@ export function CourseUploadForm({
                       : "border-zinc-300 text-zinc-500 dark:border-zinc-700 dark:text-zinc-400",
                   ].join(" ")}
                 >
-                  Drop here to split into its own lecture
+                  {t.dashboard.dropToSplit}
                 </div>
               ) : null}
             </div>
@@ -1062,10 +1097,7 @@ export function CourseUploadForm({
         )}
 
         <p className="mt-2 text-xs text-zinc-500">
-          Your files are private to your account. Make sure you have permission
-          to use copyrighted material. Videos and audio are transcribed (up to
-          25MB per file for transcription). Processing can take several minutes
-          for long recordings.
+          {t.dashboard.privacyNote}
         </p>
       </div>
 
@@ -1077,7 +1109,7 @@ export function CourseUploadForm({
           aria-busy="true"
         >
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            Course build in progress
+            {t.dashboard.courseBuildInProgress}
           </p>
           <p className="mt-1.5 whitespace-pre-line text-sm font-medium text-zinc-900 dark:text-zinc-100">
             {buildProgress.line}
@@ -1118,10 +1150,10 @@ export function CourseUploadForm({
         className="inline-flex items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/20 hover:bg-brand-hover disabled:opacity-60 dark:bg-brand dark:hover:bg-brand-soft"
       >
         {loading
-          ? "Building…"
+          ? t.dashboard.building
           : groups.length > 1
-            ? `Upload & build ${groups.length} lectures`
-            : "Upload & build course"}
+            ? tf(t.dashboard.uploadBuildLectures, { count: groups.length })
+            : t.dashboard.uploadBuildCourse}
       </button>
     </form>
   );

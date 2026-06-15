@@ -9,6 +9,8 @@ import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { BrandLogo } from "@/components/BrandLogo";
 import { LegalFooterLinks } from "@/components/LegalFooterLinks";
 import { APP_NAME } from "@/lib/brand";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import { parseSafeInternalNext } from "@/lib/internal-next-path";
 import { getBrowserAuthOrigin } from "@/lib/site-url";
 import { GoogleSignInButton } from "@/components/GoogleSignInButton";
@@ -16,6 +18,33 @@ import {
   emailMatchesAllowedDomains,
   schoolEmailPolicyUserMessage,
 } from "@/lib/school-email-policy";
+
+/**
+ * Age + terms consent sentence, assembled from split dictionary keys so each
+ * language can order the clause naturally (Korean puts the verb at the end).
+ */
+function LegalConsentText() {
+  const t = useT();
+  return (
+    <span className="min-w-0">
+      {t.auth.legalPrefix}
+      <Link
+        href="/legal/terms"
+        className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
+      >
+        {t.auth.legalTerms}
+      </Link>
+      {t.auth.legalJoin}
+      <Link
+        href="/legal/privacy"
+        className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
+      >
+        {t.auth.legalPrivacy}
+      </Link>
+      {t.auth.legalSuffix}
+    </span>
+  );
+}
 
 function SignupContent({
   allowedDomains,
@@ -26,6 +55,7 @@ function SignupContent({
   preferredHint: string;
   hideEmailPassword: boolean;
 }) {
+  const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -47,9 +77,7 @@ function SignupContent({
     setError(null);
     setMessage(null);
     if (!acceptedLegal) {
-      setError(
-        "Please confirm your age and accept the Terms and Privacy Policy."
-      );
+      setError(t.auth.confirmLegalFirst);
       return;
     }
     if (
@@ -80,16 +108,14 @@ function SignupContent({
       return;
     }
 
-    setMessage(
-      "Check your email to confirm your account, or log in if confirmation is disabled."
-    );
+    setMessage(t.auth.checkEmailToConfirm);
     router.refresh();
   }
 
   return (
     <>
       <AppHeader
-        right={<HeaderNavLink href={loginHref}>Log in</HeaderNavLink>}
+        right={<HeaderNavLink href={loginHref}>{t.auth.logIn}</HeaderNavLink>}
       />
       <main className="mx-auto flex min-h-[calc(100vh-3.5rem)] w-full max-w-md flex-1 flex-col px-4 py-10 pb-12 sm:py-12">
         <div className="flex flex-1 flex-col justify-center py-4">
@@ -101,10 +127,10 @@ function SignupContent({
             <BrandLogo className="h-14 w-14 sm:h-16 sm:w-16" />
           </Link>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Create your account
+            {t.auth.createYourAccount}
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-            {`Start studying smarter with ${APP_NAME}.`}
+            {tf(t.auth.startStudyingSmarter, { app: APP_NAME })}
           </p>
 
           {preferredHint ? (
@@ -123,34 +149,16 @@ function SignupContent({
                     onChange={(e) => setAcceptedLegal(e.target.checked)}
                     className="mt-0.5 h-4 w-4 shrink-0 rounded border-zinc-300 text-brand focus:ring-brand dark:border-zinc-600"
                   />
-                  <span className="min-w-0">
-                    I am at least{" "}
-                    <strong className="font-semibold">13 years old</strong> and I
-                    agree to the{" "}
-                    <Link
-                      href="/legal/terms"
-                      className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
-                    >
-                      Terms of Service
-                    </Link>{" "}
-                    and{" "}
-                    <Link
-                      href="/legal/privacy"
-                      className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
-                    >
-                      Privacy Policy
-                    </Link>
-                    .
-                  </span>
+                  <LegalConsentText />
                 </label>
                 <GoogleSignInButton
                   nextPath={afterAuthPath}
                   disabled={!acceptedLegal}
-                  label="Sign up with Google"
+                  label={t.auth.signUpWithGoogle}
                 />
                 {!acceptedLegal ? (
                   <p className="text-center text-xs text-zinc-500 dark:text-zinc-400">
-                    Accept the terms above to continue with Google.
+                    {t.auth.acceptTermsToContinue}
                   </p>
                 ) : null}
                 {error ? (
@@ -166,13 +174,13 @@ function SignupContent({
               <>
                 <GoogleSignInButton
                   nextPath={afterAuthPath}
-                  label="Sign up with Google"
+                  label={t.auth.signUpWithGoogle}
                 />
 
                 <div className="flex items-center gap-3">
                   <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
                   <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                    or email
+                    {t.auth.orEmail}
                   </span>
                   <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
                 </div>
@@ -183,7 +191,7 @@ function SignupContent({
                       htmlFor="email"
                       className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
                     >
-                      Email
+                      {t.auth.email}
                     </label>
                     <input
                       id="email"
@@ -201,7 +209,7 @@ function SignupContent({
                       htmlFor="password"
                       className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
                     >
-                      Password
+                      {t.auth.password}
                     </label>
                     <input
                       id="password"
@@ -223,25 +231,7 @@ function SignupContent({
                       onChange={(e) => setAcceptedLegal(e.target.checked)}
                       className="mt-0.5 h-4 w-4 shrink-0 rounded border-zinc-300 text-brand focus:ring-brand dark:border-zinc-600"
                     />
-                    <span className="min-w-0">
-                      I am at least{" "}
-                      <strong className="font-semibold">13 years old</strong> and I
-                      agree to the{" "}
-                      <Link
-                        href="/legal/terms"
-                        className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
-                      >
-                        Terms of Service
-                      </Link>{" "}
-                      and{" "}
-                      <Link
-                        href="/legal/privacy"
-                        className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
-                      >
-                        Privacy Policy
-                      </Link>
-                      .
-                    </span>
+                    <LegalConsentText />
                   </label>
 
                   {error && (
@@ -260,7 +250,7 @@ function SignupContent({
                     disabled={loading || !acceptedLegal}
                     className="flex w-full justify-center rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
-                    {loading ? "Creating…" : "Sign up"}
+                    {loading ? t.auth.creating : t.auth.signUp}
                   </button>
                 </form>
               </>
@@ -286,11 +276,12 @@ export function SignupPageClient({
   preferredHint,
   hideEmailPassword,
 }: Props) {
+  const t = useT();
   return (
     <Suspense
       fallback={
         <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center px-4 text-sm text-zinc-500">
-          Loading…
+          {t.auth.loading}
         </div>
       }
     >

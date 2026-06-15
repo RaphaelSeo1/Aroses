@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useDismissStudyCourse } from "@/components/progress/useDismissStudyCourse";
 import { buildResumeCourseHref } from "@/lib/dashboard/resume-course-href";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
+import type { Dictionary } from "@/locales";
 import type { CourseMode } from "@/types/mentored";
 
 type Entry = {
@@ -40,19 +43,23 @@ function pct(modDone: number, modTotal: number): number {
   return clamp(Math.round((modDone / modTotal) * 100), 0, 100);
 }
 
-function formatRelativeTime(iso: string): string {
+function formatRelativeTime(
+  iso: string,
+  d: Dictionary["dashboard"]
+): string {
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return "";
   const diffMs = Date.now() - t;
   const min = Math.round(diffMs / 60_000);
-  if (min < 60) return `${min} min ago`;
+  if (min < 60) return tf(d.minutesAgo, { count: min });
   const hr = Math.round(min / 60);
-  if (hr < 48) return hr === 1 ? "1 hour ago" : `${hr} hours ago`;
+  if (hr < 48) return hr === 1 ? d.oneHourAgo : tf(d.hoursAgo, { count: hr });
   const days = Math.round(hr / 24);
-  return days === 1 ? "Yesterday" : `${days} days ago`;
+  return days === 1 ? d.yesterday : tf(d.daysAgo, { count: days });
 }
 
 export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
+  const t = useT();
   const [items, setItems] = useState(entries);
   const { requestDismiss, dismissDialog, error } = useDismissStudyCourse({
     onDismissed: (courseId) => {
@@ -71,17 +78,17 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-            For you
+            {t.dashboard.forYou}
           </p>
           <h2 className="mt-1 text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
-            Continue studying
+            {t.dashboard.continueStudying}
           </h2>
         </div>
         <Link
           href="/dashboard/profile?tab=progress"
           className="text-sm font-semibold text-brand underline-offset-2 hover:underline dark:text-brand-soft"
         >
-          View all →
+          {t.dashboard.viewAll} →
         </Link>
       </div>
 
@@ -99,9 +106,12 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
               e.totalLast10 > 0 ? `${e.correctLast10}/${e.totalLast10}` : "—";
             const moduleLabel =
               (e.uploadsCount ?? 0) > 1
-                ? `${e.modulesTotal} checkpoints · ${e.uploadsCount} sections`
+                ? tf(t.dashboard.checkpointsSections, {
+                    checkpoints: e.modulesTotal,
+                    sections: e.uploadsCount ?? 0,
+                  })
                 : e.modulesTotal > 0
-                  ? `${e.modulesTotal} modules`
+                  ? tf(t.dashboard.modulesCount, { count: e.modulesTotal })
                   : null;
             const href = buildResumeCourseHref({
               courseId: e.courseId,
@@ -136,7 +146,7 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
                       {e.title}
                     </p>
                     <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                      {formatRelativeTime(e.answeredAt)}
+                      {formatRelativeTime(e.answeredAt, t.dashboard)}
                       {moduleLabel ? (
                         <>
                           <span className="mx-2 text-zinc-300 dark:text-zinc-700">·</span>
@@ -157,14 +167,14 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
                       }
                       className="rounded-full border border-zinc-300/90 bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 shadow-sm transition hover:border-red-300 hover:bg-red-50 hover:text-red-700 dark:border-zinc-600 dark:bg-zinc-900/80 dark:text-zinc-200 dark:hover:border-red-800 dark:hover:bg-red-950/50 dark:hover:text-red-300"
                     >
-                      Remove
+                      {t.dashboard.remove}
                     </button>
                     <div className="text-right">
                       <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
                         {score}
                       </p>
                       <p className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-                        last 10
+                        {t.dashboard.lastTen}
                       </p>
                     </div>
                   </div>
@@ -174,8 +184,11 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
                   <div className="flex items-center justify-between gap-3 text-xs font-medium text-zinc-600 dark:text-zinc-400">
                     <span>
                       {e.modulesTotal > 0
-                        ? `${e.modulesCompleted}/${e.modulesTotal} checkpoints`
-                        : "Progress"}
+                        ? tf(t.dashboard.checkpointsDone, {
+                            done: e.modulesCompleted,
+                            total: e.modulesTotal,
+                          })
+                        : t.dashboard.progressLabel}
                     </span>
                     <span className="tabular-nums text-zinc-700 dark:text-zinc-300">
                       {progressPct}%
@@ -194,13 +207,13 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
                     href={href}
                     className="inline-flex items-center justify-center rounded-full border border-emerald-200/70 bg-emerald-50/80 px-4 py-2 text-sm font-semibold text-emerald-950 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100 dark:border-emerald-900/50 dark:bg-emerald-950/35 dark:text-emerald-100 dark:hover:bg-emerald-950/55"
                   >
-                    Open →
+                    {t.dashboard.openCta} →
                   </Link>
                   <Link
                     href={detailsHref}
                     className="text-xs font-semibold text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
                   >
-                    Details
+                    {t.dashboard.details}
                   </Link>
                 </div>
               </article>

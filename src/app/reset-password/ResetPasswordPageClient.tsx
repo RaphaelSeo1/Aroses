@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { BrandLogo } from "@/components/BrandLogo";
+import { useT } from "@/lib/i18n/LocaleProvider";
 import { createClient } from "@/lib/supabase/client";
 import { APP_NAME } from "@/lib/brand";
 
 export function ResetPasswordPageClient() {
+  const t = useT();
   const router = useRouter();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -39,11 +41,11 @@ export function ResetPasswordPageClient() {
     e.preventDefault();
     setError(null);
     if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+      setError(t.auth.passwordMin8);
       return;
     }
     if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+      setError(t.auth.passwordsMismatch);
       return;
     }
     setLoading(true);
@@ -63,7 +65,7 @@ export function ResetPasswordPageClient() {
       <>
         <AppHeader />
         <div className="mx-auto flex max-w-md flex-1 flex-col justify-center px-4 py-24 text-center text-sm text-zinc-500">
-          Loading…
+          {t.auth.loading}
         </div>
       </>
     );
@@ -82,10 +84,10 @@ export function ResetPasswordPageClient() {
             <BrandLogo className="h-14 w-14 sm:h-16 sm:w-16" />
           </Link>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Set a new password
+            {t.auth.resetTitle}
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-            Choose a strong password for your account.
+            {t.auth.resetBody}
           </p>
 
           <form onSubmit={onSubmit} className="mt-8 space-y-5">
@@ -94,7 +96,7 @@ export function ResetPasswordPageClient() {
                 htmlFor="new-password"
                 className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
               >
-                New password
+                {t.auth.newPassword}
               </label>
               <input
                 id="new-password"
@@ -113,7 +115,7 @@ export function ResetPasswordPageClient() {
                 htmlFor="confirm-password"
                 className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
               >
-                Confirm password
+                {t.auth.confirmPassword}
               </label>
               <input
                 id="confirm-password"
@@ -142,7 +144,7 @@ export function ResetPasswordPageClient() {
               disabled={loading}
               className="flex w-full justify-center rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
             >
-              {loading ? "Saving…" : "Update password"}
+              {loading ? t.common.saving : t.auth.updatePassword}
             </button>
           </form>
         </div>

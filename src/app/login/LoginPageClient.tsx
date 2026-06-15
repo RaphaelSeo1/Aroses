@@ -9,6 +9,8 @@ import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { BrandLogo } from "@/components/BrandLogo";
 import { LegalFooterLinks } from "@/components/LegalFooterLinks";
 import { APP_NAME } from "@/lib/brand";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import { parseSafeInternalNext } from "@/lib/internal-next-path";
 import { reportClientActivity } from "@/lib/activity-log-client";
 import { GoogleSignInButton } from "@/components/GoogleSignInButton";
@@ -30,6 +32,7 @@ function LoginForm({
   preferredHint: string;
   hideEmailPassword: boolean;
 }) {
+  const t = useT();
   const router = useRouter();
 
   const [email, setEmail] = useState("");
@@ -74,10 +77,10 @@ function LoginForm({
           <BrandLogo className="h-14 w-14 sm:h-16 sm:w-16" />
         </Link>
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Log in
+          {t.auth.logIn}
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-          {`Welcome back to ${APP_NAME}.`}
+          {tf(t.auth.welcomeBack, { app: APP_NAME })}
         </p>
 
         {preferredHint ? (
@@ -91,10 +94,10 @@ function LoginForm({
             role="alert"
             className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-900 dark:bg-red-950/50 dark:text-red-100"
           >
-            That account isn&apos;t approved for this site.{" "}
+            {t.auth.notApproved}{" "}
             {allowedDomains.length > 0
               ? schoolEmailPolicyUserMessage(allowedDomains)
-              : "Sign in with an email your administrator allowed."}
+              : t.auth.signInWithAllowedEmail}
           </p>
         ) : null}
 
@@ -106,7 +109,7 @@ function LoginForm({
               <div className="flex items-center gap-3">
                 <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
                 <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                  or email
+                  {t.auth.orEmail}
                 </span>
                 <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
               </div>
@@ -117,7 +120,7 @@ function LoginForm({
                     htmlFor="email"
                     className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
                   >
-                    Email
+                    {t.auth.email}
                   </label>
                   <input
                     id="email"
@@ -135,7 +138,7 @@ function LoginForm({
                     htmlFor="password"
                     className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
                   >
-                    Password
+                    {t.auth.password}
                   </label>
                   <input
                     id="password"
@@ -160,14 +163,13 @@ function LoginForm({
                   disabled={loading}
                   className="flex w-full justify-center rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                 >
-                  {loading ? "Signing in…" : "Log in"}
+                  {loading ? t.auth.signingIn : t.auth.logIn}
                 </button>
               </form>
             </>
           ) : (
             <p className="text-center text-xs text-zinc-500 dark:text-zinc-400">
-              Email/password sign-in is disabled for this deployment — use Google
-              above.
+              {t.auth.emailPasswordDisabled}
             </p>
           )}
         </div>
@@ -188,6 +190,7 @@ function LoginPageInner({
   preferredHint: string;
   hideEmailPassword: boolean;
 }) {
+  const t = useT();
   const searchParams = useSearchParams();
   const safeNext = parseSafeInternalNext(searchParams.get("next"));
   const nextPath = safeNext ?? "/";
@@ -200,7 +203,7 @@ function LoginPageInner({
       <AppHeader
         right={
           <HeaderNavLink href={signupHref} variant="primary">
-            Sign up
+            {t.auth.signUp}
           </HeaderNavLink>
         }
       />
@@ -228,13 +231,14 @@ export function LoginPageClient({
   preferredHint,
   hideEmailPassword,
 }: Props) {
+  const t = useT();
   return (
     <Suspense
       fallback={
         <div className="flex min-h-[calc(100vh-3.5rem)] flex-col">
           <AppHeader />
           <div className="mx-auto flex max-w-md flex-1 flex-col justify-center px-4 py-24 text-center text-sm text-zinc-500">
-            Loading…
+            {t.auth.loading}
           </div>
         </div>
       }

@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
  * Tutor Session nav with a chevron dropdown — compact menu only,
  * no inline session list (that lives on /sessions).
  */
 export function TutorSessionNavDropdown() {
+  const t = useT();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -59,7 +61,7 @@ export function TutorSessionNavDropdown() {
           href="/tutor-session"
           prefetch
           className="inline-flex items-center gap-1.5"
-          title="Start a one-on-one tutor session with Rose"
+          title={t.nav.tutorSessionTitle}
           aria-current={active ? "page" : undefined}
         >
           <svg
@@ -74,14 +76,14 @@ export function TutorSessionNavDropdown() {
           >
             <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
           </svg>
-          <span>Tutor Session</span>
+          <span>{t.nav.tutorSession}</span>
         </Link>
         <button
           type="button"
           onClick={toggle}
           aria-haspopup="menu"
           aria-expanded={open}
-          aria-label="Tutor session menu"
+          aria-label={t.nav.tutorSessionMenu}
           className="-ml-px inline-flex w-4 shrink-0 items-center justify-center self-stretch opacity-70 transition hover:opacity-100"
         >
           <svg
@@ -104,7 +106,7 @@ export function TutorSessionNavDropdown() {
       {open ? (
         <div
           role="menu"
-          aria-label="Tutor session options"
+          aria-label={t.nav.tutorSessionOptions}
           className="absolute left-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-xl border border-zinc-200 bg-white py-1 shadow-lg shadow-zinc-900/10 ring-1 ring-zinc-900/[0.04] dark:border-zinc-700 dark:bg-zinc-900 dark:ring-white/10"
         >
           <Link
@@ -116,7 +118,7 @@ export function TutorSessionNavDropdown() {
             <span aria-hidden className="text-base">
               ✨
             </span>
-            Start a new session
+            {t.nav.startNewSession}
           </Link>
           <div className="my-1 h-px bg-zinc-100 dark:bg-zinc-800" />
           <Link
@@ -125,7 +127,7 @@ export function TutorSessionNavDropdown() {
             onClick={close}
             className="flex items-center justify-between px-3.5 py-2.5 text-sm text-zinc-700 transition hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-800"
           >
-            <span>View previous sessions</span>
+            <span>{t.nav.viewPreviousSessions}</span>
             <span aria-hidden className="text-zinc-400">
               →
             </span>

@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { INTRO_HREF } from "@/lib/brand";
+import { useLocale, useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import {
   ageFromYmd,
   ONBOARDING_GOALS,
@@ -109,6 +111,8 @@ function IconX({ className }: { className?: string }) {
 
 export function OnboardingClient() {
   const router = useRouter();
+  const t = useT();
+  const locale = useLocale();
   const [persona, setPersona] = useState<OnboardingPersona | null>(null);
   const [goals, setGoals] = useState<Set<OnboardingGoal>>(new Set());
   const [schoolName, setSchoolName] = useState("");
@@ -158,7 +162,7 @@ export function OnboardingClient() {
       setUsernameStatus(username.trim().length === 0 ? "idle" : "invalid");
       return;
     }
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       setUsernameStatus("checking");
       void (async () => {
         try {
@@ -179,7 +183,7 @@ export function OnboardingClient() {
         }
       })();
     }, 380);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [parsedUsername, username]);
 
   const goNext = useCallback(() => {
@@ -258,7 +262,9 @@ export function OnboardingClient() {
       };
       if (!res.ok) {
         const base =
-          typeof j.error === "string" ? j.error : "Could not finish setup.";
+          typeof j.error === "string"
+            ? j.error
+            : t.onboarding.couldNotFinishSetup;
         const withCode =
           typeof j.code === "string" && j.code.length > 0
             ? `${base} [${j.code}]`
@@ -271,7 +277,7 @@ export function OnboardingClient() {
       // to "/" when onboarding is already complete, which would skip this "done" step.
       setPhase("done");
     } catch {
-      setSubmitError("Network error.");
+      setSubmitError(t.onboarding.networkError);
     } finally {
       setSubmitting(false);
     }
@@ -292,16 +298,55 @@ export function OnboardingClient() {
   const yearOptions: number[] = [];
   for (let y = yearNow - 13; y >= yearNow - 100; y--) yearOptions.push(y);
 
+  // Stable option ids (persisted to the API) → localized display labels.
+  const personaLabels: Record<
+    OnboardingPersona,
+    { label: string; hint: string }
+  > = {
+    student: {
+      label: t.onboarding.personaStudent,
+      hint: t.onboarding.personaStudentHint,
+    },
+    educator: {
+      label: t.onboarding.personaEducator,
+      hint: t.onboarding.personaEducatorHint,
+    },
+    professional: {
+      label: t.onboarding.personaProfessional,
+      hint: t.onboarding.personaProfessionalHint,
+    },
+    self_learner: {
+      label: t.onboarding.personaSelfLearner,
+      hint: t.onboarding.personaSelfLearnerHint,
+    },
+  };
+
+  const goalLabels: Record<OnboardingGoal, string> = {
+    exam_prep: t.onboarding.goalExamPrep,
+    understand: t.onboarding.goalUnderstand,
+    ahead: t.onboarding.goalAhead,
+    skill: t.onboarding.goalSkill,
+    create_share: t.onboarding.goalCreateShare,
+    explore: t.onboarding.goalExplore,
+  };
+
+  const referralLabels: Record<OnboardingReferral, string> = {
+    friend: t.onboarding.referralFriend,
+    social: t.onboarding.referralSocial,
+    google: t.onboarding.referralGoogle,
+    teacher: t.onboarding.referralTeacher,
+    other: t.onboarding.referralOther,
+  };
+
   if (dobUnderage) {
     return (
       <div className={`flex flex-col ${SHELL}`}>
         <div className="mx-auto flex w-full max-w-lg flex-1 flex-col justify-center px-6 py-16 text-center">
           <h1 className={`text-2xl sm:text-3xl ${HEADING_SERIF}`}>
-            Aroses is for ages 13 and up
+            {t.onboarding.underageTitle}
           </h1>
           <p className="mt-5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
-            Thanks for your interest. When you&apos;re 13 or older, we&apos;d love
-            to have you back.
+            {t.onboarding.underageBody}
           </p>
           <div className="mx-auto mt-10 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button
@@ -313,14 +358,14 @@ export function OnboardingClient() {
               }}
               className={BTN_SECONDARY}
             >
-              Adjust birthday
+              {t.onboarding.adjustBirthday}
             </button>
             <button
               type="button"
               onClick={() => void leaveUnderage()}
               className={BTN_PRIMARY}
             >
-              Back to home
+              {t.onboarding.backToHome}
             </button>
           </div>
         </div>
@@ -329,7 +374,12 @@ export function OnboardingClient() {
   }
 
   const stepLabel =
-    phaseIndex >= 0 ? `Step ${phaseIndex + 1} of ${phases.length}` : "";
+    phaseIndex >= 0
+      ? tf(t.onboarding.stepLabel, {
+          current: phaseIndex + 1,
+          total: phases.length,
+        })
+      : "";
 
   const cardBase =
     "group flex w-full cursor-pointer items-start gap-3 rounded-xl border border-zinc-200/90 bg-white p-4 text-left text-zinc-900 shadow-sm transition hover:border-zinc-300 hover:shadow-md dark:border-zinc-200/90 dark:bg-white dark:text-zinc-900 sm:flex-row sm:items-center sm:gap-3.5 sm:p-4";
@@ -356,7 +406,7 @@ export function OnboardingClient() {
                 onClick={goBack}
                 className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-200 dark:bg-white dark:text-zinc-700 dark:hover:bg-zinc-50"
               >
-                ← Back
+                ← {t.onboarding.back}
               </button>
             ) : (
               <span className="inline-block w-px opacity-0" aria-hidden>
@@ -365,7 +415,9 @@ export function OnboardingClient() {
             )}
           </div>
           <p className="justify-self-center text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-500">
-            {phase === "welcome" || phase === "done" ? "Setup" : stepLabel}
+            {phase === "welcome" || phase === "done"
+              ? t.onboarding.setup
+              : stepLabel}
           </p>
           <span className="justify-self-end" aria-hidden />
         </div>
@@ -381,17 +433,17 @@ export function OnboardingClient() {
               <h1
                 className={`text-[1.75rem] font-semibold leading-tight sm:text-[2.1rem] ${HEADING_SERIF}`}
               >
-                Welcome to Aroses
+                {t.onboarding.welcomeTitle}
               </h1>
               <p className="mx-auto mt-5 max-w-sm text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
-                We all know something. Let&apos;s set up your experience.
+                {t.onboarding.welcomeBody}
               </p>
               <button
                 type="button"
                 onClick={goNext}
                 className={`${BTN_PRIMARY} mx-auto mt-10 gap-2`}
               >
-                Get started
+                {t.onboarding.getStarted}
                 <IconArrowRight className="h-4 w-4" />
               </button>
             </div>
@@ -402,7 +454,7 @@ export function OnboardingClient() {
               <h2
                 className={`mx-auto max-w-lg text-center text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
               >
-                I am a…
+                {t.onboarding.personaTitle}
               </h2>
               <div className="mt-6 grid grid-cols-1 gap-3 sm:mt-8 sm:grid-cols-2 sm:gap-3.5">
                 {ONBOARDING_PERSONAS.map((opt) => (
@@ -417,10 +469,10 @@ export function OnboardingClient() {
                     </span>
                     <div className="min-w-0 flex-1 space-y-0.5">
                       <span className="block text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-900 sm:text-base">
-                        {opt.label}
+                        {personaLabels[opt.id].label}
                       </span>
                       <span className="block text-[13px] leading-relaxed text-zinc-600 dark:text-zinc-600 sm:text-sm">
-                        {opt.hint}
+                        {personaLabels[opt.id].hint}
                       </span>
                     </div>
                   </button>
@@ -434,10 +486,10 @@ export function OnboardingClient() {
               <h2
                 className={`mx-auto max-w-lg text-center text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
               >
-                I&apos;m here to…
+                {t.onboarding.goalsTitle}
               </h2>
               <p className="mx-auto mt-3 max-w-md text-center text-sm leading-relaxed text-zinc-500 dark:text-zinc-500">
-                Select all that apply.
+                {t.onboarding.selectAllThatApply}
               </p>
               <div className="mt-6 grid grid-cols-1 gap-3 sm:mt-8 sm:grid-cols-2 sm:gap-3.5">
                 {ONBOARDING_GOALS.map((opt) => {
@@ -454,7 +506,7 @@ export function OnboardingClient() {
                       </span>
                       <div className="min-w-0 flex-1">
                         <span className="block text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-900 sm:text-base">
-                          {opt.label}
+                          {goalLabels[opt.id]}
                         </span>
                       </div>
                     </button>
@@ -469,10 +521,10 @@ export function OnboardingClient() {
               <h2
                 className={`text-center text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
               >
-                Where do you study or teach?
+                {t.onboarding.schoolTitle}
               </h2>
               <p className="mx-auto mt-3 text-center text-sm leading-relaxed text-zinc-500 dark:text-zinc-500">
-                Start typing for suggestions, or skip for now.
+                {t.onboarding.schoolBody}
               </p>
               <div className="relative mx-auto mt-8 w-full">
                 <input
@@ -484,7 +536,7 @@ export function OnboardingClient() {
                   }}
                   onFocus={() => setSchoolOpen(true)}
                   onBlur={() => setTimeout(() => setSchoolOpen(false), 180)}
-                  placeholder="University or school name"
+                  placeholder={t.onboarding.schoolPlaceholder}
                   className="w-full rounded-xl border border-zinc-200 bg-zinc-50/50 px-4 py-3.5 text-sm text-zinc-900 shadow-inner outline-none transition placeholder:text-zinc-400 focus:border-brand focus:bg-white focus:ring-2 focus:ring-brand/20 dark:border-zinc-200 dark:bg-zinc-50/50 dark:text-zinc-900 dark:placeholder:text-zinc-400 dark:focus:bg-white"
                   autoComplete="off"
                 />
@@ -513,7 +565,7 @@ export function OnboardingClient() {
               </div>
               <div className="mx-auto mt-8 flex flex-wrap justify-center gap-3">
                 <button type="button" onClick={goNext} className={BTN_PRIMARY}>
-                  Continue
+                  {t.onboarding.continue}
                 </button>
                 <button
                   type="button"
@@ -523,7 +575,7 @@ export function OnboardingClient() {
                   }}
                   className={BTN_SECONDARY}
                 >
-                  Skip
+                  {t.onboarding.skip}
                 </button>
               </div>
             </div>
@@ -534,10 +586,10 @@ export function OnboardingClient() {
               <h2
                 className={`text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
               >
-                Choose your username
+                {t.onboarding.usernameTitle}
               </h2>
               <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
-                This is how others will see you on Aroses.
+                {t.onboarding.usernameBody}
               </p>
               <div className="relative mx-auto mt-8 text-left">
                 <input
@@ -548,7 +600,7 @@ export function OnboardingClient() {
                       e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "")
                     )
                   }
-                  placeholder="letters_numbers"
+                  placeholder={t.onboarding.usernamePlaceholder}
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
@@ -569,12 +621,12 @@ export function OnboardingClient() {
               </div>
               {usernameStatus === "invalid" && username.length > 0 ? (
                 <p className="mt-2 text-left text-xs text-red-600">
-                  Use 3–30 characters: lowercase letters, numbers, underscores.
+                  {t.onboarding.usernameInvalid}
                 </p>
               ) : null}
               {usernameStatus === "taken" ? (
                 <p className="mt-2 text-left text-xs text-red-600">
-                  That username is taken. Try another.
+                  {t.onboarding.usernameTaken}
                 </p>
               ) : null}
             </div>
@@ -585,15 +637,14 @@ export function OnboardingClient() {
               <h2
                 className={`text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
               >
-                When were you born?
+                {t.onboarding.dobTitle}
               </h2>
               <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
-                We use this to personalize your experience. You must be 13 or older
-                to use Aroses.
+                {t.onboarding.dobBody}
               </p>
               <div className="mx-auto mt-8 flex max-w-md flex-wrap items-end justify-center gap-4">
                 <label className="flex flex-col text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
-                  Month
+                  {t.onboarding.month}
                   <select
                     value={birthMonth}
                     onChange={(e) => {
@@ -609,10 +660,10 @@ export function OnboardingClient() {
                     }}
                     className="mt-2 min-w-[10.5rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 dark:border-zinc-200 dark:bg-white dark:text-zinc-900"
                   >
-                    <option value="">Month</option>
+                    <option value="">{t.onboarding.month}</option>
                     {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
                       <option key={m} value={String(m)}>
-                        {new Date(2000, m - 1, 1).toLocaleString("default", {
+                        {new Date(2000, m - 1, 1).toLocaleString(locale, {
                           month: "long",
                         })}
                       </option>
@@ -620,13 +671,13 @@ export function OnboardingClient() {
                   </select>
                 </label>
                 <label className="flex flex-col text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
-                  Day
+                  {t.onboarding.day}
                   <select
                     value={birthDay}
                     onChange={(e) => setBirthDay(e.target.value)}
                     className="mt-2 min-w-[6.5rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 dark:border-zinc-200 dark:bg-white dark:text-zinc-900"
                   >
-                    <option value="">Day</option>
+                    <option value="">{t.onboarding.day}</option>
                     {Array.from({ length: maxDay }, (_, i) => i + 1).map((d) => (
                       <option key={d} value={String(d)}>
                         {d}
@@ -635,7 +686,7 @@ export function OnboardingClient() {
                   </select>
                 </label>
                 <label className="flex flex-col text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
-                  Year
+                  {t.onboarding.year}
                   <select
                     value={birthYear}
                     onChange={(e) => {
@@ -651,7 +702,7 @@ export function OnboardingClient() {
                     }}
                     className="mt-2 min-w-[7.5rem] rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/15 dark:border-zinc-200 dark:bg-white dark:text-zinc-900"
                   >
-                    <option value="">Year</option>
+                    <option value="">{t.onboarding.year}</option>
                     {yearOptions.map((y) => (
                       <option key={y} value={String(y)}>
                         {y}
@@ -668,7 +719,7 @@ export function OnboardingClient() {
               <h2
                 className={`mx-auto max-w-lg text-center text-[1.45rem] font-semibold leading-snug sm:text-[1.65rem] ${HEADING_SERIF}`}
               >
-                How did you find Aroses?
+                {t.onboarding.referralTitle}
               </h2>
               <div className="mx-auto mt-6 grid max-w-2xl grid-cols-1 gap-3 sm:mt-8 sm:grid-cols-2 sm:gap-3.5 lg:grid-cols-3">
                 {ONBOARDING_REFERRALS.map((opt) => (
@@ -683,7 +734,7 @@ export function OnboardingClient() {
                     </span>
                     <div className="min-w-0 flex-1">
                       <span className="block text-[15px] font-semibold leading-snug text-zinc-900 dark:text-zinc-900 sm:text-base">
-                        {opt.label}
+                        {referralLabels[opt.id]}
                       </span>
                     </div>
                   </button>
@@ -697,25 +748,26 @@ export function OnboardingClient() {
               <h1
                 className={`text-[1.65rem] font-semibold leading-tight sm:text-[2rem] ${HEADING_SERIF}`}
               >
-                You&apos;re all set, {parseUsername(username) ?? "friend"}!
+                {tf(t.onboarding.doneTitle, {
+                  name: parseUsername(username) ?? t.onboarding.doneFallbackName,
+                })}
               </h1>
               <p className="mx-auto mt-5 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
-                Your Aroses account is ready. Start by creating your first course or
-                exploring what others have made.
+                {t.onboarding.doneBody}
               </p>
               <div className="mx-auto mt-10 flex max-w-md flex-col gap-3 sm:flex-row sm:justify-center">
                 <Link
                   href="/dashboard/courses/new"
                   className={`${BTN_PRIMARY} flex-1 gap-2 sm:flex-initial`}
                 >
-                  Create a course
+                  {t.onboarding.createCourse}
                   <IconArrowRight className="h-4 w-4" />
                 </Link>
                 <Link
                   href="/explore"
                   className={`${BTN_SECONDARY} flex-1 gap-2 font-semibold sm:flex-initial`}
                 >
-                  Explore courses
+                  {t.onboarding.exploreCourses}
                   <IconArrowRight className="h-4 w-4" />
                 </Link>
               </div>
@@ -751,9 +803,9 @@ export function OnboardingClient() {
               >
                 {phase === "referral"
                   ? submitting
-                    ? "Saving…"
-                    : "Finish"
-                  : "Continue"}
+                    ? t.onboarding.saving
+                    : t.onboarding.finish
+                  : t.onboarding.continue}
               </button>
             </div>
           ) : null}
@@ -766,7 +818,7 @@ export function OnboardingClient() {
                 onClick={goNext}
                 className={BTN_PRIMARY}
               >
-                Continue
+                {t.onboarding.continue}
               </button>
             </div>
           ) : null}
@@ -779,7 +831,7 @@ export function OnboardingClient() {
                 onClick={goNext}
                 className={BTN_PRIMARY}
               >
-                Continue
+                {t.onboarding.continue}
               </button>
             </div>
           ) : null}

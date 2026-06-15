@@ -35,6 +35,7 @@ import {
 } from "@/lib/structure-plan-coverage";
 import {
   deriveCourseTitleFromChunkTitles,
+  isBadIngestTitle,
   isGenericIngestPlaceholder,
   normalizeIngestDisplayTitle,
 } from "@/lib/study-ingest/normalize-ingest-title";
@@ -1409,10 +1410,19 @@ function isLlmStructurePlanningEnabled(): boolean {
 function normalizeChunkSummariesForPlanner(
   chunkSummaries: IngestChunkSummary[]
 ): IngestChunkSummary[] {
-  return chunkSummaries.map((c) => ({
-    ...c,
-    title: normalizeIngestDisplayTitle(c.title),
-  }));
+  return chunkSummaries.map((c, i) => {
+    let title = normalizeIngestDisplayTitle(c.title);
+    if (isBadIngestTitle(title)) {
+      const page = c.position.match(/\bpage\s+(\d+)/i);
+      const slide = c.position.match(/\bslide\s+(\d+)/i);
+      title = page
+        ? `Page ${page[1]}`
+        : slide
+          ? `Slide ${slide[1]}`
+          : `Part ${i + 1}`;
+    }
+    return { ...c, title };
+  });
 }
 
 export async function planCourseStructureFromChunks(

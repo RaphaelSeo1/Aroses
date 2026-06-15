@@ -5,6 +5,8 @@ import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { TutorSessionNavDropdown } from "@/components/TutorSessionNavDropdown";
 import { AvatarMenu } from "@/components/nav/AvatarMenu";
 import { MobileNavMenu } from "@/components/nav/MobileNavMenu";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import { useSrsDueCounts, type SrsDueCounts } from "@/lib/srs-due";
 
 /**
@@ -35,6 +37,7 @@ export function HeaderNavLoggedIn({
   email?: string | null;
   avatarUrl?: string | null;
 }) {
+  const t = useT();
   const dashboardNav = useDashboardAdminNav();
   const adminHubHref = adminHubHrefProp ?? dashboardNav?.adminHubHref;
   const { counts: dueCounts } = useSrsDueCounts(undefined, {
@@ -75,22 +78,24 @@ export function HeaderNavLoggedIn({
             <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
             <polyline points="9 22 9 12 15 12 15 22" />
           </svg>
-          <span>Home</span>
+          <span>{t.nav.home}</span>
         </HeaderNavLink>
         <TutorSessionNavDropdown />
-        <HeaderNavLink href="/explore">Explore</HeaderNavLink>
-        <HeaderNavLink href="/forum">Forum</HeaderNavLink>
+        <HeaderNavLink href="/explore">{t.nav.explore}</HeaderNavLink>
+        <HeaderNavLink href="/forum">{t.nav.forum}</HeaderNavLink>
         <HeaderNavLink
           href="/dashboard/review"
           activeWhen={(p) => p.startsWith("/dashboard/review")}
           className="relative inline-flex items-center gap-1"
           aria-label={
-            dueTotal > 0 ? `Review — ${dueTotal} cards due` : "Review"
+            dueTotal > 0
+              ? tf(t.nav.reviewAriaDue, { count: dueTotal })
+              : t.nav.review
           }
           title={
             dueTotal > 0
-              ? `${dueTotal} cards due for review`
-              : "Spaced repetition review"
+              ? tf(t.nav.reviewCardsDue, { count: dueTotal })
+              : t.nav.reviewSpacedRepetition
           }
         >
           <svg
@@ -118,7 +123,7 @@ export function HeaderNavLoggedIn({
           </span>
         </HeaderNavLink>
         {courseHomeHref ? (
-          <HeaderNavLink href={courseHomeHref}>Course home</HeaderNavLink>
+          <HeaderNavLink href={courseHomeHref}>{t.nav.courseHome}</HeaderNavLink>
         ) : null}
       </div>
 

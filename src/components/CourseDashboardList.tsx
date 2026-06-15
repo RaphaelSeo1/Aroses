@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useT } from "@/lib/i18n/LocaleProvider";
 import type { StudyingCourse } from "@/lib/load-dashboard-courses";
 
 export type DashboardCourse = {
@@ -80,6 +81,7 @@ function AddCoursePlaceholderCard({
   href: string;
   accent: "brand" | "selfStudy";
 }) {
+  const t = useT();
   const topBar =
     accent === "selfStudy"
       ? "from-violet-400/25 via-fuchsia-400/20 to-violet-400/25"
@@ -143,7 +145,7 @@ function AddCoursePlaceholderCard({
           <span
             className={`inline-flex w-fit items-center gap-1.5 rounded-full border bg-white/60 px-4 py-2 text-sm font-semibold shadow-sm backdrop-blur-sm transition group-hover:shadow dark:bg-zinc-950/40 ${btnClass}`}
           >
-            Add course
+            {t.dashboard.addCourse}
             <span aria-hidden className="transition group-hover:translate-x-0.5">
               →
             </span>
@@ -166,6 +168,7 @@ export function CourseDashboardList({
   className?: string;
   density?: "comfortable" | "compact";
 }) {
+  const t = useT();
   const router = useRouter();
   const [courses, setCourses] = useState(initialCourses);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -271,7 +274,7 @@ export function CourseDashboardList({
   async function saveEdit(courseId: string) {
     const title = draftTitle.trim();
     if (title.length < 2) {
-      setListError("Title must be at least 2 characters.");
+      setListError(t.dashboard.titleTooShort);
       return;
     }
     setBusyId(courseId);
@@ -284,14 +287,16 @@ export function CourseDashboardList({
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setListError(typeof body.error === "string" ? body.error : "Could not save.");
+        setListError(
+          typeof body.error === "string" ? body.error : t.dashboard.couldNotSave
+        );
         setBusyId(null);
         return;
       }
       setEditingId(null);
       router.refresh();
     } catch {
-      setListError("Network error.");
+      setListError(t.dashboard.networkError);
     }
     setBusyId(null);
   }
@@ -310,7 +315,11 @@ export function CourseDashboardList({
       const res = await fetch(`/api/courses/${courseId}`, { method: "DELETE" });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setListError(typeof body.error === "string" ? body.error : "Could not delete.");
+        setListError(
+          typeof body.error === "string"
+            ? body.error
+            : t.dashboard.couldNotDelete
+        );
         setBusyId(null);
         setPendingDelete(null);
         return;
@@ -319,7 +328,7 @@ export function CourseDashboardList({
       setPendingDelete(null);
       router.refresh();
     } catch {
-      setListError("Network error.");
+      setListError(t.dashboard.networkError);
       setPendingDelete(null);
     }
     setBusyId(null);
@@ -336,12 +345,16 @@ export function CourseDashboardList({
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setListError(typeof body.error === "string" ? body.error : "Could not reorder.");
+        setListError(
+          typeof body.error === "string"
+            ? body.error
+            : t.dashboard.couldNotReorder
+        );
       } else {
         router.refresh();
       }
     } catch {
-      setListError("Network error.");
+      setListError(t.dashboard.networkError);
     }
     setBusyId(null);
   }
@@ -358,7 +371,9 @@ export function CourseDashboardList({
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setListError(
-          typeof body.error === "string" ? body.error : "Could not update visibility."
+          typeof body.error === "string"
+            ? body.error
+            : t.dashboard.couldNotUpdateVisibility
         );
         setBusyId(null);
         return;
@@ -370,7 +385,7 @@ export function CourseDashboardList({
       );
       router.refresh();
     } catch {
-      setListError("Network error.");
+      setListError(t.dashboard.networkError);
     }
     setBusyId(null);
   }
@@ -444,10 +459,10 @@ export function CourseDashboardList({
           />
           <div>
             <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
-              Public courses
+              {t.dashboard.publicCourses}
             </h3>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Visible on the explore page for others to discover and use.
+              {t.dashboard.publicCoursesDesc}
             </p>
           </div>
         </div>
@@ -455,17 +470,17 @@ export function CourseDashboardList({
         {previewExplore.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-zinc-200/90 bg-zinc-50/40 px-5 py-8 text-center dark:border-zinc-700/80 dark:bg-zinc-900/30">
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Nothing on Explore yet. Use{" "}
+              {t.dashboard.exploreEmptyPrefix}{" "}
               <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                Make public
+                {t.dashboard.makePublic}
               </span>{" "}
-              on a private course below, or create a new one.
+              {t.dashboard.exploreEmptySuffix}
             </p>
             <Link
               href="/dashboard/courses/new"
               className="mt-4 inline-flex text-sm font-semibold text-brand hover:underline dark:text-brand-soft"
             >
-              + Create a course
+              {t.dashboard.createCoursePlus}
             </Link>
           </div>
         ) : (
@@ -513,10 +528,10 @@ export function CourseDashboardList({
               />
               <div>
                 <h4 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
-                  Private courses
+                  {t.dashboard.privateCourses}
                 </h4>
                 <p className="mt-1 max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">
-                  Not on Explore — only you can open them from here.
+                  {t.dashboard.privateCoursesDesc}
                 </p>
               </div>
             </div>
@@ -570,10 +585,10 @@ export function CourseDashboardList({
           />
           <div>
             <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
-              Self study
+              {t.dashboard.selfStudyHeading}
             </h3>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Private — only visible to you in your workspace.
+              {t.dashboard.selfStudyDesc}
             </p>
           </div>
         </div>
@@ -581,14 +596,13 @@ export function CourseDashboardList({
         {previewSelfStudy.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-zinc-200/90 bg-zinc-50/40 px-5 py-8 text-center dark:border-zinc-700/80 dark:bg-zinc-900/30">
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Start a self study session when you want a private space for your
-              materials and goals — nothing here is published to Explore.
+              {t.dashboard.selfStudyEmpty}
             </p>
             <Link
               href="/dashboard/courses/new?mode=selfStudy"
               className="mt-4 inline-flex text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
             >
-              Start self study →
+              {t.dashboard.startSelfStudy} →
             </Link>
           </div>
         ) : (
@@ -663,17 +677,16 @@ export function CourseDashboardList({
                   id="delete-course-title"
                   className="text-lg font-semibold text-zinc-900 dark:text-zinc-50"
                 >
-                  Delete this course?
+                  {t.dashboard.deleteCourseTitle}
                 </h2>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                   <span className="font-medium text-zinc-900 dark:text-zinc-100">
                     &ldquo;{pendingDelete.title}&rdquo;
                   </span>{" "}
-                  will be permanently deleted, along with all uploads, sections,
-                  generated lessons, quizzes, and progress.
+                  {t.dashboard.deleteCourseWarning}
                 </p>
                 <p className="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
-                  This cannot be undone.
+                  {t.dashboard.cannotBeUndone}
                 </p>
               </div>
             </div>
@@ -684,7 +697,7 @@ export function CourseDashboardList({
                 disabled={busyId === pendingDelete.id}
                 className="inline-flex items-center justify-center rounded-full border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
               >
-                Cancel
+                {t.dashboard.cancel}
               </button>
               <button
                 type="button"
@@ -692,7 +705,9 @@ export function CourseDashboardList({
                 disabled={busyId === pendingDelete.id}
                 className="inline-flex items-center justify-center rounded-full bg-red-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-red-600/20 hover:bg-red-700 disabled:opacity-60 dark:bg-red-500 dark:hover:bg-red-600"
               >
-                {busyId === pendingDelete.id ? "Deleting…" : "Delete course"}
+                {busyId === pendingDelete.id
+                  ? t.dashboard.deleting
+                  : t.dashboard.deleteCourse}
               </button>
             </div>
           </div>
@@ -746,6 +761,7 @@ function CourseCard({
   onDrop: () => void;
   onDragEnd: () => void;
 }) {
+  const t = useT();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const isEditing = editingId === c.id;
@@ -821,7 +837,7 @@ function CourseCard({
                 type="button"
                 onClick={() => setMenuOpen((p) => !p)}
                 className="flex h-7 w-7 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-                aria-label="Course options"
+                aria-label={t.dashboard.courseOptions}
               >
                 <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
                   <circle cx="4" cy="10" r="1.5" />
@@ -843,7 +859,7 @@ function CourseCard({
                     <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 shrink-0 text-zinc-400">
                       <path d="M13.586 3.586a2 2 0 1 1 2.828 2.828l-.793.793-2.828-2.828.793-.793ZM11.379 5.793 3 14.172V17h2.828l8.38-8.379-2.83-2.828Z" />
                     </svg>
-                    Edit title &amp; description
+                    {t.dashboard.editTitleDescription}
                   </button>
                   {canToggleExplore ? (
                     <>
@@ -866,7 +882,7 @@ function CourseCard({
                                 clipRule="evenodd"
                               />
                             </svg>
-                            Make private
+                            {t.dashboard.makePrivate}
                           </>
                         ) : (
                           <>
@@ -878,7 +894,7 @@ function CourseCard({
                                 clipRule="evenodd"
                               />
                             </svg>
-                            Make public
+                            {t.dashboard.makePublic}
                           </>
                         )}
                       </button>
@@ -901,7 +917,7 @@ function CourseCard({
                         clipRule="evenodd"
                       />
                     </svg>
-                    Delete course
+                    {t.dashboard.deleteCourse}
                   </button>
                 </div>
               )}
@@ -912,7 +928,7 @@ function CourseCard({
         {isEditing ? (
           <div className="flex flex-1 flex-col gap-3 px-6 pb-6">
             <label className="sr-only" htmlFor={`edit-title-${c.id}`}>
-              Title
+              {t.dashboard.titleLabel}
             </label>
             <input
               id={`edit-title-${c.id}`}
@@ -921,7 +937,7 @@ function CourseCard({
               className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-base font-semibold text-zinc-900 outline-none focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
             />
             <label className="sr-only" htmlFor={`edit-desc-${c.id}`}>
-              Description
+              {t.dashboard.descriptionLabel}
             </label>
             <textarea
               id={`edit-desc-${c.id}`}
@@ -929,7 +945,7 @@ function CourseCard({
               onChange={(e) => setDraftDescription(e.target.value)}
               rows={3}
               className="resize-y rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-              placeholder="Description (optional)"
+              placeholder={t.dashboard.descriptionOptionalPlaceholder}
             />
             <div className="mt-auto flex flex-wrap gap-2 pt-2">
               <button
@@ -938,7 +954,7 @@ function CourseCard({
                 onClick={() => onSaveEdit(c.id)}
                 className="rounded-full bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover disabled:opacity-50 dark:bg-brand"
               >
-                Save
+                {t.dashboard.save}
               </button>
               <button
                 type="button"
@@ -946,7 +962,7 @@ function CourseCard({
                 onClick={onCancelEdit}
                 className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-900"
               >
-                Cancel
+                {t.dashboard.cancel}
               </button>
             </div>
           </div>
@@ -967,7 +983,7 @@ function CourseCard({
               </Link>
               {listedOnExplore ? (
                 <span className="rounded-full border border-emerald-200/80 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
-                  On Explore
+                  {t.dashboard.onExplore}
                 </span>
               ) : visualVariant === "selfStudy" ? (
                 <span className="inline-flex items-center gap-1 rounded-full border border-zinc-300/90 bg-zinc-100/90 px-2.5 py-0.5 text-xs font-semibold text-zinc-800 shadow-sm dark:border-zinc-600 dark:bg-zinc-900/90 dark:text-zinc-200">
@@ -983,11 +999,11 @@ function CourseCard({
                       clipRule="evenodd"
                     />
                   </svg>
-                  Private
+                  {t.dashboard.privateBadge}
                 </span>
               ) : (
                 <span className="rounded-full border border-zinc-200/90 bg-zinc-100/90 px-2.5 py-0.5 text-xs font-semibold text-zinc-600 shadow-sm dark:border-zinc-700 dark:bg-zinc-900/90 dark:text-zinc-400">
-                  Not on Explore
+                  {t.dashboard.notOnExplore}
                 </span>
               )}
             </div>
@@ -996,7 +1012,9 @@ function CourseCard({
                 {c.description}
               </p>
             ) : (
-              <p className="text-sm italic text-zinc-500">No description</p>
+              <p className="text-sm italic text-zinc-500">
+                {t.dashboard.noDescription}
+              </p>
             )}
             <div
               className={
@@ -1013,7 +1031,7 @@ function CourseCard({
                     : "inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand-blush/70 px-4 py-2 text-sm font-semibold text-brand transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-brand-blush/15 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
                 }
               >
-                Open course
+                {t.dashboard.openCourse}
                 <span aria-hidden className="transition group-hover:translate-x-0.5">
                   →
                 </span>
@@ -1031,13 +1049,11 @@ function CourseCard({
                       : "inline-flex w-fit items-center gap-1.5 rounded-full border border-emerald-400/60 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm transition hover:border-emerald-500 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200 dark:hover:bg-emerald-950/80"
                   }
                 >
-                  {busy ? (
-                    "Updating…"
-                  ) : listedOnExplore ? (
-                    "Make private"
-                  ) : (
-                    "Make public"
-                  )}
+                  {busy
+                    ? t.dashboard.updating
+                    : listedOnExplore
+                      ? t.dashboard.makePrivate
+                      : t.dashboard.makePublic}
                 </button>
               ) : null}
             </div>
@@ -1053,6 +1069,7 @@ export function StudyingCoursesSection({
 }: {
   courses: StudyingCourse[];
 }) {
+  const t = useT();
   if (courses.length === 0) return null;
 
   return (
@@ -1064,11 +1081,10 @@ export function StudyingCoursesSection({
         />
         <div>
           <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
-            Continue learning
+            {t.dashboard.continueLearning}
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-            Community courses you&apos;ve started — resume on Explore (read-only;
-            you don&apos;t manage these).
+            {t.dashboard.continueLearningDesc}
           </p>
         </div>
       </div>
@@ -1081,7 +1097,7 @@ export function StudyingCoursesSection({
                 aria-hidden
               />
               <span className="px-6 text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-800 dark:text-emerald-300">
-                From Explore
+                {t.dashboard.fromExplore}
               </span>
               <Link
                 href={`/explore/${c.id}`}
@@ -1095,7 +1111,7 @@ export function StudyingCoursesSection({
                 </p>
               ) : (
                 <p className="mt-2 px-6 text-sm italic text-zinc-500 dark:text-zinc-500">
-                  No description
+                  {t.dashboard.noDescription}
                 </p>
               )}
               <div className="mt-auto flex flex-wrap gap-3 px-6 pb-6 pt-4">
@@ -1103,14 +1119,14 @@ export function StudyingCoursesSection({
                   href={`/explore/${c.id}/study`}
                   className="inline-flex items-center gap-1 rounded-full border border-brand/30 bg-white/90 px-4 py-2 text-sm font-semibold text-brand shadow-sm transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-zinc-900/80 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
                 >
-                  Continue studying
+                  {t.dashboard.continueStudying}
                   <span aria-hidden>→</span>
                 </Link>
                 <Link
                   href={`/explore/${c.id}`}
                   className="inline-flex items-center rounded-full px-3 py-2 text-sm font-medium text-zinc-600 transition hover:bg-emerald-100/80 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-emerald-950/50 dark:hover:text-zinc-100"
                 >
-                  Outline
+                  {t.dashboard.outline}
                 </Link>
               </div>
             </div>

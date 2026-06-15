@@ -4,6 +4,11 @@ import { LegalFooterLinks } from "@/components/LegalFooterLinks";
 import { Reveal } from "@/components/Reveal";
 import { ScrollTypewriter } from "@/components/ScrollTypewriter";
 import { APP_NAME } from "@/lib/brand";
+import { tf } from "@/lib/i18n/format";
+import { getT } from "@/lib/i18n/server";
+import type { Dictionary } from "@/locales";
+
+type LandingDict = Dictionary["landing"];
 
 // === SVG icons =================================================================
 
@@ -77,21 +82,22 @@ function IconGlobe({ className = "h-6 w-6" }: { className?: string }) {
 const tileShell =
   "flex h-full flex-col rounded-2xl border border-zinc-200/90 bg-white/90 p-4 shadow-sm backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/90";
 
-function TileLesson() {
+function TileLesson({ l }: { l: LandingDict }) {
   return (
     <div className={tileShell}>
       <div className="flex items-center justify-between">
         <span className="rounded-full bg-brand-blush px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-brand dark:bg-brand/20 dark:text-brand-soft">
-          Lesson
+          {l.tileLessonBadge}
         </span>
-        <span className="text-[10px] text-zinc-500">Module 3 / 6</span>
+        <span className="text-[10px] text-zinc-500">{l.tileLessonModule}</span>
       </div>
-      <h4 className="mt-3 text-sm font-semibold text-zinc-900 dark:text-white">The sodium-potassium pump</h4>
+      <h4 className="mt-3 text-sm font-semibold text-zinc-900 dark:text-white">{l.tileLessonTitle}</h4>
       <p className="mt-2 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-        An active transporter that moves{" "}
-        <span className="rounded bg-brand-blush px-1 text-brand dark:bg-brand/25 dark:text-brand-soft">3 Na⁺ out</span> for every{" "}
-        <span className="rounded bg-emerald-50 px-1 text-emerald-600 dark:bg-emerald-400/20 dark:text-emerald-300">2 K⁺ in</span>, powered by a
-        single ATP. This gradient drives nerve signalling.
+        {l.tileLessonBodyPrefix}
+        <span className="rounded bg-brand-blush px-1 text-brand dark:bg-brand/25 dark:text-brand-soft">{l.tileLessonNaOut}</span>
+        {l.tileLessonBodyMid}
+        <span className="rounded bg-emerald-50 px-1 text-emerald-600 dark:bg-emerald-400/20 dark:text-emerald-300">{l.tileLessonKIn}</span>
+        {l.tileLessonBodySuffix}
       </p>
       <div className="mt-auto flex items-center gap-2 pt-3">
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-white/10">
@@ -103,7 +109,7 @@ function TileLesson() {
   );
 }
 
-function TileVoice() {
+function TileVoice({ l }: { l: LandingDict }) {
   return (
     <div className={tileShell}>
       <div className="flex items-center gap-2">
@@ -111,7 +117,7 @@ function TileVoice() {
         <div className="min-w-0">
           <p className="text-[11px] font-semibold text-zinc-900 dark:text-white">Rose</p>
           <p className="flex items-center gap-1 text-[9px] text-zinc-500 dark:text-zinc-400">
-            <span className="h-1.5 w-1.5 animate-soft-pulse rounded-full bg-brand" /> listening
+            <span className="h-1.5 w-1.5 animate-soft-pulse rounded-full bg-brand" /> {l.tileVoiceListening}
           </p>
         </div>
         <IconMic className="ml-auto h-4 w-4 text-brand dark:text-brand-soft" />
@@ -126,17 +132,17 @@ function TileVoice() {
         ))}
       </div>
       <p className="mt-3 text-[10.5px] leading-relaxed text-zinc-600 dark:text-zinc-400">
-        &ldquo;Quiz me on what we just covered.&rdquo;
+        &ldquo;{l.tileVoiceQuote}&rdquo;
       </p>
     </div>
   );
 }
 
-function TileQuiz() {
+function TileQuiz({ l }: { l: LandingDict }) {
   return (
     <div className={tileShell}>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Quick check</p>
-      <p className="mt-2 text-[11px] font-medium text-zinc-900 dark:text-white">How many Na⁺ ions leave per cycle?</p>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">{l.tileQuizLabel}</p>
+      <p className="mt-2 text-[11px] font-medium text-zinc-900 dark:text-white">{l.tileQuizQuestion}</p>
       <div className="mt-2.5 space-y-1.5">
         {[
           { t: "2", ok: false },
@@ -160,21 +166,21 @@ function TileQuiz() {
   );
 }
 
-function TileFlashcard() {
+function TileFlashcard({ l }: { l: LandingDict }) {
   return (
     <div className={tileShell}>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Review · due now</p>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">{l.tileFlashcardLabel}</p>
       <p className="mt-2 flex-1 text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-300">
-        What powers the Na⁺/K⁺ pump?
+        {l.tileFlashcardQuestion}
       </p>
       <div className="mt-2 flex gap-1.5">
         {[
-          ["Again", "text-rose-500 dark:text-rose-300"],
-          ["Hard", "text-amber-500 dark:text-amber-300"],
-          ["Good", "text-emerald-600 dark:text-emerald-300"],
-        ].map(([t, c]) => (
-          <span key={t} className={`flex-1 rounded-md border border-zinc-200 py-1 text-center text-[10px] font-semibold dark:border-white/10 ${c}`}>
-            {t}
+          [l.tileFlashAgain, "text-rose-500 dark:text-rose-300"],
+          [l.tileFlashHard, "text-amber-500 dark:text-amber-300"],
+          [l.tileFlashGood, "text-emerald-600 dark:text-emerald-300"],
+        ].map(([label, c]) => (
+          <span key={label} className={`flex-1 rounded-md border border-zinc-200 py-1 text-center text-[10px] font-semibold dark:border-white/10 ${c}`}>
+            {label}
           </span>
         ))}
       </div>
@@ -182,7 +188,7 @@ function TileFlashcard() {
   );
 }
 
-function TileProgress() {
+function TileProgress({ l }: { l: LandingDict }) {
   const r = 16;
   const circ = 2 * Math.PI * r;
   return (
@@ -202,28 +208,28 @@ function TileProgress() {
       </svg>
       <div>
         <p className="text-lg font-bold text-zinc-900 dark:text-white">78%</p>
-        <p className="text-[10px] text-zinc-500 dark:text-zinc-400">course mastery</p>
-        <p className="mt-1 text-[10px] text-emerald-600 dark:text-emerald-300">+12% this week</p>
+        <p className="text-[10px] text-zinc-500 dark:text-zinc-400">{l.tileProgressMastery}</p>
+        <p className="mt-1 text-[10px] text-emerald-600 dark:text-emerald-300">{l.tileProgressDelta}</p>
       </div>
     </div>
   );
 }
 
-function HeroBento() {
+function HeroBento({ l }: { l: LandingDict }) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:grid-rows-2">
       <div className="col-span-2 row-span-2 sm:col-span-2">
-        <TileLesson />
+        <TileLesson l={l} />
       </div>
       <div className="col-span-2 sm:col-span-2">
-        <TileVoice />
+        <TileVoice l={l} />
       </div>
       <div className="col-span-1">
-        <TileQuiz />
+        <TileQuiz l={l} />
       </div>
       <div className="col-span-1 grid grid-rows-2 gap-3">
-        <TileFlashcard />
-        <TileProgress />
+        <TileFlashcard l={l} />
+        <TileProgress l={l} />
       </div>
     </div>
   );
@@ -284,15 +290,42 @@ function BentoTile({
 }
 
 // === Main export ===============================================================
-export function MarketingLandingContent({ isAuthenticated = false }: { isAuthenticated?: boolean }) {
+export async function MarketingLandingContent({
+  isAuthenticated = false,
+}: {
+  isAuthenticated?: boolean;
+}) {
+  const t = await getT();
+  const l = t.landing;
   const year = new Date().getFullYear();
   const ctaPrimary = isAuthenticated ? "/" : "/signup";
-  const ctaPrimaryLabel = isAuthenticated ? "Go to workspace" : "Get started free";
+  const ctaPrimaryLabel = isAuthenticated ? l.ctaGoToWorkspace : l.ctaGetStarted;
 
   const subjects = [
-    "Organic Chemistry", "Constitutional Law", "Linear Algebra", "Human Anatomy",
-    "Macroeconomics", "Cell Biology", "Thermodynamics", "Cognitive Psychology",
-    "Microbiology", "Calculus II", "Art History", "Genetics",
+    l.subject1, l.subject2, l.subject3, l.subject4,
+    l.subject5, l.subject6, l.subject7, l.subject8,
+    l.subject9, l.subject10, l.subject11, l.subject12,
+  ];
+
+  const steps = [
+    ["01", l.step1Title, l.step1Body],
+    ["02", l.step2Title, l.step2Body],
+    ["03", l.step3Title, l.step3Body],
+  ] as const;
+
+  const voiceTags = [l.voiceTag1, l.voiceTag2, l.voiceTag3, l.voiceTag4];
+  const publicBullets = [l.publicBullet1, l.publicBullet2, l.publicBullet3];
+  const selfStudyBullets = [l.selfStudyBullet1, l.selfStudyBullet2, l.selfStudyBullet3];
+  const spotlightItems = [
+    [l.spotlightQ1, l.spotlightA1],
+    [l.spotlightQ2, l.spotlightA2],
+    [l.spotlightQ3, l.spotlightA3],
+  ] as const;
+  const spotlightAi = [
+    { icon: "✓", label: l.spotlightAi1, ok: true },
+    { icon: "✓", label: l.spotlightAi2, ok: true },
+    { icon: "✓", label: l.spotlightAi3, ok: true },
+    { icon: "✗", label: l.spotlightAi4, ok: false },
   ];
 
   // Headline options (picked: #1):
@@ -313,7 +346,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
           <div className="mx-auto max-w-4xl text-center">
             <p className="animate-hero-rise inline-flex items-center gap-2 rounded-full border border-brand-border bg-white/80 px-3.5 py-1.5 text-xs font-semibold text-brand shadow-sm backdrop-blur dark:border-brand-border/40 dark:bg-zinc-900/80 dark:text-brand-soft">
               <span className="h-1.5 w-1.5 animate-soft-pulse rounded-full bg-brand" />
-              AI study tutor, built from your own material
+              {l.heroEyebrow}
             </p>
 
             <h1 className="mx-auto mt-7 max-w-4xl text-balance text-[2.75rem] font-semibold leading-[1.02] tracking-tight text-brand-ink sm:text-6xl md:text-7xl dark:text-white">
@@ -321,8 +354,8 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
                 mode="chars"
                 charStepMs={30}
                 segments={[
-                  { text: "The edge for the class that\u2019s " },
-                  { text: "breaking you", className: "text-brand dark:text-brand-soft" },
+                  { text: l.heroPrefix },
+                  { text: l.heroAccent, className: "text-brand dark:text-brand-soft" },
                 ]}
               />
             </h1>
@@ -331,7 +364,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
               style={{ animationDelay: "0.16s" }}
               className="animate-hero-rise mx-auto mt-6 max-w-2xl text-balance text-lg leading-relaxed text-brand-muted sm:text-xl dark:text-zinc-400"
             >
-              Turn your own slides and notes into a course and a tutor that&apos;s mastered every page.
+              {l.heroSub}
             </p>
 
             <div
@@ -349,7 +382,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
                 href="/explore"
                 className="inline-flex items-center justify-center rounded-full border border-zinc-300 bg-white/80 px-8 py-3.5 text-sm font-semibold text-zinc-800 backdrop-blur transition hover:bg-white dark:border-zinc-700 dark:bg-zinc-950/80 dark:text-zinc-100 dark:hover:bg-zinc-900"
               >
-                Browse courses
+                {l.browseCourses}
               </Link>
             </div>
           </div>
@@ -359,7 +392,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
             style={{ animationDelay: "0.36s" }}
             className="animate-hero-rise relative mx-auto mt-14 max-w-4xl"
           >
-            <HeroBento />
+            <HeroBento l={l} />
           </div>
         </div>
       </section>
@@ -368,7 +401,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
       <section className="border-y border-zinc-200/70 bg-white/60 py-5 dark:border-white/[0.06] dark:bg-white/[0.02]">
         <div className="flex items-center gap-6 overflow-hidden">
           <span className="shrink-0 pl-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted dark:text-zinc-500 sm:pl-6">
-            Works for any class
+            {l.worksForAnyClass}
           </span>
           <div className="relative flex-1 overflow-hidden [mask-image:linear-gradient(90deg,transparent,#000_8%,#000_92%,transparent)]">
             <div className="animate-marquee flex w-max items-center gap-3">
@@ -389,19 +422,15 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
       <section className="mx-auto w-full max-w-6xl px-4 py-24 sm:px-6 sm:py-32">
         <div className="max-w-2xl">
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand dark:text-brand-soft">
-            How it works
+            {l.howEyebrow}
           </p>
           <h2 className="mt-3 text-3xl font-semibold tracking-tight text-brand-ink dark:text-zinc-50 sm:text-5xl">
-            <ScrollTypewriter text="From a pile of PDFs to a tutor that knows them" />
+            <ScrollTypewriter text={l.howTitle} />
           </h2>
         </div>
 
         <div className="mt-16 space-y-px">
-          {[
-            ["01", "Upload your material", "Drop lecture slides, notes, or textbook chapters - one file or many. No formatting required, no clean-up."],
-            ["02", "Choose your mode", "Publish a public course for classmates, or use Self Study and describe your exact goal. The AI calibrates depth, pacing, and focus from there."],
-            ["03", "Learn with Rose", "Read AI lessons, take per-module quizzes, and talk to Rose - a voice tutor that only knows your material and your goal."],
-          ].map(([n, title, body], i) => (
+          {steps.map(([n, title, body], i) => (
             <Reveal key={n} delay={i * 130}>
               <div className="group grid grid-cols-[auto_1fr] items-start gap-x-6 gap-y-2 border-t border-zinc-200/80 py-8 transition dark:border-white/10 sm:grid-cols-[7rem_1fr] sm:gap-x-10">
                 <span className="text-5xl font-bold tabular-nums leading-none text-brand-soft sm:text-7xl dark:text-brand-ink">
@@ -422,10 +451,10 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
           <div className="mx-auto max-w-2xl text-center">
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand dark:text-brand-soft">
-              Everything in one place
+              {l.featuresEyebrow}
             </p>
             <h2 className="mt-3 text-3xl font-semibold tracking-tight text-brand-ink dark:text-zinc-50 sm:text-5xl">
-              <ScrollTypewriter text="One workspace. The whole study loop." />
+              <ScrollTypewriter text={l.featuresTitle} />
             </h2>
           </div>
 
@@ -434,14 +463,14 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
               <BentoTile
                 className="lg:row-span-2"
                 icon={<IconMic className="h-6 w-6" />}
-                label="Voice tutor"
-                title="Talk to Rose - a tutor who knows your notes"
-                body="Ask out loud, get spoken answers in seconds, grounded only in your material. Say 'take me to ATP synthesis' and she navigates you there."
+                label={l.voiceLabel}
+                title={l.voiceTitle}
+                body={l.voiceBody}
               >
                 <div className="mt-5 flex flex-wrap gap-2">
-                  {["Live voice", "Navigation commands", "Knows your goal", "Multilingual"].map((t) => (
-                    <span key={t} className="rounded-full bg-zinc-100 px-2.5 py-1 text-[11px] font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-400">
-                      {t}
+                  {voiceTags.map((tag) => (
+                    <span key={tag} className="rounded-full bg-zinc-100 px-2.5 py-1 text-[11px] font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-400">
+                      {tag}
                     </span>
                   ))}
                 </div>
@@ -460,9 +489,9 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
             <Reveal delay={110} className="h-full">
               <BentoTile
                 icon={<IconBolt className="h-6 w-6" />}
-                label="AI lessons"
-                title="Written from your exact slides"
-                body="Structured lessons with key terms, examples, and explanations - grounded only in what you uploaded."
+                label={l.lessonsLabel}
+                title={l.lessonsTitle}
+                body={l.lessonsBody}
               />
             </Reveal>
 
@@ -470,9 +499,9 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
               <BentoTile
                 accent="emerald"
                 icon={<IconCheckCircle className="h-6 w-6" />}
-                label="Module quizzes"
-                title="Test yourself after every module"
-                body="Mixed multiple-choice and written questions. Wrong answers are surfaced for review so nothing slips through."
+                label={l.quizLabel}
+                title={l.quizTitle}
+                body={l.quizBody}
               />
             </Reveal>
 
@@ -480,9 +509,9 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
               <BentoTile
                 accent="amber"
                 icon={<IconCards className="h-6 w-6" />}
-                label="Spaced repetition"
-                title="Flashcards from your highlights"
-                body="Highlight while reading and it becomes a card. The scheduler spaces reviews over days - no decks to import."
+                label={l.srsLabel}
+                title={l.srsTitle}
+                body={l.srsBody}
               />
             </Reveal>
 
@@ -490,9 +519,9 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
               <BentoTile
                 accent="indigo"
                 icon={<IconMap className="h-6 w-6" />}
-                label="Smart navigation"
-                title={'Say "take me to carbs"'}
-                body="Chat and voice both understand navigation intent. Jump to any module, topic, or section hands-free."
+                label={l.navLabel}
+                title={l.navTitle}
+                body={l.navBody}
               />
             </Reveal>
           </div>
@@ -503,10 +532,10 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
       <section className="mx-auto w-full max-w-6xl px-4 py-24 sm:px-6 sm:py-32">
         <div className="mx-auto max-w-2xl text-center">
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand dark:text-brand-soft">
-            Two ways to study
+            {l.modesEyebrow}
           </p>
           <h2 className="mt-3 text-3xl font-semibold tracking-tight text-brand-ink dark:text-zinc-50 sm:text-5xl">
-            <ScrollTypewriter text="Made for you, or made for everyone" />
+            <ScrollTypewriter text={l.modesTitle} />
           </h2>
         </div>
         <div className="mt-16 grid gap-5 lg:grid-cols-2">
@@ -515,13 +544,13 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-blush text-brand dark:bg-[#1e1616]/80 dark:text-brand-soft">
                 <IconGlobe />
               </div>
-              <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand dark:text-brand-soft">Public course</p>
-              <h3 className="mt-1.5 text-lg font-semibold text-brand-ink dark:text-zinc-100">Share with other students</h3>
+              <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand dark:text-brand-soft">{l.publicLabel}</p>
+              <h3 className="mt-1.5 text-lg font-semibold text-brand-ink dark:text-zinc-100">{l.publicTitle}</h3>
               <p className="mt-2 text-sm leading-relaxed text-brand-muted dark:text-zinc-400">
-                Organise your material into sections, upload your lecture PDFs, and publish. Others discover and enroll right from Explore.
+                {l.publicBody}
               </p>
               <ul className="mt-5 space-y-2">
-                {["Visible on Explore", "Multi-section organisation", "Learner progress tracking"].map((b) => (
+                {publicBullets.map((b) => (
                   <li key={b} className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
                     <span className="text-emerald-500">✓</span> {b}
                   </li>
@@ -532,17 +561,17 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
 
           <Reveal delay={150} className="h-full">
             <div className="relative flex h-full flex-col overflow-hidden rounded-3xl border border-indigo-200/70 bg-gradient-to-br from-indigo-50/60 to-white/95 p-8 shadow-sm dark:border-indigo-900/40 dark:from-indigo-950/30 dark:to-zinc-950/95">
-              <span className="absolute right-5 top-5 rounded-full bg-indigo-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white dark:bg-indigo-500">New</span>
+              <span className="absolute right-5 top-5 rounded-full bg-indigo-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white dark:bg-indigo-500">{l.selfStudyNew}</span>
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600 dark:bg-indigo-950/60 dark:text-indigo-400">
                 <IconTargetGlyph />
               </div>
-              <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-600 dark:text-indigo-400">Self Study mode</p>
-              <h3 className="mt-1.5 text-lg font-semibold text-brand-ink dark:text-zinc-100">Calibrated to your exact goal</h3>
+              <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-600 dark:text-indigo-400">{l.selfStudyLabel}</p>
+              <h3 className="mt-1.5 text-lg font-semibold text-brand-ink dark:text-zinc-100">{l.selfStudyTitle}</h3>
               <p className="mt-2 text-sm leading-relaxed text-brand-muted dark:text-zinc-400">
-                Describe your situation - &ldquo;exam in 2 days, weak on photosynthesis&rdquo; - and the AI builds the whole course around it. Completely private.
+                {l.selfStudyBody}
               </p>
               <ul className="mt-5 space-y-2">
-                {["AI depth calibrated to your goal", "Voice tutor knows your background", "Private - never on Explore"].map((b) => (
+                {selfStudyBullets.map((b) => (
                   <li key={b} className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
                     <span className="text-indigo-500">✓</span> {b}
                   </li>
@@ -559,19 +588,17 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
           <div className="overflow-hidden rounded-[2rem] border border-indigo-200/70 bg-gradient-to-br from-indigo-50 via-white to-white shadow-sm dark:border-indigo-900/40 dark:from-indigo-950/40 dark:via-zinc-950 dark:to-zinc-950">
             <div className="grid gap-10 p-8 sm:p-12 lg:grid-cols-2 lg:items-center lg:gap-16">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-600 dark:text-indigo-400">Self Study mode</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-600 dark:text-indigo-400">{l.spotlightEyebrow}</p>
                 <h2 className="mt-3 text-2xl font-semibold tracking-tight text-brand-ink dark:text-zinc-50 sm:text-4xl">
-                  AI that knows your <span className="text-indigo-600 dark:text-indigo-400">situation</span>, not just your subject
+                  {l.spotlightTitlePrefix}
+                  <span className="text-indigo-600 dark:text-indigo-400">{l.spotlightTitleAccent}</span>
+                  {l.spotlightTitleSuffix}
                 </h2>
                 <p className="mt-4 leading-relaxed text-brand-muted dark:text-zinc-400">
-                  {`Tell ${APP_NAME} exactly where you're at - exam in two days, already know the basics, stuck on one topic - and every lesson, quiz, and voice conversation is calibrated to match.`}
+                  {tf(l.spotlightBody, { app: APP_NAME })}
                 </p>
                 <ul className="mt-6 space-y-4 text-sm">
-                  {[
-                    ["Exam deadline?", "Content prioritises testable concepts and quick retention."],
-                    ["Already know the basics?", "Introductions are skipped. Nuance and depth get more space."],
-                    ["Struggling with one topic?", "That section expands significantly versus everything else."],
-                  ].map(([k, v]) => (
+                  {spotlightItems.map(([k, v]) => (
                     <li key={k} className="flex gap-3">
                       <span aria-hidden className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
                       <span>
@@ -585,23 +612,18 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
                   href={ctaPrimary}
                   className="mt-8 inline-flex items-center justify-center gap-2 rounded-full bg-indigo-600 px-7 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-600/20 transition hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
                 >
-                  Try Self Study mode
+                  {l.spotlightCta}
                   <span aria-hidden>→</span>
                 </Link>
               </div>
               <div className="rounded-2xl border border-indigo-200/70 bg-white p-5 shadow-sm dark:border-indigo-900/40 dark:bg-zinc-900">
-                <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">Setup prompt</p>
+                <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">{l.spotlightSetupLabel}</p>
                 <p className="mt-2 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm italic leading-relaxed text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-                  &ldquo;Biochem final in 3 days. Okay with glycolysis but I keep blanking on the Krebs cycle and oxidative phosphorylation. Skip lipids - we weren&apos;t tested on that.&rdquo;
+                  &ldquo;{l.spotlightSetupExample}&rdquo;
                 </p>
                 <div className="mt-4 space-y-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">What the AI does</p>
-                  {[
-                    { icon: "✓", label: "Krebs cycle - expanded with extra examples", ok: true },
-                    { icon: "✓", label: "Oxidative phosphorylation - exam-focused", ok: true },
-                    { icon: "✓", label: "Glycolysis - brief recap, no intro padding", ok: true },
-                    { icon: "✗", label: "Lipids section - skipped entirely", ok: false },
-                  ].map(({ icon, label, ok }) => (
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">{l.spotlightAiLabel}</p>
+                  {spotlightAi.map(({ icon, label, ok }) => (
                     <div key={label} className={`flex items-center gap-2 text-xs ${ok ? "text-emerald-600 dark:text-emerald-400" : "text-zinc-400 dark:text-zinc-500"}`}>
                       <span className="text-sm font-bold">{icon}</span> {label}
                     </div>
@@ -620,10 +642,11 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
             <div aria-hidden className="pointer-events-none absolute -top-24 left-1/2 h-72 w-[36rem] -translate-x-1/2 rounded-full bg-brand/10 blur-[90px] dark:bg-brand/15" />
             <div className="relative">
               <h2 className="text-3xl font-semibold tracking-tight text-brand-ink sm:text-4xl dark:text-white">
-                Beat the class that&apos;s <span className="text-brand dark:text-brand-soft">beating you</span>
+                {l.closingTitlePrefix}
+                <span className="text-brand dark:text-brand-soft">{l.closingTitleAccent}</span>
               </h2>
               <p className="mx-auto mt-3 max-w-lg text-brand-muted dark:text-zinc-400">
-                Upload your material, choose your mode, and Rose builds your course in minutes.
+                {l.closingBody}
               </p>
               <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
                 <Link
@@ -637,7 +660,7 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
                   href="/explore"
                   className="inline-flex items-center justify-center rounded-full border border-zinc-300 bg-white/80 px-8 py-3.5 text-sm font-semibold text-zinc-800 backdrop-blur transition hover:bg-white dark:border-zinc-700 dark:bg-zinc-950/80 dark:text-zinc-100 dark:hover:bg-zinc-900"
                 >
-                  Browse courses
+                  {l.browseCourses}
                 </Link>
               </div>
             </div>
@@ -657,19 +680,19 @@ export function MarketingLandingContent({ isAuthenticated = false }: { isAuthent
             </div>
             <nav
               className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-sm font-medium text-zinc-700 dark:text-zinc-300 sm:justify-end"
-              aria-label="Site"
+              aria-label={l.footerSiteNav}
             >
-              <Link href="/explore" className="hover:text-brand dark:hover:text-brand-soft">Explore</Link>
-              <Link href="/forum" className="hover:text-brand dark:hover:text-brand-soft">Forum</Link>
+              <Link href="/explore" className="hover:text-brand dark:hover:text-brand-soft">{t.nav.explore}</Link>
+              <Link href="/forum" className="hover:text-brand dark:hover:text-brand-soft">{t.nav.forum}</Link>
               {isAuthenticated ? (
                 <>
-                  <Link href="/" className="hover:text-brand dark:hover:text-brand-soft">Workspace</Link>
-                  <Link href="/dashboard/profile" className="hover:text-brand dark:hover:text-brand-soft">Profile</Link>
+                  <Link href="/" className="hover:text-brand dark:hover:text-brand-soft">{l.footerWorkspace}</Link>
+                  <Link href="/dashboard/profile" className="hover:text-brand dark:hover:text-brand-soft">{t.nav.profile}</Link>
                 </>
               ) : (
                 <>
-                  <Link href="/login" className="hover:text-brand dark:hover:text-brand-soft">Log in</Link>
-                  <Link href="/signup" className="hover:text-brand dark:hover:text-brand-soft">Sign up</Link>
+                  <Link href="/login" className="hover:text-brand dark:hover:text-brand-soft">{t.nav.login}</Link>
+                  <Link href="/signup" className="hover:text-brand dark:hover:text-brand-soft">{t.nav.signup}</Link>
                 </>
               )}
             </nav>

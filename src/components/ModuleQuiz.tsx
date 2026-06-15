@@ -8,6 +8,8 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import { shuffleMcqChoices, type QuizSessionItem } from "@/lib/quiz-session";
 import { isQuizMcq } from "@/types/course";
 
@@ -51,6 +53,7 @@ export function ModuleQuiz({
   onPassFinished,
   onPracticeAgain,
 }: Props) {
+  const t = useT();
   const [index, setIndex] = useState(0);
   const [wrongAttempts, setWrongAttempts] = useState(0);
   const [finished, setFinished] = useState(false);
@@ -246,7 +249,7 @@ export function ModuleQuiz({
         setSubmitError(
           typeof body.error === "string"
             ? body.error
-            : "Could not grade. Try again."
+            : t.study.couldNotGrade
         );
         setFrBusy(false);
         return;
@@ -256,15 +259,15 @@ export function ModuleQuiz({
         typeof body.feedback === "string"
           ? body.feedback
           : correct
-            ? "Looks good."
-            : "Keep refining your answer.";
+            ? t.study.looksGood
+            : t.study.keepRefining;
       setFrCorrect(correct);
       setFrFeedback(feedback);
       setFrGraded(true);
       if (!correct) setWrongAttempts((w) => w + 1);
       await recordFreeAttempt(originalQuizIndex, correct);
     } catch {
-      setSubmitError("Network error. Try again.");
+      setSubmitError(t.study.networkErrorTryAgain);
     }
     setFrBusy(false);
   }, [
@@ -277,6 +280,7 @@ export function ModuleQuiz({
     recordFreeAttempt,
     sessionItems,
     index,
+    t,
   ]);
 
   useEffect(() => {
@@ -296,9 +300,11 @@ export function ModuleQuiz({
   const scoreLabel = useMemo(
     () =>
       wrongAttempts === 0
-        ? "No misses this pass"
-        : `${wrongAttempts} miss${wrongAttempts === 1 ? "" : "es"} — review them later from your queue`,
-    [wrongAttempts]
+        ? t.study.noMisses
+        : wrongAttempts === 1
+          ? t.study.missCountOne
+          : tf(t.study.missCount, { count: wrongAttempts }),
+    [wrongAttempts, t]
   );
 
   if (finished) {
@@ -306,15 +312,10 @@ export function ModuleQuiz({
       return (
         <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
           <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Mixed review complete
+            {t.study.mixedReviewComplete}
           </h3>
           <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-            You finished this pass —{" "}
-            <span className="font-medium text-zinc-900 dark:text-zinc-100">
-              {total}
-            </span>{" "}
-            questions drawn at random from every module and upload in this
-            course. Attempts are saved to each question&apos;s home module.
+            {tf(t.study.mixedReviewCompleteBody, { count: total })}
           </p>
           <p className="mt-1 text-sm text-zinc-500">{scoreLabel}</p>
           <button
@@ -323,7 +324,7 @@ export function ModuleQuiz({
             onClick={() => void runComplete("review_lessons")}
             className="transition-none mt-6 inline-flex w-full items-center justify-center rounded-full bg-brand px-6 py-2.5 text-sm font-medium text-white hover:bg-brand-hover disabled:opacity-60 dark:bg-brand dark:hover:bg-brand-soft sm:w-auto"
           >
-            {savingExit ? "Closing…" : "Back to practice room"}
+            {savingExit ? t.study.closing : t.study.backToPracticeRoom}
           </button>
         </div>
       );
@@ -332,19 +333,14 @@ export function ModuleQuiz({
     return (
       <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Module quiz complete
+          {t.study.moduleQuizComplete}
         </h3>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-          You finished this pass —{" "}
-          <span className="font-medium text-zinc-900 dark:text-zinc-100">
-            {total}
-          </span>{" "}
-          questions. Missed items stay in your review queue for next time.
+          {tf(t.study.moduleQuizCompleteBody, { count: total })}
         </p>
         <p className="mt-1 text-sm text-zinc-500">{scoreLabel}</p>
         <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-          Progress is saved when you finish this pass. Choose whether to reread
-          the lessons or jump ahead.
+          {t.study.progressSavedChoose}
         </p>
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
           {onPracticeAgain ? (
@@ -354,7 +350,7 @@ export function ModuleQuiz({
               onClick={() => onPracticeAgain()}
               className="transition-none inline-flex flex-1 items-center justify-center rounded-full border border-brand-border bg-brand-blush px-6 py-2.5 text-sm font-semibold text-brand-ink hover:bg-brand-blush/80 disabled:opacity-60 dark:border-brand-border/50 dark:bg-brand-blush/8 dark:text-brand-blush dark:hover:bg-brand-blush/12 sm:flex-none"
             >
-              Practice again
+              {t.study.practiceAgain}
             </button>
           ) : null}
           <button
@@ -363,7 +359,7 @@ export function ModuleQuiz({
             onClick={() => void runComplete("review_lessons")}
             className="transition-none inline-flex flex-1 items-center justify-center rounded-full border border-zinc-300 bg-white px-6 py-2.5 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900 sm:flex-none"
           >
-            {savingExit ? "Saving…" : "Review lessons again"}
+            {savingExit ? t.study.saving : t.study.reviewLessonsAgain}
           </button>
           {hasNextModule ? (
             <button
@@ -372,7 +368,7 @@ export function ModuleQuiz({
               onClick={() => void runComplete("next_module")}
               className="transition-none inline-flex flex-1 items-center justify-center rounded-full bg-brand-hover px-6 py-2.5 text-sm font-medium text-white shadow-sm shadow-red-950/25 hover:bg-red-900 disabled:opacity-60 dark:bg-brand-hover dark:hover:bg-red-950 dark:shadow-black/40 sm:flex-none"
             >
-              {savingExit ? "Saving…" : "Next module →"}
+              {savingExit ? t.study.saving : t.study.nextModule}
             </button>
           ) : onNextMaterial ? (
             <button
@@ -384,9 +380,9 @@ export function ModuleQuiz({
               }}
               className="transition-none inline-flex flex-1 items-center justify-center gap-1.5 rounded-full bg-brand-hover px-6 py-2.5 text-sm font-medium text-white shadow-sm shadow-red-950/25 hover:bg-red-900 disabled:opacity-60 dark:bg-brand-hover dark:hover:bg-red-950 dark:shadow-black/40 sm:flex-none"
             >
-              {savingExit ? "Saving…" : (
+              {savingExit ? t.study.saving : (
                 <span className="flex items-center gap-1.5">
-                  Move to next upload
+                  {t.study.moveToNextUpload}
                   {nextMaterialFileName ? (
                     <span className="max-w-[9rem] truncate text-xs text-white/70">
                       {nextMaterialFileName}
@@ -400,11 +396,11 @@ export function ModuleQuiz({
         </div>
         {!hasNextModule && !onNextMaterial ? (
           <p className="mt-3 text-xs text-zinc-500">
-            You&apos;ve finished all modules in this upload. Use{" "}
+            {t.study.allModulesFinishedBefore}
             <strong className="font-medium text-zinc-700 dark:text-zinc-300">
-              Review lessons again
-            </strong>{" "}
-            to revisit, or navigate to another upload from the sidebar.
+              {t.study.reviewLessonsAgain}
+            </strong>
+            {t.study.allModulesFinishedAfter}
           </p>
         ) : null}
       </div>
@@ -414,7 +410,7 @@ export function ModuleQuiz({
   if (!q) {
     return (
       <p className="text-sm text-zinc-500">
-        No quiz questions for this module.
+        {t.study.noQuizQuestions}
       </p>
     );
   }
@@ -422,21 +418,23 @@ export function ModuleQuiz({
   return (
     <div className="space-y-6">
       <p className="rounded-xl border border-brand-border bg-brand-blush/80 px-4 py-3 text-sm text-brand-ink dark:border-brand-border/50 dark:bg-brand-blush/8 dark:text-brand-blush">
-        <span className="font-semibold">Single pass:</span>
+        <span className="font-semibold">{t.study.singlePassLabel}</span>
         {" "}
-        answer each question once. If you miss, you&apos;ll move on — missed
-        questions are logged and prioritized in your next run or in the review
-        queue below the lessons.
+        {t.study.singlePassBody}
       </p>
 
       <div className="flex items-center justify-between text-sm text-zinc-500">
         <span>
-          Question {index + 1} of {total}{" "}
+          {tf(t.study.questionXofY, { current: index + 1, total })}{" "}
           <span className="text-zinc-400">
-            ({isMc ? "multiple choice" : "short answer"})
+            ({isMc ? t.study.multipleChoice : t.study.shortAnswer})
           </span>
         </span>
-        <span>{wrongAttempts > 0 ? `${wrongAttempts} misses so far` : "—"}</span>
+        <span>
+          {wrongAttempts > 0
+            ? tf(t.study.missesSoFar, { count: wrongAttempts })
+            : "—"}
+        </span>
       </div>
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
@@ -488,12 +486,11 @@ export function ModuleQuiz({
                 <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
                   {mcSelected === displayMcq.correctIndex ? (
                     <span className="text-emerald-700 dark:text-emerald-400">
-                      Correct.
+                      {t.study.correct}
                     </span>
                   ) : (
                     <span className="text-red-700 dark:text-red-400">
-                      Incorrect — saved for review. Read the explanation, then
-                      continue.
+                      {t.study.incorrectSavedForReview}
                     </span>
                   )}
                 </p>
@@ -509,10 +506,10 @@ export function ModuleQuiz({
                     className="transition-none inline-flex items-center justify-center rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
                     {!continueReady
-                      ? "Read feedback…"
+                      ? t.study.readFeedback
                       : isLast
-                        ? "See results"
-                        : "Continue"}
+                        ? t.study.seeResults
+                        : t.study.continue}
                   </button>
                 </div>
               </div>
@@ -525,7 +522,7 @@ export function ModuleQuiz({
                 className="sr-only"
                 htmlFor={`free-${moduleId}-${originalQuizIndex}`}
               >
-                Your answer
+                {t.study.yourAnswer}
               </label>
               <textarea
                 id={`free-${moduleId}-${originalQuizIndex}`}
@@ -533,7 +530,7 @@ export function ModuleQuiz({
                 onChange={(e) => setFrText(e.target.value)}
                 disabled={frBusy || frGraded}
                 rows={6}
-                placeholder="Type your answer in your own words…"
+                placeholder={t.study.answerPlaceholder}
                 className="w-full resize-y rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               />
               {!frGraded ? (
@@ -543,7 +540,7 @@ export function ModuleQuiz({
                   onClick={() => void gradeFree()}
                   className="transition-none mt-3 inline-flex rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-hover disabled:opacity-50 dark:bg-brand"
                 >
-                  {frBusy ? "Checking…" : "Submit answer"}
+                  {frBusy ? t.study.checking : t.study.submitAnswer}
                 </button>
               ) : null}
               {submitError ? (
@@ -562,14 +559,14 @@ export function ModuleQuiz({
                       : "text-zinc-900 dark:text-zinc-100"
                   }`}
                 >
-                  {frCorrect ? "Correct — well done." : "Feedback"}
+                  {frCorrect ? t.study.correctWellDone : t.study.feedback}
                 </p>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                   {frFeedback}
                 </p>
                 {!frCorrect && frGraded ? (
                   <p className="mt-4 text-xs text-zinc-500">
-                    Lesson reminder: {q.explanation}
+                    {t.study.lessonReminder} {q.explanation}
                   </p>
                 ) : null}
                 {frGraded ? (
@@ -581,10 +578,10 @@ export function ModuleQuiz({
                     className="transition-none mt-4 inline-flex rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
                     {!continueReady
-                      ? "Read feedback…"
+                      ? t.study.readFeedback
                       : isLast
-                        ? "See results"
-                        : "Continue"}
+                        ? t.study.seeResults
+                        : t.study.continue}
                   </button>
                 ) : null}
               </div>

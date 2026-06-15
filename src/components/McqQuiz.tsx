@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import type { MCQuestion } from "@/types/study";
 
 type Props = {
@@ -9,6 +11,7 @@ type Props = {
 };
 
 export function McqQuiz({ materialId, questions }: Props) {
+  const t = useT();
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -68,28 +71,29 @@ export function McqQuiz({ materialId, questions }: Props) {
   }, [isLast]);
 
   const scoreLabel = useMemo(
-    () => `${correctCount} correct · ${wrongCount} incorrect`,
-    [correctCount, wrongCount]
+    () =>
+      tf(t.study.scoreCorrectIncorrect, {
+        correct: correctCount,
+        wrong: wrongCount,
+      }),
+    [correctCount, wrongCount, t]
   );
 
   if (finished) {
     return (
       <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <h2 className="text-xl font-semibold tracking-tight">Session complete</h2>
+        <h2 className="text-xl font-semibold tracking-tight">
+          {t.study.sessionComplete}
+        </h2>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-          You answered{" "}
-          <span className="font-medium text-zinc-900 dark:text-zinc-100">
-            {correctCount}
-          </span>{" "}
-          out of{" "}
-          <span className="font-medium text-zinc-900 dark:text-zinc-100">
-            {total}
-          </span>{" "}
-          questions correctly.
+          {tf(t.study.sessionCompleteBody, {
+            correct: correctCount,
+            total,
+          })}
         </p>
         <p className="mt-1 text-sm text-zinc-500">{scoreLabel}</p>
         <p className="mt-4 text-sm text-zinc-500">
-          Results are saved so you can pick up where you left off anytime.
+          {t.study.resultsSaved}
         </p>
       </div>
     );
@@ -97,7 +101,7 @@ export function McqQuiz({ materialId, questions }: Props) {
 
   if (!q) {
     return (
-      <p className="text-zinc-500">No questions loaded for this material.</p>
+      <p className="text-zinc-500">{t.study.noQuestionsLoaded}</p>
     );
   }
 
@@ -105,7 +109,7 @@ export function McqQuiz({ materialId, questions }: Props) {
     <div className="space-y-6">
       <div className="flex items-center justify-between text-sm text-zinc-500">
         <span>
-          Question {index + 1} of {total}
+          {tf(t.study.questionXofY, { current: index + 1, total })}
         </span>
         <span>{scoreLabel}</span>
       </div>
@@ -155,11 +159,11 @@ export function McqQuiz({ materialId, questions }: Props) {
             <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
               {selected === q.correctIndex ? (
                 <span className="text-emerald-700 dark:text-emerald-400">
-                  Correct.
+                  {t.study.correct}
                 </span>
               ) : (
                 <span className="text-red-700 dark:text-red-400">
-                  Not quite — review the explanation below.
+                  {t.study.notQuiteReview}
                 </span>
               )}
             </p>
@@ -171,7 +175,7 @@ export function McqQuiz({ materialId, questions }: Props) {
               onClick={goNext}
               className="mt-4 inline-flex items-center justify-center rounded-full bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
             >
-              {isLast ? "See results" : "Next question"}
+              {isLast ? t.study.seeResults : t.study.nextQuestion}
             </button>
           </div>
         )}

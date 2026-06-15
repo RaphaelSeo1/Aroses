@@ -9,10 +9,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { LogoutButton } from "@/components/LogoutButton";
 import { FriendsApp } from "@/components/messaging/FriendsApp";
 import { MessagingWorkspace } from "@/components/messaging/MessagingWorkspace";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import { createClient } from "@/lib/supabase/client";
 import { getBrowserAuthOrigin } from "@/lib/site-url";
 import { replaceProfileUrl } from "@/lib/messaging/profile-url";
@@ -22,14 +25,15 @@ import type { UserProfileRow } from "@/types/profile";
 
 type Panel = "general" | "account" | "progress" | "friends" | "messages";
 
-const STUDY_FOCUS_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "Select" },
-  { value: "student", label: "Student" },
-  { value: "instructor", label: "Instructor / TA" },
-  { value: "professional", label: "Working professional" },
-  { value: "hobby", label: "Hobby learner" },
-  { value: "other", label: "Other" },
-];
+// Values are stored in the DB as-is; only display labels are translated.
+const STUDY_FOCUS_VALUES = [
+  "",
+  "student",
+  "instructor",
+  "professional",
+  "hobby",
+  "other",
+] as const;
 
 const FIELD =
   "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-800/80 sm:max-w-xs md:max-w-sm";
@@ -191,6 +195,7 @@ export function ProfileSettingsForm({
   initialPanel = "general",
   progressPanel,
 }: Props) {
+  const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [panel, setPanel] = useState<Panel>(initialPanel);
@@ -385,14 +390,12 @@ export function ProfileSettingsForm({
 
     if (usernameDirty) {
       if (usernameInput.trim() !== "" && !nextUsername) {
-        setError(
-          "Username must be 3–30 characters: lowercase letters, numbers, and underscores."
-        );
+        setError(t.settings.errorUsernameInvalid);
         setBusy(false);
         return;
       }
       if (normalizedInitialUsername && !nextUsername) {
-        setError("Username cannot be empty.");
+        setError(t.settings.errorUsernameEmpty);
         setBusy(false);
         return;
       }
@@ -401,12 +404,12 @@ export function ProfileSettingsForm({
         nextUsername !== normalizedInitialUsername &&
         usernameStatus !== "available"
       ) {
-        setError("Choose an available username before saving.");
+        setError(t.settings.errorUsernameUnavailable);
         setBusy(false);
         return;
       }
       if (usernameStatus === "checking") {
-        setError("Still checking username — try again in a moment.");
+        setError(t.settings.errorUsernameChecking);
         setBusy(false);
         return;
       }
@@ -422,14 +425,14 @@ export function ProfileSettingsForm({
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(
-          typeof j.error === "string" ? j.error : "Could not save settings."
+          typeof j.error === "string" ? j.error : t.settings.errorSaveFailed
         );
         return;
       }
-      setMessage("Saved.");
+      setMessage(t.settings.saved);
       router.refresh();
     } catch {
-      setError("Network error.");
+      setError(t.settings.errorNetwork);
     } finally {
       setBusy(false);
     }
@@ -441,6 +444,7 @@ export function ProfileSettingsForm({
     router,
     schoolName,
     studyFocus,
+    t,
     usernameDirty,
     usernameInput,
     usernameStatus,
@@ -462,15 +466,13 @@ export function ProfileSettingsForm({
         setPasswordResetError(resetError.message);
         return;
       }
-      setPasswordResetMessage(
-        `We sent a reset link to ${email}. Check your inbox to choose a new password.`
-      );
+      setPasswordResetMessage(tf(t.settings.resetLinkSent, { email }));
     } catch {
-      setPasswordResetError("Network error. Try again.");
+      setPasswordResetError(t.settings.errorNetworkRetry);
     } finally {
       setPasswordResetBusy(false);
     }
-  }, [email]);
+  }, [email, t]);
 
   const persistAvatarUrl = useCallback(
     async (nextUrl: string | null) => {
@@ -485,20 +487,20 @@ export function ProfileSettingsForm({
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
           setError(
-            typeof j.error === "string" ? j.error : "Could not update avatar."
+            typeof j.error === "string" ? j.error : t.settings.errorAvatarUpdate
           );
           return false;
         }
         setAvatarUrl(nextUrl);
-        setMessage(nextUrl ? "Avatar updated." : "Avatar removed.");
+        setMessage(nextUrl ? t.settings.avatarUpdated : t.settings.avatarRemoved);
         router.refresh();
         return true;
       } catch {
-        setError("Network error.");
+        setError(t.settings.errorNetwork);
         return false;
       }
     },
-    [router]
+    [router, t]
   );
 
   const onAvatarFile = useCallback(
@@ -506,11 +508,11 @@ export function ProfileSettingsForm({
       const file = fileList?.[0];
       if (!file) return;
       if (!file.type.startsWith("image/")) {
-        setError("Please choose an image file.");
+        setError(t.settings.errorChooseImage);
         return;
       }
       if (file.size > 8 * 1024 * 1024) {
-        setError("Image is too large (max 8 MB before resize).");
+        setError(t.settings.errorImageTooLarge);
         return;
       }
       setMessage(null);
@@ -522,7 +524,7 @@ export function ProfileSettingsForm({
           data: { user },
         } = await supabase.auth.getUser();
         if (!user) {
-          setError("You need to be signed in to change your avatar.");
+          setError(t.settings.errorSignInRequired);
           return;
         }
         const blob = await fileToResizedJpegBlob(file, 512);
@@ -531,19 +533,21 @@ export function ProfileSettingsForm({
           .from("avatars")
           .upload(path, blob, { contentType: "image/jpeg", upsert: false });
         if (upErr) {
-          setError(upErr.message || "Could not upload image.");
+          setError(upErr.message || t.settings.errorUploadFailed);
           return;
         }
         const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
         const publicUrl = pub.publicUrl;
         await persistAvatarUrl(publicUrl);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not process image.");
+      } catch {
+        // Underlying errors (image decode/encode) carry English debug messages;
+        // show the localized generic toast instead.
+        setError(t.settings.errorProcessImage);
       } finally {
         setAvatarBusy(false);
       }
     },
-    [persistAvatarUrl]
+    [persistAvatarUrl, t]
   );
 
   const clearAvatar = useCallback(async () => {
@@ -565,6 +569,15 @@ export function ProfileSettingsForm({
   const navBtnSubActive =
     "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50";
 
+  const studyFocusLabels: Record<(typeof STUDY_FOCUS_VALUES)[number], string> = {
+    "": t.settings.studyFocusSelect,
+    student: t.settings.studyFocusStudent,
+    instructor: t.settings.studyFocusInstructor,
+    professional: t.settings.studyFocusProfessional,
+    hobby: t.settings.studyFocusHobby,
+    other: t.settings.studyFocusOther,
+  };
+
   const selectChevronStyle = {
     backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2371717a'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`,
   };
@@ -578,7 +591,7 @@ export function ProfileSettingsForm({
       <aside className="shrink-0 lg:w-56 lg:pt-1">
         <nav
           className="flex flex-row gap-1 overflow-x-auto rounded-2xl border border-zinc-200/90 bg-white/90 p-1.5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90 lg:flex-col lg:overflow-visible lg:p-2 lg:shadow-md lg:shadow-zinc-900/5 dark:lg:shadow-black/40"
-          aria-label="Settings sections"
+          aria-label={t.settings.settingsSections}
         >
           <button
             type="button"
@@ -586,7 +599,7 @@ export function ProfileSettingsForm({
             className={`${navBtn} shrink-0 ${panel === "general" ? navBtnActive : ""}`}
           >
             <IconUserCircle className="h-5 w-5 shrink-0 opacity-70" />
-            General
+            {t.settings.navGeneral}
           </button>
           <button
             type="button"
@@ -594,7 +607,7 @@ export function ProfileSettingsForm({
             className={`${navBtn} shrink-0 ${panel === "account" ? navBtnActive : ""}`}
           >
             <IconShield className="h-5 w-5 shrink-0 opacity-70" />
-            Account
+            {t.settings.navAccount}
           </button>
 
           <div className="shrink-0">
@@ -605,7 +618,7 @@ export function ProfileSettingsForm({
               className={`${navBtn} w-full ${panel === "friends" || panel === "messages" ? navBtnActive : ""}`}
             >
               <IconUsers className="h-5 w-5 shrink-0 opacity-70" />
-              <span className="flex-1 text-left">Social</span>
+              <span className="flex-1 text-left">{t.settings.navSocial}</span>
               <svg
                 className={`h-4 w-4 shrink-0 opacity-50 transition ${socialOpen ? "rotate-180" : ""}`}
                 viewBox="0 0 24 24"
@@ -624,14 +637,14 @@ export function ProfileSettingsForm({
                   onClick={() => goPanel("friends")}
                   className={`${navBtnSub} ${panel === "friends" ? navBtnSubActive : ""}`}
                 >
-                  Friends
+                  {t.settings.navFriends}
                 </button>
                 <button
                   type="button"
                   onClick={() => goPanel("messages")}
                   className={`${navBtnSub} ${panel === "messages" ? navBtnSubActive : ""}`}
                 >
-                  <span className="flex-1">Messages</span>
+                  <span className="flex-1">{t.settings.navMessages}</span>
                   {unreadMessages > 0 ? (
                     <span className="inline-flex min-w-[1.1rem] items-center justify-center rounded-full bg-brand px-1.5 py-0.5 text-[9px] font-bold leading-none text-white tabular-nums">
                       {unreadBadge}
@@ -648,7 +661,7 @@ export function ProfileSettingsForm({
             className={`${navBtn} shrink-0 ${panel === "progress" ? navBtnActive : ""}`}
           >
             <IconChart className="h-5 w-5 shrink-0 opacity-70" />
-            Progress
+            {t.settings.navProgress}
           </button>
         </nav>
       </aside>
@@ -660,21 +673,21 @@ export function ProfileSettingsForm({
             <>
               <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
                 <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  General
+                  {t.settings.generalTitle}
                 </h1>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  Profile details and how Aroses looks on this device.
+                  {t.settings.generalSubtitle}
                 </p>
               </header>
 
               <div className="px-6">
                 <h2 className="pt-6 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                  Profile
+                  {t.settings.sectionProfile}
                 </h2>
                 <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   <SettingsRow
-                    label="Avatar"
-                    hint="Shown on your profile. Saves as soon as you choose a photo."
+                    label={t.settings.avatarLabel}
+                    hint={t.settings.avatarHint}
                     alignTop
                   >
                     <div className="flex flex-wrap items-center gap-3 sm:justify-end">
@@ -710,7 +723,9 @@ export function ProfileSettingsForm({
                           onClick={() => avatarInputRef.current?.click()}
                           className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-900"
                         >
-                          {avatarBusy ? "Working…" : "Change"}
+                          {avatarBusy
+                            ? t.settings.avatarWorking
+                            : t.settings.avatarChange}
                         </button>
                         {avatarUrl ? (
                           <button
@@ -719,7 +734,7 @@ export function ProfileSettingsForm({
                             onClick={() => void clearAvatar()}
                             className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-500 transition hover:text-zinc-800 disabled:opacity-50 dark:text-zinc-400 dark:hover:text-zinc-200"
                           >
-                            Remove
+                            {t.settings.avatarRemove}
                           </button>
                         ) : null}
                       </div>
@@ -727,8 +742,8 @@ export function ProfileSettingsForm({
                   </SettingsRow>
 
                   <SettingsRow
-                    label="Full name"
-                    hint="Used across your workspace when we greet you or label activity."
+                    label={t.settings.fullNameLabel}
+                    hint={t.settings.fullNameHint}
                   >
                     <input
                       id="display_name"
@@ -737,14 +752,14 @@ export function ProfileSettingsForm({
                       maxLength={120}
                       value={displayName}
                       onChange={(e) => setDisplayName(e.target.value)}
-                      placeholder="Your name"
+                      placeholder={t.settings.fullNamePlaceholder}
                       className={FIELD}
                     />
                   </SettingsRow>
 
                   <SettingsRow
-                    label="Username"
-                    hint="Public handle (lowercase, letters, numbers, underscores). Shown as @username where your profile appears."
+                    label={t.settings.usernameLabel}
+                    hint={t.settings.usernameHint}
                   >
                     <div className="relative w-full sm:max-w-xs md:max-w-sm">
                       <input
@@ -761,7 +776,7 @@ export function ProfileSettingsForm({
                               .replace(/[^a-z0-9_]/g, "")
                           );
                         }}
-                        placeholder="your_handle"
+                        placeholder={t.settings.usernamePlaceholder}
                         className={`${FIELD} pr-10`}
                       />
                       <span className="pointer-events-none absolute right-2.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center">
@@ -770,7 +785,7 @@ export function ProfileSettingsForm({
                         ) : usernameStatus === "available" ? (
                           <span
                             className="text-sm font-semibold text-emerald-600 dark:text-emerald-400"
-                            aria-label="Available"
+                            aria-label={t.settings.usernameAvailable}
                           >
                             ✓
                           </span>
@@ -779,7 +794,7 @@ export function ProfileSettingsForm({
                           usernameInput.trim().length > 0 ? (
                             <span
                               className="text-sm font-semibold text-red-600 dark:text-red-400"
-                              aria-label="Unavailable"
+                              aria-label={t.settings.usernameUnavailable}
                             >
                               ✗
                             </span>
@@ -789,19 +804,19 @@ export function ProfileSettingsForm({
                     </div>
                     {usernameStatus === "invalid" && usernameInput.trim() !== "" ? (
                       <p className="mt-2 text-right text-xs text-red-600 dark:text-red-400">
-                        Use 3–30 characters: lowercase letters, numbers, underscores.
+                        {t.settings.usernameInvalidMessage}
                       </p>
                     ) : null}
                     {usernameStatus === "taken" ? (
                       <p className="mt-2 text-right text-xs text-red-600 dark:text-red-400">
-                        That username is taken. Try another.
+                        {t.settings.usernameTakenMessage}
                       </p>
                     ) : null}
                   </SettingsRow>
 
                   <SettingsRow
-                    label="Birthday"
-                    hint="Optional. Private to your account."
+                    label={t.settings.birthdayLabel}
+                    hint={t.settings.birthdayHint}
                   >
                     <input
                       id="birthday"
@@ -813,8 +828,8 @@ export function ProfileSettingsForm({
                   </SettingsRow>
 
                   <SettingsRow
-                    label="What best describes you?"
-                    hint="Helps us tune defaults over time (courses, reminders)."
+                    label={t.settings.studyFocusLabel}
+                    hint={t.settings.studyFocusHint}
                   >
                     <select
                       value={studyFocus}
@@ -822,17 +837,17 @@ export function ProfileSettingsForm({
                       style={selectChevronStyle}
                       className={`${FIELD} ${SELECT_CHEVRON} cursor-pointer`}
                     >
-                      {STUDY_FOCUS_OPTIONS.map((o) => (
-                        <option key={o.value || "empty"} value={o.value}>
-                          {o.label}
+                      {STUDY_FOCUS_VALUES.map((value) => (
+                        <option key={value || "empty"} value={value}>
+                          {studyFocusLabels[value]}
                         </option>
                       ))}
                     </select>
                   </SettingsRow>
 
                   <SettingsRow
-                    label="School"
-                    hint="Where you study or teach. Shown here if you added it during onboarding — you can change it anytime."
+                    label={t.settings.schoolLabel}
+                    hint={t.settings.schoolHint}
                   >
                     <input
                       id="school_name"
@@ -841,14 +856,14 @@ export function ProfileSettingsForm({
                       maxLength={200}
                       value={schoolName}
                       onChange={(e) => setSchoolName(e.target.value)}
-                      placeholder="e.g. State University"
+                      placeholder={t.settings.schoolPlaceholder}
                       className={FIELD}
                     />
                   </SettingsRow>
 
                   <SettingsRow
-                    label="Study goals & notes"
-                    hint="Context we can use for summaries and study chat — keep it short."
+                    label={t.settings.bioLabel}
+                    hint={t.settings.bioHint}
                     alignTop
                   >
                     <div className="w-full md:max-w-lg">
@@ -858,7 +873,7 @@ export function ProfileSettingsForm({
                         maxLength={500}
                         value={bio}
                         onChange={(e) => setBio(e.target.value)}
-                        placeholder="e.g. MCB 32 final in May — focus on renal & cardio units."
+                        placeholder={t.settings.bioPlaceholder}
                         className={`${FIELD_WIDE} resize-y`}
                       />
                       <p className="mt-2 text-right text-xs text-zinc-400">
@@ -869,15 +884,24 @@ export function ProfileSettingsForm({
                 </div>
 
                 <h2 className="pt-10 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                  Preferences
+                  {t.settings.sectionPreferences}
                 </h2>
                 <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   <SettingsRow
-                    label="Appearance"
-                    hint="Stored on this browser — light, dark, or match the system."
+                    label={t.settings.appearanceLabel}
+                    hint={t.settings.appearanceHint}
                   >
                     <div className="flex justify-end">
                       <ThemeToggle />
+                    </div>
+                  </SettingsRow>
+
+                  <SettingsRow
+                    label={t.settings.languageLabel}
+                    hint={t.settings.languageHint}
+                  >
+                    <div className="flex justify-end">
+                      <LanguageSwitcher />
                     </div>
                   </SettingsRow>
                 </div>
@@ -896,9 +920,7 @@ export function ProfileSettingsForm({
                     </p>
                   ) : (
                     <p className="text-xs leading-relaxed text-zinc-400 dark:text-zinc-500">
-                      Theme applies immediately on this device. Name, username,
-                      birthday, school, study focus, and notes update when you tap
-                      Save changes. Your avatar saves when you choose a photo.
+                      {t.settings.footerHelp}
                     </p>
                   )}
                 </div>
@@ -913,7 +935,7 @@ export function ProfileSettingsForm({
                   onClick={() => void save()}
                   className="inline-flex shrink-0 items-center justify-center rounded-full bg-zinc-900 px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 disabled:opacity-50 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
                 >
-                  {busy ? "Saving…" : "Save changes"}
+                  {busy ? t.settings.saving : t.settings.saveChanges}
                 </button>
               </footer>
             </>
@@ -925,23 +947,23 @@ export function ProfileSettingsForm({
             <>
               <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
                 <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  Account
+                  {t.settings.accountTitle}
                 </h1>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  Email, password, and session.
+                  {t.settings.accountSubtitle}
                 </p>
               </header>
 
               <div className="divide-y divide-zinc-100 px-6 dark:divide-zinc-800">
-                <SettingsRow label="Email">
+                <SettingsRow label={t.settings.emailLabel}>
                   <p className="text-sm text-zinc-700 dark:text-zinc-300 sm:text-right">
                     {email}
                   </p>
                 </SettingsRow>
 
                 <SettingsRow
-                  label="Password"
-                  hint="We never store your password in plain text."
+                  label={t.settings.passwordLabel}
+                  hint={t.settings.passwordHint}
                   alignTop
                 >
                   <div className="flex flex-col items-start gap-2 sm:items-end">
@@ -951,7 +973,9 @@ export function ProfileSettingsForm({
                       onClick={() => void sendPasswordReset()}
                       className="text-sm font-medium text-zinc-900 underline-offset-2 hover:underline disabled:opacity-50 dark:text-zinc-200"
                     >
-                      {passwordResetBusy ? "Sending reset link…" : "Forgot password"}
+                      {passwordResetBusy
+                        ? t.settings.sendingResetLink
+                        : t.settings.forgotPassword}
                     </button>
                     {passwordResetError ? (
                       <p
@@ -970,8 +994,8 @@ export function ProfileSettingsForm({
                 </SettingsRow>
 
                 <SettingsRow
-                  label="Session"
-                  hint="Sign out on this device."
+                  label={t.settings.sessionLabel}
+                  hint={t.settings.sessionHint}
                   alignTop
                 >
                   <div className="flex justify-end">
@@ -988,10 +1012,10 @@ export function ProfileSettingsForm({
             <>
               <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
                 <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  Friends
+                  {t.settings.friendsTitle}
                 </h1>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  Connect with other learners, manage requests, and start chats.
+                  {t.settings.friendsSubtitle}
                 </p>
               </header>
               <div className="px-4 py-6 sm:px-6">
@@ -1006,10 +1030,10 @@ export function ProfileSettingsForm({
             <>
               <header className="border-b border-zinc-100 px-6 py-5 dark:border-zinc-800">
                 <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  Messages
+                  {t.settings.messagesTitle}
                 </h1>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  Inbox, chats, and group members.
+                  {t.settings.messagesSubtitle}
                 </p>
               </header>
               <div className="p-3 sm:p-4">

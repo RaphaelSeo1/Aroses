@@ -19,6 +19,8 @@ import { ModuleQuizReview } from "@/components/ModuleQuizReview";
 import { ModuleQuiz } from "@/components/ModuleQuiz";
 import { PersonalQuizSection } from "@/components/PersonalQuizSection";
 import { buildQuizSessionItems } from "@/lib/quiz-session";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import { useCourseMode } from "@/lib/mentored/use-course-mode";
 import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { persistStudyModulePosition } from "@/lib/study/persist-study-module";
@@ -48,11 +50,12 @@ function ModuleLessonJumpNav({
   lessons: { title: string }[];
   onJump: (lessonIndex: number) => void;
 }) {
+  const t = useT();
   if (lessons.length <= 1) return null;
   return (
     <div className="mb-2 ml-2 mt-1 border-l-2 border-zinc-200 pl-3 dark:border-zinc-700">
       <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-        Lessons
+        {t.study.lessons}
       </p>
       <ul className="space-y-0.5">
         {lessons.map((lesson, li) => (
@@ -146,6 +149,7 @@ export function CoursePlayer({
   /** When set (dashboard quiz), progress drawer matches Profile → Progress for this course. */
   practiceProgressCourseSummary?: CourseLearningSummary | null;
 }) {
+  const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
   const studyBase =
@@ -591,17 +595,17 @@ export function CoursePlayer({
         setQuizAppendError(
           typeof j.error === "string"
             ? j.error
-            : "Could not generate new questions."
+            : t.study.couldNotGenerateQuestions
         );
         return;
       }
       router.refresh();
     } catch {
-      setQuizAppendError("Network error.");
+      setQuizAppendError(t.study.networkError);
     } finally {
       setQuizAppendBusy(false);
     }
-  }, [activeModule, courseManageEnabled, materialId, router]);
+  }, [activeModule, courseManageEnabled, materialId, router, t]);
 
   const activeModuleIndex = useMemo(
     () => course.modules.findIndex((m) => m.id === activeModuleId),
@@ -757,7 +761,7 @@ export function CoursePlayer({
     if (renamingModuleId === null) return;
     const title = renameDraft.trim();
     if (title.length < 1 || title.length > 200) {
-      setManageError("Title must be 1–200 characters.");
+      setManageError(t.study.titleLengthError);
       return;
     }
 
@@ -775,7 +779,7 @@ export function CoursePlayer({
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setManageError(
-          typeof body.error === "string" ? body.error : "Could not rename."
+          typeof body.error === "string" ? body.error : t.study.couldNotRename
         );
         setBusyModuleId(null);
         return;
@@ -783,7 +787,7 @@ export function CoursePlayer({
       setRenamingModuleId(null);
       router.refresh();
     } catch {
-      setManageError("Network error.");
+      setManageError(t.study.networkError);
     }
     setBusyModuleId(null);
   }
@@ -792,9 +796,9 @@ export function CoursePlayer({
     if (course.modules.length <= 1) return;
 
     const ok = await confirmDialog({
-      title: "Delete this module?",
-      body: "Remaining modules will be renumbered. Progress and quiz attempts for this upload will be reset.",
-      confirmLabel: "Delete",
+      title: t.study.deleteModuleTitle,
+      body: t.study.deleteModuleBody,
+      confirmLabel: t.study.delete,
       tone: "danger",
     });
     if (!ok) return;
@@ -809,7 +813,7 @@ export function CoursePlayer({
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setManageError(
-          typeof body.error === "string" ? body.error : "Could not delete."
+          typeof body.error === "string" ? body.error : t.study.couldNotDelete
         );
         setBusyModuleId(null);
         return;
@@ -817,7 +821,7 @@ export function CoursePlayer({
       setRenamingModuleId(null);
       router.refresh();
     } catch {
-      setManageError("Network error.");
+      setManageError(t.study.networkError);
     }
     setBusyModuleId(null);
   }
@@ -902,7 +906,7 @@ export function CoursePlayer({
 
   if (!activeModule) {
     return (
-      <p className="text-sm text-zinc-500">No modules in this course.</p>
+      <p className="text-sm text-zinc-500">{t.study.noModules}</p>
     );
   }
 
@@ -912,10 +916,10 @@ export function CoursePlayer({
         <div className="border-b border-zinc-200 bg-zinc-50/95 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/80">
           <div className="mx-auto max-w-3xl">
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-              Updating study content
+              {t.study.updatingStudyContent}
             </p>
             <p className="mt-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">
-              Merging your edits into this page…
+              {t.study.mergingEdits}
             </p>
             <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
               <div
@@ -931,7 +935,7 @@ export function CoursePlayer({
         <div className="sticky top-16 space-y-6 p-6 lg:top-0 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-              {courseManageEnabled ? "Your course" : "Course"}
+              {courseManageEnabled ? t.study.yourCourse : t.study.course}
             </p>
             <h1 className="mt-1 text-xl font-semibold leading-snug tracking-tight text-zinc-900 dark:text-zinc-50">
               {course.title}
@@ -953,7 +957,7 @@ export function CoursePlayer({
                     onClick={() => setDescriptionExpanded((v) => !v)}
                     className="mt-1 text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                   >
-                    {descriptionExpanded ? "Show less" : "Show more"}
+                    {descriptionExpanded ? t.study.showLess : t.study.showMore}
                   </button>
                 ) : null}
               </>
@@ -962,8 +966,13 @@ export function CoursePlayer({
 
           <div>
             <div className="flex items-center justify-between text-xs font-medium text-zinc-600 dark:text-zinc-400">
-              <span>This upload</span>
-              <span>{completedCount}/{totalModules} modules</span>
+              <span>{t.study.thisUpload}</span>
+              <span>
+                {tf(t.study.modulesProgress, {
+                  completed: completedCount,
+                  total: totalModules,
+                })}
+              </span>
             </div>
             <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-zinc-200/90 ring-1 ring-zinc-900/5 dark:bg-zinc-800 dark:ring-white/5">
               <div
@@ -976,14 +985,14 @@ export function CoursePlayer({
                 href={courseMixHref}
                 className="mt-3 flex w-full items-center justify-center rounded-full border border-zinc-200 bg-white px-3 py-2 text-center text-[11px] font-semibold leading-snug text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
               >
-                Whole-course mixed quiz
+                {t.study.wholeCourseMixedQuiz}
               </Link>
             ) : null}
           </div>
 
           <nav className="space-y-3">
             <p className="pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
-              {showAccordion ? "All materials" : "Curriculum"}
+              {showAccordion ? t.study.allMaterials : t.study.curriculum}
             </p>
             {manageError && (
               <p className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
@@ -1003,7 +1012,9 @@ export function CoursePlayer({
                   const seen = new Map<string, { name: string; outlines: typeof sidebarOutlines }>();
                   for (const o of sidebarOutlines) {
                     const key = o.examGroupId ?? "__none__";
-                    const name = o.examGroupName ?? (o.examGroupId ? "Section" : "Other");
+                    const name =
+                      o.examGroupName ??
+                      (o.examGroupId ? t.study.section : t.study.other);
                     if (!seen.has(key)) seen.set(key, { name, outlines: [] });
                     seen.get(key)!.outlines.push(o);
                   }
@@ -1044,7 +1055,7 @@ export function CoursePlayer({
                           </span>
                           {isOpenBuild ? (
                             <span className="shrink-0 rounded bg-brand-blush px-1.5 py-0 text-[9px] font-bold uppercase text-brand dark:bg-[#1e1616] dark:text-brand-soft">
-                              viewing
+                              {t.study.viewing}
                             </span>
                           ) : null}
                         </span>
@@ -1077,7 +1088,7 @@ export function CoursePlayer({
                                   className="sr-only"
                                   htmlFor={`rename-${mod.id}`}
                                 >
-                                  Module title
+                                  {t.study.moduleTitle}
                                 </label>
                                 <input
                                   id={`rename-${mod.id}`}
@@ -1095,7 +1106,7 @@ export function CoursePlayer({
                                     disabled={busy}
                                     className="rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover disabled:opacity-50"
                                   >
-                                    Save
+                                    {t.study.save}
                                   </button>
                                   <button
                                     type="button"
@@ -1103,7 +1114,7 @@ export function CoursePlayer({
                                     onClick={cancelRename}
                                     className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
                                   >
-                                    Cancel
+                                    {t.study.cancel}
                                   </button>
                                 </div>
                               </form>
@@ -1157,7 +1168,7 @@ export function CoursePlayer({
                                         onClick={() => beginRename(fullMod)}
                                         className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
                                       >
-                                        Rename
+                                        {t.study.rename}
                                       </button>
                                       <button
                                         type="button"
@@ -1169,7 +1180,7 @@ export function CoursePlayer({
                                         }
                                         className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
                                       >
-                                        Delete
+                                        {t.study.delete}
                                       </button>
                                     </div>
                                   ) : null}
@@ -1228,7 +1239,7 @@ export function CoursePlayer({
                           className="sr-only"
                           htmlFor={`rename-${mod.id}`}
                         >
-                          Module title
+                          {t.study.moduleTitle}
                         </label>
                         <input
                           id={`rename-${mod.id}`}
@@ -1244,7 +1255,7 @@ export function CoursePlayer({
                             disabled={busy}
                             className="rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover disabled:opacity-50"
                           >
-                            Save
+                            {t.study.save}
                           </button>
                           <button
                             type="button"
@@ -1252,7 +1263,7 @@ export function CoursePlayer({
                             onClick={cancelRename}
                             className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
                           >
-                            Cancel
+                            {t.study.cancel}
                           </button>
                         </div>
                       </form>
@@ -1297,7 +1308,7 @@ export function CoursePlayer({
                               onClick={() => beginRename(mod)}
                               className="rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 hover:bg-brand-blush hover:text-brand disabled:opacity-40 dark:hover:bg-[#1e1616]/50 dark:hover:text-brand-soft"
                             >
-                              Rename
+                              {t.study.rename}
                             </button>
                             <button
                               type="button"
@@ -1305,7 +1316,7 @@ export function CoursePlayer({
                               onClick={() => void deleteModule(mod.id)}
                               className="rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40 dark:text-red-400"
                             >
-                              Delete
+                              {t.study.delete}
                             </button>
                           </div>
                         ) : null}
@@ -1322,7 +1333,7 @@ export function CoursePlayer({
           </nav>
 
           <p className="text-[11px] text-zinc-500">
-            Source file:{" "}
+            {t.study.sourceFile}{" "}
             <span className="font-medium text-zinc-700 dark:text-zinc-400">
               {sourceLabel}
             </span>
@@ -1373,11 +1384,11 @@ export function CoursePlayer({
                     }).catch(() => {});
                   }
                 }}
-                hint="Mentored Learning opens in a focused tutoring view; Free Exploration is the reading mode you're in now."
+                hint={t.study.modeToggleHint}
               />
               <header className="border-b border-zinc-100 pb-4 dark:border-zinc-900">
                 <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-                  Module {activeModule.id}
+                  {tf(t.study.moduleLabel, { id: activeModule.id })}
                 </p>
                 <h2 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                   {activeModule.title}
@@ -1390,7 +1401,7 @@ export function CoursePlayer({
                     htmlFor="lesson-jump-select"
                     className="sr-only"
                   >
-                    Jump to lesson
+                    {t.study.jumpToLesson}
                   </label>
                   <select
                     id="lesson-jump-select"
@@ -1403,7 +1414,7 @@ export function CoursePlayer({
                     }}
                     className="w-full rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 shadow-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-brand-soft dark:focus:ring-brand-soft/20"
                   >
-                    <option value="">Jump to lesson…</option>
+                    <option value="">{t.study.jumpToLessonPlaceholder}</option>
                     {activeModule.lessons.map((lesson, li) => (
                       <option key={li} value={String(li)}>
                         {li + 1}. {lesson.title}
@@ -1439,16 +1450,14 @@ export function CoursePlayer({
 
               <div className="mt-14 rounded-2xl border border-brand-border bg-gradient-to-br from-brand-blush/90 to-white p-6 shadow-sm dark:border-brand-border/40 dark:from-[#1e1616]/40 dark:to-zinc-950">
                 <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                  Practice & review
+                  {t.study.practiceAndReview}
                 </h3>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  Head to the practice room to run the module quiz or your focus
-                  cards — switch between them with the tabs there.
+                  {t.study.practiceAndReviewBody}
                 </p>
                 {completed.has(activeModule.id) ? (
                   <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/90 px-4 py-2.5 text-sm font-medium text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-100">
-                    Module complete — open the practice room to run questions
-                    again anytime.
+                    {t.study.moduleCompleteBanner}
                   </p>
                 ) : null}
                 <div className="mt-5 flex flex-wrap gap-3">
@@ -1456,7 +1465,7 @@ export function CoursePlayer({
                     href={moduleQuizPageHref}
                     className="inline-flex items-center justify-center rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
                   >
-                    Go to practice room
+                    {t.study.goToPracticeRoom}
                     {moduleQuizBank.length > 0 ? (
                       <span className="ml-2 inline-flex items-center justify-center rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums">
                         {moduleQuizBank.length}
@@ -1471,27 +1480,27 @@ export function CoursePlayer({
               <header className="border-b border-zinc-100 pb-5 dark:border-zinc-900">
                 <div className="min-w-0">
                   <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-                    Module {activeModule.id}
+                    {tf(t.study.moduleLabel, { id: activeModule.id })}
                   </p>
                   <h2 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                     {activeModule.title}
                   </h2>
                   <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-                    Switch with the tabs below —{" "}
+                    {t.study.practiceIntroBeforeModule}
                     <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                      Module quiz
-                    </span>{" "}
-                    is the shared bank;{" "}
+                      {t.study.moduleQuiz}
+                    </span>
+                    {t.study.practiceIntroBetween}
                     <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                      Focus quiz
-                    </span>{" "}
-                    is your private cards from notes.
+                      {t.study.focusQuiz}
+                    </span>
+                    {t.study.practiceIntroAfter}
                   </p>
                 </div>
                 <div
                   className="mt-5 flex flex-wrap gap-2"
                   role="tablist"
-                  aria-label="Practice type"
+                  aria-label={t.study.practiceType}
                 >
                   <button
                     type="button"
@@ -1506,7 +1515,7 @@ export function CoursePlayer({
                         : "inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 shadow-sm hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:border-zinc-600"
                     }
                   >
-                    <span>Module quiz</span>
+                    <span>{t.study.moduleQuiz}</span>
                     <span
                       className={
                         practiceTab === "module"
@@ -1530,7 +1539,7 @@ export function CoursePlayer({
                         : "inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 shadow-sm hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:border-zinc-600"
                     }
                   >
-                    <span>Focus quiz</span>
+                    <span>{t.study.focusQuiz}</span>
                     <span
                       className={
                         practiceTab === "focus"
@@ -1550,19 +1559,18 @@ export function CoursePlayer({
                     <div className="overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/90 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/40">
                       <div className="border-b border-zinc-200/80 px-4 py-3 dark:border-zinc-700/80">
                         <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                          Module bank review
+                          {t.study.moduleBankReview}
                         </h3>
                         <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                          Shared questions for this module (same pool as the quiz
-                          below). Focus cards stay under the Focus quiz tab.
+                          {t.study.moduleBankReviewDesc}
                         </p>
                       </div>
                       <div className="p-3 sm:p-4">
                         {moduleQuizBank.length === 0 ? (
                           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                            No module bank questions for this module yet.
+                            {t.study.noBankQuestions}
                             {courseManageEnabled
-                              ? " Generate a batch under Module quiz below."
+                              ? ` ${t.study.generateBatchHint}`
                               : ""}
                           </p>
                         ) : (
@@ -1570,7 +1578,9 @@ export function CoursePlayer({
                             showHeader={false}
                             compact
                             embedded
-                            bankScopeHint={`Module ${activeModule.id} · Module quiz bank`}
+                            bankScopeHint={tf(t.study.moduleQuizBankScope, {
+                              id: activeModule.id,
+                            })}
                             quiz={moduleQuizBank}
                             reviewByIndex={reviewByIndex}
                             scrollAreaClassName="max-h-[min(52vh,26rem)] overflow-y-auto overscroll-contain rounded-xl border border-zinc-200/70 bg-zinc-50/40 dark:border-zinc-800 dark:bg-zinc-900/25"
@@ -1582,19 +1592,18 @@ export function CoursePlayer({
 
                   <div className="mt-9 border-t border-zinc-100 pt-6 dark:border-zinc-900">
                     <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                      Module quiz
+                      {t.study.moduleQuiz}
                     </h3>
                     <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                      Uses the shared module bank only. For cards from your notes,
-                      open the{" "}
+                      {t.study.moduleQuizDescBefore}
                       <button
                         type="button"
                         onClick={() => selectPracticeTab("focus")}
                         className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
                       >
-                        Focus quiz
-                      </button>{" "}
-                      tab.
+                        {t.study.focusQuiz}
+                      </button>
+                      {t.study.moduleQuizDescAfter}
                     </p>
                     <div className="mt-5 flex flex-wrap items-center gap-3">
                       {courseManageEnabled ? (
@@ -1606,32 +1615,37 @@ export function CoursePlayer({
                             className="inline-flex items-center justify-center rounded-full border border-brand-border bg-white px-5 py-2.5 text-sm font-medium text-brand-ink shadow-sm hover:bg-brand-blush disabled:opacity-50 dark:border-brand-border/50 dark:bg-zinc-950 dark:text-brand-soft dark:hover:bg-brand-blush/10"
                           >
                             {quizAppendBusy
-                              ? "Generating questions…"
-                              : "Generate more questions (AI)"}
+                              ? t.study.generatingQuestions
+                              : t.study.generateMoreQuestions}
                           </button>
                           {moduleQuizBank.length > 0 ? (
                             <span className="text-xs text-zinc-500">
-                              Bank: {moduleQuizBank.length} question
-                              {moduleQuizBank.length === 1 ? "" : "s"} in this
-                              module
+                              {moduleQuizBank.length === 1
+                                ? t.study.bankCountOne
+                                : tf(t.study.bankCount, {
+                                    count: moduleQuizBank.length,
+                                  })}
                             </span>
                           ) : (
                             <span className="text-xs font-medium text-amber-800 dark:text-amber-200">
-                              No questions yet — generate a batch to start the quiz.
+                              {t.study.noQuestionsYetGenerate}
                             </span>
                           )}
                         </>
                       ) : (
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                          Question bank is managed by the course creator.
+                          {t.study.bankManagedByCreator}
                           {moduleQuizBank.length > 0 ? (
                             <>
                               {" "}
-                              Bank: {moduleQuizBank.length} question
-                              {moduleQuizBank.length === 1 ? "" : "s"}.
+                              {moduleQuizBank.length === 1
+                                ? t.study.bankCountShortOne
+                                : tf(t.study.bankCountShort, {
+                                    count: moduleQuizBank.length,
+                                  })}
                             </>
                           ) : (
-                            <> No questions in this module yet.</>
+                            <> {t.study.noQuestionsInModule}</>
                           )}
                         </p>
                       )}
@@ -1644,12 +1658,14 @@ export function CoursePlayer({
                     {missedQuizIndices.length > 0 ? (
                       <div className="mt-5 rounded-2xl border border-amber-200/90 bg-amber-50/90 px-4 py-4 dark:border-amber-900/60 dark:bg-amber-950/30">
                         <p className="text-sm font-semibold text-amber-950 dark:text-amber-100">
-                          Review queue — {missedQuizIndices.length} question
-                          {missedQuizIndices.length === 1 ? "" : "s"}
+                          {missedQuizIndices.length === 1
+                            ? t.study.reviewQueueOne
+                            : tf(t.study.reviewQueue, {
+                                count: missedQuizIndices.length,
+                              })}
                         </p>
                         <p className="mt-1 text-xs text-amber-900/80 dark:text-amber-200/80">
-                          Still weak on your last try — they&apos;ll appear first in
-                          your next quiz until you answer them correctly.
+                          {t.study.reviewQueueDesc}
                         </p>
                         <ul className="mt-3 space-y-2 border-t border-amber-200/60 pt-3 dark:border-amber-900/40">
                           {missedQuizIndices.slice(0, 5).map((qi) => {
@@ -1667,7 +1683,9 @@ export function CoursePlayer({
                         </ul>
                         {missedQuizIndices.length > 5 ? (
                           <p className="mt-2 text-[11px] text-amber-800/80 dark:text-amber-300/70">
-                            +{missedQuizIndices.length - 5} more in this module
+                            {tf(t.study.moreInModule, {
+                              count: missedQuizIndices.length - 5,
+                            })}
                           </p>
                         ) : null}
                       </div>
@@ -1691,12 +1709,12 @@ export function CoursePlayer({
                         }}
                         title={
                           personalQuizActive
-                            ? "Finish your focus quiz first"
+                            ? t.study.finishFocusQuizFirst
                             : undefined
                         }
                         className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
                       >
-                        Start module quiz
+                        {t.study.startModuleQuiz}
                       </button>
                     ) : (
                       <div
@@ -1706,7 +1724,7 @@ export function CoursePlayer({
                         <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200/80 pb-5 dark:border-zinc-800">
                           <div className="min-w-0">
                             <p className="text-xs font-semibold uppercase tracking-wide text-brand dark:text-brand-soft">
-                              Module quiz run
+                              {t.study.moduleQuizRun}
                             </p>
                             <p className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
                               {activeModule.title}
@@ -1717,7 +1735,7 @@ export function CoursePlayer({
                             onClick={() => setQuizOpen(false)}
                             className="shrink-0 rounded-full border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900"
                           >
-                            ← Back to overview
+                            {t.study.backToOverview}
                           </button>
                         </div>
                         <ModuleQuiz
@@ -1803,7 +1821,7 @@ export function CoursePlayer({
           href={lecturePageHref}
           className="fixed left-4 top-[max(6.625rem,calc(env(safe-area-inset-top)+5.875rem))] z-[100] inline-flex items-center rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 shadow-lg shadow-black/12 ring-1 ring-black/5 transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:shadow-black/35 dark:ring-white/10 dark:hover:bg-zinc-900 sm:top-[max(7.375rem,calc(env(safe-area-inset-top)+6.625rem))] lg:left-[calc(22rem+1rem)]"
         >
-          ← Lecture
+          {t.study.backToLecture}
         </Link>
         <PracticeProgressPullTab
           open={progressPanelOpen}
@@ -1821,10 +1839,19 @@ export function CoursePlayer({
           totalModules={pullProgressTotal}
           progressPct={pullProgressPct}
           masteryPct={pullMasteryPct}
-          panelEyebrow={alignProgressWithProfile ? "This course" : undefined}
+          panelEyebrow={alignProgressWithProfile ? t.study.thisCourse : undefined}
           modulesDetailLine={
             alignProgressWithProfile && practiceProgressCourseSummary
-              ? `${practiceProgressCourseSummary.modulesCompleted}/${practiceProgressCourseSummary.modulesTotal} modules · ${practiceProgressCourseSummary.uploadsCount} ${practiceProgressCourseSummary.uploadsCount === 1 ? "material" : "materials"} · matches Profile → Progress`
+              ? tf(
+                  practiceProgressCourseSummary.uploadsCount === 1
+                    ? t.study.modulesDetailLineOne
+                    : t.study.modulesDetailLine,
+                  {
+                    completed: practiceProgressCourseSummary.modulesCompleted,
+                    total: practiceProgressCourseSummary.modulesTotal,
+                    count: practiceProgressCourseSummary.uploadsCount,
+                  }
+                )
               : undefined
           }
           quizMetricSource={

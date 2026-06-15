@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
  * Hamburger menu holding the primary nav on small screens (< lg). The avatar
@@ -19,6 +20,7 @@ export function MobileNavMenu({
   badgeLabel: string;
   courseHomeHref?: string;
 }) {
+  const t = useT();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -63,7 +65,7 @@ export function MobileNavMenu({
         onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Menu"
+        aria-label={t.nav.menu}
         className="inline-flex h-9 w-9 items-center justify-center rounded-full text-brand-muted transition hover:bg-brand-blush hover:text-brand-ink dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
       >
         <svg
@@ -91,12 +93,12 @@ export function MobileNavMenu({
       {open ? (
         <div
           role="menu"
-          aria-label="Navigation"
+          aria-label={t.nav.navigation}
           className="absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-xl border border-zinc-200 bg-white py-1 shadow-lg shadow-zinc-900/10 ring-1 ring-zinc-900/[0.04] dark:border-zinc-700 dark:bg-zinc-900 dark:ring-white/10"
         >
           <MobileRow
             href="/"
-            label="Home"
+            label={t.nav.home}
             onClick={close}
             active={
               pathname === "/" ||
@@ -112,7 +114,7 @@ export function MobileNavMenu({
           />
           <MobileRow
             href="/tutor-session"
-            label="Tutor Session"
+            label={t.nav.tutorSession}
             onClick={close}
             active={tutorActive}
             icon={
@@ -125,11 +127,11 @@ export function MobileNavMenu({
             onClick={close}
             className="flex items-center gap-2.5 py-2 pl-10 pr-3.5 text-[13px] text-zinc-500 transition hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-800"
           >
-            Previous sessions
+            {t.nav.previousSessions}
           </Link>
           <MobileRow
             href="/explore"
-            label="Explore"
+            label={t.nav.explore}
             onClick={close}
             active={pathname === "/explore" || pathname.startsWith("/explore/")}
             icon={
@@ -141,7 +143,7 @@ export function MobileNavMenu({
           />
           <MobileRow
             href="/forum"
-            label="Forum"
+            label={t.nav.forum}
             onClick={close}
             active={pathname === "/forum" || pathname.startsWith("/forum/")}
             icon={
@@ -150,7 +152,7 @@ export function MobileNavMenu({
           />
           <MobileRow
             href="/dashboard/review"
-            label="Review"
+            label={t.nav.review}
             onClick={close}
             active={pathname.startsWith("/dashboard/review")}
             badge={badgeLabel}
@@ -165,7 +167,7 @@ export function MobileNavMenu({
           {courseHomeHref ? (
             <MobileRow
               href={courseHomeHref}
-              label="Course home"
+              label={t.nav.courseHome}
               onClick={close}
               active={false}
               icon={

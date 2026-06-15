@@ -6,8 +6,10 @@ import type {
 import type { IngestChunkSummary } from "@/lib/study-ingest/chunking";
 import {
   deriveCourseTitleFromChunkTitles,
+  isBadIngestTitle,
   moduleTitleFromLessonTitles,
   normalizeIngestDisplayTitle,
+  polishLessonTitlesForModule,
   substantiveLessonTitles,
 } from "@/lib/study-ingest/normalize-ingest-title";
 import { isDenseSectionedPharmacologyDeck } from "@/lib/study-ingest/pdf-section-split";
@@ -199,32 +201,34 @@ export function structurePlanCoveragePromptBlock(
 }
 
 function lessonTitleFromChunks(chunks: IngestChunkSummary[]): string {
-  const isBad = (t: string) => {
-    const trim = t.trim();
-    if (trim.length === 0 || /^\d+$/.test(trim)) return true;
-    if (trim.length === 1) return true;
-    // Keep 2-character Korean topic labels (개요, 수면, etc.)
-    if (trim.length === 2 && !/^[\uac00-\ud7a3]{2}$/.test(trim)) return true;
-    return false;
-  };
-
   if (chunks.length === 1) {
-    const t = normalizeIngestDisplayTitle(chunks[0]!.title.trim());
-    if (!isBad(t)) return t;
-    const pos = chunks[0]!.position.trim();
-    if (pos.length > 0) return pos;
+    const c = chunks[0]!;
+    const t = normalizeIngestDisplayTitle(c.title.trim());
+    if (!isBadIngestTitle(t)) return t;
+    const pos = c.position.trim();
+    const page = pos.match(/\bpage\s+(\d+)/i);
+    if (page) return `Page ${page[1]}`;
+    const slide = pos.match(/\bslide\s+(\d+)/i);
+    if (slide) return `Slide ${slide[1]}`;
     return "Core concepts";
   }
   for (const c of chunks) {
     const t = normalizeIngestDisplayTitle(c.title.trim());
-    if (!isBad(t)) return t;
+    if (!isBadIngestTitle(t)) return t;
   }
   const first = chunks[0]!;
   const last = chunks[chunks.length - 1]!;
-  if (first.position.trim()) {
+  const firstPage = first.position.match(/\bpage\s+(\d+)/i);
+  const lastPage = last.position.match(/\bpage\s+(\d+)/i);
+  if (firstPage && lastPage) {
+    return firstPage[1] === lastPage[1]
+      ? `Page ${firstPage[1]}`
+      : `Pages ${firstPage[1]}–${lastPage[1]}`;
+  }
+  if (first.position.trim() && !/^section\s+\d+$/i.test(first.position.trim())) {
     return `${first.position} – ${last.position}`.slice(0, 80);
   }
-  return `Sections ${first.position}–${last.position}`;
+  return "Core concepts";
 }
 
 const GENERIC_INTRO_CHUNK =
@@ -352,9 +356,12 @@ export function normalizeStructurePlanTitles(
   plan: CourseStructurePlan
 ): CourseStructurePlan {
   const modules = plan.modules.map((mod) => {
-    const lessons = mod.lessons.map((lesson) => ({
+    const rawLessonTitles = mod.lessons.map((l) => l.title);
+    const modTitleGuess = moduleTitleFromLessonTitles(rawLessonTitles);
+    const polished = polishLessonTitlesForModule(rawLessonTitles, modTitleGuess);
+    const lessons = mod.lessons.map((lesson, i) => ({
       ...lesson,
-      title: normalizeIngestDisplayTitle(lesson.title),
+      title: polished[i] ?? normalizeIngestDisplayTitle(lesson.title),
     }));
     return {
       ...mod,

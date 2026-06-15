@@ -2,7 +2,11 @@ import type {
   ExtractedStudyContent,
   ExtractedStudyChunk,
 } from "@/lib/study-ingest/extract";
-import { normalizeIngestDisplayTitle } from "@/lib/study-ingest/normalize-ingest-title";
+import {
+  isBadIngestTitle,
+  normalizeIngestDisplayTitle,
+  pickBestTitleFromText,
+} from "@/lib/study-ingest/normalize-ingest-title";
 import { splitBodyOnMajorSectionHeadings } from "@/lib/study-ingest/pdf-section-split";
 
 /** Behind STRUCTURE_PLANNING — AI decides course structure from content, not file count. */
@@ -42,50 +46,17 @@ export type ExtractedPartForChunking = ExtractedStudyContent;
 
 const MAX_CHUNK_CHARS = 6_000;
 const MIN_CHUNK_CHARS = 400;
-const MAX_TITLE_CHARS = 80;
 const MAX_CHUNKS_TOTAL = 400;
 
 function cleanTitleFromText(text: string, position?: string): string {
-  const lines = text
-    .split(/\n+/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-
-  const isBadTitle = (line: string): boolean => {
-    const t = line.replace(/^[#>\-*\s]+/, "").trim();
-    if (t.length === 0) return true;
-    if (/^\d+$/.test(t)) return true;
-    if (t.length === 1) return true;
-    if (t.length === 2 && !/^[\uac00-\ud7a3]{2}$/.test(t)) return true;
-    if (t.length > 50) return true;
-    return false;
-  };
-
-  for (const line of lines) {
-    const stripped = line.replace(/^[#>\-*\s]+/, "").trim();
-    if (stripped.length > MAX_TITLE_CHARS) continue;
-    if (!isBadTitle(stripped)) {
-      const title = normalizeIngestDisplayTitle(stripped);
-      if (title.length === 0 || isBadTitle(title)) continue;
-      return title.length > MAX_TITLE_CHARS
-        ? `${title.slice(0, MAX_TITLE_CHARS - 1).trim()}…`
-        : title;
-    }
-  }
-
-  if (position?.trim()) {
-    const p = position.trim();
-    return p.length > MAX_TITLE_CHARS
-      ? `${p.slice(0, MAX_TITLE_CHARS - 1).trim()}…`
-      : p;
-  }
-  return "Untitled section";
+  return pickBestTitleFromText(text, position);
 }
 
 /** True when a trimmed line looks like a section heading. */
 function looksLikeHeading(line: string): boolean {
   const t = line.trim();
   if (t.length === 0 || t.length > 90) return false;
+  if (isBadIngestTitle(t)) return false;
   if (/^#{1,6}\s+\S/.test(t)) return true; // markdown heading
   if (/^(chapter|section|part|unit|lecture|module|topic)\s+[0-9ivxlc]+/i.test(t)) {
     return true;

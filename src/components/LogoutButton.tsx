@@ -3,9 +3,11 @@
 import { HEADER_NAV_NEUTRAL } from "@/components/AppHeader";
 import { createClient } from "@/lib/supabase/client";
 import { reportClientActivity } from "@/lib/activity-log-client";
+import { useT } from "@/lib/i18n/LocaleProvider";
 import { useRouter } from "next/navigation";
 
 export function LogoutButton({ className }: { className?: string }) {
+  const t = useT();
   const router = useRouter();
 
   async function handleLogout() {
@@ -23,7 +25,7 @@ export function LogoutButton({ className }: { className?: string }) {
       onClick={handleLogout}
       className={className ?? HEADER_NAV_NEUTRAL}
     >
-      Log out
+      {t.nav.logout}
     </button>
   );
 }
