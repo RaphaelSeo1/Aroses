@@ -941,8 +941,9 @@ export function CoursePlayer({
       style={
         {
           // Width the floating voice/refine dock occupies, plus breathing room.
-          // The lesson column reserves this as right padding on lg+ so the dock
-          // can never overlap the content at any zoom level or monitor size.
+          // The lesson column reserves this as right padding on xl+ (where the
+          // sidebar + content + dock all fit) so the dock can never overlap the
+          // content. Below xl the dock collapses to a trigger and content fills.
           "--rose-dock-w": "min(16rem, calc(100vw - 2rem))",
           "--rose-dock-rail": "calc(var(--rose-dock-w) + 3rem)",
         } as CSSProperties
@@ -1358,8 +1359,8 @@ export function CoursePlayer({
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1 bg-white dark:bg-zinc-950 lg:pr-[var(--rose-dock-rail)]">
-        <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6">
+      <div className="min-w-0 flex-1 bg-white dark:bg-zinc-950 xl:pr-[var(--rose-dock-rail)]">
+        <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6 lg:px-8">
           <AiStudyDisclaimer className="mb-3" />
           {mode === "lessons" ? (
             <>
@@ -1441,7 +1442,7 @@ export function CoursePlayer({
                 </div>
               ) : null}
 
-              <div className="mt-6 space-y-10 pb-[max(13rem,calc(11rem+env(safe-area-inset-bottom)))] lg:pb-16">
+              <div className="mt-6 space-y-10 pb-[max(13rem,calc(11rem+env(safe-area-inset-bottom)))] xl:pb-16">
                 {activeModule.lessons.map((lesson, li) => (
                   <div
                     key={li}
@@ -1812,12 +1813,12 @@ export function CoursePlayer({
         <CourseRefineDrawer materialId={materialId} docked />
       ) : null}
 
-      {/* Compact trigger — narrow screens only, when the voice dock is closed. */}
+      {/* Compact trigger — below xl only, when the voice dock is closed. */}
       {!voiceDockOpen ? (
         <button
           type="button"
           onClick={() => setVoiceDockOpen(true)}
-          className="inline-flex items-center gap-2 rounded-full border-2 border-zinc-200 bg-white px-4 py-3 text-sm font-semibold text-zinc-900 shadow-xl transition hover:border-brand hover:text-brand lg:hidden dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+          className="inline-flex items-center gap-2 rounded-full border-2 border-zinc-200 bg-white px-4 py-3 text-sm font-semibold text-zinc-900 shadow-xl transition hover:border-brand hover:text-brand xl:hidden dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
           aria-expanded={false}
         >
           <span
@@ -1830,22 +1831,22 @@ export function CoursePlayer({
 
       {/*
         Single VoiceTutorDock instance, repositioned responsively:
-        - lg+: inline in this cluster, which sits inside the reserved right rail.
-        - < lg, open: dismissible bottom sheet that overlays (user-invoked).
-        - < lg, closed: display:none (kept mounted to preserve mic state).
+        - xl+: inline in this cluster, which sits inside the reserved right rail.
+        - < xl, open: dismissible bottom sheet that overlays (user-invoked).
+        - < xl, closed: display:none (kept mounted to preserve mic state).
       */}
       <div
         className={
           voiceDockOpen
-            ? "fixed inset-x-3 bottom-3 z-[110] flex max-h-[80dvh] flex-col items-center gap-3 overflow-y-auto rounded-2xl border border-zinc-200/90 bg-white/95 p-3 shadow-2xl backdrop-blur lg:static lg:inset-auto lg:z-auto lg:max-h-none lg:w-auto lg:items-end lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:backdrop-blur-none dark:border-zinc-700 dark:bg-zinc-900/95"
-            : "hidden lg:flex lg:flex-col lg:items-end lg:gap-3"
+            ? "fixed inset-x-3 bottom-3 z-[110] flex max-h-[80dvh] flex-col items-center gap-3 overflow-y-auto rounded-2xl border border-zinc-200/90 bg-white/95 p-3 shadow-2xl backdrop-blur xl:static xl:inset-auto xl:z-auto xl:max-h-none xl:w-auto xl:items-end xl:overflow-visible xl:rounded-none xl:border-0 xl:bg-transparent xl:p-0 xl:shadow-none xl:backdrop-blur-none dark:border-zinc-700 dark:bg-zinc-900/95"
+            : "hidden xl:flex xl:flex-col xl:items-end xl:gap-3"
         }
       >
         {voiceDockOpen ? (
           <button
             type="button"
             onClick={() => setVoiceDockOpen(false)}
-            className="self-end rounded-lg border border-zinc-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-600 shadow-sm hover:bg-zinc-50 lg:hidden dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            className="self-end rounded-lg border border-zinc-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-600 shadow-sm hover:bg-zinc-50 xl:hidden dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
             Close
           </button>
