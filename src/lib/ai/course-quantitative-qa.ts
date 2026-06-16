@@ -62,35 +62,36 @@ function buildQaInstruction(
   sourceExcerpt: string,
   outputLanguage: CourseOutputLanguage
 ): string {
-  return `You are a quantitative QA auditor for structured course JSON on Aroses.
+  return `You are a source-fidelity QA auditor for structured course JSON on Aroses.
 
-Your job is to find and **fix** teaching errors in numeric worked examples — not to rewrite unrelated prose.
+Your job is to remove content the model **invented or editorialized** — NOT to correct the source's math. The source material below is authoritative even where it appears wrong; a separate disclaimer already warns students that AI-generated content may contain mistakes. Do not second-guess the source.
 
-Check every lesson in this module for:
+Check every lesson in this module and fix ONLY these problems:
 
-1. **Arithmetic consistency** — balance-sheet totals must equal the sum of listed accounts; equity effects must match described transactions. If the source material below contains a numeric slip (e.g. transcript says total assets $420 but cash + inventory + PP&E = $320), **teach the correct math ($320)**. Do not propagate source errors into load-bearing examples.
+1. **Fabricated figures, tables, or worked examples** — Remove any computed value, total, balance sheet, journal entry, table, or worked example that does NOT appear in the source material below and is not directly and unambiguously derivable from numbers the source gives. Do NOT recompute or "correct" the source's numbers: if the source states a figure, keep it exactly as stated even if it does not balance. If the source never works a calculation through, delete the model's invented calculation rather than fixing it.
 
-2. **Margin vs markup** — gross profit **margin** = profit ÷ revenue. **Markup** on cost = profit ÷ cost. Never label markup as "gross profit margin" (wrong: 60% margin when profit $30, cost $50, revenue $80 — correct margin is 37.5%).
+2. **Self-referential / editorializing commentary** — Delete first-person hedging, doubt, or narration of reasoning (e.g. "Wait—this doesn't balance", "hmm", "let me reconsider", "it seems", "as an AI"). Also delete invented explanations the model added to justify a discrepancy (e.g. claiming "we haven't recorded depreciation" to cover a gap the source never discussed).
 
-3. **Journal entry headings** — step labels must name the same debit/credit side as the entry lines shown (if Sales is debited, the heading must say Debit Sales, not Credit Sales).
-
-4. **Multiple net figures** — if net income or net profit appears more than once at different stages (e.g. before vs after depreciation), label each clearly so they are not contradictory.
+3. **Mislabeled source figures** — Only when the source itself supplies BOTH the number and its label, keep them paired as the source gives them (e.g. do not relabel a source "markup" as "margin"). Never change a number to make a label fit, and never introduce a figure the source lacks.
 
 Rules:
 - Return ONLY valid JSON: \`{ "module": { ... } }\` with the **same** module id, lesson count, and lesson titles as input.
-- Fix content, examples, key_terms, and quiz questions/reference answers where numbers or labels are wrong.
-- Preserve Markdown structure and teaching flow; make minimal edits needed for correctness.
+- Make MINIMAL edits: delete fabricated or editorialized spans; otherwise preserve the source's framing, figures, Markdown structure, and teaching flow verbatim.
+- Never add new figures, tables, or corrections of your own.
 - ${formatOutputLanguageGenerationBlock(outputLanguage)}
 
 --- MODULE JSON ---
 ${JSON.stringify({ module: mod })}
 
---- SOURCE MATERIAL (for grounding — may contain errors; prefer correct math) ---
+--- SOURCE MATERIAL (authoritative — reproduce faithfully, even where it appears to contain errors) ---
 ${sourceExcerpt.slice(0, 48_000)}`;
 }
 
 /**
- * Post-generation pass: audit one module for arithmetic / accounting consistency.
+ * Post-generation pass: audit one module for SOURCE FIDELITY — strip figures,
+ * tables, and worked examples the model fabricated (not present in / derivable
+ * from the source) and remove self-referential or editorializing commentary.
+ * It does NOT recompute or "correct" the source's own numbers.
  * Returns the original module unchanged when QA is disabled, nothing to check, or on failure.
  */
 export async function auditModuleQuantitativeConsistency(
@@ -127,7 +128,7 @@ export async function auditModuleQuantitativeConsistency(
       if (!parsed.module) return mod;
       const repaired = parseCourseModuleLoose(parsed.module);
       if (repaired.lessons.length !== mod.lessons.length) return mod;
-      console.info("[course-quantitative-qa] module audited", {
+      console.info("[course-fidelity-qa] module audited", {
         moduleId: mod.id,
         title: mod.title,
       });
@@ -139,7 +140,7 @@ export async function auditModuleQuantitativeConsistency(
     }
   }
 
-  console.warn("[course-quantitative-qa] audit skipped after error", {
+  console.warn("[course-fidelity-qa] audit skipped after error", {
     moduleId: mod.id,
     error: lastErr instanceof Error ? lastErr.message : String(lastErr),
   });

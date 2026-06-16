@@ -475,13 +475,27 @@ function factualAccuracyRules(): string {
 - Do **not** invent table columns or rows not present in the source. If the source table has **N** columns, output exactly **N** columns with the same headers — never add invented columns such as "임상적 의미" unless the PDF includes them.`;
 }
 
+function sourceFidelityRules(): string {
+  return `SOURCE FIDELITY (strict):
+- Generate course content ONLY from the provided source material. Do not introduce outside facts, corrections, or knowledge not present in the source. If the source states something, reproduce its framing and figures faithfully even if you believe it is incorrect. Do not "fix" the source.
+- Do not fabricate computed values, journal entries, tables, balance sheets, or worked examples that the source did not provide or that are not directly and unambiguously derivable from numbers the source gives. If the source does not compute a result, do not invent one.
+- If a calculation or table would require you to supply numbers the source didn't state, omit it rather than guess.`;
+}
+
+function voiceRules(): string {
+  return `VOICE (strict):
+- Write in a declarative, instructional tone. Never use conversational asides, first-person hedging, or self-referential commentary about your own reasoning or uncertainty (e.g. no "Wait—this doesn't balance", "hmm", "let me reconsider", "as an AI", "it seems").
+- Never flag your own doubt inside the lesson text. If content is uncertain, leave it out; do not narrate the uncertainty to the student.
+- The page already carries an "AI-generated content may contain mistakes" disclaimer, so fidelity to source is the priority — not autonomous correctness-seeking.`;
+}
+
 function quantitativeTeachingRules(): string {
-  return `QUANTITATIVE WORKED EXAMPLES (critical — verify before writing):
-- **Verify arithmetic** in every balance-sheet, income-statement, or journal-entry walkthrough. Total assets must equal the sum of listed asset accounts; equity changes must match the transactions you describe.
-- If the **source transcript or slides contain a numeric slip** (e.g. professor says total assets are $420 but cash + inventory + PP&E sum to $320), **teach the mathematically correct figure** ($320). Do not copy a load-bearing error verbatim. You may note "(lecture said $420)" only when it helps — prefer silently using the correct number.
-- **Do not invent** new numeric examples unless every figure is internally consistent. For inventory cost $50, sold $80, profit $30: gross **margin** = profit ÷ revenue = 37.5%; **markup** on cost = profit ÷ cost = 60%. **Never** label markup as "gross profit margin".
-- **Journal entries**: step headings must name the **same debit/credit side** as the entry lines below (if you debit Sales, write "Debit Sales…", not "Credit Sales…").
-- When **net income** or net profit appears at different stages (e.g. before vs after depreciation), label each figure clearly so learners are not confused by two different "net" numbers.`;
+  return `QUANTITATIVE WORKED EXAMPLES (reproduce — do not compute or correct):
+- Reproduce every balance sheet, income statement, journal entry, and numeric walkthrough **exactly as the source presents it**, including the source's own totals and framing. Do NOT recompute, "verify", or correct the source's numbers — even one you believe is wrong.
+- Do NOT build a computed table, total, or balance the source never stated. If the source does not work a calculation through, do not work it through for the student.
+- Keep each source figure with the label the source gave it. If the source says "60% markup", do not relabel it "gross margin" (and vice versa); never re-derive a different value to make a label "correct".
+- Journal-entry step headings must name the **same debit/credit side** the source's entry lines use (if the source debits Sales, the heading reads "Debit Sales…"). Reproduce the source's pairing; do not reinterpret it.
+- Never narrate an arithmetic check, discrepancy, or fix inside the lesson (no "this doesn't balance", no inventing a reason like "we haven't recorded depreciation" to explain a gap). Present the source's figures as given, without commentary.`;
 }
 
 function dataFidelityRules(): string {
@@ -496,6 +510,10 @@ function dataFidelityRules(): string {
 - **NUMERIC RANGES**: always write ranges with an en-dash between endpoints: 1–4, 2–3, 10–18, 47–100. NEVER concatenate endpoints (wrong: 14단계, 23시간, 1018시간, 47100시간).
 
 ${factualAccuracyRules()}
+
+${sourceFidelityRules()}
+
+${voiceRules()}
 
 ${quantitativeTeachingRules()}`;
 }
