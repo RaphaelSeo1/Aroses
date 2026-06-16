@@ -40,6 +40,7 @@ import {
   normalizeIngestDisplayTitle,
 } from "@/lib/study-ingest/normalize-ingest-title";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
+import { auditModuleQuantitativeConsistency } from "@/lib/ai/course-quantitative-qa";
 import {
   DEFAULT_COURSE_OUTPUT_LANGUAGE,
   formatOutputLanguageGenerationBlock,
@@ -472,6 +473,15 @@ function factualAccuracyRules(): string {
 - Do **not** invent table columns or rows not present in the source. If the source table has **N** columns, output exactly **N** columns with the same headers — never add invented columns such as "임상적 의미" unless the PDF includes them.`;
 }
 
+function quantitativeTeachingRules(): string {
+  return `QUANTITATIVE WORKED EXAMPLES (critical — verify before writing):
+- **Verify arithmetic** in every balance-sheet, income-statement, or journal-entry walkthrough. Total assets must equal the sum of listed asset accounts; equity changes must match the transactions you describe.
+- If the **source transcript or slides contain a numeric slip** (e.g. professor says total assets are $420 but cash + inventory + PP&E sum to $320), **teach the mathematically correct figure** ($320). Do not copy a load-bearing error verbatim. You may note "(lecture said $420)" only when it helps — prefer silently using the correct number.
+- **Do not invent** new numeric examples unless every figure is internally consistent. For inventory cost $50, sold $80, profit $30: gross **margin** = profit ÷ revenue = 37.5%; **markup** on cost = profit ÷ cost = 60%. **Never** label markup as "gross profit margin".
+- **Journal entries**: step headings must name the **same debit/credit side** as the entry lines below (if you debit Sales, write "Debit Sales…", not "Credit Sales…").
+- When **net income** or net profit appears at different stages (e.g. before vs after depreciation), label each figure clearly so learners are not confused by two different "net" numbers.`;
+}
+
 function dataFidelityRules(): string {
   return `STRUCTURED DATA FIDELITY (critical — full tables, not summaries):
 - Every table, drug list, potency chart, side-effect matrix, seizure-type mapping, and numbered reference grid from the source MUST appear in lesson "content" as **complete GitHub-flavored markdown tables** (header row + \`|---|\` separator + **one row per source row**). Do NOT summarize tables into prose-only bullets.
@@ -483,7 +493,9 @@ function dataFidelityRules(): string {
 - Keep mixed-language terms in full, BOTH languages, exactly as written (e.g. "디아제팜(diazepam)").
 - **NUMERIC RANGES**: always write ranges with an en-dash between endpoints: 1–4, 2–3, 10–18, 47–100. NEVER concatenate endpoints (wrong: 14단계, 23시간, 1018시간, 47100시간).
 
-${factualAccuracyRules()}`;
+${factualAccuracyRules()}
+
+${quantitativeTeachingRules()}`;
 }
 
 function isRetryableApiError(err: unknown): boolean {
@@ -876,10 +888,11 @@ export async function generateCourseFromMaterial(
   } catch {
     try {
       const repaired = await repairPayloadJson(anthropic, rawText, profile);
-      const modules = await Promise.all(
-        repaired.modules.map((m) =>
-          ensureModuleQuizCount(m, profile, outputLanguage)
-        )
+      const modules = await finalizeGeneratedModules(
+        repaired.modules,
+        profile,
+        trimmed,
+        outputLanguage
       );
       return { ...repaired, modules };
     } catch (e) {
@@ -890,20 +903,22 @@ export async function generateCourseFromMaterial(
 
   try {
     const payload = parseCoursePayload(parsed);
-    const modules = await Promise.all(
-      payload.modules.map((m) =>
-        ensureModuleQuizCount(m, profile, outputLanguage)
-      )
+    const modules = await finalizeGeneratedModules(
+      payload.modules,
+      profile,
+      trimmed,
+      outputLanguage
     );
     return { ...payload, modules };
   } catch (e) {
     console.warn("[study-generation] Payload validation failed; repairing", e);
     try {
       const repaired = await repairPayloadJson(anthropic, rawText, profile);
-      const modules = await Promise.all(
-        repaired.modules.map((m) =>
-          ensureModuleQuizCount(m, profile, outputLanguage)
-        )
+      const modules = await finalizeGeneratedModules(
+        repaired.modules,
+        profile,
+        trimmed,
+        outputLanguage
       );
       return { ...repaired, modules };
     } catch {
@@ -1709,6 +1724,25 @@ function sanitizeGeneratedModuleLessons(mod: CourseModule): CourseModule {
   };
 }
 
+async function finalizeGeneratedModules(
+  modules: CourseModule[],
+  profile: CourseBuildProfile,
+  sourceExcerpt: string,
+  outputLanguage: CourseOutputLanguage
+): Promise<CourseModule[]> {
+  return Promise.all(
+    modules.map(async (mod) => {
+      const withQuiz = await ensureModuleQuizCount(mod, profile, outputLanguage);
+      const sanitized = sanitizeGeneratedModuleLessons(withQuiz);
+      return auditModuleQuantitativeConsistency(
+        sanitized,
+        sourceExcerpt,
+        outputLanguage
+      );
+    })
+  );
+}
+
 function applyPlannedModuleTitles(
   mod: CourseModule,
   outline: CourseOutlinePayload,
@@ -1798,8 +1832,12 @@ export async function generateCourseModuleFromMaterial(
       moduleOptions?.skipQuizBackfill === true
         ? withLessons
         : await ensureModuleQuizCount(withLessons, profile, outputLanguage);
-    return sanitizeGeneratedModuleLessons(
-      applyPlannedModuleTitles(withQuiz, outline, moduleIndex)
+    const titled = applyPlannedModuleTitles(withQuiz, outline, moduleIndex);
+    const sanitized = sanitizeGeneratedModuleLessons(titled);
+    return auditModuleQuantitativeConsistency(
+      sanitized,
+      trimmed,
+      outputLanguage
     );
   };
 
@@ -1852,8 +1890,12 @@ export async function generateCourseModuleFromMaterial(
             outputLanguage
           );
         }
-        return sanitizeGeneratedModuleLessons(
-          applyPlannedModuleTitles(repaired, outline, moduleIndex)
+        return auditModuleQuantitativeConsistency(
+          sanitizeGeneratedModuleLessons(
+            applyPlannedModuleTitles(repaired, outline, moduleIndex)
+          ),
+          trimmed,
+          outputLanguage
         );
       } catch (repairErr) {
         if (attempt < tokenBudgets.length - 1) continue;
@@ -1867,7 +1909,11 @@ export async function generateCourseModuleFromMaterial(
   if (moduleOptions?.skipQuizBackfill !== true) {
     repaired = await ensureModuleQuizCount(repaired, profile, outputLanguage);
   }
-  return sanitizeGeneratedModuleLessons(
-    applyPlannedModuleTitles(repaired, outline, moduleIndex)
+  return auditModuleQuantitativeConsistency(
+    sanitizeGeneratedModuleLessons(
+      applyPlannedModuleTitles(repaired, outline, moduleIndex)
+    ),
+    trimmed,
+    outputLanguage
   );
 }
