@@ -106,7 +106,11 @@ import { logActivity, pruneActivityEvents } from "@/lib/activity-log";
 import {
   resolveMaterialSectionLabel,
 } from "@/lib/study-material-display-name";
-import { isGenericIngestPlaceholder } from "@/lib/study-ingest/normalize-ingest-title";
+import {
+  isGenericIngestPlaceholder,
+  isWeakModuleTitle,
+  resolveCourseDisplayTitle,
+} from "@/lib/study-ingest/normalize-ingest-title";
 
 function normalizeStoragePaths(storagePath: string | string[]): string[] {
   return Array.isArray(storagePath) ? storagePath : [storagePath];
@@ -734,6 +738,19 @@ async function finalizePdfIngest(
   ).size;
 
   const modules = placed.modules;
+
+  // Upgrade a placeholder course title (e.g. "Part 1", "Section 1", "Course")
+  // using the real module titles the writer produced, then the upload name.
+  if (isWeakModuleTitle(outline.title) || isGenericIngestPlaceholder(outline.title)) {
+    const upgraded = resolveCourseDisplayTitle({
+      planTitle: null,
+      chunkTitles: modules.map((m) => m.title),
+      uploadFileNames: originalFileName ? [originalFileName] : [],
+    });
+    if (upgraded && !isWeakModuleTitle(upgraded)) {
+      outline = { ...outline, title: upgraded };
+    }
+  }
 
   const allLessons = modules.flatMap((m) => m.lessons);
   const lessonsWithVisualAssets = allLessons.filter(

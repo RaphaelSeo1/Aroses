@@ -37,6 +37,7 @@ import {
 import {
   isBadIngestTitle,
   isGenericIngestPlaceholder,
+  isWeakModuleTitle,
   normalizeIngestDisplayTitle,
   resolveCourseDisplayTitle,
 } from "@/lib/study-ingest/normalize-ingest-title";
@@ -1065,6 +1066,19 @@ function moduleInstruction(
   const stub = outline.modules[moduleIndex];
   const n = outline.modules.length;
   const titles = stub.lesson_titles.map((t) => JSON.stringify(t)).join(", ");
+  const moduleTitleIsPlaceholder = isWeakModuleTitle(stub.title);
+  const lessonTitlesArePlaceholders = stub.lesson_titles.every(
+    (t) => isBadIngestTitle(t) || /^(part|page|slide|section)\s+\d+$/i.test(t.trim())
+  );
+  const moduleTitleDirective = moduleTitleIsPlaceholder
+    ? `The provisional module title is ${JSON.stringify(stub.title)}, but that is a placeholder — **replace it** with a concise topic name (2–5 words, max 40 chars) drawn from this module's actual content. NEVER start with "Master", "Explore", "Understand", "Introduction to", "Overview of", "Learn", or any verb. Just name the topic (e.g. "The Accounting Equation", "Closing Entries").`
+    : `Module title **must be** ${JSON.stringify(stub.title)}.`;
+  const lessonTitleDirective = lessonTitlesArePlaceholders
+    ? `The planned lesson titles below are placeholders (e.g. "Part 1"). **Replace each** with a concise topic title (3–6 words, max 50 chars) from that lesson's content — keep the SAME number of lessons in the SAME order. No verb-led or "Introduction to …" phrasing.`
+    : `Each lesson's JSON "title" **must match** the planned title at the same index exactly (same wording, same order). If a planned title is a placeholder like "Part 1", replace just that one with a concise topic title from its content.`;
+  const wrapperTitle = moduleTitleIsPlaceholder
+    ? `"<concise topic title>"`
+    : JSON.stringify(stub.title);
   const styleRule =
     profile === "express"
       ? `STYLE (express): Focused lessons (**under ~500 words** each). Cover every planned topic from the source — do not skip subtopics assigned to this module.`
@@ -1082,12 +1096,12 @@ function moduleInstruction(
           ? `For EACH lesson: include 2–4 key_terms (term+definition) and 2 short real-world examples (strings).`
           : `For EACH lesson: include key_terms (term+definition) and examples (strings).`;
 
-  return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. Module title **must be** ${JSON.stringify(stub.title)}.
+  return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. ${moduleTitleDirective}
 ${generationContextSuffix(studyContext, outputLanguage)}
 Create one full module object: lessons (one per planned lesson title below, in order — same count as lesson_titles, each with rich "content", "key_terms", "examples"), plus quiz.
 
 Planned lesson titles for this module: ${titles}.
-Each lesson's JSON "title" **must match** the planned title at the same index exactly (same wording, same order).
+${lessonTitleDirective}
 
 ${sourceCoverageRules("module")}
 
@@ -1099,7 +1113,7 @@ ${dataFidelityRules()}
 ${assetManifestBlock?.trim() ? `${assetManifestBlock.trim()}\n\n` : ""}${moduleQuizRules(profile)}
 
 Return ONLY valid JSON in this exact wrapper (no markdown):
-{ "module": { "id": ${stub.id}, "title": ${JSON.stringify(stub.title)}, "lessons": [...], "quiz": [...] } }
+{ "module": { "id": ${stub.id}, "title": ${wrapperTitle}, "lessons": [...], "quiz": [...] } }
 
 Base all teaching strictly on the source material.
 
@@ -1751,6 +1765,39 @@ async function finalizeGeneratedModules(
   );
 }
 
+/** Prefer a real planned title; otherwise keep the LLM's generated title. */
+function pickModuleTitle(
+  plannedTitle: string | undefined,
+  generatedTitle: string | undefined,
+  moduleIndex: number
+): string {
+  const planned = normalizeIngestDisplayTitle(plannedTitle ?? "");
+  if (planned && !isWeakModuleTitle(planned)) return planned;
+  const generated = normalizeIngestDisplayTitle(generatedTitle ?? "");
+  if (generated && !isWeakModuleTitle(generated)) return generated;
+  return planned || generated || `Section ${moduleIndex + 1}`;
+}
+
+function isPlaceholderLessonTitle(title: string): boolean {
+  const t = title.trim();
+  if (!t) return true;
+  if (/^(part|page|slide|section)\s+\d+$/i.test(t)) return true;
+  return isBadIngestTitle(t);
+}
+
+/** Prefer a real planned lesson title; otherwise keep the LLM's generated one. */
+function pickLessonTitle(
+  plannedTitle: string | undefined,
+  generatedTitle: string | undefined,
+  lessonIndex: number
+): string {
+  const planned = normalizeIngestDisplayTitle(plannedTitle ?? "");
+  if (planned && !isPlaceholderLessonTitle(planned)) return planned;
+  const generated = normalizeIngestDisplayTitle(generatedTitle ?? "");
+  if (generated && !isPlaceholderLessonTitle(generated)) return generated;
+  return planned || generated || `Part ${lessonIndex + 1}`;
+}
+
 function applyPlannedModuleTitles(
   mod: CourseModule,
   outline: CourseOutlinePayload,
@@ -1760,12 +1807,10 @@ function applyPlannedModuleTitles(
   if (!stub) return mod;
   return {
     ...mod,
-    title: normalizeIngestDisplayTitle(stub.title),
+    title: pickModuleTitle(stub.title, mod.title, moduleIndex),
     lessons: mod.lessons.map((lesson, li) => ({
       ...lesson,
-      title:
-        stub.lesson_titles[li]?.trim() ||
-        normalizeIngestDisplayTitle(lesson.title),
+      title: pickLessonTitle(stub.lesson_titles[li], lesson.title, li),
     })),
   };
 }

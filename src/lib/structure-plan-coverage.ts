@@ -6,7 +6,6 @@ import type {
 import type { IngestChunkSummary } from "@/lib/study-ingest/chunking";
 import {
   deriveCourseTitleFromChunkTitles,
-  deriveTitleFromUploadFileName,
   disambiguateModuleTitle,
   isBadIngestTitle,
   isWeakModuleTitle,
@@ -383,11 +382,8 @@ export function normalizeStructurePlanTitles(
     }));
     let candidate = moduleTitleFromLessonTitles(lessons.map((l) => l.title));
     if (isWeakModuleTitle(candidate)) {
-      const uploadName = options?.uploadFileNames?.[modIndex];
-      const fromFile = uploadName
-        ? deriveTitleFromUploadFileName(uploadName)
-        : null;
-      candidate = fromFile ?? `Section ${modIndex + 1}`;
+      // Placeholder — the per-module writer renames it from the lesson content.
+      candidate = `Section ${modIndex + 1}`;
     }
     const title = disambiguateModuleTitle(
       candidate,

@@ -135,6 +135,10 @@ export function isBadIngestTitle(raw: string): boolean {
   // Incomplete spoken lists: "company's assets, liabilities,"
   if (/,\s*$/.test(t)) return true;
   if (/^[a-z][a-z'-]*['']s\s+/i.test(t) && /,/.test(t)) return true;
+  // Leftover file-extension fragments: "… (1).txt 2 mo…"
+  if (UPLOAD_FILE_EXT.test(t) || /\.(pdf|docx?|pptx?|txt|rtf|md)\b/i.test(t)) {
+    return true;
+  }
   // Multiple clauses in a label usually means spoken transcript, not a heading.
   if (t.includes(".") && t.split(/\.\s+/).length >= 2 && t.length < 72) return true;
   // Spoken lecture lines — lowercase prose, not headings.
@@ -147,6 +151,9 @@ export function isBadIngestTitle(raw: string): boolean {
   ) {
     return true;
   }
+  // Lowercase-first, multi-word labels are almost always transcript fragments
+  // ("transaction ultimately increased retained"), not real headings.
+  if (/^[a-z]/.test(t) && t.split(/\s+/).length >= 4) return true;
   return false;
 }
 
@@ -298,8 +305,14 @@ export function deriveCourseTitleFromChunkTitles(titles: string[]): string {
  * (e.g. "EN-INTRODUCTION TO THE INCOME STATEMENT (1).TXT" → "Introduction To The Income Statement").
  */
 export function deriveTitleFromUploadFileName(fileName: string): string | null {
-  const base = (fileName.split(/[/\\]/).pop() ?? fileName).trim();
+  let base = (fileName.split(/[/\\]/).pop() ?? fileName).trim();
   if (!base) return null;
+  // Multi-file uploads arrive as a combined label, e.g. "lecture.txt + 2 more"
+  // or "lecture.txt, notes.pdf" — keep only the first file's name.
+  base = base.replace(/\s*[+,]\s*\d+\s*more\b.*$/i, "").trim();
+  base = base.split(/\s*,\s*/)[0]!.trim();
+  // An extension may now sit mid-string ("lecture.txt + 2 more" → "lecture.txt").
+  base = base.replace(new RegExp(`${UPLOAD_FILE_EXT.source}.*$`, "i"), "").trim();
   let stem = base;
   let prev = "";
   while (stem !== prev) {
