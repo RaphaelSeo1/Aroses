@@ -387,7 +387,7 @@ export default async function StudyPage({ params, searchParams }: Props) {
           courseId={courseId}
           courseTitle={courseTitle}
         />
-        <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+        <main className="mx-auto max-w-3xl px-4 py-10 pb-[22rem] sm:px-6 lg:pb-10 lg:pr-[19rem]">
           <p className="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-400">
             Legacy study pack — upload again for the full course experience
           </p>

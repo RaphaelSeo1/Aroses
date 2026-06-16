@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
 import { AiStudyDisclaimer } from "@/components/AiStudyDisclaimer";
 import { confirmDialog } from "@/components/AppDialogs";
@@ -28,6 +29,7 @@ import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
 import { PracticeProgressPullTab } from "@/components/PracticeProgressPullTab";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import { VoiceTutorDock } from "@/components/VoiceTutorDock";
+import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import {
   AROSES_COURSE_REFINED_EVENT,
   type ArosesCourseRefinedDetail,
@@ -194,6 +196,10 @@ export function CoursePlayer({
   const [personalBankEpoch, setPersonalBankEpoch] = useState(0);
   const [focusItemCount, setFocusItemCount] = useState(0);
   const [refineApplyFlash, setRefineApplyFlash] = useState(false);
+  // On narrow screens (< lg) the voice dock collapses to a compact trigger so
+  // it can't cover the lesson text; tapping it opens a dismissible bottom sheet.
+  // On lg+ it always shows, sitting in the reserved right rail.
+  const [voiceDockOpen, setVoiceDockOpen] = useState(false);
   const refineClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
@@ -930,7 +936,18 @@ export function CoursePlayer({
           </div>
         </div>
       ) : null}
-    <div className="flex min-h-[calc(100vh-3.5rem)] flex-col lg:flex-row">
+    <div
+      className="flex min-h-[calc(100vh-3.5rem)] flex-col lg:flex-row"
+      style={
+        {
+          // Width the floating voice/refine dock occupies, plus breathing room.
+          // The lesson column reserves this as right padding on lg+ so the dock
+          // can never overlap the content at any zoom level or monitor size.
+          "--rose-dock-w": "min(16rem, calc(100vw - 2rem))",
+          "--rose-dock-rail": "calc(var(--rose-dock-w) + 3rem)",
+        } as CSSProperties
+      }
+    >
       <aside className="border-b border-zinc-200/90 bg-gradient-to-b from-zinc-50 to-white lg:w-[22rem] lg:shrink-0 lg:border-r lg:border-b-0 dark:border-zinc-800 dark:from-zinc-950 dark:to-zinc-950">
         <div className="sticky top-16 space-y-6 p-6 lg:top-0 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto">
           <div>
@@ -1341,7 +1358,7 @@ export function CoursePlayer({
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1 bg-white dark:bg-zinc-950">
+      <div className="min-w-0 flex-1 bg-white dark:bg-zinc-950 lg:pr-[var(--rose-dock-rail)]">
         <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6">
           <AiStudyDisclaimer className="mb-3" />
           {mode === "lessons" ? (
@@ -1424,7 +1441,7 @@ export function CoursePlayer({
                 </div>
               ) : null}
 
-              <div className="mt-6 space-y-10 pb-[max(22rem,calc(18rem+env(safe-area-inset-bottom)))]">
+              <div className="mt-6 space-y-10 pb-[max(13rem,calc(11rem+env(safe-area-inset-bottom)))] lg:pb-16">
                 {activeModule.lessons.map((lesson, li) => (
                   <div
                     key={li}
@@ -1790,20 +1807,61 @@ export function CoursePlayer({
         </div>
       </div>
     </div>
-    <div className="fixed bottom-6 right-6 z-[100] flex flex-col items-end gap-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+    <div className="pointer-events-none fixed bottom-6 right-6 z-[100] flex flex-col items-end gap-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] [&>*]:pointer-events-auto">
       {courseManageEnabled ? (
         <CourseRefineDrawer materialId={materialId} docked />
       ) : null}
-      <VoiceTutorDock
-        key={`${materialId}-${activeModuleId}`}
-        materialId={materialId}
-        moduleId={activeModuleId}
-        quizOpen={quizOpen}
-        courseId={courseId}
-        studyHrefBase={studyBase}
-        learnMode={learnMode}
-        docked
-      />
+
+      {/* Compact trigger — narrow screens only, when the voice dock is closed. */}
+      {!voiceDockOpen ? (
+        <button
+          type="button"
+          onClick={() => setVoiceDockOpen(true)}
+          className="inline-flex items-center gap-2 rounded-full border-2 border-zinc-200 bg-white px-4 py-3 text-sm font-semibold text-zinc-900 shadow-xl transition hover:border-brand hover:text-brand lg:hidden dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+          aria-expanded={false}
+        >
+          <span
+            className="inline-block h-2.5 w-2.5 rounded-full bg-rose-500"
+            aria-hidden
+          />
+          {`Ask ${AI_ASSISTANT_NAME}`}
+        </button>
+      ) : null}
+
+      {/*
+        Single VoiceTutorDock instance, repositioned responsively:
+        - lg+: inline in this cluster, which sits inside the reserved right rail.
+        - < lg, open: dismissible bottom sheet that overlays (user-invoked).
+        - < lg, closed: display:none (kept mounted to preserve mic state).
+      */}
+      <div
+        className={
+          voiceDockOpen
+            ? "fixed inset-x-3 bottom-3 z-[110] flex max-h-[80dvh] flex-col items-center gap-3 overflow-y-auto rounded-2xl border border-zinc-200/90 bg-white/95 p-3 shadow-2xl backdrop-blur lg:static lg:inset-auto lg:z-auto lg:max-h-none lg:w-auto lg:items-end lg:overflow-visible lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:backdrop-blur-none dark:border-zinc-700 dark:bg-zinc-900/95"
+            : "hidden lg:flex lg:flex-col lg:items-end lg:gap-3"
+        }
+      >
+        {voiceDockOpen ? (
+          <button
+            type="button"
+            onClick={() => setVoiceDockOpen(false)}
+            className="self-end rounded-lg border border-zinc-200 bg-white px-3 py-1 text-xs font-semibold text-zinc-600 shadow-sm hover:bg-zinc-50 lg:hidden dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            Close
+          </button>
+        ) : null}
+        <VoiceTutorDock
+          key={`${materialId}-${activeModuleId}`}
+          materialId={materialId}
+          moduleId={activeModuleId}
+          quizOpen={quizOpen}
+          courseId={courseId}
+          studyHrefBase={studyBase}
+          learnMode={learnMode}
+          docked
+        />
+      </div>
+
       <StudyChatDrawer
         materialId={materialId}
         moduleId={activeModuleId}
