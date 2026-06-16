@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FreePracticePanel } from "@/components/FreePracticePanel";
 import { ReviewSettingsPanel } from "@/components/ReviewSettingsPanel";
 import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import { useSrsDueCounts, type SrsDueByMaterial } from "@/lib/srs-due";
 
 /**
@@ -28,6 +30,7 @@ import { useSrsDueCounts, type SrsDueByMaterial } from "@/lib/srs-due";
 type ReviewKind = "both" | "module" | "personal";
 
 export function ReviewDashboardClient() {
+  const t = useT();
   const { counts, loading, refresh } = useSrsDueCounts(undefined, {
     enabled: true,
   });
@@ -129,14 +132,16 @@ export function ReviewDashboardClient() {
           }}
           className="inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
-          ← Back to Review dashboard
+          {t.review.backToDashboard}
         </button>
         <SrsReviewLauncher
           scope={sessionMode.scope}
           materialIds={sessionMode.materialIds}
           cram={sessionMode.cram}
           sessionKey={`global-${sessionMode.materialIds.slice(0, 4).join(",")}-${sessionMode.scope}${sessionMode.cram ? "-cram" : ""}`}
-          heading={sessionMode.cram ? "Free practice" : "Global review"}
+          heading={
+            sessionMode.cram ? t.review.freePractice : t.review.globalReview
+          }
           showCourseBadge
           onExit={() => {
             setSessionMode(null);
@@ -167,9 +172,9 @@ export function ReviewDashboardClient() {
     return (
       <section className="space-y-4">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Review
+          {t.review.title}
         </h1>
-        <p className="text-zinc-600 dark:text-zinc-400">Loading your decks…</p>
+        <p className="text-zinc-600 dark:text-zinc-400">{t.review.loadingDecks}</p>
       </section>
     );
   }
@@ -180,19 +185,18 @@ export function ReviewDashboardClient() {
       <section className="space-y-6">
         <header>
           <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Review
+            {t.review.title}
           </h1>
           <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-            Spaced repetition across every course you&apos;re studying.
+            {t.review.subtitle}
           </p>
         </header>
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-8 text-center dark:border-emerald-900/60 dark:bg-emerald-950/30">
           <h2 className="text-xl font-semibold text-emerald-900 dark:text-emerald-100">
-            You&apos;re all caught up, great work.
+            {t.review.allCaughtUpGreat}
           </h2>
           <p className="mt-2 text-sm text-emerald-800/90 dark:text-emerald-200/80">
-            Nothing is due right now. Come back tomorrow, start a new course,
-            or run a free practice on a course you&apos;ve already mastered.
+            {t.review.allCaughtUpEmpty}
           </p>
           <div className="mt-5 flex flex-wrap justify-center gap-3">
             <button
@@ -200,7 +204,7 @@ export function ReviewDashboardClient() {
               onClick={() => startPractice()}
               className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >
-              Practice anyway
+              {t.review.practiceAnyway}
               <span aria-hidden>→</span>
             </button>
             <button
@@ -208,19 +212,19 @@ export function ReviewDashboardClient() {
               onClick={() => setChoosingPractice(true)}
               className="inline-flex items-center justify-center rounded-full border border-emerald-300 bg-white px-5 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:bg-zinc-950 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
             >
-              Choose courses
+              {t.review.chooseCourses}
             </button>
             <a
               href="/dashboard/courses/new"
               className="inline-flex items-center justify-center rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover"
             >
-              Start a new course
+              {t.review.startNewCourse}
             </a>
             <a
               href="/"
               className="inline-flex items-center justify-center rounded-full border border-zinc-300 bg-white px-5 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
             >
-              Back to home
+              {t.review.backToHome}
             </a>
           </div>
         </div>
@@ -233,24 +237,26 @@ export function ReviewDashboardClient() {
     <section className="space-y-8">
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Review
+          {t.review.title}
         </h1>
-        <p className="text-zinc-600 dark:text-zinc-400">
-          Spaced repetition across every course you&apos;re studying.
-        </p>
+        <p className="text-zinc-600 dark:text-zinc-400">{t.review.subtitle}</p>
       </header>
 
       {/* Quick Review (Review All) ---------------------------------- */}
       <div className="rounded-2xl border border-zinc-200 bg-gradient-to-br from-brand-blush/40 to-white p-6 shadow-sm dark:border-zinc-800 dark:from-brand-blush/8 dark:to-zinc-950 sm:p-8">
         <p className="text-xs font-semibold uppercase tracking-wide text-brand dark:text-brand-soft">
-          Quick review
+          {t.review.quickReview}
         </p>
         <h2 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-3xl">
-          You have {totalDue} card{totalDue === 1 ? "" : "s"} due today
+          {totalDue === 1
+            ? t.review.dueTodayCardsOne
+            : tf(t.review.dueTodayCards, { count: totalDue })}
         </h2>
         <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          Mixed review across all your courses — module bank ({moduleTotal})
-          and focus cards ({personalTotal}).
+          {tf(t.review.dueTodayMixed, {
+            module: moduleTotal,
+            personal: personalTotal,
+          })}
         </p>
         <div className="mt-5 flex flex-wrap items-center gap-3">
           <button
@@ -259,7 +265,7 @@ export function ReviewDashboardClient() {
             disabled={totalDue === 0}
             className="inline-flex items-center justify-center gap-2 rounded-full bg-zinc-900 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-zinc-900/15 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
           >
-            Review all
+            {t.review.reviewAll}
             <span className="rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-bold tabular-nums dark:bg-zinc-900/20">
               {totalDue}
             </span>
@@ -267,22 +273,22 @@ export function ReviewDashboardClient() {
           <button
             type="button"
             onClick={() => startPractice()}
-            title="Practice every card across all your courses, ignoring the review schedule."
+            title={t.review.practiceAllTitle}
             className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-300 bg-white px-6 py-3 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
           >
-            Practice all
+            {t.review.practiceAll}
           </button>
           <button
             type="button"
             onClick={() => setChoosingPractice(true)}
-            title="Pick which courses to free-practice, ignoring the review schedule."
+            title={t.review.choosePracticeTitle}
             className="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-300 bg-white px-6 py-3 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
           >
-            Choose courses
+            {t.review.chooseCourses}
           </button>
         </div>
         <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
-          Practice all ignores the schedule and serves every card — great for cramming. Choose courses lets you pick which ones.
+          {t.review.practiceAllHintLong}
         </p>
       </div>
 
@@ -290,7 +296,7 @@ export function ReviewDashboardClient() {
       <div className="space-y-3">
         <div className="flex items-baseline justify-between">
           <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-            Or choose specific courses
+            {t.review.orChooseCourses}
           </h3>
           <button
             type="button"
@@ -301,14 +307,14 @@ export function ReviewDashboardClient() {
             }
             className="text-xs font-medium text-brand hover:text-brand-hover dark:text-brand-soft"
           >
-            Select all
+            {t.review.selectAll}
           </button>
         </div>
 
         <ul className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
           {materials.length === 0 ? (
             <li className="px-4 py-5 text-sm text-zinc-500 dark:text-zinc-400">
-              No courses yet — start one and your due cards will show up here.
+              {t.review.noCoursesYet}
             </li>
           ) : (
             materials.map((m, idx) => (
@@ -328,14 +334,14 @@ export function ReviewDashboardClient() {
       {/* Type filter ----------------------------------------------- */}
       <div className="space-y-3">
         <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-          Include
+          {t.review.includeLabel}
         </h3>
         <div className="inline-flex rounded-full border border-zinc-200 bg-white p-1 text-sm dark:border-zinc-800 dark:bg-zinc-950">
           {(
             [
-              { id: "both", label: "Both" },
-              { id: "module", label: "Module only" },
-              { id: "personal", label: "Focus only" },
+              { id: "both", label: t.review.includeBoth },
+              { id: "module", label: t.review.includeModule },
+              { id: "personal", label: t.review.includeFocus },
             ] as { id: ReviewKind; label: string }[]
           ).map((opt) => (
             <button
@@ -365,11 +371,14 @@ export function ReviewDashboardClient() {
           disabled={visibleDueForSelection === 0 || selectedMaterials.length === 0}
           className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-red-600/25 hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
         >
-          Start review
+          {t.review.startReview}
           <span className="opacity-90">
-            ({visibleDueForSelection} card{visibleDueForSelection === 1 ? "" : "s"}{" "}
-            from {selectedMaterials.length} course
-            {selectedMaterials.length === 1 ? "" : "s"})
+            {visibleDueForSelection === 1 && selectedMaterials.length === 1
+              ? t.review.startReviewDetailOne
+              : tf(t.review.startReviewDetail, {
+                  count: visibleDueForSelection,
+                  courses: selectedMaterials.length,
+                })}
           </span>
         </button>
       </div>
@@ -390,6 +399,7 @@ function CourseRow({
   onToggle: () => void;
   isLast: boolean;
 }) {
+  const t = useT();
   return (
     <li
       className={`flex items-center gap-3 px-4 py-3 sm:px-5 ${
@@ -422,12 +432,12 @@ function CourseRow({
       <div className="flex shrink-0 items-center gap-2 text-xs tabular-nums">
         {disabled ? (
           <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-            All caught up
+            {t.review.allCaughtUpPill}
           </span>
         ) : (
           <>
-            <Pill label="Module" value={material.module} tone="brand" />
-            <Pill label="Focus" value={material.personal} tone="zinc" />
+            <Pill label={t.review.moduleLabel} value={material.module} tone="brand" />
+            <Pill label={t.review.focusLabel} value={material.personal} tone="zinc" />
             <span className="ml-1 font-semibold text-zinc-900 dark:text-zinc-100">
               {material.total}
             </span>

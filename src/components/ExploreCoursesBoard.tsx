@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { formatPrice } from "@/lib/marketplace/listing-access";
 import { useMemo, useState } from "react";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 import type { ExploreListingCard } from "@/lib/marketplace/types";
 
@@ -51,23 +52,6 @@ function applyFilter(
   }
 }
 
-const SIDEBAR_ALL: {
-  id: ExploreFilter;
-  label: string;
-  hint: string;
-}[] = [
-  { id: "all", label: "All courses", hint: "Free and for sale" },
-  { id: "free", label: "Free", hint: "Community-shared courses" },
-  { id: "for_sale", label: "For sale", hint: "Student-created listings" },
-  { id: "featured", label: "Featured", hint: "Recent spotlight" },
-];
-
-const SIDEBAR_FREE_ONLY: typeof SIDEBAR_ALL = [
-  { id: "all", label: "All courses", hint: "Community-shared courses" },
-  { id: "free", label: "Free", hint: "Open to everyone signed in" },
-  { id: "featured", label: "Featured", hint: "Recent spotlight" },
-];
-
 export function ExploreCoursesBoard({
   courses,
   currentUserId,
@@ -77,7 +61,22 @@ export function ExploreCoursesBoard({
   currentUserId?: string;
   marketplaceEnabled?: boolean;
 }) {
-  const sidebar = marketplaceEnabled ? SIDEBAR_ALL : SIDEBAR_FREE_ONLY;
+  const t = useT();
+  const sidebar = useMemo(() => {
+    if (marketplaceEnabled) {
+      return [
+        { id: "all" as const, label: t.explore.filterAll, hint: t.explore.filterAllHintMarket },
+        { id: "free" as const, label: t.explore.filterFree, hint: t.explore.filterFreeHintMarket },
+        { id: "for_sale" as const, label: t.explore.filterForSale, hint: t.explore.filterForSaleHint },
+        { id: "featured" as const, label: t.explore.filterFeatured, hint: t.explore.filterFeaturedHint },
+      ];
+    }
+    return [
+      { id: "all" as const, label: t.explore.filterAll, hint: t.explore.filterAllHintFree },
+      { id: "free" as const, label: t.explore.filterFree, hint: t.explore.filterFreeHintFree },
+      { id: "featured" as const, label: t.explore.filterFeatured, hint: t.explore.filterFeaturedHint },
+    ];
+  }, [marketplaceEnabled, t.explore]);
   const [filter, setFilter] = useState<ExploreFilter>("all");
 
   const visible = useMemo(
@@ -90,7 +89,7 @@ export function ExploreCoursesBoard({
       <div className="order-2 min-w-0 flex-1 lg:order-1">
         {visible.length === 0 ? (
           <p className="rounded-2xl border border-zinc-200/90 bg-white/80 px-5 py-8 text-center text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950/80 dark:text-zinc-400">
-            No courses match this view yet.
+            {t.explore.noMatch}
           </p>
         ) : (
           <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -118,7 +117,7 @@ export function ExploreCoursesBoard({
                           </span>
                         ) : c.listingKind === "free" ? (
                           <span className="shrink-0 rounded-full bg-emerald-600/90 px-2 py-0.5 text-[10px] font-bold uppercase text-white">
-                            Free
+                            {t.common.free}
                           </span>
                         ) : null}
                       </div>
@@ -128,7 +127,7 @@ export function ExploreCoursesBoard({
                         </p>
                       ) : (
                         <p className="mt-2 flex-1 text-xs italic text-zinc-600 dark:text-zinc-500">
-                          No description
+                          {t.explore.noDescriptionShort}
                         </p>
                       )}
                       <p className="mt-3 text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
@@ -136,7 +135,7 @@ export function ExploreCoursesBoard({
                           ? `@${c.seller_username}`
                           : c.seller_display_name
                             ? c.seller_display_name
-                            : "Community creator"}
+                            : t.explore.communityCreator}
                         {" · "}
                         {new Date(c.created_at).toLocaleDateString(undefined, {
                           month: "short",
@@ -156,7 +155,7 @@ export function ExploreCoursesBoard({
       <aside className="order-1 w-full shrink-0 lg:order-2 lg:sticky lg:top-24 lg:w-72 lg:self-start">
         <div className="rounded-2xl border border-zinc-200/90 bg-white/90 p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-            Browse
+            {t.explore.browse}
           </p>
           <nav className="mt-3 flex flex-col gap-1" aria-label="Explore filters">
             {sidebar.map((item) => {

@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import { useSrsDueCounts } from "@/lib/srs-due";
 
 /**
@@ -19,6 +21,7 @@ function todayStamp(): string {
 }
 
 export function ReviewDueBanner() {
+  const t = useT();
   const { counts } = useSrsDueCounts(undefined);
   const [dismissedToday, setDismissedToday] = useState(false);
 
@@ -35,6 +38,7 @@ export function ReviewDueBanner() {
   if (!counts || counts.total === 0 || dismissedToday) return null;
 
   const total = counts.total;
+  const courseCount = counts.byMaterial.length;
 
   return (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-border/70 bg-brand-blush/70 px-4 py-3 text-sm shadow-sm dark:border-brand-border/40 dark:bg-brand-blush/10">
@@ -58,13 +62,21 @@ export function ReviewDueBanner() {
         </span>
         <div className="min-w-0">
           <p className="font-medium text-brand-ink dark:text-brand-soft">
-            {total} card{total === 1 ? "" : "s"} due for review today
+            {total === 1
+              ? t.review.cardsDueTodayOne
+              : tf(t.review.cardsDueToday, { count: total })}
           </p>
           <p className="text-xs text-brand-ink/70 dark:text-brand-soft/70">
-            Mixed across {counts.byMaterial.length} course
-            {counts.byMaterial.length === 1 ? "" : "s"} — module bank (
-            {counts.module}) and focus (
-            {counts.personal}).
+            {courseCount === 1
+              ? tf(t.review.bannerMixedAcrossOne, {
+                  module: counts.module,
+                  personal: counts.personal,
+                })
+              : tf(t.review.bannerMixedAcross, {
+                  courses: courseCount,
+                  module: counts.module,
+                  personal: counts.personal,
+                })}
           </p>
         </div>
       </div>
@@ -73,11 +85,11 @@ export function ReviewDueBanner() {
           href="/dashboard/review"
           className="inline-flex items-center justify-center rounded-full bg-brand px-4 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover"
         >
-          Open review →
+          {t.review.openReview}
         </Link>
         <button
           type="button"
-          aria-label="Dismiss until tomorrow"
+          aria-label={t.review.dismissUntilTomorrow}
           onClick={() => {
             try {
               window.localStorage.setItem(STORAGE_KEY, todayStamp());
@@ -87,7 +99,7 @@ export function ReviewDueBanner() {
             setDismissedToday(true);
           }}
           className="inline-flex h-7 w-7 items-center justify-center rounded-full text-brand-ink/60 hover:bg-brand-blush hover:text-brand-ink dark:text-brand-soft/60 dark:hover:bg-brand-blush/20 dark:hover:text-brand-soft"
-          title="Dismiss until tomorrow"
+          title={t.review.dismissUntilTomorrow}
         >
           ×
         </button>

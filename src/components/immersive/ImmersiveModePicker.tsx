@@ -5,6 +5,8 @@ import { AnimatedWaveform } from "@/components/immersive/AnimatedWaveform";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { ImmersiveShell } from "@/components/immersive/ImmersiveShell";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
+import { tf } from "@/lib/i18n/format";
+import { useT } from "@/lib/i18n/LocaleProvider";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
 
 /**
@@ -35,6 +37,7 @@ export function ImmersiveModePicker({
   onChoose: (mode: "mentored" | "free") => void;
   onExit: () => void;
 }) {
+  const t = useT();
   // No barge-in on the welcome screen — the student hasn't opted into mic
   // monitoring yet, and we don't want to trip the browser permission
   // dialog the moment they land on /learn.
@@ -44,7 +47,7 @@ export function ImmersiveModePicker({
   const [classifying, setClassifying] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
 
-  const welcome = `Hi — welcome to ${courseTitle}. Ready to dive in? You can either pick Mentored Learning and I'll walk you through it together, or choose Free Exploration and go at your own pace.`;
+  const welcome = tf(t.immersive.welcomeSpeech, { title: courseTitle });
 
   useEffect(() => {
     if (spokeRef.current) return;
@@ -96,9 +99,7 @@ export function ImmersiveModePicker({
         onChoose(mode);
         return;
       }
-      setHint(
-        `I heard "${text}". Tap one of the cards, or say "mentored" or "free exploration".`
-      );
+      setHint(tf(t.tutor.voiceHint, { text }));
     } catch {
       setClassifying(false);
       // Last-ditch fallback: same keyword regex as before.
@@ -111,11 +112,9 @@ export function ImmersiveModePicker({
         onChoose("mentored");
         return;
       }
-      setHint(
-        `I heard "${text}". Tap one of the cards, or say "mentored" or "free exploration".`
-      );
+      setHint(tf(t.tutor.voiceHint, { text }));
     }
-  }, [onChoose, voice]);
+  }, [onChoose, voice, t.tutor.voiceHint]);
 
   // Cancel speaking before navigating away.
   const choose = useCallback(
@@ -139,7 +138,7 @@ export function ImmersiveModePicker({
           onClick={handleExit}
           className="rounded-full border border-white/50 bg-white/40 px-4 py-1.5 text-xs font-medium text-zinc-700 shadow-sm backdrop-blur-md transition hover:bg-white/60"
         >
-          Exit
+          {t.tutor.exit}
         </button>
       }
       bottomBar={
@@ -173,12 +172,12 @@ export function ImmersiveModePicker({
               }
             >
               {voice.state.transcribing
-                ? "Listening…"
+                ? t.tutor.listening
                 : voice.state.recording
-                  ? "● Release"
+                  ? t.tutor.release
                   : classifying
-                    ? "Thinking…"
-                    : "🎤 Say your choice"}
+                    ? t.tutor.thinking
+                    : t.tutor.sayChoice}
             </button>
             {hint ? (
               <span className="max-w-xs text-xs text-zinc-600">{hint}</span>
@@ -189,7 +188,7 @@ export function ImmersiveModePicker({
     >
       <div className="flex flex-col items-center text-center">
         <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-zinc-500">
-          Welcome
+          {t.tutor.welcome}
         </p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl">
           {courseTitle}
@@ -203,22 +202,28 @@ export function ImmersiveModePicker({
 
         <div className="mt-8 grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
           <ChoiceCard
-            label="Mentored Learning"
-            description="I'll guide you through the course, ask questions, and slow down where you need."
-            badge={defaultMode === "mentored" ? "Your usual pick" : null}
+            label={t.tutor.mentoredLearning}
+            description={t.tutor.mentoredDesc}
+            badge={defaultMode === "mentored" ? t.tutor.usualPick : null}
             recommended
+            recommendedLabel={t.tutor.recommended}
+            selfPacedLabel={t.tutor.selfPaced}
+            chooseLabel={t.tutor.choose}
             onClick={() => choose("mentored")}
           />
           <ChoiceCard
-            label="Free Exploration"
-            description="Read on your own. Highlights, notes, and the voice tutor are still one tap away."
-            badge={defaultMode === "free" ? "Your usual pick" : null}
+            label={t.tutor.freeExploration}
+            description={t.tutor.freeDesc}
+            badge={defaultMode === "free" ? t.tutor.usualPick : null}
+            recommendedLabel={t.tutor.recommended}
+            selfPacedLabel={t.tutor.selfPaced}
+            chooseLabel={t.tutor.choose}
             onClick={() => choose("free")}
           />
         </div>
 
         <p className="mt-6 text-xs text-zinc-500">
-          You can switch modes anytime — your progress saves either way.
+          {t.tutor.switchModesHint}
         </p>
       </div>
     </ImmersiveShell>
@@ -230,12 +235,18 @@ function ChoiceCard({
   description,
   recommended,
   badge,
+  recommendedLabel,
+  selfPacedLabel,
+  chooseLabel,
   onClick,
 }: {
   label: string;
   description: string;
   recommended?: boolean;
   badge?: string | null;
+  recommendedLabel: string;
+  selfPacedLabel: string;
+  chooseLabel: string;
   onClick: () => void;
 }) {
   return (
@@ -255,14 +266,14 @@ function ChoiceCard({
         </span>
       ) : null}
       <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
-        {recommended ? "Recommended" : "Self-paced"}
+        {recommended ? recommendedLabel : selfPacedLabel}
       </span>
       <span className="text-xl font-semibold text-zinc-900">{label}</span>
       <span className="text-sm leading-relaxed text-zinc-700">
         {description}
       </span>
       <span className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-zinc-700">
-        Choose
+        {chooseLabel}
         <span aria-hidden className="transition group-hover:translate-x-1">
           →
         </span>

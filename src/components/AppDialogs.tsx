@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
  * On-brand replacement for the browser's native window.confirm / alert / prompt
@@ -151,6 +152,7 @@ function DialogShell({
   request: DialogRequest;
   onDone: () => void;
 }) {
+  const t = useT();
   const [value, setValue] = useState(
     request.kind === "prompt" ? (request.defaultValue ?? "") : ""
   );
@@ -191,12 +193,11 @@ function DialogShell({
   const showCancel = request.kind !== "alert";
   const confirmLabel =
     request.kind === "alert"
-      ? (request.confirmLabel ?? "OK")
-      : (request.confirmLabel ?? (request.kind === "confirm" ? "Confirm" : "Save"));
+      ? (request.confirmLabel ?? t.common.ok)
+      : (request.confirmLabel ??
+        (request.kind === "confirm" ? t.common.confirm : t.common.saveLabel));
   const cancelLabel =
-    request.kind === "alert"
-      ? ""
-      : (request.cancelLabel ?? "Cancel");
+    request.kind === "alert" ? "" : (request.cancelLabel ?? t.common.cancel);
 
   return (
     <div
@@ -209,7 +210,7 @@ function DialogShell({
         type="button"
         className="absolute inset-0 bg-black/45 backdrop-blur-[1px]"
         onClick={() => finish("cancel")}
-        aria-label="Dismiss"
+        aria-label={t.common.dismiss}
       />
       <div className={cardClass}>
         <h2 className={titleClass}>{request.title}</h2>

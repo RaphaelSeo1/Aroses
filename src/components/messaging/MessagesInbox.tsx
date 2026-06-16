@@ -17,6 +17,7 @@ import {
   prefetchMessages,
 } from "@/lib/messaging/thread-cache";
 import { createClient } from "@/lib/supabase/client";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 function formatWhen(iso: string | null): string {
   if (!iso) return "";
@@ -45,6 +46,7 @@ function MessagesInboxInner({
   compact = false,
   activeConversationId = null,
 }: Props) {
+  const t = useT();
   const router = useRouter();
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,10 +63,10 @@ function MessagesInboxInner({
         setError(null);
         loadedOnce.current = true;
       } else {
-        setError(typeof body.error === "string" ? body.error : "Could not load inbox.");
+        setError(typeof body.error === "string" ? body.error : t.messages.couldNotLoadInbox);
       }
     } catch {
-      setError("Network error.");
+      setError(t.messages.networkError);
     }
     setLoading(false);
   }, []);
@@ -114,7 +116,7 @@ function MessagesInboxInner({
 
   if (compact) {
     if (loading && !loadedOnce.current) {
-      return <p className="px-2 py-4 text-center text-xs text-zinc-400">Loading…</p>;
+      return <p className="px-2 py-4 text-center text-xs text-zinc-400">{t.common.loading}</p>;
     }
     if (error) {
       return <p className="px-2 py-2 text-xs text-red-600">{error}</p>;
@@ -122,9 +124,9 @@ function MessagesInboxInner({
     if (conversations.length === 0) {
       return (
         <p className="px-2 py-4 text-center text-xs text-zinc-500">
-          No chats yet.{" "}
+          {t.messages.noChatsYet}{" "}
           <Link href={friendsHref} className="text-brand hover:underline">
-            Add friends
+            {t.messages.addFriends}
           </Link>
         </p>
       );
@@ -181,7 +183,7 @@ function MessagesInboxInner({
                     </span>
                   </div>
                   <p className="mt-0.5 truncate text-xs text-zinc-500">
-                    {c.lastMessagePreview ?? "No messages yet"}
+                    {c.lastMessagePreview ?? t.messages.noMessages}
                   </p>
                 </div>
                 {c.unreadCount > 0 ? (
@@ -200,12 +202,12 @@ function MessagesInboxInner({
   return (
     <div>
       <div className="mb-4 flex items-center justify-between gap-3">
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">Messages with friends.</p>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">{t.messages.messagesWithFriends}</p>
         <Link
           href={friendsHref}
           className="shrink-0 rounded-full border border-zinc-200 px-4 py-2 text-xs font-semibold dark:border-zinc-700"
         >
-          Friends
+          {t.messages.friends}
         </Link>
       </div>
 
@@ -214,15 +216,15 @@ function MessagesInboxInner({
       ) : null}
 
       {loading ? (
-        <p className="py-8 text-center text-sm text-zinc-400">Loading…</p>
+        <p className="py-8 text-center text-sm text-zinc-400">{t.common.loading}</p>
       ) : conversations.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-zinc-300 px-6 py-10 text-center dark:border-zinc-700">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">No conversations yet.</p>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">{t.messages.noConversationsYet}</p>
           <Link
             href={friendsHref}
             className="mt-3 inline-block text-sm font-medium text-brand hover:underline"
           >
-            Add friends to start messaging →
+            {t.messages.addFriendsToMessage}
           </Link>
         </div>
       ) : (
@@ -269,7 +271,7 @@ function MessagesInboxInner({
                       </p>
                     ) : null}
                     <p className="mt-1 truncate text-sm text-zinc-500 dark:text-zinc-400">
-                      {c.lastMessagePreview ?? "No messages yet"}
+                      {c.lastMessagePreview ?? t.messages.noMessages}
                     </p>
                   </div>
                   {c.unreadCount > 0 ? (

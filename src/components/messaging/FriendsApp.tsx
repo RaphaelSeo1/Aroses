@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { friendDisplayName } from "@/lib/messaging/display-name";
 import type { FriendshipListItem } from "@/lib/messaging/types";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 async function openDirectMessage(userId: string): Promise<{ conversationId: string | null; error: string | null }> {
   const res = await fetch("/api/conversations", {
@@ -30,11 +31,15 @@ function FriendRow({
   onMessage,
   onRemove,
   busy,
+  messageLabel,
+  removeLabel,
 }: {
   item: FriendshipListItem;
   onMessage?: () => void;
   onRemove?: () => void;
   busy?: boolean;
+  messageLabel: string;
+  removeLabel: string;
 }) {
   return (
     <li className="flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-200/90 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
@@ -57,7 +62,7 @@ function FriendRow({
             onClick={onMessage}
             className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
-            Message
+            {messageLabel}
           </button>
         ) : null}
         {onRemove ? (
@@ -67,7 +72,7 @@ function FriendRow({
             onClick={onRemove}
             className="rounded-full px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
           >
-            Remove
+            {removeLabel}
           </button>
         ) : null}
       </div>
@@ -82,6 +87,7 @@ export function FriendsApp({
   onOpenConversation?: (conversationId: string) => void;
   embedded?: boolean;
 }) {
+  const t = useT();
   const router = useRouter();
   const [friends, setFriends] = useState<FriendshipListItem[]>([]);
   const [incoming, setIncoming] = useState<FriendshipListItem[]>([]);
@@ -110,10 +116,10 @@ export function FriendsApp({
         setIncoming(body.incoming ?? []);
         setOutgoing(body.outgoing ?? []);
       } else {
-        setError(typeof body.error === "string" ? body.error : "Could not load friends.");
+        setError(typeof body.error === "string" ? body.error : t.messages.couldNotLoadFriends);
       }
     } catch {
-      setError("Network error.");
+      setError(t.messages.networkError);
     }
     setLoading(false);
   }, []);
@@ -163,14 +169,14 @@ export function FriendsApp({
         if (Array.isArray(body.suggestions) && body.suggestions.length > 0) {
           setSuggestions(body.suggestions);
         }
-        setError(typeof body.error === "string" ? body.error : "Could not send request.");
+        setError(typeof body.error === "string" ? body.error : t.messages.couldNotSendRequest);
       } else {
         setUsername("");
         setSuggestions([]);
         await load();
       }
     } catch {
-      setError("Network error.");
+      setError(t.messages.networkError);
     }
     setBusyId(null);
   }
@@ -185,7 +191,7 @@ export function FriendsApp({
       });
       await load();
     } catch {
-      setError("Network error.");
+      setError(t.messages.networkError);
     }
     setBusyId(null);
   }
@@ -210,7 +216,7 @@ export function FriendsApp({
       if (onOpenConversation) onOpenConversation(conversationId);
       else router.push(`/messages/${conversationId}`);
     } else {
-      setError(openError ?? "Could not open conversation.");
+      setError(openError ?? t.messages.couldNotOpenConversation);
     }
   }
 
@@ -325,7 +331,7 @@ export function FriendsApp({
                     onClick={() => void respond(item.id, "decline")}
                     className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium dark:border-zinc-700"
                   >
-                    Decline
+                    {t.messages.decline}
                   </button>
                   <button
                     type="button"
@@ -333,7 +339,7 @@ export function FriendsApp({
                     onClick={() => void respond(item.id, "accept")}
                     className="rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-white"
                   >
-                    Accept
+                    {t.messages.accept}
                   </button>
                 </div>
               </li>
@@ -423,6 +429,8 @@ export function FriendsApp({
                 busy={busyId === item.id || busyId === item.friend.id}
                 onMessage={() => void messageFriend(item.friend.id)}
                 onRemove={() => void removeFriend(item.id)}
+                messageLabel={t.messages.message}
+                removeLabel={t.messages.remove}
               />
             ))}
           </ul>

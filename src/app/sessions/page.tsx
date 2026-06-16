@@ -4,6 +4,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { createClient } from "@/lib/supabase/server";
 import { SessionsList } from "@/components/tutor-session/SessionsList";
+import { getT } from "@/lib/i18n/server";
 import type {
   TutorSessionModeTag,
   TutorSessionRecapStatus,
@@ -19,6 +20,7 @@ import type {
  * is enough for the MVP.
  */
 export default async function SessionsLibraryPage() {
+  const t = await getT();
   const supabase = await createClient();
   const {
     data: { user },
@@ -65,23 +67,20 @@ export default async function SessionsLibraryPage() {
           <div className="flex items-end justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
-                Tutor Sessions
+                {t.tutor.sessionsLibraryEyebrow}
               </p>
               <h1 className="mt-1 text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl">
-                Your sessions
+                {t.tutor.sessionsTitle}
               </h1>
               <p className="mt-2 text-sm text-zinc-600">
-                Everything you&apos;ve worked on with Rose. Use{" "}
-                <span className="font-medium text-violet-800">Manage</span> to
-                select sessions, delete them, or combine recaps into one study
-                guide.
+                {t.tutor.sessionsLibraryHint}
               </p>
             </div>
             <Link
               href="/tutor-session"
               className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow transition hover:from-violet-700 hover:to-fuchsia-700"
             >
-              + New session
+              {t.tutor.newSession}
             </Link>
           </div>
 

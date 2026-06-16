@@ -152,7 +152,8 @@ export function LanguageSwitcher({ className }: { className?: string }) {
 }
 
 /**
- * Compact inline EN / 한국어 toggle for tight surfaces (avatar dropdown menu).
+ * Compact language picker for the avatar dropdown — label on top, full-width
+ * segmented control below so "English" / "한국어" never clip or wrap vertically.
  */
 export function LanguageToggleRow() {
   const t = useT();
@@ -174,12 +175,18 @@ export function LanguageToggleRow() {
   );
 
   return (
-    <div className="flex items-center gap-2.5 px-3.5 py-2.5">
-      <GlobeIcon className="h-4 w-4 shrink-0 opacity-70 text-zinc-800 dark:text-zinc-100" />
-      <span className="flex-1 text-sm font-medium text-zinc-800 dark:text-zinc-100">
-        {t.common.language}
-      </span>
-      <div className="inline-flex overflow-hidden rounded-full border border-zinc-200 dark:border-zinc-700">
+    <div className="px-3.5 py-2.5">
+      <div className="mb-2 flex items-center gap-2">
+        <GlobeIcon className="h-4 w-4 shrink-0 opacity-70 text-zinc-800 dark:text-zinc-100" />
+        <span className="text-sm font-medium text-zinc-800 dark:text-zinc-100">
+          {t.common.language}
+        </span>
+      </div>
+      <div
+        className="grid w-full grid-cols-2 overflow-hidden rounded-full border border-zinc-200 dark:border-zinc-700"
+        role="group"
+        aria-label={t.common.language}
+      >
         {UI_LOCALE_OPTIONS.map((option) => {
           const active = option.value === locale;
           return (
@@ -189,7 +196,7 @@ export function LanguageToggleRow() {
               onClick={() => void pick(option.value)}
               disabled={pending}
               aria-pressed={active}
-              className={`px-2.5 py-1 text-xs font-semibold transition disabled:opacity-60 ${
+              className={`whitespace-nowrap px-2 py-1.5 text-center text-xs font-semibold [word-break:keep-all] transition disabled:opacity-60 ${
                 active
                   ? "bg-brand text-white"
                   : "bg-transparent text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"

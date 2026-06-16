@@ -1,12 +1,23 @@
 import type { UiLocale } from "@/lib/i18n/config";
 import { auth } from "./auth";
+import { billing } from "./billing";
 import { common } from "./common";
+import { courseBuild } from "./courseBuild";
 import { dashboard } from "./dashboard";
+import { explore } from "./explore";
+import { forum } from "./forum";
+import { help } from "./help";
+import { immersive } from "./immersive";
 import { landing } from "./landing";
+import { legal } from "./legal";
+import { messages } from "./messages";
 import { nav } from "./nav";
 import { onboarding } from "./onboarding";
+import { progress } from "./progress";
+import { review } from "./review";
 import { settings } from "./settings";
 import { study } from "./study";
+import { tutor } from "./tutor";
 
 /**
  * Assemble the full UI dictionary for one locale. Every namespace file keeps
@@ -24,6 +35,17 @@ export function getDictionary(locale: UiLocale) {
     dashboard: dashboard[locale],
     settings: settings[locale],
     study: study[locale],
+    explore: explore[locale],
+    review: review[locale],
+    billing: billing[locale],
+    tutor: tutor[locale],
+    immersive: immersive[locale],
+    courseBuild: courseBuild[locale],
+    forum: forum[locale],
+    messages: messages[locale],
+    legal: legal[locale],
+    progress: progress[locale],
+    help: help[locale],
   };
 }
 

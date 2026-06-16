@@ -8,6 +8,7 @@ import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { BuyCourseButton } from "@/components/marketplace/BuyCourseButton";
 import { ExplorePurchaseNotice } from "@/components/marketplace/ExplorePurchaseNotice";
 import { APP_NAME } from "@/lib/brand";
+import { getT } from "@/lib/i18n/server";
 import { exploreOutlineFromRpcPayload } from "@/lib/explore-course-outline";
 import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
 import {
@@ -37,6 +38,7 @@ export async function generateMetadata({ params }: Props) {
 }
 
 export default async function ExploreCoursePage({ params }: Props) {
+  const t = await getT();
   const { courseId } = await params;
   if (!UUID_RE.test(courseId)) notFound();
 
@@ -80,7 +82,7 @@ export default async function ExploreCoursePage({ params }: Props) {
   const sellerLabel =
     sellerProfile?.username != null
       ? `@${sellerProfile.username}`
-      : sellerProfile?.display_name ?? "Creator";
+      : sellerProfile?.display_name ?? t.explore.creator;
 
   const adminHubHref = adminHubHrefForSessionUser(user);
 
@@ -92,10 +94,10 @@ export default async function ExploreCoursePage({ params }: Props) {
             <HeaderNavLoggedInServer adminHubHref={adminHubHref} />
           ) : (
             <>
-              <HeaderNavLink href="/explore">Explore</HeaderNavLink>
-              <HeaderNavLink href="/login">Log in</HeaderNavLink>
+              <HeaderNavLink href="/explore">{t.nav.explore}</HeaderNavLink>
+              <HeaderNavLink href="/login">{t.nav.login}</HeaderNavLink>
               <HeaderNavLink href="/signup" variant="primary">
-                Sign up
+                {t.nav.signup}
               </HeaderNavLink>
             </>
           )
@@ -107,13 +109,13 @@ export default async function ExploreCoursePage({ params }: Props) {
             href="/explore"
             className="inline-flex items-center gap-1 text-sm font-semibold text-brand transition hover:gap-2 dark:text-brand-soft"
           >
-            <span aria-hidden>←</span> All listings
+            <span aria-hidden>←</span> {t.explore.allListings}
           </Link>
 
           <div className="relative mt-8 overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/80 p-6 shadow-xl shadow-zinc-900/[0.06] ring-1 ring-white/70 backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-950/75 dark:shadow-black/25 dark:ring-zinc-600/40 sm:p-8">
             <div className="relative">
               <p className="text-xs font-bold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
-                {isForSale ? "Course for sale" : "Community course"}
+                {isForSale ? t.explore.courseForSale : t.explore.communityCourse}
               </p>
               <h1 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-4xl">
                 {course.title}
@@ -128,7 +130,7 @@ export default async function ExploreCoursePage({ params }: Props) {
                   </span>
                 ) : (
                   <span className="inline-flex items-center rounded-full bg-emerald-600/90 px-2.5 py-0.5 font-bold text-white">
-                    Free
+                    {t.common.free}
                   </span>
                 )}
               </p>
@@ -138,7 +140,7 @@ export default async function ExploreCoursePage({ params }: Props) {
                 </p>
               ) : (
                 <p className="mt-6 border-t border-zinc-100 pt-6 text-sm italic text-zinc-500 dark:border-zinc-800">
-                  No description provided.
+                  {t.explore.noDescription}
                 </p>
               )}
             </div>
@@ -161,14 +163,14 @@ export default async function ExploreCoursePage({ params }: Props) {
                   href={studyHref}
                   className="inline-flex w-full items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/30 ring-2 ring-white/25 transition hover:bg-brand-hover sm:w-auto dark:bg-brand dark:hover:bg-brand-soft"
                 >
-                  {isOwner ? "Open as creator" : "Start learning"}
+                  {isOwner ? t.explore.openAsCreator : t.explore.startLearning}
                 </Link>
                 <p className="max-w-md text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
                   {isOwner
-                    ? "You own this course — full access from your dashboard or here."
+                    ? t.explore.ownerAccess
                     : hasPurchased
-                      ? "You purchased this course — full lesson access is unlocked."
-                      : "Opens Mentored Learning with full lesson access."}
+                      ? t.explore.purchasedAccess
+                      : t.explore.mentoredAccess}
                 </p>
               </>
             )}
@@ -176,7 +178,7 @@ export default async function ExploreCoursePage({ params }: Props) {
 
           {outlineError ? (
             <p className="mt-8 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-              Course outline requires migration{" "}
+              {t.explore.outlineMigration}{" "}
               <code className="rounded bg-amber-100/80 px-1.5 py-0.5 text-xs dark:bg-amber-900/60">
                 009_explore_course_outline.sql
               </code>
@@ -192,7 +194,7 @@ export default async function ExploreCoursePage({ params }: Props) {
         <div className="mx-auto max-w-3xl px-4 pb-10 sm:px-6 sm:pb-14">
           {isOwner ? (
             <p className="mt-10 rounded-xl border border-brand-border bg-brand-blush/80 px-4 py-3 text-sm text-brand-ink dark:border-brand-border/40 dark:bg-brand-blush/8 dark:text-brand-blush">
-              This is your listing. Manage it from your course dashboard.
+              {t.explore.ownerListingManage}
             </p>
           ) : null}
         </div>

@@ -19,6 +19,9 @@ import {
   type PollPdfIngestJobSnapshot,
 } from "@/lib/pdf-ingest-client";
 import { tryOutlinePreviewFromStreamTail } from "@/lib/pdf-ingest-preview";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
+import type { Dictionary } from "@/locales";
 import type { CoursePayload } from "@/types/course";
 
 type RowState = {
@@ -65,6 +68,7 @@ function canStopPdfBuild(
 }
 
 function tabStatusLine(
+  t: Dictionary["courseBuild"],
   terminal: PollOutcome | null | undefined,
   preview: CoursePayload | null | undefined,
   snap: PollPdfIngestJobSnapshot | undefined,
@@ -72,33 +76,27 @@ function tabStatusLine(
   streamTail?: string | null
 ): { line: string; detail: string } {
   if (terminal?.error) {
-    return { line: "Failed", detail: terminal.error };
+    return { line: t.failed, detail: terminal.error };
   }
   if (terminal?.materialId) {
-    return { line: "Done", detail: "Open in study editor from the course list." };
+    return { line: t.done, detail: t.doneDetail };
   }
   if (snap?.ingestPhase === "enriching_sources") {
     return {
-      line: "Extracting tables & figures…",
-      detail:
-        "Outline is on screen. Pulling tables and page images from your PDF before lesson bodies are written.",
+      line: t.enriching,
+      detail: t.enrichingDetail,
     };
   }
-  // IMPORTANT: check module progress before `preview`. The merged preview
-  // exists as soon as the outline is saved, but modules can still be writing
-  // for minutes — tabs must not all jump to "Live preview" during that time.
   if (modulesStillBuilding(snap)) {
     return {
-      line: "Writing modules…",
-      detail:
-        "Outline is on screen; lesson bodies are still being generated for this PDF.",
+      line: t.writingModules,
+      detail: t.writingModulesDetail,
     };
   }
   if (preview) {
     return {
-      line: "Live preview",
-      detail:
-        "Outline is visible; lessons fill in as each module finishes (order can differ from other PDFs in this batch).",
+      line: t.livePreview,
+      detail: t.livePreviewDetail,
     };
   }
   if (
@@ -107,59 +105,52 @@ function tabStatusLine(
     streamTail.length > 48
   ) {
     return {
-      line: "Live preview",
-      detail:
-        "Outline JSON is streaming from the model — the layout appears as soon as we can parse it.",
+      line: t.livePreview,
+      detail: t.livePreviewStream,
     };
   }
   if (snap?.ingestPhase === "planning_outline") {
     return {
-      line: "Planning outline…",
-      detail:
-        "Step 2/2: the model is drafting the course outline (JSON). Large slide decks can take several minutes.",
+      line: t.planningOutline,
+      detail: t.planningOutlineDetail,
     };
   }
   if (snap?.ingestPhase === "reviewing_transcript") {
     return {
-      line: "Review transcript",
-      detail:
-        "Fix transcription errors below, then continue to course generation.",
+      line: t.reviewTranscript,
+      detail: t.reviewTranscriptDetail,
     };
   }
   if (snap?.ingestPhase === "transcribing") {
     return {
-      line: "Transcribing…",
-      detail:
-        "Speech-to-text can take several minutes for long recordings.",
+      line: t.transcribing,
+      detail: t.transcribingDetail,
     };
   }
   if (snap?.ingestPhase === "reading_pdf") {
     return {
-      line: "Processing files…",
-      detail:
-        "Step 1/2: extracting text from documents, slides, images, or transcribing media.",
+      line: t.processingFiles,
+      detail: t.processingFilesDetail,
     };
   }
   if (snap?.status === "pending") {
     return {
-      line: "Queued…",
-      detail:
-        "This build starts shortly after upload. In large batches the first few PDFs start a few seconds apart (capped), then the rest kick in together so the tab strip does not stay idle too long.",
+      line: t.queued,
+      detail: t.queuedDetail,
     };
   }
   if (phase === "boot") {
-    return { line: "Starting…", detail: "Loading file names and job state." };
+    return { line: t.starting, detail: t.startingDetail };
   }
   if (snap) {
     return {
-      line: "Extracting…",
-      detail:
-        "Step 1/2: reading every page of your PDF (long files can take a minute or two).",
+      line: t.extracting,
+      detail: t.extractingDetail,
     };
   }
   return {
-    line: "Syncing…",
-    detail: "Waiting for the first status update from the server.",
+    line: t.sync,
+    detail: t.waitingUpdate,
   };
 }
 
@@ -265,6 +256,7 @@ export function CourseBuildTheater({
   courseTitle: string;
   initialDueCounts?: SrsDueCounts;
 }) {
+  const t = useT();
   const router = useRouter();
   const pdfBuild = useActivePdfBuildOptional();
   const sessionIdRef = useRef(
@@ -351,7 +343,7 @@ export function CourseBuildTheater({
     }
     setRows((prev) => {
       const base = prev[id] ?? {
-        label: "PDF",
+        label: t.courseBuild.pdfLabel,
         line: "",
         bar: "indeterminate" as const,
       };
@@ -364,7 +356,7 @@ export function CourseBuildTheater({
         },
       };
     });
-  }, [pdfBuild]);
+  }, [pdfBuild, t.courseBuild]);
 
   const onPreview = useCallback((id: string, course: CoursePayload | null) => {
     setPreviewByJob((prev) => ({ ...prev, [id]: course }));
@@ -395,7 +387,11 @@ export function CourseBuildTheater({
     // Immediately update the status card for this job so it doesn't stay
     // stale while other jobs in the batch are still running.
     setRows((prev) => {
-      const base = prev[id] ?? { label: "PDF", line: "", bar: "indeterminate" as const };
+      const base = prev[id] ?? {
+        label: t.courseBuild.pdfLabel,
+        line: "",
+        bar: "indeterminate" as const,
+      };
       return {
         ...prev,
         [id]: {
@@ -405,13 +401,13 @@ export function CourseBuildTheater({
           line: result.error
             ? result.error
             : result.materialId
-              ? "Ready — open study mode below."
+              ? t.courseBuild.readyOpen
               : base.line,
           bar: result.materialId ? 100 : base.bar,
         },
       };
     });
-  }, [pdfBuild]);
+  }, [pdfBuild, t.courseBuild]);
 
   useEffect(() => {
     if (!pdfBuild || !sessionIdRef.current) return;
@@ -473,9 +469,9 @@ export function CourseBuildTheater({
               typeof j.originalFileName === "string" &&
               j.originalFileName.trim()
                 ? j.originalFileName.trim()
-                : "PDF";
+                : t.courseBuild.pdfLabel;
           } catch {
-            if (!ac.signal.aborted) labelMap[id] = "PDF";
+            if (!ac.signal.aborted) labelMap[id] = t.courseBuild.pdfLabel;
           }
         })
       );
@@ -486,8 +482,8 @@ export function CourseBuildTheater({
           jobIds.map((id) => [
             id,
             {
-              label: labelMap[id] ?? "PDF",
-              line: "Starting…",
+              label: labelMap[id] ?? t.courseBuild.pdfLabel,
+              line: t.courseBuild.starting,
               bar: "indeterminate" as const,
             },
           ])
@@ -501,7 +497,7 @@ export function CourseBuildTheater({
     return () => {
       ac.abort();
     };
-  }, [jobIds]);
+  }, [jobIds, t.courseBuild]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("Notification" in window)) return;
@@ -522,14 +518,14 @@ export function CourseBuildTheater({
     if (!firstMaterial) return;
 
     try {
-      new Notification("Your course is ready", {
-        body: "Open Aroses to start studying.",
+      new Notification(t.courseBuild.notificationReady, {
+        body: t.courseBuild.notificationBody,
         tag: `course-build-${courseId}`,
       });
     } catch {
       /* ignore */
     }
-  }, [phase, summary, jobIds, terminalByJob, courseId]);
+  }, [phase, summary, jobIds, terminalByJob, courseId, t.courseBuild]);
 
   useEffect(() => {
     if (jobIds.length === 0) return;
@@ -547,7 +543,7 @@ export function CourseBuildTheater({
         const next = { ...prev };
         for (const { id, polled } of outcomes) {
           const base = next[id] ?? {
-            label: "PDF",
+            label: t.courseBuild.pdfLabel,
             line: "",
             bar: null as PdfBuildProgressUI["bar"],
           };
@@ -558,7 +554,7 @@ export function CourseBuildTheater({
             line: polled.error
               ? polled.error
               : polled.materialId
-                ? "Ready — open study mode below."
+                ? t.courseBuild.readyOpen
                 : base.line,
             bar: polled.materialId ? 100 : base.bar,
           };
@@ -621,7 +617,7 @@ export function CourseBuildTheater({
       });
       const raw = await r.text();
       if (!r.ok) {
-        let msg = "Could not stop this build.";
+        let msg = t.courseBuild.couldNotStop;
         try {
           const j = JSON.parse(raw) as { error?: string };
           if (typeof j.error === "string" && j.error.trim()) msg = j.error.trim();
@@ -631,7 +627,7 @@ export function CourseBuildTheater({
         setCancelErr(msg);
         return;
       }
-      const outcome: PollOutcome = { error: "Build stopped." };
+      const outcome: PollOutcome = { error: t.courseBuild.buildStopped };
       setPollStoppedByJob((p) => ({ ...p, [id]: true }));
       if (pdfBuild && sessionIdRef.current) {
         pdfBuild.updateJobTerminal(sessionIdRef.current, id, outcome);
@@ -640,8 +636,12 @@ export function CourseBuildTheater({
       setRows((p) => ({
         ...p,
         [id]: {
-          ...(p[id] ?? { label: "PDF", line: "", bar: "indeterminate" as const }),
-          line: "Build stopped.",
+          ...(p[id] ?? {
+            label: t.courseBuild.pdfLabel,
+            line: "",
+            bar: "indeterminate" as const,
+          }),
+          line: t.courseBuild.buildStopped,
           bar: null,
           error: outcome.error,
           materialId: undefined,
@@ -666,7 +666,7 @@ export function CourseBuildTheater({
       });
       const raw = await r.text();
       if (!r.ok) {
-        let msg = "Could not restart this build.";
+        let msg = t.courseBuild.couldNotRestart;
         try {
           const j = JSON.parse(raw) as { error?: string };
           if (typeof j.error === "string" && j.error.trim()) msg = j.error.trim();
@@ -688,8 +688,8 @@ export function CourseBuildTheater({
       const hintedTotal = previewByJob[id]?.modules?.length ?? 0;
       const restartLine =
         hintedTotal > 0
-          ? `Build restarted — next: module 1 of ${hintedTotal} (this count is from your last preview; the new outline can change it).`
-          : "Build restarted — starting again from step 1 (extract → outline → modules)…";
+          ? tf(t.courseBuild.buildRestartedWithModules, { total: hintedTotal })
+          : t.courseBuild.buildRestarted;
       setSnapshotByJob((p) => {
         const next = { ...p };
         delete next[id];
@@ -711,7 +711,11 @@ export function CourseBuildTheater({
       setRows((p) => ({
         ...p,
         [id]: {
-          ...(p[id] ?? { label: "PDF", line: "", bar: "indeterminate" as const }),
+          ...(p[id] ?? {
+            label: t.courseBuild.pdfLabel,
+            line: "",
+            bar: "indeterminate" as const,
+          }),
           line: restartLine,
           bar: "indeterminate",
           error: undefined,
@@ -767,7 +771,7 @@ export function CourseBuildTheater({
         <div className="border-b border-zinc-200 bg-zinc-50/90 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900/40 sm:px-6">
           <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-zinc-600 dark:text-zinc-400">
-              You can leave this page — building continues in the background.
+              {t.courseBuild.leavePageHint}
             </p>
             <button
               type="button"
@@ -776,7 +780,7 @@ export function CourseBuildTheater({
               }}
               className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
             >
-              Browse while building
+              {t.courseBuild.browseWhileBuilding}
             </button>
           </div>
         </div>
@@ -788,15 +792,12 @@ export function CourseBuildTheater({
           {jobIds.length > 1 ? (
             <div className="mb-6 space-y-2 border-b border-zinc-100 pb-4 dark:border-zinc-800">
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Tabs stay in the order you uploaded. Each PDF finishes on its own
-                schedule, so previews can appear in a different order than the list
-                — use the status under each name to see which step each file is on.
-                All jobs poll in parallel so previews can land as soon as the server has
-                anything to show.
+                {t.courseBuild.tabsHint}
               </p>
-              <div className="flex flex-wrap gap-2" role="tablist" aria-label="PDF builds">
+              <div className="flex flex-wrap gap-2" role="tablist" aria-label={t.courseBuild.pdfBuildsAria}>
                 {jobIds.map((id, idx) => {
                   const { line, detail } = tabStatusLine(
+                    t.courseBuild,
                     terminalByJob[id],
                     previewByJob[id] ?? null,
                     snapshotByJob[id],
@@ -833,7 +834,7 @@ export function CourseBuildTheater({
                           {idx + 1}/{jobIds.length}
                         </span>{" "}
                         <span className="font-semibold">
-                          {rows[id]?.label ?? "PDF"}
+                          {rows[id]?.label ?? t.courseBuild.pdfLabel}
                         </span>
                       </span>
                       <span
@@ -887,7 +888,7 @@ export function CourseBuildTheater({
                         onClick={() => void cancelActiveJob()}
                         className="rounded-full border border-red-200 bg-white px-4 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/60 dark:bg-zinc-900 dark:text-red-300 dark:hover:bg-red-950/40"
                       >
-                        {cancelBusy ? "Stopping…" : "Stop"}
+                        {cancelBusy ? t.courseBuild.stopping : t.courseBuild.stop}
                       </button>
                     ) : null}
                     {canOfferRetry ? (
@@ -897,7 +898,7 @@ export function CourseBuildTheater({
                         onClick={() => void retryActiveJob()}
                         className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-xs font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
                       >
-                        {retryBusy ? "Restarting…" : "Restart this PDF"}
+                        {retryBusy ? t.courseBuild.restarting : t.courseBuild.restartPdf}
                       </button>
                     ) : null}
                   </div>
@@ -915,8 +916,9 @@ export function CourseBuildTheater({
               ) : null}
               {restartAckByJob[activeJob] ? (
                 <p className="mt-2 text-xs text-emerald-800 dark:text-emerald-300/90">
-                  Restart confirmed at{" "}
-                  {formatIsoLocal(restartAckByJob[activeJob]!)}.
+                  {tf(t.courseBuild.restartConfirmed, {
+                    time: formatIsoLocal(restartAckByJob[activeJob]!),
+                  })}
                 </p>
               ) : null}
               {row ? (
@@ -974,12 +976,10 @@ export function CourseBuildTheater({
               <div className="flex min-h-[40vh] flex-col gap-6 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-6 py-12 dark:border-zinc-800 dark:bg-zinc-900/40">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-                    Building your course
+                    {t.courseBuild.buildingCourseEyebrow}
                   </p>
                   <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
-                    Outline JSON is arriving from the model. The full layout appears
-                    here as soon as we can parse it — nothing is wrong while you see
-                    this skeleton.
+                    {t.courseBuild.outlineStreamingBody}
                   </p>
                 </div>
                 <div className="space-y-3">
@@ -996,23 +996,13 @@ export function CourseBuildTheater({
             <div className="flex min-h-[22vh] flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/50 px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-900/20">
               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 {jobIds.length > 1
-                  ? `No live layout yet for “${row?.label ?? "this PDF"}”.`
-                  : "Blank page — your course will fill in here as soon as the outline is ready."}
+                  ? tf(t.courseBuild.noLayoutYet, {
+                      label: row?.label ?? t.courseBuild.pdfLabel,
+                    })
+                  : t.courseBuild.blankPage}
               </p>
               <p className="mt-2 max-w-md text-xs text-zinc-500 dark:text-zinc-400">
-                {jobIds.length > 1 ? (
-                  <>
-                    Extraction and outline work complete in parallel across your
-                    uploads, so another tab can show a preview while this file is
-                    still reading pages. The status line above matches this PDF only;
-                    switch tabs to watch others.
-                  </>
-                ) : (
-                  <>
-                    Titles, lessons, key terms, and examples appear in the same layout
-                    as study mode, updated as each part finishes generating.
-                  </>
-                )}
+                {jobIds.length > 1 ? t.courseBuild.parallelHint : t.courseBuild.titlesFillIn}
               </p>
             </div>
             )
@@ -1033,7 +1023,7 @@ export function CourseBuildTheater({
                 <section className="space-y-6">
                   <header>
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-                      Module {mod.id}
+                      {tf(t.courseBuild.moduleN, { id: mod.id })}
                     </p>
                     <h2 className="mt-1 text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                       <TypewriterText
@@ -1075,11 +1065,10 @@ export function CourseBuildTheater({
                 href={`/dashboard/courses/${courseId}/study?material=${encodeURIComponent(firstMaterialId)}`}
                 className="inline-flex rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
               >
-                Open in editor
+                {t.courseBuild.openInEditor}
               </Link>
               <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                Opening the study editor in a few seconds (you can use the button
-                now)…
+                {t.courseBuild.openingEditorSoon}
               </span>
             </div>
           ) : null}
@@ -1091,7 +1080,9 @@ export function CourseBuildTheater({
                 onClick={() => goToCourseWorkspace()}
                 className="inline-flex rounded-full border border-zinc-300 bg-white px-5 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
               >
-                {summary === "partial" ? "Dismiss & go to course" : "Dismiss"}
+                {summary === "partial"
+                  ? t.courseBuild.dismissAndGo
+                  : t.courseBuild.dismiss}
               </button>
             </div>
           ) : null}

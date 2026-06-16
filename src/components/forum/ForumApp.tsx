@@ -7,10 +7,12 @@ import { ForumVoteButton } from "@/components/forum/ForumVoteButton";
 import { RichContent } from "@/components/forum/RichContent";
 import { RichTextEditor } from "@/components/forum/RichTextEditor";
 import { forumTimeAgo } from "@/lib/forum/relative-time";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
+import type { Dictionary } from "@/locales";
 import {
   FORUM_CATEGORIES,
   FORUM_CATEGORY_BADGE,
-  FORUM_CATEGORY_LABELS,
   type ForumCategory,
   type ForumComment,
   type ForumPost,
@@ -28,6 +30,22 @@ type DetailState = {
 const loginHref = (next: string) =>
   `/login?redirect=${encodeURIComponent(next)}`;
 
+function forumCategoryLabel(
+  t: Dictionary["forum"],
+  category: ForumCategory
+): string {
+  switch (category) {
+    case "course_request":
+      return t.categoryCourseRequest;
+    case "feedback":
+      return t.categoryFeedback;
+    case "discussion":
+      return t.categoryDiscussion;
+    case "bug":
+      return t.categoryBug;
+  }
+}
+
 export function ForumApp({
   initialPosts,
   votedPostIds,
@@ -39,6 +57,7 @@ export function ForumApp({
   currentUserId: string | null;
   isAdmin?: boolean;
 }) {
+  const t = useT();
   const isAuthed = Boolean(currentUserId);
   const votedSet = useMemo(() => new Set(votedPostIds), [votedPostIds]);
 
@@ -166,6 +185,7 @@ export function ForumApp({
       <aside className="hidden w-56 shrink-0 flex-col gap-4 overflow-y-auto border-r border-zinc-200 bg-zinc-50/60 p-3 lg:flex dark:border-zinc-800 dark:bg-zinc-900/40">
         <NewThreadButton
           isAuthed={isAuthed}
+          label={t.forum.newThread}
           onClick={() => {
             setComposing(true);
             setSelectedId(null);
@@ -173,12 +193,12 @@ export function ForumApp({
         />
         <div>
           <p className="px-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-            Categories
+            {t.forum.categories}
           </p>
           <nav className="mt-1 space-y-0.5">
             <CategoryButton
               active={filter === "all"}
-              label="All threads"
+              label={t.forum.allThreads}
               count={counts.all}
               onClick={() => setFilter("all")}
             />
@@ -186,7 +206,7 @@ export function ForumApp({
               <CategoryButton
                 key={c.id}
                 active={filter === c.id}
-                label={c.label}
+                label={forumCategoryLabel(t.forum, c.id)}
                 count={counts[c.id] ?? 0}
                 onClick={() => setFilter(c.id)}
               />
@@ -219,7 +239,7 @@ export function ForumApp({
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search threads"
+              placeholder={t.forum.searchThreads}
               className="w-full rounded-lg border border-zinc-200 bg-white py-2 pl-9 pr-3 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
             />
           </div>
@@ -229,13 +249,14 @@ export function ForumApp({
             <NewThreadButton
               compact
               isAuthed={isAuthed}
+              label={t.forum.newThread}
               onClick={() => {
                 setComposing(true);
                 setSelectedId(null);
               }}
             />
             <Chip active={filter === "all"} onClick={() => setFilter("all")}>
-              All
+              {t.forum.all}
             </Chip>
             {FORUM_CATEGORIES.map((c) => (
               <Chip
@@ -243,14 +264,16 @@ export function ForumApp({
                 active={filter === c.id}
                 onClick={() => setFilter(c.id)}
               >
-                {c.label}
+                {forumCategoryLabel(t.forum, c.id)}
               </Chip>
             ))}
           </div>
 
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-500">
-              {visible.length} thread{visible.length === 1 ? "" : "s"}
+              {visible.length === 1
+                ? t.forum.threadCountOne
+                : tf(t.forum.threadCount, { count: visible.length })}
             </span>
             <div className="inline-flex rounded-full border border-zinc-200 p-0.5 text-[11px] font-semibold dark:border-zinc-700">
               <button
@@ -262,7 +285,7 @@ export function ForumApp({
                     : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
                 }`}
               >
-                New
+                {t.forum.sortNew}
               </button>
               <button
                 type="button"
@@ -273,7 +296,7 @@ export function ForumApp({
                     : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
                 }`}
               >
-                Top
+                {t.forum.sortTop}
               </button>
             </div>
           </div>
@@ -282,7 +305,7 @@ export function ForumApp({
         <ul className="flex-1 overflow-y-auto">
           {visible.length === 0 ? (
             <li className="p-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
-              No threads here yet.
+              {t.forum.noThreads}
             </li>
           ) : (
             visible.map((p) => (
@@ -290,6 +313,7 @@ export function ForumApp({
                 key={p.id}
                 post={p}
                 active={p.id === selectedId}
+                categoryLabel={forumCategoryLabel(t.forum, p.category)}
                 onClick={() => openThread(p.id)}
               />
             ))
@@ -312,6 +336,7 @@ export function ForumApp({
           <ThreadDetail
             key={selected.id}
             post={selected}
+            categoryLabel={forumCategoryLabel(t.forum, selected.category)}
             detail={details[selected.id]}
             currentUserId={currentUserId}
             isAuthed={isAuthed}
@@ -339,10 +364,12 @@ function NewThreadButton({
   isAuthed,
   onClick,
   compact,
+  label,
 }: {
   isAuthed: boolean;
   onClick: () => void;
   compact?: boolean;
+  label: string;
 }) {
   const cls = compact
     ? "inline-flex items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-hover"
@@ -353,7 +380,7 @@ function NewThreadButton({
         <span aria-hidden className="text-base leading-none">
           +
         </span>
-        New thread
+        {label}
       </Link>
     );
   }
@@ -362,7 +389,7 @@ function NewThreadButton({
       <span aria-hidden className="text-base leading-none">
         +
       </span>
-      New thread
+      {label}
     </button>
   );
 }
@@ -423,12 +450,15 @@ function Chip({
 function ThreadRow({
   post,
   active,
+  categoryLabel,
   onClick,
 }: {
   post: ForumPost;
   active: boolean;
+  categoryLabel: string;
   onClick: () => void;
 }) {
+  const t = useT();
   const answered = post.comment_count > 0;
   return (
     <li>
@@ -468,7 +498,7 @@ function ThreadRow({
                 className="h-3.5 w-3.5 shrink-0 text-brand dark:text-brand-soft"
                 viewBox="0 0 24 24"
                 fill="currentColor"
-                aria-label="Pinned"
+                aria-label={t.forum.pinnedAria}
               >
                 <path d="M16 3a1 1 0 0 1 .7 1.7L15 6.4V11l2.6 2.6a1 1 0 0 1-.7 1.7H13v5a1 1 0 0 1-2 0v-5H7.1a1 1 0 0 1-.7-1.7L9 11V6.4L7.3 4.7A1 1 0 0 1 8 3z" />
               </svg>
@@ -481,7 +511,7 @@ function ThreadRow({
             <span
               className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-semibold ring-1 ring-inset ${FORUM_CATEGORY_BADGE[post.category]}`}
             >
-              {FORUM_CATEGORY_LABELS[post.category]}
+              {categoryLabel}
             </span>
             <span className="truncate">
               {post.author_name} · {forumTimeAgo(post.created_at)}
@@ -509,6 +539,7 @@ function ThreadRow({
 
 function ThreadDetail({
   post,
+  categoryLabel,
   detail,
   currentUserId,
   isAuthed,
@@ -521,6 +552,7 @@ function ThreadDetail({
   onDelete,
 }: {
   post: ForumPost;
+  categoryLabel: string;
   detail: DetailState | undefined;
   currentUserId: string | null;
   isAuthed: boolean;
@@ -532,7 +564,12 @@ function ThreadDetail({
   onTogglePin: () => void;
   onDelete: () => void;
 }) {
+  const t = useT();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const viewsTitle =
+    post.view_count === 1
+      ? t.forum.viewsOne
+      : tf(t.forum.views, { count: post.view_count });
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-5 sm:px-8 sm:py-7">
       <div className="flex items-center justify-between gap-3">
@@ -541,14 +578,14 @@ function ThreadDetail({
           onClick={onBack}
           className="inline-flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-brand lg:hidden dark:text-zinc-400 dark:hover:text-brand-soft"
         >
-          <span aria-hidden>←</span> Back
+          <span aria-hidden>←</span> {t.forum.back}
         </button>
         <Link
           href={`/forum/${post.id}`}
           className="ml-auto text-xs font-medium text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
-          title="Open full page (shareable link)"
+          title={t.forum.openFullPageTitle}
         >
-          Open full page ↗
+          {t.forum.openFullPage}
         </Link>
       </div>
 
@@ -565,14 +602,14 @@ function ThreadDetail({
             <span
               className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${FORUM_CATEGORY_BADGE[post.category]}`}
             >
-              {FORUM_CATEGORY_LABELS[post.category]}
+              {categoryLabel}
             </span>
             {post.pinned ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand dark:bg-brand-soft/15 dark:text-brand-soft">
                 <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                   <path d="M16 3a1 1 0 0 1 .7 1.7L15 6.4V11l2.6 2.6a1 1 0 0 1-.7 1.7H13v5a1 1 0 0 1-2 0v-5H7.1a1 1 0 0 1-.7-1.7L9 11V6.4L7.3 4.7A1 1 0 0 1 8 3z" />
                 </svg>
-                Pinned
+                {t.forum.pinned}
               </span>
             ) : null}
             <span className="text-xs text-zinc-500 dark:text-zinc-500">
@@ -581,7 +618,7 @@ function ThreadDetail({
             <span className="ml-auto flex items-center gap-3 text-xs">
               <span
                 className="inline-flex items-center gap-1 text-zinc-400 dark:text-zinc-500"
-                title={`${post.view_count} view${post.view_count === 1 ? "" : "s"}`}
+                title={viewsTitle}
               >
                 <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
@@ -595,7 +632,7 @@ function ThreadDetail({
                   onClick={onTogglePin}
                   className="font-medium text-zinc-500 hover:text-brand dark:text-zinc-400 dark:hover:text-brand-soft"
                 >
-                  {post.pinned ? "Unpin" : "Pin"}
+                  {post.pinned ? t.forum.unpin : t.forum.pin}
                 </button>
               ) : null}
               {currentUserId === post.user_id ? (
@@ -606,14 +643,14 @@ function ThreadDetail({
                       onClick={onDelete}
                       className="font-semibold text-red-600 hover:underline dark:text-red-400"
                     >
-                      Delete
+                      {t.common.delete}
                     </button>
                     <button
                       type="button"
                       onClick={() => setConfirmDelete(false)}
                       className="font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
                     >
-                      Cancel
+                      {t.common.cancel}
                     </button>
                   </span>
                 ) : (
@@ -622,7 +659,7 @@ function ThreadDetail({
                     onClick={() => setConfirmDelete(true)}
                     className="font-medium text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
                   >
-                    Delete
+                    {t.common.delete}
                   </button>
                 )
               ) : null}
@@ -643,11 +680,11 @@ function ThreadDetail({
 
       {!detail || detail.status === "loading" ? (
         <p className="mt-8 text-sm text-zinc-500 dark:text-zinc-400">
-          Loading replies…
+          {t.forum.loadingReplies}
         </p>
       ) : detail.status === "error" ? (
         <p className="mt-8 text-sm text-red-600 dark:text-red-400">
-          Could not load replies.
+          {t.forum.couldNotLoadReplies}
         </p>
       ) : (
         <ForumComments
@@ -662,6 +699,7 @@ function ThreadDetail({
 }
 
 function EmptyDetail() {
+  const t = useT();
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
       <div className="rounded-full bg-zinc-100 p-4 dark:bg-zinc-900">
@@ -670,11 +708,10 @@ function EmptyDetail() {
         </svg>
       </div>
       <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">
-        Select a thread to read it
+        {t.forum.selectThread}
       </p>
       <p className="max-w-xs text-xs text-zinc-500 dark:text-zinc-500">
-        Or start a new thread to request a course, share feedback, or ask the
-        community something.
+        {t.forum.emptyDetailBody}
       </p>
     </div>
   );
@@ -687,6 +724,7 @@ function Composer({
   onCancel: () => void;
   onCreated: (post: ForumPost) => void;
 }) {
+  const t = useT();
   const [category, setCategory] = useState<ForumCategory>("course_request");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -698,7 +736,7 @@ function Composer({
     e.preventDefault();
     if (submitting) return;
     if (title.trim().length < 3) {
-      setError("Give your thread a title (at least 3 characters).");
+      setError(t.forum.titleTooShort);
       return;
     }
     setSubmitting(true);
@@ -711,12 +749,14 @@ function Composer({
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error ?? "Could not create thread.");
+        throw new Error(data.error ?? t.forum.couldNotCreateThread);
       }
       const data = (await res.json()) as { post: ForumPost };
       onCreated(data.post);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create thread.");
+      setError(
+        err instanceof Error ? err.message : t.forum.couldNotCreateThread
+      );
     } finally {
       setSubmitting(false);
     }
@@ -729,14 +769,14 @@ function Composer({
     >
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-          New thread
+          {t.forum.newThread}
         </h1>
         <button
           type="button"
           onClick={onCancel}
           className="text-sm font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
-          Cancel
+          {t.common.cancel}
         </button>
       </div>
 
@@ -752,7 +792,7 @@ function Composer({
                 : "bg-zinc-100 text-zinc-600 hover:text-brand dark:bg-white/10 dark:text-zinc-300"
             }`}
           >
-            {c.label}
+            {forumCategoryLabel(t.forum, c.id)}
           </button>
         ))}
       </div>
@@ -761,12 +801,12 @@ function Composer({
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         maxLength={140}
-        placeholder="Title — e.g. “Organic Chemistry crash course”"
+        placeholder={t.forum.titlePlaceholder}
         className="mt-4 w-full rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
       />
       <RichTextEditor
         className="mt-3"
-        placeholder="Add details (optional) — what you’d like, why it’d help, links, images…"
+        placeholder={t.forum.bodyPlaceholder}
         onChange={(json, text) => {
           setBodyRich(json);
           setBody(text);
@@ -781,14 +821,14 @@ function Composer({
           onClick={onCancel}
           className="rounded-full px-4 py-2 text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
-          Cancel
+          {t.common.cancel}
         </button>
         <button
           type="submit"
           disabled={submitting}
           className="inline-flex items-center rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover disabled:opacity-60"
         >
-          {submitting ? "Posting…" : "Post thread"}
+          {submitting ? t.forum.posting : t.forum.postThread}
         </button>
       </div>
     </form>

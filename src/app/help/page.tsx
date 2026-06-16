@@ -7,14 +7,22 @@ import { HelpPageContent } from "@/components/help/HelpPageContent";
 import { LegalFooterLinks } from "@/components/LegalFooterLinks";
 import { APP_NAME } from "@/lib/brand";
 import { adminHubHrefForSessionUser } from "@/lib/app-admin-env";
+import { tf } from "@/lib/i18n/format";
+import { getT, getUiLocale } from "@/lib/i18n/server";
+import { getDictionary } from "@/locales";
 import { createClient } from "@/lib/supabase/server";
 
-export const metadata: Metadata = {
-  title: `How to Use ${APP_NAME}`,
-  description: `How to use ${APP_NAME} — step-by-step guide plus an honest FAQ on how it compares to ChatGPT, Anki, and why it exists.`,
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getUiLocale();
+  const t = getDictionary(locale).help;
+  return {
+    title: tf(t.metaTitle, { app: APP_NAME }),
+    description: tf(t.metaDescription, { app: APP_NAME }),
+  };
+}
 
 export default async function HelpPage() {
+  const t = await getT();
   const supabase = await createClient();
   const {
     data: { user },
@@ -30,8 +38,8 @@ export default async function HelpPage() {
             <HeaderNavLoggedInServer adminHubHref={adminHubHref} />
           ) : (
             <>
-              <HeaderNavLink href="/explore">Explore</HeaderNavLink>
-              <HeaderNavLink href="/login">Log in</HeaderNavLink>
+              <HeaderNavLink href="/explore">{t.nav.explore}</HeaderNavLink>
+              <HeaderNavLink href="/login">{t.nav.login}</HeaderNavLink>
             </>
           )
         }
@@ -43,16 +51,16 @@ export default async function HelpPage() {
               href={user ? "/" : "/intro"}
               className="text-sm font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
             >
-              {user ? `← Back to workspace` : `← Back to ${APP_NAME}`}
+              {user
+                ? t.help.backToWorkspace
+                : tf(t.help.backToApp, { app: APP_NAME })}
             </Link>
           </p>
           <h1 className="mt-5 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-4xl">
-            How to use {APP_NAME}
+            {tf(t.help.title, { app: APP_NAME })}
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-            Everything in one place — with UI previews of what you&apos;ll see on
-            screen. Video walkthroughs are coming soon; the written guide is kept
-            up to date with the app.
+            {t.help.subtitle}
           </p>
 
           <div className="mt-10">

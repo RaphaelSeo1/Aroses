@@ -16,6 +16,8 @@ import {
   type SrsCardState,
   type SrsRating,
 } from "@/lib/srs-sm2";
+import { tf } from "@/lib/i18n/format";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
  * Flashcard-style review session driver. Implements:
@@ -99,37 +101,49 @@ const AGAIN_REINSERT_OFFSET = 3;
 
 const RATING_COLORS: Record<
   SrsRating,
-  { bg: string; ring: string; text: string; label: string; key: string }
+  { bg: string; ring: string; text: string; key: string }
 > = {
   again: {
     bg: "bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/50",
     ring: "border-red-400 dark:border-red-700",
     text: "text-red-700 dark:text-red-300",
-    label: "Again",
     key: "1",
   },
   hard: {
     bg: "bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/50",
     ring: "border-amber-400 dark:border-amber-700",
     text: "text-amber-800 dark:text-amber-300",
-    label: "Hard",
     key: "2",
   },
   good: {
     bg: "bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50",
     ring: "border-emerald-400 dark:border-emerald-700",
     text: "text-emerald-800 dark:text-emerald-300",
-    label: "Good",
     key: "3",
   },
   easy: {
     bg: "bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/40 dark:hover:bg-sky-900/50",
     ring: "border-sky-400 dark:border-sky-700",
     text: "text-sky-800 dark:text-sky-300",
-    label: "Easy",
     key: "4",
   },
 };
+
+function ratingLabel(
+  rating: SrsRating,
+  t: ReturnType<typeof useT>["review"]
+): string {
+  switch (rating) {
+    case "again":
+      return t.again;
+    case "hard":
+      return t.hard;
+    case "good":
+      return t.good;
+    case "easy":
+      return t.easy;
+  }
+}
 
 type ResumeState = {
   queueKeys: string[]; // remaining card keys in order
@@ -147,6 +161,7 @@ export function SrsReviewSession({
   onExit,
   onPracticeAgain,
 }: Props) {
+  const t = useT();
   const storageKey = `aroses.srs.session.${sessionKey}`;
 
   // Build a lookup of all cards we know about (from the prop) so resume
@@ -458,10 +473,10 @@ export function SrsReviewSession({
     return (
       <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-          You&apos;re all caught up
+          {t.review.allCaughtUpShort}
         </h3>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-          No cards are due right now — come back later, or start a new course.
+          {t.review.noCardsDueSession}
         </p>
       </div>
     );
@@ -473,11 +488,17 @@ export function SrsReviewSession({
     return (
       <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-          Session complete
+          {t.review.sessionComplete}
         </h3>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-          You finished {done.length} card{done.length === 1 ? "" : "s"} in{" "}
-          {formatDuration(elapsedMs)}.
+          {done.length === 1
+            ? tf(t.review.sessionFinishedOne, {
+                duration: formatDuration(elapsedMs),
+              })
+            : tf(t.review.sessionFinished, {
+                count: done.length,
+                duration: formatDuration(elapsedMs),
+              })}
         </p>
         <dl className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
           {(Object.keys(RATING_COLORS) as SrsRating[]).map((r) => (
@@ -488,7 +509,7 @@ export function SrsReviewSession({
               <dt
                 className={`text-[11px] font-semibold uppercase tracking-wide ${RATING_COLORS[r].text}`}
               >
-                {RATING_COLORS[r].label}
+                {ratingLabel(r, t.review)}
               </dt>
               <dd className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
                 {ratings[r]}
@@ -503,7 +524,7 @@ export function SrsReviewSession({
               onClick={onPracticeAgain}
               className="inline-flex items-center justify-center rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white shadow-md shadow-red-600/20 hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
             >
-              Practice again
+              {t.review.practiceAgain}
             </button>
           ) : null}
           {onExit ? (
@@ -512,7 +533,7 @@ export function SrsReviewSession({
               onClick={onExit}
               className="inline-flex items-center justify-center rounded-full border border-zinc-300 bg-white px-5 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
             >
-              Back to overview
+              {t.review.backToOverview}
             </button>
           ) : null}
         </div>
@@ -537,6 +558,7 @@ export function SrsReviewSession({
         card={current}
         showCourseBadge={showCourseBadge}
         onExit={onExit}
+        t={t.review}
       />
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-6">
@@ -588,7 +610,7 @@ export function SrsReviewSession({
                   onClick={() => void handleRate(r)}
                   className={`group flex flex-col items-center gap-1 rounded-xl border-2 px-3 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${c.ring} ${c.bg} ${c.text}`}
                 >
-                  <span>{c.label}</span>
+                  <span>{ratingLabel(r, t.review)}</span>
                   <span className="text-xs font-medium opacity-80">
                     {previews[r].label}
                   </span>
@@ -852,6 +874,7 @@ function SessionHeader({
   card,
   showCourseBadge,
   onExit,
+  t,
 }: {
   position: number;
   total: number;
@@ -859,11 +882,12 @@ function SessionHeader({
   card: SrsSessionCard;
   showCourseBadge: boolean;
   onExit?: () => void;
+  t: ReturnType<typeof useT>["review"];
 }) {
   const pct = total === 0 ? 0 : Math.round(((position - 1) / total) * 100);
   const badge: ReactNode = (
     <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2.5 py-1 text-[11px] font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-      {card.kind === "module" ? "Module bank" : "Focus card"}
+      {card.kind === "module" ? t.moduleBank : t.focusCard}
     </span>
   );
   const courseBadge = showCourseBadge ? (
@@ -873,7 +897,7 @@ function SessionHeader({
   ) : null;
   const newBadge = card.isNew ? (
     <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-700 ring-1 ring-sky-200 dark:bg-sky-950/40 dark:text-sky-200 dark:ring-sky-800">
-      New
+      {t.newCard}
     </span>
   ) : null;
   return (
@@ -902,7 +926,7 @@ function SessionHeader({
               onClick={onExit}
               className="rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900"
             >
-              Pause & exit
+              {t.pauseExit}
             </button>
           ) : null}
         </div>

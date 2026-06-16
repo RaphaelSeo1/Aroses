@@ -8,6 +8,61 @@ import {
   isPaidTier,
   type PlanTier,
 } from "@/lib/billing/plans";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
+import type { Dictionary } from "@/locales";
+
+function planStrings(t: Dictionary["billing"], tier: PlanTier) {
+  const names: Record<PlanTier, string> = {
+    free: t.planFree,
+    student: t.planStudent,
+    premium: t.planPremium,
+  };
+  const taglines: Record<PlanTier, string> = {
+    free: t.planFreeTag,
+    student: t.planStudentTag,
+    premium: t.planPremiumTag,
+  };
+  const highlights: Record<PlanTier, string[]> = {
+    free: [t.planFreeHighlight1, t.planFreeHighlight2, t.planFreeHighlight3],
+    student: [
+      t.planStudentHighlight1,
+      t.planStudentHighlight2,
+      t.planStudentHighlight3,
+    ],
+    premium: [
+      t.planPremiumHighlight1,
+      t.planPremiumHighlight2,
+      t.planPremiumHighlight3,
+    ],
+  };
+  return {
+    name: names[tier],
+    tagline: taglines[tier],
+    highlights: highlights[tier],
+  };
+}
+
+function statusLine(
+  t: Dictionary["billing"],
+  status: string,
+  cancelAtPeriodEnd: boolean,
+  periodEndLabel: string | null
+): string {
+  if (status === "inactive" || status === "canceled") {
+    return t.noActiveSub;
+  }
+  if (cancelAtPeriodEnd && periodEndLabel) {
+    return tf(t.cancelsOn, { date: periodEndLabel });
+  }
+  if (status === "past_due") {
+    return t.pastDue;
+  }
+  if (periodEndLabel) {
+    return tf(t.renewsOnFull, { date: periodEndLabel });
+  }
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
 
 export function BillingClient({
   currentTier,
@@ -26,6 +81,7 @@ export function BillingClient({
   voiceUsedSeconds: number;
   voiceCapSeconds: number;
 }) {
+  const t = useT();
   const searchParams = useSearchParams();
   const checkoutStatus = searchParams.get("status");
 
@@ -48,11 +104,13 @@ export function BillingClient({
         error?: string;
       };
       if (!res.ok || !data.url) {
-        throw new Error(data.error ?? "Could not start checkout.");
+        throw new Error(data.error ?? t.billing.checkoutError);
       }
       window.location.href = data.url;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start checkout.");
+      setError(
+        err instanceof Error ? err.message : t.billing.checkoutError
+      );
       setBusyTier(null);
     }
   }
@@ -68,12 +126,12 @@ export function BillingClient({
         error?: string;
       };
       if (!res.ok || !data.url) {
-        throw new Error(data.error ?? "Could not open the billing portal.");
+        throw new Error(data.error ?? t.billing.portalError);
       }
       window.location.href = data.url;
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Could not open the billing portal."
+        err instanceof Error ? err.message : t.billing.portalError
       );
       setPortalBusy(false);
     }
@@ -95,27 +153,23 @@ export function BillingClient({
       : 0;
   const capReached = voiceCapSeconds > 0 && voiceUsedSeconds >= voiceCapSeconds;
 
+  const currentPlan = planStrings(t.billing, currentTier);
+
   return (
     <div>
       <header className="mb-8">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Plans &amp; billing
+          {t.billing.title}
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
-          Voice tutoring is the metered premium — everything else (course
-          building, quizzes, spaced repetition, and text tutoring) is unlimited
-          on every plan. When you use up your monthly voice hours, voice
-          switches to free text mode; you&apos;re never blocked mid-study.
+          {t.billing.subtitleLong}
         </p>
       </header>
 
       {checkoutStatus === "success" ? (
-        <Banner tone="success">
-          Payment received — your plan will update within a few seconds. Refresh
-          if it hasn&apos;t yet.
-        </Banner>
+        <Banner tone="success">{t.billing.checkoutSuccessLong}</Banner>
       ) : checkoutStatus === "cancel" ? (
-        <Banner tone="muted">Checkout canceled — no changes were made.</Banner>
+        <Banner tone="muted">{t.billing.checkoutCanceled}</Banner>
       ) : null}
 
       {error ? <Banner tone="error">{error}</Banner> : null}
@@ -124,22 +178,30 @@ export function BillingClient({
       <div className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-zinc-200/90 bg-white/95 p-5 dark:border-zinc-800 dark:bg-zinc-950/90">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-            Current plan
+            {t.billing.currentPlan}
           </p>
           <p className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-            {PLANS[currentTier].name}
+            {currentPlan.name}
             {currentTier !== "free" ? (
               <span className="ml-2 text-sm font-normal text-zinc-500">
-                · {PLANS[currentTier].voiceHours}h voice / month
+                ·{" "}
+                {tf(t.billing.voiceHoursMonth, {
+                  hours: PLANS[currentTier].voiceHours,
+                })}
               </span>
             ) : null}
           </p>
           <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-            {statusLine(status, cancelAtPeriodEnd, periodEndLabel)}
+            {statusLine(
+              t.billing,
+              status,
+              cancelAtPeriodEnd,
+              periodEndLabel
+            )}
           </p>
           <div className="mt-3 w-full max-w-xs">
             <div className="flex w-full items-center justify-between gap-3 text-[11px] text-zinc-500 dark:text-zinc-400">
-              <span className="shrink-0">Voice this period</span>
+              <span className="shrink-0">{t.billing.voiceThisPeriod}</span>
               <span className="shrink-0 tabular-nums">
                 {usedMinutes} / {capMinutes} min
               </span>
@@ -154,8 +216,7 @@ export function BillingClient({
             </div>
             {capReached ? (
               <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
-                Voice limit reached — using free text mode until your next
-                period.
+                {t.billing.voiceLimitReached}
               </p>
             ) : null}
           </div>
@@ -167,7 +228,7 @@ export function BillingClient({
             disabled={portalBusy}
             className="inline-flex items-center rounded-full border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 transition hover:border-zinc-400 hover:text-zinc-900 disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-200 dark:hover:border-zinc-500"
           >
-            {portalBusy ? "Opening…" : "Manage billing"}
+            {portalBusy ? t.billing.opening : t.billing.manageBilling}
           </button>
         ) : null}
       </div>
@@ -175,7 +236,8 @@ export function BillingClient({
       {/* Plan cards */}
       <div className="grid gap-4 md:grid-cols-3">
         {PLAN_ORDER.map((tier) => {
-          const plan = PLANS[tier];
+          const plan = planStrings(t.billing, tier);
+          const price = PLANS[tier].priceMonthly;
           const isCurrent = tier === currentTier;
           return (
             <div
@@ -192,7 +254,7 @@ export function BillingClient({
                 </h2>
                 {isCurrent ? (
                   <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand dark:bg-brand-soft/15 dark:text-brand-soft">
-                    Current
+                    {t.billing.current}
                   </span>
                 ) : null}
               </div>
@@ -201,11 +263,11 @@ export function BillingClient({
               </p>
               <p className="mt-3">
                 <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  ${plan.priceMonthly}
+                  ${price}
                 </span>
                 <span className="text-sm text-zinc-500 dark:text-zinc-400">
                   {" "}
-                  / month
+                  {t.billing.perMonthLabel}
                 </span>
               </p>
               <ul className="mt-4 flex-1 space-y-2 text-sm text-zinc-600 dark:text-zinc-300">
@@ -243,7 +305,7 @@ export function BillingClient({
           disabled
           className="w-full cursor-default rounded-full bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
         >
-          {tier === "free" ? "Your plan" : "Current plan"}
+          {tier === "free" ? t.billing.yourPlan : t.billing.currentPlan}
         </button>
       );
     }
@@ -256,7 +318,7 @@ export function BillingClient({
           disabled={portalBusy}
           className="w-full rounded-full border border-zinc-300 px-4 py-2.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-400 disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-200"
         >
-          Cancel in portal
+          {t.billing.cancelInPortal}
         </button>
       ) : (
         <button
@@ -264,7 +326,7 @@ export function BillingClient({
           disabled
           className="w-full cursor-default rounded-full bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-400 dark:bg-zinc-800"
         >
-          Included
+          {t.billing.included}
         </button>
       );
     }
@@ -276,33 +338,13 @@ export function BillingClient({
         className="w-full rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover disabled:opacity-60"
       >
         {busyTier === tier
-          ? "Redirecting…"
+          ? t.billing.redirecting
           : isPaidTier(currentTier)
-            ? "Switch plan"
-            : "Upgrade"}
+            ? t.billing.switchPlan
+            : t.billing.upgrade}
       </button>
     );
   }
-}
-
-function statusLine(
-  status: string,
-  cancelAtPeriodEnd: boolean,
-  periodEndLabel: string | null
-): string {
-  if (status === "inactive" || status === "canceled") {
-    return "No active subscription.";
-  }
-  if (cancelAtPeriodEnd && periodEndLabel) {
-    return `Cancels on ${periodEndLabel}.`;
-  }
-  if (status === "past_due") {
-    return "Payment past due — update your card in the billing portal.";
-  }
-  if (periodEndLabel) {
-    return `Renews on ${periodEndLabel}.`;
-  }
-  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
 function Banner({

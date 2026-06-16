@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 
 /**
  * Typewriter — reveals `text` one character at a time. Used in the
@@ -174,6 +176,7 @@ function DraftReview({
   onConfirm: () => void;
   onEditAnswer: () => void;
 }) {
+  const t = useT();
   // Stagger reveal: title first, then each bullet, then summary.
   // Each segment waits ~its predecessor's char count × speed + a small pad.
   const speed = 16;
@@ -198,7 +201,7 @@ function DraftReview({
     <div className="mt-8 space-y-5">
       <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 px-5 py-5 dark:border-indigo-900/60 dark:bg-indigo-950/30">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-          Is this what you want?
+          {t.courseBuild.isThisWhatYouWant}
         </p>
 
         {/* Editable course title — the auto-rename problem dies here.
@@ -207,7 +210,7 @@ function DraftReview({
           htmlFor="self-study-title"
           className="mt-3 block text-xs font-medium text-zinc-500 dark:text-zinc-400"
         >
-          Course title
+          {t.courseBuild.courseTitleLabel}
         </label>
         <input
           id="self-study-title"
@@ -222,7 +225,7 @@ function DraftReview({
         {editableTitle === draft.title ? (
           <p className="mt-1 text-[11px] text-indigo-500 dark:text-indigo-400">
             <Typewriter
-              text={`✨ Suggested: ${draft.title}`}
+              text={tf(t.courseBuild.suggested, { title: draft.title })}
               delayMs={titleDelay}
               speed={speed}
             />
@@ -230,7 +233,7 @@ function DraftReview({
         ) : null}
 
         <p className="mt-4 text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
-          We&apos;ll focus on
+          {t.courseBuild.weWillFocus}
         </p>
         <ul className="mt-2 space-y-1.5 text-sm text-zinc-800 dark:text-zinc-100">
           {draft.bullets.map((b, i) => (
@@ -247,7 +250,7 @@ function DraftReview({
         </ul>
 
         <p className="mt-4 text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
-          One-liner
+          {t.courseBuild.oneLiner}
         </p>
         <p className="mt-1 text-sm italic leading-relaxed text-zinc-700 dark:text-zinc-300">
           <Typewriter text={draft.summary} delayMs={summaryDelay} speed={speed} />
@@ -259,15 +262,15 @@ function DraftReview({
           htmlFor="self-study-section-review"
           className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
         >
-          Folder name{" "}
-          <span className="font-normal text-zinc-500">(optional)</span>
+          {t.courseBuild.folderName}{" "}
+          <span className="font-normal text-zinc-500">{t.courseBuild.optional}</span>
         </label>
         <input
           id="self-study-section-review"
           value={sectionName}
           onChange={(e) => setSectionName(e.target.value)}
           maxLength={80}
-          placeholder="e.g. Midterm prep, Lecture notes, Bio chapter 4"
+          placeholder={t.courseBuild.folderPlaceholder}
           className="mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 outline-none ring-indigo-500 placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
         />
       </div>
@@ -283,7 +286,7 @@ function DraftReview({
           disabled={loading || !editableTitle.trim()}
           className="inline-flex flex-1 items-center justify-center rounded-full bg-indigo-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 disabled:opacity-50 sm:flex-none dark:bg-indigo-500 dark:hover:bg-indigo-600"
         >
-          {loading ? "Setting up…" : "Confirm — upload PDF next →"}
+          {loading ? t.courseBuild.settingUp : t.courseBuild.confirmUpload}
         </button>
         <button
           type="button"
@@ -291,7 +294,7 @@ function DraftReview({
           disabled={loading}
           className="rounded-full border border-zinc-300 px-4 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
         >
-          Edit my answer
+          {t.courseBuild.editMyAnswer}
         </button>
       </div>
     </div>
@@ -302,6 +305,7 @@ function DraftReview({
 type Step = "mode" | "public" | "selfStudy";
 
 export default function NewCoursePage() {
+  const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
   // Allow deep-linking straight into a step (e.g. workspace shortcut
@@ -353,7 +357,7 @@ export default function NewCoursePage() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(typeof body.error === "string" ? body.error : "Could not create course.");
+        setError(typeof body.error === "string" ? body.error : t.courseBuild.errCreateCourse);
         setLoading(false);
         return;
       }
@@ -362,10 +366,10 @@ export default function NewCoursePage() {
         router.push(`/dashboard/courses/${id}`);
         router.refresh();
       } else {
-        setError("Unexpected response.");
+        setError(t.courseBuild.errUnexpected);
       }
     } catch {
-      setError("Network error. Try again.");
+      setError(t.courseBuild.errNetwork);
     }
     setLoading(false);
   }
@@ -378,9 +382,7 @@ export default function NewCoursePage() {
     e.preventDefault();
     const raw = studyContext.trim();
     if (!raw) {
-      setError(
-        "Tell us a bit about your study situation so we can personalise it for you."
-      );
+      setError(t.courseBuild.errTellUs);
       return;
     }
     setError(null);
@@ -404,7 +406,7 @@ export default function NewCoursePage() {
         setError(
           typeof body.error === "string"
             ? body.error
-            : "Couldn't draft a plan — please rephrase and try again."
+            : t.courseBuild.errDraftPlan
         );
         setPolishing(false);
         return;
@@ -416,7 +418,7 @@ export default function NewCoursePage() {
       });
       setEditableTitle(body.title);
     } catch {
-      setError("Network error. Try again.");
+      setError(t.courseBuild.errNetwork);
     }
     setPolishing(false);
   }
@@ -427,7 +429,7 @@ export default function NewCoursePage() {
   // "Self study · May 15" date string the user kept seeing.
   async function submitSelfStudy(d: DraftShape, finalTitle: string) {
     if (!d.summary.trim()) {
-      setError("Tell us a bit about your study situation so we can personalise it for you.");
+      setError(t.courseBuild.errTellUs);
       return;
     }
     setError(null);
@@ -453,7 +455,7 @@ export default function NewCoursePage() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(typeof body.error === "string" ? body.error : "Could not create session.");
+        setError(typeof body.error === "string" ? body.error : t.courseBuild.errCreateSession);
         setLoading(false);
         return;
       }
@@ -462,10 +464,10 @@ export default function NewCoursePage() {
         router.push(`/dashboard/courses/${id}?selfStudy=1`);
         router.refresh();
       } else {
-        setError("Unexpected response.");
+        setError(t.courseBuild.errUnexpected);
       }
     } catch {
-      setError("Network error. Try again.");
+      setError(t.courseBuild.errNetwork);
     }
     setLoading(false);
   }
@@ -481,38 +483,38 @@ export default function NewCoursePage() {
           {step === "mode" && (
             <>
               <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-                Get started
+                {t.courseBuild.getStarted}
               </p>
               <h1 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                How do you want to study?
+                {t.courseBuild.howStudy}
               </h1>
               <p className="mt-3 text-zinc-500 dark:text-zinc-400">
-                Both options turn your PDFs into lessons and quizzes — the difference is who it&apos;s for.
+                {t.courseBuild.modeIntro}
               </p>
               <div className="mt-8 grid gap-4 sm:grid-cols-2">
                 <ModeCard
                   icon="🌐"
-                  title="Create Public Course"
-                  subtitle="Build a structured course other students can discover and enroll in."
+                  title={t.courseBuild.publicCourseTitle}
+                  subtitle={t.courseBuild.publicCourseSubtitle}
                   bullets={[
-                    "Appears on the Explore page",
-                    "Add sections and multiple uploads",
-                    "Track learner progress",
+                    t.courseBuild.publicBullet1,
+                    t.courseBuild.publicBullet2,
+                    t.courseBuild.publicBullet3,
                   ]}
-                  cta="Create course →"
+                  cta={t.courseBuild.publicCta}
                   accent="brand"
                   onClick={() => { setStep("public"); setError(null); }}
                 />
                 <ModeCard
                   icon="🎯"
-                  title="Self Study Mode"
-                  subtitle="A private, personalised session built around your specific goal — exam prep, deep dives, quick reviews."
+                  title={t.courseBuild.selfStudyTitle}
+                  subtitle={t.courseBuild.selfStudySubtitle}
                   bullets={[
-                    "Stays 100% private to you",
-                    "AI calibrates depth and focus to your goal",
-                    "Voice tutor knows your background",
+                    t.courseBuild.selfStudyBullet1,
+                    t.courseBuild.selfStudyBullet2,
+                    t.courseBuild.selfStudyBullet3,
                   ]}
-                  cta="Start self study →"
+                  cta={t.courseBuild.selfStudyCta}
                   accent="indigo"
                   onClick={() => { setStep("selfStudy"); setError(null); }}
                 />
@@ -522,7 +524,7 @@ export default function NewCoursePage() {
                   href="/"
                   className="text-sm text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
                 >
-                  ← Back
+                  ← {t.common.back}
                 </Link>
               </div>
             </>
@@ -536,21 +538,21 @@ export default function NewCoursePage() {
                 onClick={() => { setStep("mode"); setError(null); }}
                 className="mb-6 text-sm text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
               >
-                ← Back
+                ← {t.common.back}
               </button>
               <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-                Public course
+                {t.courseBuild.publicCourse}
               </p>
               <h1 className="mt-3 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                Name your course
+                {t.courseBuild.nameYourCourse}
               </h1>
               <p className="mt-3 leading-relaxed text-zinc-500 dark:text-zinc-400">
-                You&apos;ll add sections and upload PDFs next — we turn each one into lessons and quizzes.
+                {t.courseBuild.publicFormIntro}
               </p>
               <form onSubmit={(e) => void submitPublicCourse(e)} className="mt-8 space-y-6">
                 <div>
                   <label htmlFor="title" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                    Course title
+                    {t.courseBuild.courseTitleLabel}
                   </label>
                   <input
                     id="title"
@@ -558,21 +560,21 @@ export default function NewCoursePage() {
                     minLength={2}
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    placeholder="e.g. Immunology midterm prep"
+                    placeholder={t.courseBuild.titlePlaceholder}
                     className="mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-zinc-900 shadow-sm outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                   />
                 </div>
                 <div>
                   <label htmlFor="description" className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                    Description{" "}
-                    <span className="font-normal text-zinc-500">(optional)</span>
+                    {t.courseBuild.descriptionLabel}{" "}
+                    <span className="font-normal text-zinc-500">{t.courseBuild.optional}</span>
                   </label>
                   <textarea
                     id="description"
                     rows={3}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    placeholder="What should this course cover? Who is it for?"
+                    placeholder={t.courseBuild.descriptionPlaceholder}
                     className="mt-2 block w-full resize-y rounded-xl border border-zinc-300 bg-white px-4 py-3 text-zinc-900 shadow-sm outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                   />
                 </div>
@@ -583,7 +585,7 @@ export default function NewCoursePage() {
                     disabled={loading}
                     className="inline-flex flex-1 items-center justify-center rounded-full bg-brand px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/20 hover:bg-brand-hover disabled:opacity-60 sm:flex-none"
                   >
-                    {loading ? "Creating…" : "Continue"}
+                    {loading ? t.courseBuild.creating : t.common.continue}
                   </button>
                 </div>
               </form>
@@ -598,23 +600,23 @@ export default function NewCoursePage() {
                 onClick={() => { setStep("mode"); setError(null); }}
                 className="mb-6 text-sm text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
               >
-                ← Back
+                ← {t.common.back}
               </button>
 
               <div className="flex items-center gap-3">
                 <span className="text-3xl">🎯</span>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                    Self Study Mode
+                    {t.courseBuild.selfStudyTitle}
                   </p>
                   <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                    Tell us about your study situation
+                    {t.courseBuild.tellUsSituation}
                   </h1>
                 </div>
               </div>
 
               <p className="mt-4 leading-relaxed text-zinc-500 dark:text-zinc-400">
-                What do you need from this material? The more specific you are, the better we can tailor it for you — upload your PDF next and we&apos;ll build a course around exactly your goal.
+                {t.courseBuild.selfStudyIntro}
               </p>
 
               {draft === null ? (
@@ -637,7 +639,9 @@ export default function NewCoursePage() {
                     />
                     {studyContext.length > 3600 && (
                       <p className="mt-1 text-right text-xs text-zinc-400">
-                        {4000 - studyContext.length} characters left
+                        {tf(t.courseBuild.charactersLeft, {
+                          count: 4000 - studyContext.length,
+                        })}
                       </p>
                     )}
                   </div>
@@ -645,10 +649,10 @@ export default function NewCoursePage() {
                   {/* Hint chips — tap to fill */}
                   <div className="flex flex-wrap gap-2">
                     {[
-                      "I have an exam soon",
-                      "I already know the basics",
-                      "I'm completely new to this",
-                      "Focus on one specific topic",
+                      t.courseBuild.hintExamSoon,
+                      t.courseBuild.hintKnowBasics,
+                      t.courseBuild.hintCompletelyNew,
+                      t.courseBuild.hintOneTopic,
                     ].map((hint) => (
                       <button
                         key={hint}
@@ -670,9 +674,9 @@ export default function NewCoursePage() {
                       htmlFor="self-study-section"
                       className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
                     >
-                      Folder name{" "}
+                      {t.courseBuild.folderName}{" "}
                       <span className="font-normal text-zinc-500">
-                        (optional — shows as the materials tab)
+                        {t.courseBuild.folderOptionalMaterials}
                       </span>
                     </label>
                     <input
@@ -680,7 +684,7 @@ export default function NewCoursePage() {
                       value={sectionName}
                       onChange={(e) => setSectionName(e.target.value)}
                       maxLength={80}
-                      placeholder="e.g. Midterm prep, Lecture notes, Bio chapter 4"
+                      placeholder={t.courseBuild.folderPlaceholder}
                       className="mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 outline-none ring-indigo-500 placeholder:text-zinc-400 focus:border-indigo-500 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
                     />
                   </div>
@@ -696,8 +700,8 @@ export default function NewCoursePage() {
                       className="inline-flex flex-1 items-center justify-center rounded-full bg-indigo-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 disabled:opacity-50 sm:flex-none dark:bg-indigo-500 dark:hover:bg-indigo-600"
                     >
                       {polishing
-                        ? "Drafting your plan…"
-                        : "Review my plan →"}
+                        ? t.courseBuild.draftingPlan
+                        : t.courseBuild.reviewMyPlan}
                     </button>
                   </div>
                 </form>
