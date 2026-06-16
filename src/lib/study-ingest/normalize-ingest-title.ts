@@ -79,6 +79,43 @@ const INCOMPLETE_PHRASE =
   /\b(haven't|hasn't|didn't|won't|wouldn't|couldn't|shouldn't|isn't|aren't|wasn't|weren't)\s*$/i;
 const SPOKEN_CLAUSE =
   /\.\s+(?:So |And |But |What |When |Where |If |Then |Now |Okay |Ok )/i;
+const VERB_LED_TITLE =
+  /^(learn|understand|explore|master|discover|study|review|cover|introduce|explain|deep dive into)\b/i;
+const VERBOSE_TITLE_OPENER =
+  /^(core concepts|key principles|structure and interpretation|learn how|a comprehensive guide|an introduction to)\b/i;
+const WEAK_MODULE_TITLE =
+  /^(introduction|overview|module|core concepts|part\s+\d+|section\s+\d+|page\s+\d+|slide\s+\d+)$/i;
+const UPLOAD_FILE_EXT =
+  /\.(pdf|docx?|pptx?|xlsx?|txt|rtf|md|pages|key|numbers|png|jpe?g|gif|webp|heic|svg|csv|tsv|zip|rar|7z)$/i;
+
+const GENERIC_COURSE_TITLE =
+  /^(약리학|개요|서론|목차|introduction|overview|course|untitled section)$/i;
+
+const GENERIC_INGEST_PLACEHOLDER =
+  /^a (?:structured )?course (?:built )?from your uploaded materials\.?$/i;
+
+const GENERIC_INTRO_LESSON =
+  /^(약리학|서론|목차|introduction|overview|chapter\s+overview|lecture\s+overview)$/i;
+
+/** Boilerplate outline/description text — never use as a user-facing title. */
+export function isGenericIngestPlaceholder(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  if (GENERIC_INGEST_PLACEHOLDER.test(t)) return true;
+  if (/^a course built from your uploaded materials\.?$/i.test(t)) return true;
+  return false;
+}
+
+/** True when a title reads like a sentence/LLM blurb, not a short topic label. */
+export function isSentenceLikeIngestTitle(raw: string): boolean {
+  const t = normalizeIngestDisplayTitle(raw).trim();
+  if (!t) return true;
+  if (t.length > 52) return true;
+  if (t.split(/\s+/).length > 9) return true;
+  if (VERB_LED_TITLE.test(t)) return true;
+  if (VERBOSE_TITLE_OPENER.test(t)) return true;
+  return false;
+}
 
 /** True when raw text should not become a module/lesson label in the sidebar. */
 export function isBadIngestTitle(raw: string): boolean {
@@ -94,12 +131,16 @@ export function isBadIngestTitle(raw: string): boolean {
   if (TRANSCRIPT_FRAGMENT.test(t)) return true;
   if (INCOMPLETE_PHRASE.test(t)) return true;
   if (SPOKEN_CLAUSE.test(t)) return true;
+  if (isSentenceLikeIngestTitle(t)) return true;
+  // Incomplete spoken lists: "company's assets, liabilities,"
+  if (/,\s*$/.test(t)) return true;
+  if (/^[a-z][a-z'-]*['']s\s+/i.test(t) && /,/.test(t)) return true;
   // Multiple clauses in a label usually means spoken transcript, not a heading.
   if (t.includes(".") && t.split(/\.\s+/).length >= 2 && t.length < 72) return true;
   // Spoken lecture lines — lowercase prose, not headings.
   if (
     t.length > 28 &&
-    /[a-z]/.test(t) &&
+    /^[a-z]/.test(t) &&
     /\b(the|and|or|to|a|an|is|are|was|were|of|in|on|for|that|this|with|we|you|what|so|up|goes)\b/i.test(
       t
     )
@@ -107,6 +148,24 @@ export function isBadIngestTitle(raw: string): boolean {
     return true;
   }
   return false;
+}
+
+/** Module/lesson placeholder labels that should not repeat across a course. */
+export function isWeakModuleTitle(raw: string): boolean {
+  const t = normalizeIngestDisplayTitle(raw).trim();
+  if (!t) return true;
+  if (WEAK_MODULE_TITLE.test(t)) return true;
+  if (GENERIC_INTRO_LESSON.test(t)) return true;
+  if (isBadIngestTitle(t)) return true;
+  return false;
+}
+
+function partLabelFromPosition(position?: string): string | null {
+  const p = position?.trim();
+  if (!p) return null;
+  const part = p.match(/\b(?:transcript part|section|part)\s+(\d+)/i);
+  if (part) return `Part ${part[1]}`;
+  return null;
 }
 
 function titleCaseIfAllCaps(raw: string): string {
@@ -124,14 +183,14 @@ function titleCaseIfAllCaps(raw: string): string {
 }
 
 function titleFromPosition(position?: string): string | null {
+  const fromPart = partLabelFromPosition(position);
+  if (fromPart) return fromPart;
   const p = position?.trim();
   if (!p || SECTION_PLACEHOLDER.test(p)) return null;
   const page = p.match(/\bpage\s+(\d+)/i);
   if (page) return `Page ${page[1]}`;
   const slide = p.match(/\bslide\s+(\d+)/i);
   if (slide) return `Slide ${slide[1]}`;
-  const part = p.match(/\bpart\s+(\d+)/i);
-  if (part) return `Part ${part[1]}`;
   return null;
 }
 
@@ -169,17 +228,15 @@ export function pickBestTitleFromText(
   const fromPos = titleFromPosition(position);
   if (fromPos) return fromPos;
 
-  return "Core concepts";
+  return "Part 1";
 }
 
 /** Ensure lesson titles within one module are distinct and readable. */
 export function polishLessonTitlesForModule(
   lessonTitles: string[],
-  moduleTitle?: string
+  _moduleTitle?: string
 ): string[] {
-  const modKey = moduleTitle
-    ? normalizeIngestDisplayTitle(moduleTitle).toLowerCase()
-    : "";
+  void _moduleTitle;
   const used = new Set<string>();
 
   return lessonTitles.map((raw, i) => {
@@ -189,9 +246,7 @@ export function polishLessonTitlesForModule(
     }
 
     const key = title.toLowerCase();
-    if (modKey && key === modKey && i === 0) {
-      title = "Introduction";
-    } else if (used.has(key)) {
+    if (used.has(key)) {
       title = `${title} (${i + 1})`;
     }
 
@@ -199,24 +254,6 @@ export function polishLessonTitlesForModule(
     return title;
   });
 }
-
-const GENERIC_COURSE_TITLE =
-  /^(약리학|개요|서론|목차|introduction|overview|course|untitled section)$/i;
-
-const GENERIC_INGEST_PLACEHOLDER =
-  /^a (?:structured )?course (?:built )?from your uploaded materials\.?$/i;
-
-/** Boilerplate outline/description text — never use as a user-facing title. */
-export function isGenericIngestPlaceholder(text: string): boolean {
-  const t = text.trim();
-  if (!t) return true;
-  if (GENERIC_INGEST_PLACEHOLDER.test(t)) return true;
-  if (/^a course built from your uploaded materials\.?$/i.test(t)) return true;
-  return false;
-}
-
-const GENERIC_INTRO_LESSON =
-  /^(약리학|서론|목차|introduction|overview|chapter\s+overview|lecture\s+overview)$/i;
 
 /** Skip generic intro labels when naming a module from its lessons. */
 export function substantiveLessonTitles(lessonTitles: string[]): string[] {
@@ -254,6 +291,53 @@ export function deriveCourseTitleFromChunkTitles(titles: string[]): string {
 
   const first = normalized[0]?.trim();
   return first && first.length > 0 ? first : "Course";
+}
+
+/**
+ * Turn an upload filename into a short course title
+ * (e.g. "EN-INTRODUCTION TO THE INCOME STATEMENT (1).TXT" → "Introduction To The Income Statement").
+ */
+export function deriveTitleFromUploadFileName(fileName: string): string | null {
+  const base = (fileName.split(/[/\\]/).pop() ?? fileName).trim();
+  if (!base) return null;
+  let stem = base;
+  let prev = "";
+  while (stem !== prev) {
+    prev = stem;
+    stem = stem.replace(UPLOAD_FILE_EXT, "").trim();
+  }
+  stem = stem.replace(/\s*[\(\[]\s*\d+\s*[\)\]]\s*$/g, "").trim();
+  stem = stem.replace(/^[A-Z]{2,3}[-_\s]+(?=[A-Za-z])/i, "");
+  stem = stem.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+  stem = normalizeIngestDisplayTitle(stem);
+  if (!stem || stem.length < 4) return null;
+  if (GENERIC_COURSE_TITLE.test(stem)) return null;
+  if (isGenericIngestPlaceholder(stem)) return null;
+  if (/,\s*$/.test(stem)) return null;
+  if (TRANSCRIPT_FRAGMENT.test(stem)) return null;
+  if (VERBOSE_TITLE_OPENER.test(stem)) return null;
+  return stem;
+}
+
+/** Pick the best course title from plan text, chunk headings, and upload names. */
+export function resolveCourseDisplayTitle(input: {
+  planTitle?: string | null;
+  chunkTitles?: string[];
+  uploadFileNames?: string[];
+}): string {
+  const plan = input.planTitle?.trim();
+  if (
+    plan &&
+    !isGenericIngestPlaceholder(plan) &&
+    !isBadIngestTitle(plan)
+  ) {
+    return normalizeIngestDisplayTitle(plan);
+  }
+  for (const fileName of input.uploadFileNames ?? []) {
+    const fromFile = deriveTitleFromUploadFileName(fileName);
+    if (fromFile) return fromFile;
+  }
+  return deriveCourseTitleFromChunkTitles(input.chunkTitles ?? []);
 }
 
 function disambiguateModuleTitle(title: string, index: number, used: Set<string>): string {

@@ -6,11 +6,14 @@ import type {
 import type { IngestChunkSummary } from "@/lib/study-ingest/chunking";
 import {
   deriveCourseTitleFromChunkTitles,
+  deriveTitleFromUploadFileName,
   disambiguateModuleTitle,
   isBadIngestTitle,
+  isWeakModuleTitle,
   moduleTitleFromLessonTitles,
   normalizeIngestDisplayTitle,
   polishLessonTitlesForModule,
+  resolveCourseDisplayTitle,
   substantiveLessonTitles,
 } from "@/lib/study-ingest/normalize-ingest-title";
 import { isDenseSectionedPharmacologyDeck } from "@/lib/study-ingest/pdf-section-split";
@@ -201,17 +204,23 @@ export function structurePlanCoveragePromptBlock(
 - The later writing step will teach **only** what you assign here; missing chunks = missing course content.`;
 }
 
+function partTitleFromChunkPosition(position: string): string | null {
+  const part = position.match(/\b(?:transcript part|section|part)\s+(\d+)/i);
+  return part ? `Part ${part[1]}` : null;
+}
+
 function lessonTitleFromChunks(chunks: IngestChunkSummary[]): string {
   if (chunks.length === 1) {
     const c = chunks[0]!;
     const t = normalizeIngestDisplayTitle(c.title.trim());
     if (!isBadIngestTitle(t)) return t;
-    const pos = c.position.trim();
-    const page = pos.match(/\bpage\s+(\d+)/i);
+    const posTitle = partTitleFromChunkPosition(c.position.trim());
+    if (posTitle) return posTitle;
+    const page = c.position.match(/\bpage\s+(\d+)/i);
     if (page) return `Page ${page[1]}`;
-    const slide = pos.match(/\bslide\s+(\d+)/i);
+    const slide = c.position.match(/\bslide\s+(\d+)/i);
     if (slide) return `Slide ${slide[1]}`;
-    return "Core concepts";
+    return "Part 1";
   }
   for (const c of chunks) {
     const t = normalizeIngestDisplayTitle(c.title.trim());
@@ -226,10 +235,12 @@ function lessonTitleFromChunks(chunks: IngestChunkSummary[]): string {
       ? `Page ${firstPage[1]}`
       : `Pages ${firstPage[1]}–${lastPage[1]}`;
   }
+  const posTitle = partTitleFromChunkPosition(first.position.trim());
+  if (posTitle) return posTitle;
   if (first.position.trim() && !/^section\s+\d+$/i.test(first.position.trim())) {
     return `${first.position} – ${last.position}`.slice(0, 80);
   }
-  return "Core concepts";
+  return "Part 1";
 }
 
 const GENERIC_INTRO_CHUNK =
@@ -352,9 +363,14 @@ export function buildDeterministicStructurePlan(
   };
 }
 
+export type StructurePlanTitleOptions = {
+  uploadFileNames?: string[];
+};
+
 /** Apply stable display titles to any structure plan (LLM or deterministic). */
 export function normalizeStructurePlanTitles(
-  plan: CourseStructurePlan
+  plan: CourseStructurePlan,
+  options?: StructurePlanTitleOptions
 ): CourseStructurePlan {
   const usedModuleTitles = new Set<string>();
   const modules = plan.modules.map((mod, modIndex) => {
@@ -365,8 +381,16 @@ export function normalizeStructurePlanTitles(
       ...lesson,
       title: polished[i] ?? normalizeIngestDisplayTitle(lesson.title),
     }));
+    let candidate = moduleTitleFromLessonTitles(lessons.map((l) => l.title));
+    if (isWeakModuleTitle(candidate)) {
+      const uploadName = options?.uploadFileNames?.[modIndex];
+      const fromFile = uploadName
+        ? deriveTitleFromUploadFileName(uploadName)
+        : null;
+      candidate = fromFile ?? `Section ${modIndex + 1}`;
+    }
     const title = disambiguateModuleTitle(
-      moduleTitleFromLessonTitles(lessons.map((l) => l.title)),
+      candidate,
       modIndex,
       usedModuleTitles
     );
@@ -377,13 +401,11 @@ export function normalizeStructurePlanTitles(
     };
   });
   const chunkTitles = modules.flatMap((m) => m.lessons.map((l) => l.title));
-  const rawPlanTitle = plan.title?.trim();
-  const title =
-    rawPlanTitle &&
-    !/^a structured course/i.test(rawPlanTitle) &&
-    !isBadIngestTitle(rawPlanTitle)
-      ? normalizeIngestDisplayTitle(rawPlanTitle)
-      : deriveCourseTitleFromChunkTitles(chunkTitles);
+  const title = resolveCourseDisplayTitle({
+    planTitle: plan.title,
+    chunkTitles,
+    uploadFileNames: options?.uploadFileNames,
+  });
   return {
     ...plan,
     title,

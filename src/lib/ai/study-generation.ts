@@ -31,13 +31,14 @@ import {
   structurePlanCoveragePromptBlock,
   structurePlanTargets,
   validateStructurePlanCoverage,
+  type StructurePlanTitleOptions,
   type StructurePlanTargets,
 } from "@/lib/structure-plan-coverage";
 import {
-  deriveCourseTitleFromChunkTitles,
   isBadIngestTitle,
   isGenericIngestPlaceholder,
   normalizeIngestDisplayTitle,
+  resolveCourseDisplayTitle,
 } from "@/lib/study-ingest/normalize-ingest-title";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
 import { auditModuleQuantitativeConsistency } from "@/lib/ai/course-quantitative-qa";
@@ -1548,19 +1549,19 @@ export async function planCourseStructureFromChunks(
 /** Convert a structure plan into the existing outline shape (expand/finalize unchanged). */
 export function structurePlanToOutline(
   plan: CourseStructurePlan,
-  fallbackTitle?: string
+  options?: StructurePlanTitleOptions
 ): CourseOutlinePayload {
-  const normalized = normalizeStructurePlanTitles(plan);
+  const normalized = normalizeStructurePlanTitles(plan, options);
   const modules = normalized.modules.map((m, i) => ({
     id: i + 1,
     title: normalizeIngestDisplayTitle(m.title),
     lesson_titles: m.lessons.map((l) => normalizeIngestDisplayTitle(l.title)),
   }));
-  const title =
-    normalized.title?.trim() ||
-    fallbackTitle?.trim() ||
-    modules[0]?.title ||
-    "Course";
+  const title = resolveCourseDisplayTitle({
+    planTitle: normalized.title,
+    chunkTitles: modules.flatMap((m) => m.lesson_titles),
+    uploadFileNames: options?.uploadFileNames,
+  });
   const rawDescription = plan.description?.trim();
   const description =
     rawDescription && !isGenericIngestPlaceholder(rawDescription)
@@ -1608,20 +1609,21 @@ export function assembleModuleSourcesFromPlan(
 }
 
 /** Phase 1 of chunked PDF ingest — small JSON, usually finishes quickly. */
-function normalizeOutlinePayload(outline: CourseOutlinePayload): CourseOutlinePayload {
+function normalizeOutlinePayload(
+  outline: CourseOutlinePayload,
+  options?: StructurePlanTitleOptions
+): CourseOutlinePayload {
   const modules = outline.modules.map((m) => ({
     ...m,
     title: normalizeIngestDisplayTitle(m.title),
     lesson_titles: m.lesson_titles.map((t) => normalizeIngestDisplayTitle(t)),
   }));
   const lessonTitles = modules.flatMap((m) => m.lesson_titles);
-  const rawOutlineTitle = outline.title?.trim();
-  const title =
-    rawOutlineTitle &&
-    !/^a structured course/i.test(rawOutlineTitle) &&
-    !isBadIngestTitle(rawOutlineTitle)
-      ? normalizeIngestDisplayTitle(rawOutlineTitle)
-      : deriveCourseTitleFromChunkTitles(lessonTitles);
+  const title = resolveCourseDisplayTitle({
+    planTitle: outline.title?.trim(),
+    chunkTitles: lessonTitles,
+    uploadFileNames: options?.uploadFileNames,
+  });
   return { ...outline, title, modules };
 }
 
@@ -1629,7 +1631,8 @@ export async function generateCourseOutlineFromMaterial(
   materialText: string,
   streamSink?: PdfIngestStreamSink,
   studyContext?: string,
-  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE
+  outputLanguage: CourseOutputLanguage = DEFAULT_COURSE_OUTPUT_LANGUAGE,
+  titleOptions?: StructurePlanTitleOptions
 ): Promise<CourseOutlinePayload> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -1676,16 +1679,21 @@ export async function generateCourseOutlineFromMaterial(
     parsed = JSON.parse(stripJsonFence(rawText));
   } catch {
     return normalizeOutlinePayload(
-      await repairOutlineJson(anthropic, rawText, profile)
+      await repairOutlineJson(anthropic, rawText, profile),
+      titleOptions
     );
   }
 
   try {
-    return normalizeOutlinePayload(parseCourseOutlinePayload(parsed));
+    return normalizeOutlinePayload(
+      parseCourseOutlinePayload(parsed),
+      titleOptions
+    );
   } catch (e) {
     console.warn("[study-generation] outline validation failed; repairing", e);
     return normalizeOutlinePayload(
-      await repairOutlineJson(anthropic, rawText, profile)
+      await repairOutlineJson(anthropic, rawText, profile),
+      titleOptions
     );
   }
 }

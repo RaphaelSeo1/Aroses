@@ -1,5 +1,5 @@
 import type { CoursePayload } from "@/types/course";
-import { isGenericIngestPlaceholder, isBadIngestTitle, normalizeIngestDisplayTitle } from "@/lib/study-ingest/normalize-ingest-title";
+import { isGenericIngestPlaceholder, isBadIngestTitle, isSentenceLikeIngestTitle, normalizeIngestDisplayTitle, deriveTitleFromUploadFileName } from "@/lib/study-ingest/normalize-ingest-title";
 
 const INVALID_FILENAME_CHARS = /[/\\?%*:|"<>]/g;
 
@@ -71,6 +71,7 @@ function scoreStemForMaterialLabel(stem: string, sourceIndex: number): number {
   let score = Math.min(100, stem.length);
   if (isGenericIngestPlaceholder(stem)) score -= 200;
   if (isBadIngestTitle(stem)) score -= 250;
+  if (isSentenceLikeIngestTitle(stem)) score -= 220;
   if (GENERIC_TITLE_LINE.test(stem)) score -= 42;
   if (GENERIC_LECTURE_NUM.test(stem)) score -= 18;
   if (/^week\s*\d+\b/i.test(stem)) score -= 6;
@@ -171,6 +172,8 @@ export function resolveMaterialSectionLabel(input: {
   if (fromPayload) candidates.push(fromPayload);
   const upload = input.originalFileName?.trim();
   if (upload) {
+    const fromUpload = deriveTitleFromUploadFileName(upload);
+    if (fromUpload) candidates.unshift(fromUpload);
     const stem = stripKnownDocumentExtension(upload);
     if (stem) candidates.unshift(stem);
     else candidates.unshift(upload);

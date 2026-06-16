@@ -2094,6 +2094,27 @@ function isPdfPageRenderEnabled(): boolean {
   return true;
 }
 
+function collectUploadFileNames(input: {
+  primaryFileName?: string | null;
+  sourceFiles?: IngestSourceFileRef[] | null;
+  chunks?: IngestChunk[];
+}): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (name?: string | null) => {
+    const t = name?.trim();
+    if (!t) return;
+    const key = t.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(t);
+  };
+  add(input.primaryFileName);
+  for (const chunk of input.chunks ?? []) add(chunk.sourceFileName);
+  for (const file of input.sourceFiles ?? []) add(file.originalFileName);
+  return out;
+}
+
 async function runPdfIngestOutlinePhase(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   input: {
@@ -2260,7 +2281,13 @@ async function runPdfIngestOutlinePhase(
           ),
         { maxAttempts: 14 }
       );
-      outline = structurePlanToOutline(plan);
+      outline = structurePlanToOutline(plan, {
+        uploadFileNames: collectUploadFileNames({
+          primaryFileName,
+          sourceFiles,
+          chunks,
+        }),
+      });
       planJson = plan;
       console.info("[pdf-ingest] structure plan ok", {
         jobId,
@@ -2400,7 +2427,14 @@ async function runPdfIngestOutlinePhase(
             sourceTextForOutline,
             streamSink,
             courseStudyContext ?? undefined,
-            generationLanguage
+            generationLanguage,
+            {
+              uploadFileNames: collectUploadFileNames({
+                primaryFileName,
+                sourceFiles,
+                chunks,
+              }),
+            }
           ),
         { maxAttempts: 14 }
       );
