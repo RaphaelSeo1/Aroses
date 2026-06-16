@@ -1,3 +1,5 @@
+import { helpContent } from "./help-content";
+
 const en = {
   metaTitle: "How to Use {app}",
   metaDescription:
@@ -7,6 +9,7 @@ const en = {
   title: "How to use {app}",
   subtitle:
     "Everything in one place — with UI previews of what you'll see on screen. Video walkthroughs are coming soon; the written guide is kept up to date with the app.",
+  ...helpContent.en,
 };
 
 const ko: typeof en = {
@@ -18,6 +21,7 @@ const ko: typeof en = {
   title: "{app} 사용 방법",
   subtitle:
     "화면에서 보게 될 UI 미리보기와 함께 모든 내용을 한곳에 모았어요. 영상 워크스루는 곧 제공될 예정이며, 작성 가이드는 앱과 함께 업데이트돼요.",
+  ...helpContent.ko,
 };
 
 export const help = { en, ko };
