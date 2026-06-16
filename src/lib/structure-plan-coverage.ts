@@ -6,6 +6,7 @@ import type {
 import type { IngestChunkSummary } from "@/lib/study-ingest/chunking";
 import {
   deriveCourseTitleFromChunkTitles,
+  disambiguateModuleTitle,
   isBadIngestTitle,
   moduleTitleFromLessonTitles,
   normalizeIngestDisplayTitle,
@@ -355,7 +356,8 @@ export function buildDeterministicStructurePlan(
 export function normalizeStructurePlanTitles(
   plan: CourseStructurePlan
 ): CourseStructurePlan {
-  const modules = plan.modules.map((mod) => {
+  const usedModuleTitles = new Set<string>();
+  const modules = plan.modules.map((mod, modIndex) => {
     const rawLessonTitles = mod.lessons.map((l) => l.title);
     const modTitleGuess = moduleTitleFromLessonTitles(rawLessonTitles);
     const polished = polishLessonTitlesForModule(rawLessonTitles, modTitleGuess);
@@ -363,20 +365,28 @@ export function normalizeStructurePlanTitles(
       ...lesson,
       title: polished[i] ?? normalizeIngestDisplayTitle(lesson.title),
     }));
+    const title = disambiguateModuleTitle(
+      moduleTitleFromLessonTitles(lessons.map((l) => l.title)),
+      modIndex,
+      usedModuleTitles
+    );
     return {
       ...mod,
-      title: moduleTitleFromLessonTitles(lessons.map((l) => l.title)),
+      title,
       lessons,
     };
   });
   const chunkTitles = modules.flatMap((m) => m.lessons.map((l) => l.title));
+  const rawPlanTitle = plan.title?.trim();
+  const title =
+    rawPlanTitle &&
+    !/^a structured course/i.test(rawPlanTitle) &&
+    !isBadIngestTitle(rawPlanTitle)
+      ? normalizeIngestDisplayTitle(rawPlanTitle)
+      : deriveCourseTitleFromChunkTitles(chunkTitles);
   return {
     ...plan,
-    title:
-      plan.title?.trim() &&
-      !/^a structured course/i.test(plan.title.trim())
-        ? normalizeIngestDisplayTitle(plan.title)
-        : deriveCourseTitleFromChunkTitles(chunkTitles),
+    title,
     modules,
   };
 }

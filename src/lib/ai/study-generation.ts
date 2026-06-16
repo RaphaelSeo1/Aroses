@@ -1600,10 +1600,12 @@ function normalizeOutlinePayload(outline: CourseOutlinePayload): CourseOutlinePa
     lesson_titles: m.lesson_titles.map((t) => normalizeIngestDisplayTitle(t)),
   }));
   const lessonTitles = modules.flatMap((m) => m.lesson_titles);
+  const rawOutlineTitle = outline.title?.trim();
   const title =
-    outline.title?.trim() &&
-    !/^a structured course/i.test(outline.title.trim())
-      ? normalizeIngestDisplayTitle(outline.title)
+    rawOutlineTitle &&
+    !/^a structured course/i.test(rawOutlineTitle) &&
+    !isBadIngestTitle(rawOutlineTitle)
+      ? normalizeIngestDisplayTitle(rawOutlineTitle)
       : deriveCourseTitleFromChunkTitles(lessonTitles);
   return { ...outline, title, modules };
 }

@@ -940,7 +940,27 @@ export function CourseBuildTheater({
               ) : null}
               {preview && preview.modules.length > 1 ? (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {preview.modules.map((m, i) => (
+                  {preview.modules.map((m, i) => {
+                    const duplicateCount = preview.modules.filter(
+                      (other) =>
+                        other.title.trim().toLowerCase() ===
+                        m.title.trim().toLowerCase()
+                    ).length;
+                    const dupIndex =
+                      duplicateCount > 1
+                        ? preview.modules
+                            .slice(0, i + 1)
+                            .filter(
+                              (other) =>
+                                other.title.trim().toLowerCase() ===
+                                m.title.trim().toLowerCase()
+                            ).length
+                        : 0;
+                    const label =
+                      duplicateCount > 1 && dupIndex > 1
+                        ? `${m.title} (${dupIndex})`
+                        : m.title;
+                    return (
                     <button
                       key={m.id}
                       type="button"
@@ -951,9 +971,10 @@ export function CourseBuildTheater({
                           : "border border-zinc-200 bg-white text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
                       }`}
                     >
-                      {m.title}
+                      {label}
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : null}
             </div>

@@ -1,5 +1,5 @@
 import type { CoursePayload } from "@/types/course";
-import { isGenericIngestPlaceholder } from "@/lib/study-ingest/normalize-ingest-title";
+import { isGenericIngestPlaceholder, isBadIngestTitle, normalizeIngestDisplayTitle } from "@/lib/study-ingest/normalize-ingest-title";
 
 const INVALID_FILENAME_CHARS = /[/\\?%*:|"<>]/g;
 
@@ -70,6 +70,7 @@ function firstDescriptionLine(desc: string): string | null {
 function scoreStemForMaterialLabel(stem: string, sourceIndex: number): number {
   let score = Math.min(100, stem.length);
   if (isGenericIngestPlaceholder(stem)) score -= 200;
+  if (isBadIngestTitle(stem)) score -= 250;
   if (GENERIC_TITLE_LINE.test(stem)) score -= 42;
   if (GENERIC_LECTURE_NUM.test(stem)) score -= 18;
   if (/^week\s*\d+\b/i.test(stem)) score -= 6;
@@ -102,7 +103,7 @@ function collectPayloadTitleCandidates(p: Partial<CoursePayload>): string[] {
   for (let i = 0; i < raw.length; i++) {
     const r = raw[i];
     const k = r.trim().toLowerCase();
-    if (k.length < 3 || seen.has(k)) continue;
+    if (k.length < 3 || seen.has(k) || isBadIngestTitle(r)) continue;
     seen.add(k);
     out.push(r);
   }
@@ -149,12 +150,20 @@ export function resolveMaterialSectionLabel(input: {
 }): string {
   const candidates: string[] = [];
   const outlineTitle = input.outlineTitle?.trim();
-  if (outlineTitle && !isGenericIngestPlaceholder(outlineTitle)) {
+  if (
+    outlineTitle &&
+    !isGenericIngestPlaceholder(outlineTitle) &&
+    !isBadIngestTitle(outlineTitle)
+  ) {
     candidates.push(outlineTitle);
   }
   if (input.payload && typeof input.payload === "object") {
     const p = input.payload as Partial<CoursePayload>;
-    if (typeof p.title === "string" && p.title.trim()) {
+    if (
+      typeof p.title === "string" &&
+      p.title.trim() &&
+      !isBadIngestTitle(p.title)
+    ) {
       candidates.push(p.title.trim());
     }
   }
@@ -163,13 +172,19 @@ export function resolveMaterialSectionLabel(input: {
   const upload = input.originalFileName?.trim();
   if (upload) {
     const stem = stripKnownDocumentExtension(upload);
-    if (stem) candidates.push(stem);
-    else candidates.push(upload);
+    if (stem) candidates.unshift(stem);
+    else candidates.unshift(upload);
   }
 
   for (const c of candidates) {
     const label = finalizeMaterialSectionLabel(c);
-    if (label && !isGenericIngestPlaceholder(label)) return label;
+    if (
+      label &&
+      !isGenericIngestPlaceholder(label) &&
+      !isBadIngestTitle(label)
+    ) {
+      return label;
+    }
   }
   return "Material";
 }

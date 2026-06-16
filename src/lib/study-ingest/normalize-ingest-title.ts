@@ -74,7 +74,11 @@ export function normalizeIngestDisplayTitle(raw: string): string {
 const SPEAKER_PREFIX = /^[A-Z][A-Z0-9\s.'-]{2,48}:\s*/;
 const SECTION_PLACEHOLDER = /^section\s+\d+(?:\s*[§-]\s*\d+)?$/i;
 const TRANSCRIPT_FRAGMENT =
-  /\b(that's|we're|you're|going to|let's|when you|where we|i'm|don't|isn't|aren't|gonna|we'll|you'll|i'll|because|although|however)\b/i;
+  /\b(that's|we're|you're|going to|let's|when you|where we|what we|what they|what you|so what|i'm|don't|isn't|aren't|gonna|we'll|you'll|i'll|because|although|however|haven't|hasn't|didn't|won't|wouldn't)\b/i;
+const INCOMPLETE_PHRASE =
+  /\b(haven't|hasn't|didn't|won't|wouldn't|couldn't|shouldn't|isn't|aren't|wasn't|weren't)\s*$/i;
+const SPOKEN_CLAUSE =
+  /\.\s+(?:So |And |But |What |When |Where |If |Then |Now |Okay |Ok )/i;
 
 /** True when raw text should not become a module/lesson label in the sidebar. */
 export function isBadIngestTitle(raw: string): boolean {
@@ -88,11 +92,15 @@ export function isBadIngestTitle(raw: string): boolean {
   if (SPEAKER_PREFIX.test(t)) return true;
   if (/^[A-Z][A-Z0-9\s.'-]{2,48}:$/.test(t)) return true;
   if (TRANSCRIPT_FRAGMENT.test(t)) return true;
-  // Spoken lecture lines — long lowercase prose, not headings.
+  if (INCOMPLETE_PHRASE.test(t)) return true;
+  if (SPOKEN_CLAUSE.test(t)) return true;
+  // Multiple clauses in a label usually means spoken transcript, not a heading.
+  if (t.includes(".") && t.split(/\.\s+/).length >= 2 && t.length < 72) return true;
+  // Spoken lecture lines — lowercase prose, not headings.
   if (
-    t.length > 42 &&
+    t.length > 28 &&
     /[a-z]/.test(t) &&
-    /\b(the|and|or|to|a|an|is|are|was|were|of|in|on|for|that|this|with)\b/i.test(
+    /\b(the|and|or|to|a|an|is|are|was|were|of|in|on|for|that|this|with|we|you|what|so|up|goes)\b/i.test(
       t
     )
   ) {
@@ -182,7 +190,7 @@ export function polishLessonTitlesForModule(
 
     const key = title.toLowerCase();
     if (modKey && key === modKey && i === 0) {
-      title = "Overview";
+      title = "Introduction";
     } else if (used.has(key)) {
       title = `${title} (${i + 1})`;
     }
@@ -248,12 +256,37 @@ export function deriveCourseTitleFromChunkTitles(titles: string[]): string {
   return first && first.length > 0 ? first : "Course";
 }
 
+function disambiguateModuleTitle(title: string, index: number, used: Set<string>): string {
+  let out = title;
+  const key = out.toLowerCase();
+  if (!used.has(key)) {
+    used.add(key);
+    return out;
+  }
+  out = `${title} (${index + 1})`;
+  used.add(out.toLowerCase());
+  return out;
+}
+
+export { disambiguateModuleTitle };
+
 /** Deterministic module label from its lessons (pairs → "A 및 B"). */
 export function moduleTitleFromLessonTitles(lessonTitles: string[]): string {
   const titles = lessonTitles
     .map((t) => normalizeIngestDisplayTitle(t))
-    .filter((t) => t.length > 0 && !isBadIngestTitle(t));
-  if (titles.length === 0) return "Module";
+    .filter(
+      (t) =>
+        t.length > 0 &&
+        !isBadIngestTitle(t) &&
+        !GENERIC_INTRO_LESSON.test(t)
+    );
+  if (titles.length === 0) {
+    const fallback = lessonTitles
+      .map((t) => normalizeIngestDisplayTitle(t))
+      .filter((t) => t.length > 0 && !isBadIngestTitle(t));
+    if (fallback.length > 0) return fallback[0]!;
+    return "Module";
+  }
   if (titles.length === 1) return titles[0]!;
 
   const substantive = substantiveLessonTitles(titles);

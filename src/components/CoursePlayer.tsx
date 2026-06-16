@@ -1424,7 +1424,7 @@ export function CoursePlayer({
                 </div>
               ) : null}
 
-              <div className="mt-6 space-y-10">
+              <div className="mt-6 space-y-10 pb-[max(22rem,calc(18rem+env(safe-area-inset-bottom)))]">
                 {activeModule.lessons.map((lesson, li) => (
                   <div
                     key={li}
