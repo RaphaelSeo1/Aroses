@@ -184,8 +184,13 @@ function resolveBlockFromPath(
   const tag = match[1].toUpperCase();
   const idx = Number(match[2]);
   if (!Number.isFinite(idx) || idx < 0) return null;
-  const blocks = listStableBlocks(root).filter((el) => el.tagName === tag);
-  return blocks[idx] ?? null;
+  // The index is stored against the FULL block list (all tag types in document
+  // order), so resolve against that same list — do NOT filter by tag first or
+  // the indices won't line up. The tag is only a sanity check.
+  const blocks = listStableBlocks(root);
+  const el = blocks[idx];
+  if (!el || el.tagName !== tag) return null;
+  return el;
 }
 
 function collectTextNodesIn(
@@ -304,6 +309,27 @@ function writeAnchorToMark(mark: HTMLElement, anchor: LessonHighlightAnchor) {
   mark.dataset.lessonHighlightBlockPath = anchor.blockPath;
   mark.dataset.lessonHighlightStart = String(anchor.start);
   mark.dataset.lessonHighlightEnd = String(anchor.end);
+}
+
+function markExistsForAnchor(
+  root: HTMLElement,
+  anchor: LessonHighlightAnchor
+): boolean {
+  const marks = root.querySelectorAll<HTMLElement>(
+    "[data-lesson-highlight-block-path]"
+  );
+  for (const mark of marks) {
+    const existing = readAnchorFromMark(mark);
+    if (
+      existing &&
+      existing.blockPath === anchor.blockPath &&
+      existing.start === anchor.start &&
+      existing.end === anchor.end
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function readAnchorFromMark(mark: HTMLElement): LessonHighlightAnchor | null {
@@ -732,6 +758,10 @@ function restoreSavedHighlights(
     if (text.length < MIN_CHARS) continue;
 
     if (entry.anchor) {
+      // Skip if this exact anchor is already wrapped on the page (the restore
+      // pass re-fires whenever a highlight is added while reading; re-wrapping
+      // an already-marked span would corrupt offsets).
+      if (markExistsForAnchor(root, entry.anchor)) continue;
       const block = resolveBlockFromPath(root, entry.anchor.blockPath);
       if (!block) {
         console.warn("[highlight] restore miss — block path not found", {
