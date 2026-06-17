@@ -10,6 +10,7 @@ import {
   type LessonHighlightColor,
   type LessonHighlightRemoveFromNotesDetail,
   type LessonHighlightRestoreDetail,
+  type LessonHighlightAnchor,
   type LessonQuoteDetail,
 } from "@/components/LessonQuoteCaptureRegion";
 
@@ -26,10 +27,47 @@ function dispatchHighlightRemoveFromNotes(
   );
 }
 
-function formatHighlightEntry(text: string, color?: LessonHighlightColor): string {
+const HIGHLIGHT_LABEL_RE =
+  /^\[(Pink|Yellow|Blue|Green|Purple) highlight(?:\|([a-z0-9]+:\d+)\|(\d+):(\d+))?\]\s+([\s\S]*)$/i;
+
+function parseHighlightLabel(part: string): {
+  color?: LessonHighlightColor;
+  anchor?: LessonHighlightAnchor;
+  text: string;
+} | null {
+  const m = part.match(HIGHLIGHT_LABEL_RE);
+  if (!m) return null;
+  const color = m[1].toLowerCase() as LessonHighlightColor;
+  const text = m[5].trim();
+  if (!m[2] || m[3] === undefined || m[4] === undefined) {
+    return { color, text };
+  }
+  const start = Number(m[3]);
+  const end = Number(m[4]);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return { color, text };
+  }
+  return {
+    color,
+    text,
+    anchor: { blockPath: m[2], start, end },
+  };
+}
+
+function formatHighlightEntry(
+  text: string,
+  color?: LessonHighlightColor,
+  anchor?: LessonHighlightAnchor
+): string {
   if (!color) return text.trim();
   const label = `${color[0].toUpperCase()}${color.slice(1)}`;
-  return `[${label} highlight] ${text.trim()}`;
+  const anchorSuffix =
+    anchor &&
+    Number.isFinite(anchor.start) &&
+    Number.isFinite(anchor.end)
+      ? `|${anchor.blockPath}|${anchor.start}:${anchor.end}`
+      : "";
+  return `[${label} highlight${anchorSuffix}] ${text.trim()}`;
 }
 
 function dispatchHighlightRestore(detail: LessonHighlightRestoreDetail) {
@@ -77,34 +115,52 @@ function parseHighlightEntries(raw: string): Array<{
   key: string;
   text: string;
   color?: LessonHighlightColor;
+  anchor?: LessonHighlightAnchor;
 }> {
   return splitEntries(raw).map((part, index) => {
-    const colorMatch = part.match(
-      /^\[(Pink|Yellow|Blue|Green|Purple) highlight\]\s+([\s\S]*)$/i
-    );
-    if (colorMatch) {
-      const color = colorMatch[1].toLowerCase() as LessonHighlightColor;
-      return { key: `${index}-${color}`, text: colorMatch[2].trim(), color };
+    const parsed = parseHighlightLabel(part);
+    if (parsed?.color) {
+      const anchorKey = parsed.anchor
+        ? `${parsed.anchor.blockPath}:${parsed.anchor.start}:${parsed.anchor.end}`
+        : "legacy";
+      return {
+        key: `${index}-${parsed.color}-${anchorKey}`,
+        text: parsed.text,
+        color: parsed.color,
+        anchor: parsed.anchor,
+      };
     }
     return { key: `${index}-plain`, text: part };
   });
 }
 
-function removeHighlightEntry(raw: string, textToRemove: string): string {
+function anchorsEqual(
+  a?: LessonHighlightAnchor,
+  b?: LessonHighlightAnchor
+): boolean {
+  if (!a || !b) return false;
+  return (
+    a.blockPath === b.blockPath && a.start === b.start && a.end === b.end
+  );
+}
+
+function removeHighlightEntry(
+  raw: string,
+  textToRemove: string,
+  anchorToRemove?: LessonHighlightAnchor
+): string {
   const normalized = textToRemove.replace(/\s+/g, " ").trim();
   if (!normalized) return raw;
   const parts = splitEntries(raw);
-  // Prefer exact match: if any labeled chip's text equals the target, only
-  // strip exact matches and leave any substring-containing chips alone.
-  // Otherwise fall back to "contains" so a single line removed on the page
-  // takes its multi-line parent chip with it.
-  const labels = parts.map((part) => {
-    const m = part.match(
-      /^\[(Pink|Yellow|Blue|Green|Purple) highlight\]\s+([\s\S]*)$/i
-    );
-    if (!m) return null;
-    return m[2].replace(/\s+/g, " ").trim();
-  });
+  const parsed = parts.map((part) => parseHighlightLabel(part));
+  if (anchorToRemove) {
+    return parts
+      .filter((_, i) => !anchorsEqual(parsed[i]?.anchor, anchorToRemove))
+      .join(ENTRY_JOIN);
+  }
+  const labels = parsed.map((p) =>
+    p ? p.text.replace(/\s+/g, " ").trim() : null
+  );
   const hasExact = labels.some((l) => l !== null && l === normalized);
   return parts
     .filter((_, i) => {
@@ -118,44 +174,74 @@ function removeHighlightEntry(raw: string, textToRemove: string): string {
 
 function findContainingHighlightChip(
   raw: string,
-  textToFind: string
+  textToFind: string,
+  anchorToFind?: LessonHighlightAnchor
 ):
   | {
       text: string;
       color: LessonHighlightColor;
+      anchor?: LessonHighlightAnchor;
     }
   | null {
   const normalized = textToFind.replace(/\s+/g, " ").trim();
   if (!normalized) return null;
   const parsed = parseHighlightEntries(raw);
+  if (anchorToFind) {
+    const byAnchor = parsed.find(
+      (e) => Boolean(e.color) && anchorsEqual(e.anchor, anchorToFind)
+    );
+    if (byAnchor && byAnchor.color) {
+      return {
+        text: byAnchor.text,
+        color: byAnchor.color,
+        anchor: byAnchor.anchor,
+      };
+    }
+  }
   const exact = parsed.find(
     (e) =>
       Boolean(e.color) && e.text.replace(/\s+/g, " ").trim() === normalized
   );
-  if (exact && exact.color) return { text: exact.text, color: exact.color };
+  if (exact && exact.color) {
+    return {
+      text: exact.text,
+      color: exact.color,
+      anchor: exact.anchor,
+    };
+  }
   const partial = parsed.find(
     (e) =>
       Boolean(e.color) &&
       normalized.length > 2 &&
       e.text.replace(/\s+/g, " ").trim().includes(normalized)
   );
-  if (partial && partial.color)
-    return { text: partial.text, color: partial.color };
+  if (partial && partial.color) {
+    return {
+      text: partial.text,
+      color: partial.color,
+      anchor: partial.anchor,
+    };
+  }
   return null;
 }
 
-function upsertHighlightEntry(raw: string, entry: string, text: string): string {
+function upsertHighlightEntry(
+  raw: string,
+  entry: string,
+  text: string,
+  anchor?: LessonHighlightAnchor
+): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   const parts = splitEntries(raw);
-  // Replace in place when the text already exists (preserves chip order on
-  // recolor). Otherwise append.
   let replaced = false;
   const updated = parts.map((part) => {
-    const colorMatch = part.match(
-      /^\[(Pink|Yellow|Blue|Green|Purple) highlight\]\s+([\s\S]*)$/i
-    );
-    if (!colorMatch) return part;
-    if (colorMatch[2].replace(/\s+/g, " ").trim() === normalized) {
+    const parsed = parseHighlightLabel(part);
+    if (!parsed?.color) return part;
+    if (anchor && anchorsEqual(parsed.anchor, anchor)) {
+      replaced = true;
+      return entry;
+    }
+    if (parsed.text.replace(/\s+/g, " ").trim() === normalized) {
       replaced = true;
       return entry;
     }
@@ -348,7 +434,11 @@ export function LessonNotesCapture({
     const timer = window.setTimeout(() => {
       dispatchHighlightRestore({
         lessonIndex,
-        entries: labeled.map((e) => ({ text: e.text, color: e.color })),
+        entries: labeled.map((e) => ({
+          text: e.text,
+          color: e.color,
+          anchor: e.anchor,
+        })),
       });
     }, 0);
     return () => window.clearTimeout(timer);
@@ -375,13 +465,16 @@ export function LessonNotesCapture({
         // siblings.
         const containingChip = findContainingHighlightChip(
           highlightRef.current,
-          t
+          t,
+          d.anchor
         );
         const chipNormalized = containingChip
           ? containingChip.text.replace(/\s+/g, " ").trim()
           : "";
         const tNormalized = t.replace(/\s+/g, " ").trim();
-        setHighlight((prev) => removeHighlightEntry(prev, t));
+        setHighlight((prev) =>
+          removeHighlightEntry(prev, t, d.anchor ?? containingChip?.anchor)
+        );
         if (
           containingChip &&
           chipNormalized !== tNormalized
@@ -394,6 +487,7 @@ export function LessonNotesCapture({
             lessonIndex,
             text: containingChip.text,
             color: containingChip.color,
+            anchor: containingChip.anchor,
           });
         }
         if (d.action === "remove-highlight-and-note") {
@@ -419,14 +513,14 @@ export function LessonNotesCapture({
         }
         return;
       }
-      const entry = formatHighlightEntry(t, d.color);
+      const entry = formatHighlightEntry(t, d.color, d.anchor);
 
       setHighlight((prev) => {
         const p = prev.trim();
         const next = !p
           ? entry
           : d.color
-            ? upsertHighlightEntry(p, entry, t)
+            ? upsertHighlightEntry(p, entry, t, d.anchor)
             : p.includes(t)
               ? p
               : `${p}${ENTRY_JOIN}${entry}`;
@@ -487,22 +581,26 @@ export function LessonNotesCapture({
   }, [undoState, persistNote]);
 
   const removeChip = useCallback(
-    (entry: { text: string; color?: LessonHighlightColor }) => {
+    (entry: {
+      text: string;
+      color?: LessonHighlightColor;
+      anchor?: LessonHighlightAnchor;
+    }) => {
       const snapshot = {
         highlight: highlightRef.current,
         noteBody: noteBodyRef.current,
       };
-      // Compute the next highlight content up front so we can both update
-      // state AND persist the same value without a render round-trip.
       const nextHighlight = removeHighlightEntry(
         highlightRef.current,
-        entry.text
+        entry.text,
+        entry.anchor
       );
       setHighlight(nextHighlight);
       dispatchHighlightRemoveFromNotes({
         lessonIndex,
         text: entry.text,
         color: entry.color,
+        anchor: entry.anchor,
       });
       setMessage("Removed.");
       setUndoState({
@@ -530,6 +628,7 @@ export function LessonNotesCapture({
         lessonIndex,
         text: entry.text,
         color: entry.color,
+        anchor: entry.anchor,
       });
     }
     setMessage("Cleared.");
@@ -602,7 +701,11 @@ export function LessonNotesCapture({
                     <button
                       type="button"
                       onClick={() =>
-                        removeChip({ text: entry.text, color: entry.color })
+                        removeChip({
+                          text: entry.text,
+                          color: entry.color,
+                          anchor: entry.anchor,
+                        })
                       }
                       aria-label="Remove highlight"
                       className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-950/40 dark:hover:text-red-300"

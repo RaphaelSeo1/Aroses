@@ -10,15 +10,26 @@ export const LESSON_HIGHLIGHT_REMOVE_FROM_NOTES_EVENT =
   "aroses-lesson-highlight-remove-from-notes";
 export const LESSON_HIGHLIGHT_RESTORE_EVENT = "aroses-lesson-highlight-restore";
 
+export type LessonHighlightAnchor = {
+  blockPath: string;
+  start: number;
+  end: number;
+};
+
 export type LessonHighlightRestoreDetail = {
   lessonIndex: number;
-  entries: Array<{ text: string; color: LessonHighlightColor }>;
+  entries: Array<{
+    text: string;
+    color: LessonHighlightColor;
+    anchor?: LessonHighlightAnchor;
+  }>;
 };
 
 export type LessonHighlightRemoveFromNotesDetail = {
   lessonIndex: number;
   text: string;
   color?: LessonHighlightColor;
+  anchor?: LessonHighlightAnchor;
 };
 
 export type LessonHighlightColor =
@@ -32,6 +43,7 @@ export type LessonQuoteDetail = {
   lessonIndex: number;
   text: string;
   color?: LessonHighlightColor;
+  anchor?: LessonHighlightAnchor;
   action?: "highlight" | "remove-highlight" | "remove-highlight-and-note";
 };
 
@@ -136,10 +148,179 @@ function readSelection(root: HTMLElement): { text: string; range: Range } | null
 type AppliedHighlight = {
   ok: boolean;
   groupId: string;
-  blocks: Array<{ text: string; blockId: string }>;
+  blocks: Array<{
+    text: string;
+    blockId: string;
+    anchor?: LessonHighlightAnchor;
+  }>;
 };
 
+function listStableBlocks(root: HTMLElement): HTMLElement[] {
+  const blocks: HTMLElement[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  while (walker.nextNode()) {
+    const el = walker.currentNode as HTMLElement;
+    if (BLOCK_TAG_NAMES.has(el.tagName)) blocks.push(el);
+  }
+  return blocks;
+}
+
+function getStableBlockPath(
+  root: HTMLElement,
+  block: HTMLElement
+): string | null {
+  const blocks = listStableBlocks(root);
+  const idx = blocks.indexOf(block);
+  if (idx < 0) return null;
+  return `${block.tagName.toLowerCase()}:${idx}`;
+}
+
+function resolveBlockFromPath(
+  root: HTMLElement,
+  blockPath: string
+): HTMLElement | null {
+  const match = /^([a-z0-9]+):(\d+)$/.exec(blockPath.trim());
+  if (!match) return null;
+  const tag = match[1].toUpperCase();
+  const idx = Number(match[2]);
+  if (!Number.isFinite(idx) || idx < 0) return null;
+  const blocks = listStableBlocks(root).filter((el) => el.tagName === tag);
+  return blocks[idx] ?? null;
+}
+
+function collectTextNodesIn(
+  el: HTMLElement,
+  excludeHighlights: boolean
+): Text[] {
+  const nodes: Text[] = [];
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    if (
+      excludeHighlights &&
+      node.parentElement?.closest("[data-lesson-highlight-color]")
+    ) {
+      continue;
+    }
+    nodes.push(node);
+  }
+  return nodes;
+}
+
+function getRangeOffsetsInElement(
+  el: HTMLElement,
+  range: Range
+): { start: number; end: number } | null {
+  const nodes = collectTextNodesIn(el, false);
+  let pos = 0;
+  let startOff = -1;
+  let endOff = -1;
+
+  for (const node of nodes) {
+    const len = node.textContent?.length ?? 0;
+    const nodeStart = pos;
+    const nodeEnd = pos + len;
+
+    if (startOff < 0) {
+      if (
+        node === range.startContainer &&
+        range.startContainer.nodeType === Node.TEXT_NODE
+      ) {
+        startOff = nodeStart + range.startOffset;
+      }
+    }
+    if (endOff < 0) {
+      if (
+        node === range.endContainer &&
+        range.endContainer.nodeType === Node.TEXT_NODE
+      ) {
+        endOff = nodeStart + range.endOffset;
+      }
+    }
+    pos += len;
+  }
+
+  if (startOff < 0 || endOff < 0 || endOff <= startOff) return null;
+  return { start: startOff, end: endOff };
+}
+
+function rangeFromElementOffsets(
+  el: HTMLElement,
+  start: number,
+  end: number,
+  excludeHighlights = true
+): Range | null {
+  const nodes = collectTextNodesIn(el, excludeHighlights);
+  let pos = 0;
+  let startNode: Text | null = null;
+  let startOffset = 0;
+  let endNode: Text | null = null;
+  let endOffset = 0;
+
+  for (const node of nodes) {
+    const len = node.textContent?.length ?? 0;
+    const nodeStart = pos;
+    const nodeEnd = pos + len;
+
+    if (!startNode && start >= nodeStart && start <= nodeEnd) {
+      startNode = node;
+      startOffset = start - nodeStart;
+    }
+    if (!endNode && end >= nodeStart && end <= nodeEnd) {
+      endNode = node;
+      endOffset = end - nodeStart;
+      break;
+    }
+    if (startNode && end > nodeEnd) {
+      endNode = node;
+      endOffset = len;
+    }
+    pos += len;
+  }
+
+  if (!startNode || !endNode) return null;
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  return range;
+}
+
+function computeAnchorForBlockRange(
+  root: HTMLElement,
+  block: HTMLElement,
+  range: Range
+): LessonHighlightAnchor | null {
+  const blockPath = getStableBlockPath(root, block);
+  const offsets = getRangeOffsetsInElement(block, range);
+  if (!blockPath || !offsets) return null;
+  return {
+    blockPath,
+    start: offsets.start,
+    end: offsets.end,
+  };
+}
+
+function writeAnchorToMark(mark: HTMLElement, anchor: LessonHighlightAnchor) {
+  mark.dataset.lessonHighlightBlockPath = anchor.blockPath;
+  mark.dataset.lessonHighlightStart = String(anchor.start);
+  mark.dataset.lessonHighlightEnd = String(anchor.end);
+}
+
+function readAnchorFromMark(mark: HTMLElement): LessonHighlightAnchor | null {
+  const blockPath = mark.dataset.lessonHighlightBlockPath;
+  const startRaw = mark.dataset.lessonHighlightStart;
+  const endRaw = mark.dataset.lessonHighlightEnd;
+  if (!blockPath || startRaw === undefined || endRaw === undefined) return null;
+  const start = Number(startRaw);
+  const end = Number(endRaw);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+  return { blockPath, start, end };
+}
+
 function applyInlineHighlight(
+  root: HTMLElement,
   range: Range,
   color: LessonHighlightColor
 ): AppliedHighlight {
@@ -218,9 +399,28 @@ function applyInlineHighlight(
   }
 
   // Wrap each text node, tagging it with its block + group ids.
-  const blocksOut: Array<{ text: string; blockId: string }> = [];
+  const blocksOut: AppliedHighlight["blocks"] = [];
   for (const [block, nodes] of groupedByBlock) {
     const blockId = blockIds.get(block)!;
+    const orderedNodes = [...nodes];
+    const blockRange = document.createRange();
+    const firstNode = orderedNodes[0];
+    const lastNode = orderedNodes[orderedNodes.length - 1];
+    if (firstNode && lastNode) {
+      blockRange.setStart(
+        firstNode,
+        firstNode === startContainer
+          ? Math.min(startOffset, firstNode.nodeValue?.length ?? 0)
+          : 0
+      );
+      blockRange.setEnd(
+        lastNode,
+        lastNode === endContainer
+          ? Math.min(endOffset, lastNode.nodeValue?.length ?? 0)
+          : (lastNode.nodeValue?.length ?? 0)
+      );
+    }
+    const anchor = computeAnchorForBlockRange(root, block, blockRange);
     const wrappedTexts: string[] = [];
     for (const node of [...nodes].reverse()) {
       if (!node.isConnected) continue;
@@ -232,14 +432,26 @@ function applyInlineHighlight(
       if (node === endContainer) {
         part.setEnd(node, Math.min(endOffset, node.nodeValue?.length ?? 0));
       }
-      const wrapped = wrapTextRange(part, color, blockId, groupId);
+      const wrapped = wrapTextRange(
+        part,
+        color,
+        blockId,
+        groupId,
+        anchor ?? undefined
+      );
       if (wrapped) wrappedTexts.push(wrapped);
     }
     if (wrappedTexts.length > 0) {
       const blockText = normalizeWhitespace(
         wrappedTexts.reverse().join(" ")
       );
-      if (blockText) blocksOut.push({ text: blockText, blockId });
+      if (blockText) {
+        blocksOut.push({
+          text: blockText,
+          blockId,
+          anchor: anchor ?? undefined,
+        });
+      }
     }
   }
 
@@ -295,7 +507,8 @@ function wrapTextRange(
   range: Range,
   color: LessonHighlightColor,
   blockId?: string,
-  groupId?: string
+  groupId?: string,
+  anchor?: LessonHighlightAnchor
 ): string | null {
   const raw = range.toString();
   if (!raw.trim()) return null;
@@ -304,6 +517,7 @@ function wrapTextRange(
   mark.dataset.lessonHighlightColor = color;
   if (blockId) mark.dataset.lessonHighlightBlockId = blockId;
   if (groupId) mark.dataset.lessonHighlightGroupId = groupId;
+  if (anchor) writeAnchorToMark(mark, anchor);
   mark.style.backgroundColor = bg;
   mark.style.color = "inherit";
   mark.style.borderRadius = "0.2rem";
@@ -450,7 +664,7 @@ function collectHighlightableTextParts(root: HTMLElement): {
   return { parts, combined };
 }
 
-function findTextSpan(
+function findTextSpanInCombined(
   combined: string,
   searchText: string
 ): { start: number; end: number } | null {
@@ -505,28 +719,54 @@ function rangeFromSpan(parts: TextPart[], start: number, end: number): Range | n
   return range;
 }
 
-function isTextAlreadyHighlighted(root: HTMLElement, searchText: string): boolean {
-  const target = normalizeWhitespace(searchText);
-  if (!target) return false;
-  const marks = root.querySelectorAll<HTMLElement>("[data-lesson-highlight-color]");
-  for (const mark of marks) {
-    const markText = normalizeWhitespace(mark.textContent ?? "");
-    if (markText === target || markText.includes(target)) return true;
-  }
-  return false;
-}
-
 function restoreSavedHighlights(
   root: HTMLElement,
-  entries: Array<{ text: string; color: LessonHighlightColor }>
+  entries: Array<{
+    text: string;
+    color: LessonHighlightColor;
+    anchor?: LessonHighlightAnchor;
+  }>
 ) {
   for (const entry of entries) {
     const text = entry.text.trim();
     if (text.length < MIN_CHARS) continue;
-    if (isTextAlreadyHighlighted(root, text)) continue;
 
+    if (entry.anchor) {
+      const block = resolveBlockFromPath(root, entry.anchor.blockPath);
+      if (!block) {
+        console.warn("[highlight] restore miss — block path not found", {
+          blockPath: entry.anchor.blockPath,
+        });
+        continue;
+      }
+      const range = rangeFromElementOffsets(
+        block,
+        entry.anchor.start,
+        entry.anchor.end,
+        true
+      );
+      if (!range) {
+        console.warn("[highlight] restore miss — offsets out of range", {
+          blockPath: entry.anchor.blockPath,
+          start: entry.anchor.start,
+          end: entry.anchor.end,
+        });
+        continue;
+      }
+      const result = applyInlineHighlight(root, range, entry.color);
+      if (!result.ok) {
+        console.warn("[highlight] restore wrap failed (anchored)", {
+          text: text.slice(0, 80),
+          color: entry.color,
+          anchor: entry.anchor,
+        });
+      }
+      continue;
+    }
+
+    // Legacy entries without anchors: only search text not already highlighted.
     const { parts, combined } = collectHighlightableTextParts(root);
-    const span = findTextSpan(combined, text);
+    const span = findTextSpanInCombined(combined, text);
     if (!span) {
       console.warn("[highlight] restore miss — text not found in lesson", {
         text: text.slice(0, 80),
@@ -535,7 +775,7 @@ function restoreSavedHighlights(
     }
     const range = rangeFromSpan(parts, span.start, span.end);
     if (!range) continue;
-    const result = applyInlineHighlight(range, entry.color);
+    const result = applyInlineHighlight(root, range, entry.color);
     if (!result.ok) {
       console.warn("[highlight] restore wrap failed", {
         text: text.slice(0, 80),
@@ -628,6 +868,43 @@ export function LessonQuoteCaptureRegion({
       const rootEl = ref.current;
       if (!rootEl) return;
 
+      let removed = 0;
+
+      // 0) Precise anchor path — removes exactly one highlight even when the
+      //    same wording appears elsewhere in the lesson.
+      if (d.anchor) {
+        const dAnchor = d.anchor;
+        const block = resolveBlockFromPath(rootEl, dAnchor.blockPath);
+        if (block) {
+          const marks = Array.from(
+            block.querySelectorAll<HTMLElement>("[data-lesson-highlight-color]")
+          ).filter((mark) => {
+            const anchor = readAnchorFromMark(mark);
+            if (!anchor) return false;
+            return (
+              anchor.blockPath === dAnchor.blockPath &&
+              anchor.start === dAnchor.start &&
+              anchor.end === dAnchor.end
+            );
+          });
+          for (const mark of marks) {
+            removeInlineHighlight(mark);
+            removed += 1;
+          }
+        }
+        if (removed > 0) {
+          console.log("[highlight] remove-from-notes via anchor", {
+            removed,
+            anchor: d.anchor,
+          });
+          if (activeMarkRef.current && !activeMarkRef.current.isConnected) {
+            activeMarkRef.current = null;
+            setMenu(null);
+          }
+          return;
+        }
+      }
+
       // 1) Block-id path (new highlights): each chip == one block. Find the
       //    block whose joined text matches exactly and remove only that
       //    block's marks. This is what makes "delete the title line from
@@ -647,7 +924,6 @@ export function LessonQuoteCaptureRegion({
         if (blockText === target) blockMatches.push(blockId);
       }
 
-      let removed = 0;
       if (blockMatches.length > 0) {
         for (const blockId of blockMatches) {
           const marks = Array.from(
@@ -777,20 +1053,28 @@ export function LessonQuoteCaptureRegion({
         recolorHighlightInPlace(activeMark, color);
         const rootEl = ref.current;
         const groupMarks = getRelatedMarks(activeMark, "group");
-        const blockTexts = new Map<string, string>();
+        const blockEntries = new Map<
+          string,
+          { text: string; anchor?: LessonHighlightAnchor }
+        >();
         for (const m of groupMarks) {
           const blockId = m.dataset.lessonHighlightBlockId;
           if (!blockId || !rootEl) continue;
-          if (blockTexts.has(blockId)) continue;
+          if (blockEntries.has(blockId)) continue;
           const t = getBlockText(rootEl, blockId);
-          if (t) blockTexts.set(blockId, t);
+          if (!t) continue;
+          blockEntries.set(blockId, {
+            text: t,
+            anchor: readAnchorFromMark(m) ?? undefined,
+          });
         }
-        if (blockTexts.size > 0) {
-          for (const text of blockTexts.values()) {
+        if (blockEntries.size > 0) {
+          for (const entry of blockEntries.values()) {
             dispatchQuote({
               lessonIndex,
-              text,
+              text: entry.text,
               color,
+              anchor: entry.anchor,
               action: "highlight",
             });
           }
@@ -803,6 +1087,7 @@ export function LessonQuoteCaptureRegion({
               lessonIndex,
               text,
               color,
+              anchor: readAnchorFromMark(activeMark) ?? undefined,
               action: "highlight",
             });
           }
@@ -821,19 +1106,28 @@ export function LessonQuoteCaptureRegion({
 
     const pending = pendingRef.current;
     if (!pending) return;
+    const rootEl = ref.current;
+    if (!rootEl) return;
     console.log("[highlight] new highlight request", {
       color,
       text: pending.text,
     });
-    const result = applyInlineHighlight(pending.range, color);
+    const result = applyInlineHighlight(rootEl, pending.range, color);
     if (!result.ok || result.blocks.length === 0) {
       console.warn(
         "[highlight] visual wrap failed; saving note only with fallback text"
+      );
+      const fallbackAnchor = computeAnchorForBlockRange(
+        rootEl,
+        findBlockAncestor(pending.range.startContainer) ??
+          (rootEl as HTMLElement),
+        pending.range
       );
       dispatchQuote({
         lessonIndex,
         text: pending.text,
         color,
+        anchor: fallbackAnchor ?? undefined,
         action: "highlight",
       });
     } else {
@@ -845,6 +1139,7 @@ export function LessonQuoteCaptureRegion({
           lessonIndex,
           text: block.text,
           color,
+          anchor: block.anchor,
           action: "highlight",
         });
       }
@@ -894,10 +1189,12 @@ export function LessonQuoteCaptureRegion({
     } else {
       texts = collectNestedHighlightText(mark);
     }
+    const anchor = readAnchorFromMark(mark) ?? undefined;
     console.log("[highlight] removing highlight", {
       texts,
       blockId,
       color,
+      anchor,
       alsoRemoveNote,
     });
     removeInlineHighlight(mark);
@@ -905,7 +1202,7 @@ export function LessonQuoteCaptureRegion({
       ? "remove-highlight-and-note"
       : "remove-highlight";
     for (const text of texts) {
-      dispatchQuote({ lessonIndex, text, color, action });
+      dispatchQuote({ lessonIndex, text, color, anchor, action });
     }
     activeMarkRef.current = null;
     setMenu(null);
