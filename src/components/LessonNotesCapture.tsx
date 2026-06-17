@@ -280,6 +280,19 @@ export function LessonNotesCapture({
   const panelRef = useRef<HTMLDivElement>(null);
   const noteBodyRef = useRef(noteBody);
   const highlightRef = useRef(highlight);
+  // Auto-save plumbing. `hydratedRef` flips true once the initial load
+  // settles so we never auto-save the values we just fetched. `lastSavedRef`
+  // tracks what's already persisted so the debounced effect can skip no-ops.
+  // `savingRef` is a synchronous in-flight flag (the `saving` state lags) used
+  // to serialize writes so concurrent POSTs can't race and overwrite each
+  // other — the bug that silently dropped a second rapid highlight.
+  const hydratedRef = useRef(false);
+  const lastSavedRef = useRef<{ highlight: string; noteBody: string }>({
+    highlight: "",
+    noteBody: "",
+  });
+  const savingRef = useRef(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     noteBodyRef.current = noteBody;
@@ -301,22 +314,33 @@ export function LessonNotesCapture({
         setNoteId(null);
         setHighlight("");
         setNoteBody("");
+        lastSavedRef.current = { highlight: "", noteBody: "" };
+        hydratedRef.current = true;
         setLoading(false);
         return;
       }
       const rows = (j.notes ?? []) as NoteRow[];
       const row = rows[0];
       if (row) {
+        const loadedHighlight = row.highlight_excerpt ?? "";
+        const loadedNote = row.note_body ?? "";
         setNoteId(row.id);
-        setHighlight(row.highlight_excerpt ?? "");
-        setNoteBody(row.note_body ?? "");
+        setHighlight(loadedHighlight);
+        setNoteBody(loadedNote);
+        lastSavedRef.current = {
+          highlight: loadedHighlight,
+          noteBody: loadedNote,
+        };
       } else {
         setNoteId(null);
         setHighlight("");
         setNoteBody("");
+        lastSavedRef.current = { highlight: "", noteBody: "" };
       }
+      hydratedRef.current = true;
     } catch {
       setNoteId(null);
+      hydratedRef.current = true;
     }
     setLoading(false);
   }, [materialId, moduleId, lessonIndex]);
@@ -336,6 +360,10 @@ export function LessonNotesCapture({
   const persistNote = useCallback(
     async (h: string, n: string, silent = false) => {
       setSaving(true);
+      savingRef.current = true;
+      // Record the intent optimistically so the debounced auto-save effect
+      // treats this state as already-persisted and won't fire a duplicate.
+      lastSavedRef.current = { highlight: h, noteBody: n };
       if (!silent) setMessage(null);
       try {
         const trimmedH = h.trim();
@@ -358,7 +386,6 @@ export function LessonNotesCapture({
           } else if (!silent) {
             setMessage("Add a highlight or a note before saving.");
           }
-          setSaving(false);
           return;
         }
 
@@ -386,7 +413,6 @@ export function LessonNotesCapture({
         const j = await res.json().catch(() => ({}));
         if (res.status === 401) {
           setMessage("Sign in to save private notes for this lesson.");
-          setSaving(false);
           return;
         }
         if (!res.ok) {
@@ -397,7 +423,6 @@ export function LessonNotesCapture({
               ? ` ${j.hint}`
               : "";
           setMessage(`${err}${hint}`);
-          setSaving(false);
           return;
         }
         if (!noteId && j.note?.id) {
@@ -405,19 +430,47 @@ export function LessonNotesCapture({
         }
         if (!silent) {
           setMessage("Saved — you can quiz this from the practice room.");
-          await load();
         }
       } catch {
         setMessage("Network error.");
+      } finally {
+        setSaving(false);
+        savingRef.current = false;
       }
-      setSaving(false);
     },
-    [load, materialId, moduleId, lessonIndex, noteId]
+    [materialId, moduleId, lessonIndex, noteId]
   );
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Debounced auto-save. Any change to highlights or the note body is
+  // persisted automatically a short moment later, so the user never has to
+  // press "Update notes" for changes to survive a refresh. A single timer
+  // coalesces rapid edits (e.g. highlighting two phrases in a row) into one
+  // write that reflects the final state, and `savingRef` serializes writes so
+  // an in-flight save can't be clobbered by — or clobber — a newer one.
+  useEffect(() => {
+    if (!hydratedRef.current || loading) return;
+    const last = lastSavedRef.current;
+    if (last.highlight === highlight && last.noteBody === noteBody) return;
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    const schedule = (delay: number) => {
+      autosaveTimerRef.current = setTimeout(() => {
+        // Wait for any in-flight write to finish before starting a new one.
+        if (savingRef.current) {
+          schedule(250);
+          return;
+        }
+        void persistNote(highlightRef.current, noteBodyRef.current, true);
+      }, delay);
+    };
+    schedule(650);
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    };
+  }, [highlight, noteBody, loading, persistNote]);
 
   const highlightEntries = useMemo(
     () => parseHighlightEntries(highlight),
@@ -524,7 +577,10 @@ export function LessonNotesCapture({
             : p.includes(t)
               ? p
               : `${p}${ENTRY_JOIN}${entry}`;
-        void persistNote(next, noteBodyRef.current, true);
+        // Persistence is handled by the debounced auto-save effect, which
+        // coalesces rapid back-to-back highlights into a single write that
+        // reflects the final cumulative state. Saving inline here raced two
+        // POSTs with a null noteId and silently dropped one highlight.
         return next;
       });
       setMessage(
