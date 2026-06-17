@@ -1361,6 +1361,16 @@ export function CoursePlayer({
 
       <div className="min-w-0 flex-1 bg-white dark:bg-zinc-950 xl:pr-[var(--rose-dock-rail)]">
         <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6 lg:px-8">
+          {mode === "quiz" ? (
+            <div className="mb-3">
+              <Link
+                href={lecturePageHref}
+                className="inline-flex items-center rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 shadow-sm ring-1 ring-black/5 transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:ring-white/10 dark:hover:bg-zinc-900"
+              >
+                {t.study.backToLecture}
+              </Link>
+            </div>
+          ) : null}
           <AiStudyDisclaimer className="mb-3" />
           {mode === "lessons" ? (
             <>
@@ -1876,12 +1886,6 @@ export function CoursePlayer({
 
     {mode === "quiz" ? (
       <>
-        <Link
-          href={lecturePageHref}
-          className="fixed left-4 top-[max(6.625rem,calc(env(safe-area-inset-top)+5.875rem))] z-[100] inline-flex items-center rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 shadow-lg shadow-black/12 ring-1 ring-black/5 transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:shadow-black/35 dark:ring-white/10 dark:hover:bg-zinc-900 sm:top-[max(7.375rem,calc(env(safe-area-inset-top)+6.625rem))] lg:left-[calc(22rem+1rem)]"
-        >
-          {t.study.backToLecture}
-        </Link>
         <PracticeProgressPullTab
           open={progressPanelOpen}
           onOpenChange={(next) => {
