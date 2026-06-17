@@ -4,10 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LESSON_HAS_NOTE_QUERY_EVENT,
   LESSON_HIGHLIGHT_REMOVE_FROM_NOTES_EVENT,
+  LESSON_HIGHLIGHT_RESTORE_EVENT,
   LESSON_QUOTE_EVENT,
   type LessonHasNoteQueryDetail,
   type LessonHighlightColor,
   type LessonHighlightRemoveFromNotesDetail,
+  type LessonHighlightRestoreDetail,
   type LessonQuoteDetail,
 } from "@/components/LessonQuoteCaptureRegion";
 
@@ -24,8 +26,19 @@ function dispatchHighlightRemoveFromNotes(
   );
 }
 
-function normalizeText(value: string) {
-  return value.replace(/\s+/g, " ").trim();
+function formatHighlightEntry(text: string, color?: LessonHighlightColor): string {
+  if (!color) return text.trim();
+  const label = `${color[0].toUpperCase()}${color.slice(1)}`;
+  return `[${label} highlight] ${text.trim()}`;
+}
+
+function dispatchHighlightRestore(detail: LessonHighlightRestoreDetail) {
+  window.dispatchEvent(
+    new CustomEvent<LessonHighlightRestoreDetail>(
+      LESSON_HIGHLIGHT_RESTORE_EVENT,
+      { detail }
+    )
+  );
 }
 
 type NoteRow = {
@@ -34,17 +47,6 @@ type NoteRow = {
   highlight_excerpt: string;
   note_body: string;
   updated_at: string;
-};
-
-const HIGHLIGHT_COLORS: Record<
-  LessonHighlightColor,
-  { label: string; className: string }
-> = {
-  pink: { label: "Pink", className: "bg-pink-100 text-pink-950" },
-  yellow: { label: "Yellow", className: "bg-amber-100 text-amber-950" },
-  blue: { label: "Blue", className: "bg-blue-100 text-blue-950" },
-  green: { label: "Green", className: "bg-green-100 text-green-950" },
-  purple: { label: "Purple", className: "bg-violet-100 text-violet-950" },
 };
 
 // Entries in the textarea are separated by a blank line. The old `---`
@@ -59,6 +61,17 @@ function splitEntries(raw: string): string[] {
     .map((part) => part.trim())
     .filter(Boolean);
 }
+
+const HIGHLIGHT_COLORS: Record<
+  LessonHighlightColor,
+  { label: string; className: string }
+> = {
+  pink: { label: "Pink", className: "bg-pink-100 text-pink-950" },
+  yellow: { label: "Yellow", className: "bg-amber-100 text-amber-950" },
+  blue: { label: "Blue", className: "bg-blue-100 text-blue-950" },
+  green: { label: "Green", className: "bg-green-100 text-green-950" },
+  purple: { label: "Purple", className: "bg-violet-100 text-violet-950" },
+};
 
 function parseHighlightEntries(raw: string): Array<{
   key: string;
@@ -320,6 +333,27 @@ export function LessonNotesCapture({
     void load();
   }, [load]);
 
+  const highlightEntries = useMemo(
+    () => parseHighlightEntries(highlight),
+    [highlight]
+  );
+
+  // Re-apply saved highlights to the lesson text after notes load (or refresh).
+  useEffect(() => {
+    if (loading) return;
+    const labeled = highlightEntries.filter(
+      (e): e is typeof e & { color: LessonHighlightColor } => Boolean(e.color)
+    );
+    if (labeled.length === 0) return;
+    const timer = window.setTimeout(() => {
+      dispatchHighlightRestore({
+        lessonIndex,
+        entries: labeled.map((e) => ({ text: e.text, color: e.color })),
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loading, highlightEntries, lessonIndex]);
+
   useEffect(() => {
     const onQuote = (ev: Event) => {
       const ce = ev as CustomEvent<LessonQuoteDetail>;
@@ -385,22 +419,24 @@ export function LessonNotesCapture({
         }
         return;
       }
-      const label = d.color
-        ? `[${d.color[0].toUpperCase()}${d.color.slice(1)} highlight]`
-        : "";
-      const entry = label ? `${label} ${t}` : t;
+      const entry = formatHighlightEntry(t, d.color);
 
       setHighlight((prev) => {
         const p = prev.trim();
-        if (!p) return entry;
-        if (d.color) return upsertHighlightEntry(p, entry, t);
-        if (p.includes(t)) return p;
-        return `${p}${ENTRY_JOIN}${entry}`;
+        const next = !p
+          ? entry
+          : d.color
+            ? upsertHighlightEntry(p, entry, t)
+            : p.includes(t)
+              ? p
+              : `${p}${ENTRY_JOIN}${entry}`;
+        void persistNote(next, noteBodyRef.current, true);
+        return next;
       });
       setMessage(
         d.color
-          ? `Added ${d.color} highlight — edit or save when ready.`
-          : "Added selection to highlight — edit or save when ready."
+          ? `Added ${d.color} highlight — saved to your notes.`
+          : "Added selection — saved to your notes."
       );
       // Intentionally no scrollIntoView — adding a highlight should not
       // bounce the page down to the notes panel; the user is reading the
@@ -421,7 +457,7 @@ export function LessonNotesCapture({
       window.removeEventListener(LESSON_QUOTE_EVENT, onQuote);
       window.removeEventListener(LESSON_HAS_NOTE_QUERY_EVENT, onHasNoteQuery);
     };
-  }, [lessonIndex]);
+  }, [lessonIndex, persistNote]);
 
   useEffect(() => {
     if (!undoState) return;
@@ -509,51 +545,6 @@ export function LessonNotesCapture({
     await persistNote(highlight, noteBody, false);
   }, [highlight, noteBody, persistNote]);
 
-  const highlightEntries = useMemo(
-    () => parseHighlightEntries(highlight),
-    [highlight]
-  );
-
-  // Track labeled chips that disappeared (e.g. the user edited the highlight
-  // textarea directly). After a short debounce — long enough to ignore
-  // mid-typing flicker — sync the removal to the page so the on-page <mark>
-  // also disappears.
-  const lastSyncedLabeledRef = useRef<
-    Array<{ color: LessonHighlightColor; text: string }>
-  >([]);
-
-  useEffect(() => {
-    const labeled = highlightEntries
-      .filter((e): e is typeof e & { color: LessonHighlightColor } => Boolean(e.color))
-      .map((e) => ({ color: e.color, text: normalizeText(e.text) }));
-    const previous = lastSyncedLabeledRef.current;
-    const timer = window.setTimeout(() => {
-      const current = highlightEntries
-        .filter((e): e is typeof e & { color: LessonHighlightColor } => Boolean(e.color))
-        .map((e) => ({ color: e.color, text: normalizeText(e.text) }));
-      const vanished = previous.filter(
-        (prev) =>
-          !current.some(
-            (cur) => cur.color === prev.color && cur.text === prev.text
-          )
-      );
-      for (const v of vanished) {
-        console.log("[notes] textarea-edit removed chip; syncing to page", v);
-        dispatchHighlightRemoveFromNotes({
-          lessonIndex,
-          text: v.text,
-          color: v.color,
-        });
-      }
-      lastSyncedLabeledRef.current = current;
-    }, 900);
-    // Keep a quick mirror so re-mounting doesn't think every chip just vanished.
-    if (lastSyncedLabeledRef.current.length === 0 && labeled.length > 0) {
-      lastSyncedLabeledRef.current = labeled;
-    }
-    return () => window.clearTimeout(timer);
-  }, [highlightEntries, lessonIndex]);
-
   return (
     <div
       ref={panelRef}
@@ -567,17 +558,16 @@ export function LessonNotesCapture({
         <span className="font-medium text-zinc-700 dark:text-zinc-200">
           {lessonTitle}
         </span>
-        , drag to highlight any sentence and release to add it to the excerpt
-        below (or paste manually). Save, then build focus questions on the
-        practice tab.
+        , drag to highlight any sentence and release to add it here. Save your
+        optional note below, then build focus questions on the practice tab.
       </p>
       {loading ? (
         <p className="mt-3 text-xs text-zinc-500">Loading…</p>
       ) : (
         <div className="mt-3 space-y-3">
-          <label className="block">
+          <div>
             <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
-              Highlight / excerpt
+              Highlights
             </span>
             {highlightEntries.length > 0 ? (
               <div className="mt-2 max-h-48 space-y-2 overflow-y-auto rounded-xl border border-zinc-200 bg-white/70 p-2 pr-1 dark:border-zinc-700 dark:bg-zinc-950/40">
@@ -622,15 +612,13 @@ export function LessonNotesCapture({
                   </div>
                 ))}
               </div>
-            ) : null}
-            <textarea
-              value={highlight}
-              onChange={(e) => setHighlight(e.target.value)}
-              rows={3}
-              placeholder="Paste the sentence or diagram label you want to remember…"
-              className="mt-1 w-full resize-y rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-brand dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-            />
-          </label>
+            ) : (
+              <p className="mt-2 rounded-xl border border-dashed border-zinc-200 bg-white/50 px-3 py-2.5 text-xs text-zinc-500 dark:border-zinc-700 dark:bg-zinc-950/30 dark:text-zinc-400">
+                Drag over lesson text to highlight — your selections appear
+                here and stay marked when you return.
+              </p>
+            )}
+          </div>
           <label className="block">
             <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
               Your note (optional)

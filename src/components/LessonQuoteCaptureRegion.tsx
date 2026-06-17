@@ -8,6 +8,12 @@ export const LESSON_QUOTE_EVENT = "aroses-lesson-quote";
 export const LESSON_HAS_NOTE_QUERY_EVENT = "aroses-lesson-has-note-query";
 export const LESSON_HIGHLIGHT_REMOVE_FROM_NOTES_EVENT =
   "aroses-lesson-highlight-remove-from-notes";
+export const LESSON_HIGHLIGHT_RESTORE_EVENT = "aroses-lesson-highlight-restore";
+
+export type LessonHighlightRestoreDetail = {
+  lessonIndex: number;
+  entries: Array<{ text: string; color: LessonHighlightColor }>;
+};
 
 export type LessonHighlightRemoveFromNotesDetail = {
   lessonIndex: number;
@@ -424,6 +430,121 @@ function dispatchQuote(detail: LessonQuoteDetail) {
   );
 }
 
+type TextPart = { node: Text; text: string; globalStart: number };
+
+function collectHighlightableTextParts(root: HTMLElement): {
+  parts: TextPart[];
+  combined: string;
+} {
+  const parts: TextPart[] = [];
+  let combined = "";
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    if (node.parentElement?.closest("[data-lesson-highlight-color]")) continue;
+    const text = node.textContent ?? "";
+    if (!text) continue;
+    parts.push({ node, text, globalStart: combined.length });
+    combined += text;
+  }
+  return { parts, combined };
+}
+
+function findTextSpan(
+  combined: string,
+  searchText: string
+): { start: number; end: number } | null {
+  const target = searchText.trim();
+  if (target.length < MIN_CHARS) return null;
+
+  const exact = combined.indexOf(target);
+  if (exact >= 0) {
+    return { start: exact, end: exact + target.length };
+  }
+
+  const normTarget = normalizeWhitespace(target);
+  for (let start = 0; start < combined.length; start++) {
+    for (let end = start + normTarget.length; end <= combined.length; end++) {
+      if (normalizeWhitespace(combined.slice(start, end)) === normTarget) {
+        return { start, end };
+      }
+      const sliceNorm = normalizeWhitespace(combined.slice(start, end));
+      if (sliceNorm.length > normTarget.length) break;
+    }
+  }
+  return null;
+}
+
+function rangeFromSpan(parts: TextPart[], start: number, end: number): Range | null {
+  let startNode: Text | null = null;
+  let startOffset = 0;
+  let endNode: Text | null = null;
+  let endOffset = 0;
+
+  for (const { node, text, globalStart } of parts) {
+    const globalEnd = globalStart + text.length;
+    if (!startNode && start >= globalStart && start < globalEnd) {
+      startNode = node;
+      startOffset = start - globalStart;
+    }
+    if (end > globalStart && end <= globalEnd) {
+      endNode = node;
+      endOffset = end - globalStart;
+      break;
+    }
+    if (start < globalEnd && end > globalEnd) {
+      endNode = node;
+      endOffset = text.length;
+    }
+  }
+
+  if (!startNode || !endNode) return null;
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  return range;
+}
+
+function isTextAlreadyHighlighted(root: HTMLElement, searchText: string): boolean {
+  const target = normalizeWhitespace(searchText);
+  if (!target) return false;
+  const marks = root.querySelectorAll<HTMLElement>("[data-lesson-highlight-color]");
+  for (const mark of marks) {
+    const markText = normalizeWhitespace(mark.textContent ?? "");
+    if (markText === target || markText.includes(target)) return true;
+  }
+  return false;
+}
+
+function restoreSavedHighlights(
+  root: HTMLElement,
+  entries: Array<{ text: string; color: LessonHighlightColor }>
+) {
+  for (const entry of entries) {
+    const text = entry.text.trim();
+    if (text.length < MIN_CHARS) continue;
+    if (isTextAlreadyHighlighted(root, text)) continue;
+
+    const { parts, combined } = collectHighlightableTextParts(root);
+    const span = findTextSpan(combined, text);
+    if (!span) {
+      console.warn("[highlight] restore miss — text not found in lesson", {
+        text: text.slice(0, 80),
+      });
+      continue;
+    }
+    const range = rangeFromSpan(parts, span.start, span.end);
+    if (!range) continue;
+    const result = applyInlineHighlight(range, entry.color);
+    if (!result.ok) {
+      console.warn("[highlight] restore wrap failed", {
+        text: text.slice(0, 80),
+        color: entry.color,
+      });
+    }
+  }
+}
+
 /**
  * Wraps lesson bodies in read mode; selected text is sent to {@link LESSON_QUOTE_EVENT}
  * for the matching lesson’s notes panel.
@@ -598,6 +719,22 @@ export function LessonQuoteCaptureRegion({
       }
     };
 
+    const onRestore = (ev: Event) => {
+      const ce = ev as CustomEvent<LessonHighlightRestoreDetail>;
+      const d = ce.detail;
+      if (!d || d.lessonIndex !== lessonIndex) return;
+      const rootEl = ref.current;
+      if (!rootEl || d.entries.length === 0) return;
+      window.requestAnimationFrame(() => {
+        if (!ref.current) return;
+        console.log("[highlight] restoring saved highlights", {
+          lessonIndex,
+          count: d.entries.length,
+        });
+        restoreSavedHighlights(ref.current, d.entries);
+      });
+    };
+
     root.addEventListener("mouseup", onMouseUp);
     root.addEventListener("click", onClick);
     root.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -605,6 +742,7 @@ export function LessonQuoteCaptureRegion({
       LESSON_HIGHLIGHT_REMOVE_FROM_NOTES_EVENT,
       onRemoveFromNotes
     );
+    window.addEventListener(LESSON_HIGHLIGHT_RESTORE_EVENT, onRestore);
     return () => {
       root.removeEventListener("mouseup", onMouseUp);
       root.removeEventListener("click", onClick);
@@ -613,6 +751,7 @@ export function LessonQuoteCaptureRegion({
         LESSON_HIGHLIGHT_REMOVE_FROM_NOTES_EVENT,
         onRemoveFromNotes
       );
+      window.removeEventListener(LESSON_HIGHLIGHT_RESTORE_EVENT, onRestore);
     };
   }, [enabled, lessonIndex]);
 
