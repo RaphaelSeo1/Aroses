@@ -187,8 +187,10 @@ function resolveCourseBuildProfile(): CourseBuildProfile {
   if (p === "fast") return "fast";
   if (p === "express") return "express";
   // Default when COURSE_BUILD_PROFILE is unset (e.g. production without the env
-  // var): `balanced` is detailed but fast enough for many parallel PDF uploads.
-  return "balanced";
+  // var): `full` (Sonnet) — the "Full Processing" depth that produces richly
+  // structured, pedagogically-titled courses. Set COURSE_BUILD_PROFILE=balanced
+  // (Haiku) for cheaper/faster but shallower multi-PDF builds.
+  return "full";
 }
 
 /** Same truncation as outline/module generation — store on the job for expand steps. */
@@ -1463,7 +1465,11 @@ function planMaxTokens(profile: CourseBuildProfile): number {
  * this in `withAnthropicRateLimitRetries` like other ingest AI calls.
  */
 function isLlmStructurePlanningEnabled(): boolean {
-  return process.env.STRUCTURE_PLANNING_LLM?.trim() === "1";
+  // Default ON: let Claude group chunks into coherent, pedagogically-named
+  // modules/lessons (the "Full Processing" structure). When off, the
+  // deterministic fallback maps one file → one module with raw slide headings
+  // as lesson titles. Set STRUCTURE_PLANNING_LLM=0 to force that fallback.
+  return process.env.STRUCTURE_PLANNING_LLM?.trim() !== "0";
 }
 
 function normalizeChunkSummariesForPlanner(
