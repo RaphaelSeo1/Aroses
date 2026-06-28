@@ -309,8 +309,28 @@ export async function GET(_request: Request, ctx: Params) {
     Date.now() - updatedAt > MODULE_STALL_MS &&
     currentEpoch < MAX_AUTO_RECOVERIES;
 
-  if (isStuckWritingModules) {
-    console.warn("[jobs/get] kicking stalled writing_modules job", jobId);
+  // Finalize-stall recovery: every module is built but the job is still
+  // `running` because a prior finalize attempt was killed (function timeout,
+  // 504, or a closed tab) before it could insert the material + flip status.
+  // A healthy finalize heartbeats every 15s, so a longer gap means the worker
+  // is dead — re-kick the idempotent expand which will run finalize again.
+  const FINALIZE_STALL_MS = 90_000;
+  const isStuckFinalizing =
+    phaseForModuleCheck === "writing_modules" &&
+    row.status === "running" &&
+    outlineModuleCount > 0 &&
+    modulesBuiltForCheck >= outlineModuleCount &&
+    Number.isFinite(updatedAt) &&
+    Date.now() - updatedAt > FINALIZE_STALL_MS &&
+    currentEpoch < MAX_AUTO_RECOVERIES;
+
+  if (isStuckWritingModules || isStuckFinalizing) {
+    console.warn(
+      isStuckFinalizing
+        ? "[jobs/get] kicking stalled finalize job"
+        : "[jobs/get] kicking stalled writing_modules job",
+      jobId
+    );
     after(() => {
       void runPdfIngestExpandOne(jobId).catch((e) =>
         console.error("[jobs/get] kick after module stall", jobId, e)

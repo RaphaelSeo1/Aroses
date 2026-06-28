@@ -561,10 +561,10 @@ async function loadIngestAssetManifest(
 function finalizeVisualBudgetMs(): number {
   const raw = process.env.PDF_INGEST_FINALIZE_VISUAL_BUDGET_MS?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  if (Number.isFinite(parsed) && parsed >= 15_000 && parsed <= 280_000) {
+  if (Number.isFinite(parsed) && parsed >= 10_000 && parsed <= 280_000) {
     return parsed;
   }
-  return 150_000;
+  return 60_000;
 }
 
 /**
@@ -668,6 +668,11 @@ async function finalizePdfIngest(
     const ownerId =
       typeof ownerRow?.user_id === "string" ? ownerRow.user_id : null;
     if (ownerId) {
+      // Keep updated_at fresh while the (capped) visual fallback runs so the
+      // GET-route finalize-stall recovery doesn't kick a competing finalize.
+      const finalizeHeartbeat = setInterval(() => {
+        void touchJobProgress(admin, jobId);
+      }, 15_000);
       try {
         const ensured = await withFinalizeBudget(
           ensurePdfVisualsAtFinalize({
@@ -722,6 +727,8 @@ async function finalizePdfIngest(
         }
       } catch (e) {
         console.error("[pdf-ingest] ensurePdfVisualsAtFinalize", jobId, e);
+      } finally {
+        clearInterval(finalizeHeartbeat);
       }
     }
   }
