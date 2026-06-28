@@ -614,12 +614,33 @@ export function repairFlattenedSymptomTables(content: string): string {
 }
 
 /**
+ * Remove the model's copied "**From your material** (…)" attribution lines —
+ * a verbatim-copy artifact — while keeping the pipeline's real source-figure
+ * embeds, which are an attribution line immediately followed by an image.
+ */
+function stripCopiedSourceAttributions(content: string): string {
+  if (!content.includes("From your material")) return content;
+  const lines = content.split("\n");
+  const attrRe = /^\s*\*\*\s*From your material\s*\*\*/i;
+  const imageRe = /!\[[^\]]*\]\([^)]*\)/;
+  const keep = lines.map((line, i) => {
+    if (!attrRe.test(line)) return true;
+    let j = i + 1;
+    while (j < lines.length && lines[j]!.trim() === "") j++;
+    // Keep only when it captions an actual injected image embed.
+    return j < lines.length && imageRe.test(lines[j]!);
+  });
+  return lines.filter((_, i) => keep[i]).join("\n");
+}
+
+/**
  * Repair lesson prose: range fixes + drop corrupted appended tables.
  */
 export function sanitizeLessonContent(content: string): string {
   if (!content.trim()) return content;
 
-  let out = stripUnusableMarkdownTables(content);
+  let out = stripCopiedSourceAttributions(content);
+  out = stripUnusableMarkdownTables(out);
   out = repairFlattenedSymptomTables(out);
   out = dedupeRedundantTablesInContent(out);
   for (const [re, rep] of PROSE_TERM_CORRECTIONS) {

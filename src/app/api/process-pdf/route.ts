@@ -124,6 +124,12 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
       ? studyContext.trim().slice(0, 4000)
       : null;
   const outputLanguage = parseCourseOutputLanguage(outputLanguageRaw);
+  // Upload position within a multi-build batch (parallel POSTs). Used to keep
+  // the sidebar in upload order regardless of which build finishes first.
+  const orderIndex =
+    typeof raw.orderIndex === "number" && Number.isFinite(raw.orderIndex)
+      ? Math.max(0, Math.trunc(raw.orderIndex))
+      : 0;
 
   if (typeof courseId !== "string" || !UUID_RE.test(courseId)) {
     return NextResponse.json({ error: "Invalid course" }, { status: 400 });
@@ -266,6 +272,16 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     };
   });
 
+  // Snapshot the current section size so each parallel build in this batch
+  // gets a stable, upload-ordered sort_order (count + its upload index). All
+  // parallel POSTs read the same count here because materials are only created
+  // later at finalize, so the values stay distinct and in upload order.
+  const { count: existingMaterialCount } = await supabase
+    .from("study_materials")
+    .select("id", { count: "exact", head: true })
+    .eq("exam_group_id", examGroupId);
+  const intendedSortOrder = (existingMaterialCount ?? 0) + orderIndex;
+
   const minimalJobInsert: Record<string, unknown> = {
     user_id: user.id,
     course_id: courseId,
@@ -282,6 +298,7 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     ...minimalJobInsert,
     source_format: primaryKind,
     source_files: files.length > 1 ? sourceFilesJson : null,
+    material_sort_order: intendedSortOrder,
   };
 
   if (studyContextValue) {
@@ -304,7 +321,8 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
       "source_format",
       "source_files",
       "study_context",
-      "output_language"
+      "output_language",
+      "material_sort_order"
     )
   ) {
     const retry = await supabase

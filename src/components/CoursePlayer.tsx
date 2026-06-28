@@ -42,8 +42,24 @@ import type {
 } from "@/types/course";
 import type { QuizReviewStatsDto } from "@/types/quiz-review";
 import type { CourseLearningSummary } from "@/lib/learning-stats";
-
 const EMPTY_MODULE_QUIZ: CourseQuizItem[] = [];
+
+/** Drop a leading section number ("1 Institutional Background" → "Institutional
+ * Background", "2. Foo", "1.2 Bar"); 1–2 digits only so years survive. */
+function stripLeadingSectionNumber(s: string): string {
+  const out = s.replace(/^\s*\d{1,2}(?:\.\d{1,2})*[.):]?\s+(?=\S)/, "").trim();
+  return out || s.trim();
+}
+
+/**
+ * Header/sidebar title for a module: show the module's own stored title as the
+ * generator produced it, only stripping a leading section number for tidiness.
+ * (We no longer rewrite the title from the lessons — the stored title is the
+ * source of truth.)
+ */
+function moduleDisplayTitle(m: { title: string }): string {
+  return stripLeadingSectionNumber(m.title);
+}
 
 function ModuleLessonJumpNav({
   lessons,
@@ -754,7 +770,9 @@ export function CoursePlayer({
   function beginRename(mod: CourseModule) {
     setManageError(null);
     setRenamingModuleId(mod.id);
-    setRenameDraft(mod.title);
+    // Prefill with the title the user actually sees (descriptive), not the raw
+    // weak label — saving then persists the good title to module.title.
+    setRenameDraft(moduleDisplayTitle(mod));
     syncModuleToUrl(mod.id);
   }
 
@@ -1175,7 +1193,7 @@ export function CoursePlayer({
                                       {done ? "✓" : mod.id}
                                     </span>
                                     <span className="leading-snug">
-                                      {mod.title}
+                                      {moduleDisplayTitle(fullMod)}
                                     </span>
                                   </button>
                                   {courseManageEnabled ? (
@@ -1231,7 +1249,9 @@ export function CoursePlayer({
                               >
                                 {done ? "✓" : mod.id}
                               </span>
-                              <span className="leading-snug">{mod.title}</span>
+                              <span className="leading-snug">
+                                {stripLeadingSectionNumber(mod.title)}
+                              </span>
                             </button>
                           );
                         })}
@@ -1316,7 +1336,7 @@ export function CoursePlayer({
                           >
                             {done ? "✓" : mod.id}
                           </span>
-                          <span className="leading-snug">{mod.title}</span>
+                          <span className="leading-snug">{moduleDisplayTitle(mod)}</span>
                         </button>
                         {courseManageEnabled ? (
                           <div className="flex shrink-0 flex-col justify-center gap-0.5 py-1 pr-1">
@@ -1419,7 +1439,7 @@ export function CoursePlayer({
                   {tf(t.study.moduleLabel, { id: activeModule.id })}
                 </p>
                 <h2 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  {activeModule.title}
+                  {moduleDisplayTitle(activeModule)}
                 </h2>
               </header>
 

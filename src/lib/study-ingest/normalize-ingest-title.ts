@@ -44,8 +44,22 @@ export function normalizeIngestDisplayTitle(raw: string): string {
   // Section index markers from this pharmacology deck: _[2], _ [10]
   t = t.replace(/_?\s*\[\s*\d+\s*\]\s*/g, " ");
 
-  // Leading enumeration: "2. 전신마취제", "3) 수면제"
-  t = t.replace(/^\d+[\.\):]\s*/, "");
+  // Leading enumeration: "2. 전신마취제", "3) 수면제", "1.2 Foo"
+  t = t.replace(/^\d+(?:\.\d+)*[\.\):]\s*/, "");
+
+  // Bare leading section number with no punctuation: "1 Institutional
+  // Background" → "Institutional Background". Restricted to 1–2 digits so years
+  // and data figures ("2024 Results", "10-K Filings") are left intact.
+  t = t.replace(/^\d{1,2}\s+(?=[A-Za-z\uac00-\ud7a3])/, "");
+
+  // Lecture/chapter/week chrome prefix when a real topic follows:
+  // "Lecture 1: Introduction to the Annual Report" → "Introduction to the
+  // Annual Report", "Chapter 2 - Bonding" → "Bonding". Bare "Lecture 3"
+  // (no topic after the number) is left alone and rejected by isBadIngestTitle.
+  t = t.replace(
+    /^(?:lecture|lesson|chapter|week|unit|session|topic|module|part)\s+[0-9ivxlc]+\s*[:.\-–—]\s*(?=\S)/i,
+    ""
+  );
 
   // Trailing underscore / page chrome
   t = t.replace(/\s*_\s*$/g, "");
@@ -73,6 +87,10 @@ export function normalizeIngestDisplayTitle(raw: string): string {
 
 const SPEAKER_PREFIX = /^[A-Z][A-Z0-9\s.'-]{2,48}:\s*/;
 const SECTION_PLACEHOLDER = /^section\s+\d+(?:\s*[§-]\s*\d+)?$/i;
+// Bare enumeration headings that name nothing ("Lecture 3", "Chapter II").
+// "Part/Page/Slide/Section N" are intentional positional fallbacks elsewhere.
+const BARE_ENUM_TITLE =
+  /^(?:lecture|lesson|chapter|week|unit|session|topic|module)\s+[0-9ivxlc]+$/i;
 const TRANSCRIPT_FRAGMENT =
   /\b(that's|we're|you're|going to|let's|when you|where we|what we|what they|what you|so what|i'm|don't|isn't|aren't|gonna|we'll|you'll|i'll|because|although|however|haven't|hasn't|didn't|won't|wouldn't)\b/i;
 const INCOMPLETE_PHRASE =
@@ -125,6 +143,7 @@ export function isBadIngestTitle(raw: string): boolean {
   if (t.length === 1) return true;
   if (t.length === 2 && !/^[\uac00-\ud7a3]{2}$/.test(t)) return true;
   if (SECTION_PLACEHOLDER.test(t)) return true;
+  if (BARE_ENUM_TITLE.test(t)) return true;
   if (/^untitled section$/i.test(t)) return true;
   if (SPEAKER_PREFIX.test(t)) return true;
   if (/^[A-Z][A-Z0-9\s.'-]{2,48}:$/.test(t)) return true;
@@ -367,7 +386,19 @@ function disambiguateModuleTitle(title: string, index: number, used: Set<string>
 
 export { disambiguateModuleTitle };
 
-/** Deterministic module label from its lessons (pairs → "A 및 B"). */
+const HANGUL = /[\uac00-\ud7a3]/;
+
+/**
+ * Join two topic labels with a connector that matches their script:
+ * Korean pairs read "A 및 B", everything else reads "A & B". This prevents
+ * Korean chrome from leaking into English (or other Latin-script) titles.
+ */
+function joinTopicPair(a: string, b: string): string {
+  const connector = HANGUL.test(a) && HANGUL.test(b) ? "및" : "&";
+  return `${a} ${connector} ${b}`;
+}
+
+/** Deterministic module label from its lessons (pairs → "A & B" / "A 및 B"). */
 export function moduleTitleFromLessonTitles(lessonTitles: string[]): string {
   const titles = lessonTitles
     .map((t) => normalizeIngestDisplayTitle(t))
@@ -396,7 +427,7 @@ export function moduleTitleFromLessonTitles(lessonTitles: string[]): string {
 
   if (pair.length === 2) {
     if (pair[0] === pair[1]) return pair[0]!;
-    const combined = `${pair[0]} 및 ${pair[1]}`;
+    const combined = joinTopicPair(pair[0]!, pair[1]!);
     if (combined.length <= 40) return combined;
   }
   return substantive[0] ?? titles[0]!;

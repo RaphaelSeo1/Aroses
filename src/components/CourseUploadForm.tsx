@@ -633,7 +633,7 @@ export function CourseUploadForm({
         error?: string;
       };
       const startOutcomes: StartOutcome[] = await Promise.all(
-        buildGroups.map(async (g): Promise<StartOutcome> => {
+        buildGroups.map(async (g, orderIndex): Promise<StartOutcome> => {
           try {
             const res = await fetch("/api/process-pdf", {
               method: "POST",
@@ -644,6 +644,9 @@ export function CourseUploadForm({
                 files: g.files,
                 studyContext: studyGoal.trim() || undefined,
                 outputLanguage,
+                // Upload position within this batch — finalize uses it to keep
+                // sidebar order = upload order even though builds run in parallel.
+                orderIndex,
               }),
             });
             const raw = await res.text();

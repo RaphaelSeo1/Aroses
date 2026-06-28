@@ -825,19 +825,44 @@ async function finalizePdfIngest(
     return null;
   }
 
-  /** Append after existing uploads so the list follows “first added first” (ascending sort_order). */
-  const { data: maxRow } = await admin
-    .from("study_materials")
-    .select("sort_order")
-    .eq("exam_group_id", examGroupId)
-    .order("sort_order", { ascending: false })
-    .limit(1)
+  // Prefer the upload-order sort_order snapshotted on the job at creation time
+  // (count of prior materials + the build's upload index). This keeps the
+  // sidebar in upload order even though parallel builds finalize out of order.
+  // Falls back to "append after existing" when the column/value is absent
+  // (older jobs, or a DB without migration 076).
+  let nextSortOrder: number | null = null;
+  const { data: jobSortRow, error: jobSortErr } = await admin
+    .from("pdf_ingest_jobs")
+    .select("material_sort_order")
+    .eq("id", jobId)
     .maybeSingle();
+  if (
+    !jobSortErr &&
+    typeof (jobSortRow as { material_sort_order?: unknown } | null)
+      ?.material_sort_order === "number" &&
+    Number.isFinite(
+      (jobSortRow as { material_sort_order: number }).material_sort_order
+    )
+  ) {
+    nextSortOrder = (jobSortRow as { material_sort_order: number })
+      .material_sort_order;
+  }
 
-  const nextSortOrder =
-    typeof maxRow?.sort_order === "number" && Number.isFinite(maxRow.sort_order)
-      ? maxRow.sort_order + 1
-      : 0;
+  if (nextSortOrder === null) {
+    /** Append after existing uploads so the list follows “first added first” (ascending sort_order). */
+    const { data: maxRow } = await admin
+      .from("study_materials")
+      .select("sort_order")
+      .eq("exam_group_id", examGroupId)
+      .order("sort_order", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    nextSortOrder =
+      typeof maxRow?.sort_order === "number" && Number.isFinite(maxRow.sort_order)
+        ? maxRow.sort_order + 1
+        : 0;
+  }
 
   const uploadLabel =
     typeof originalFileName === "string" && originalFileName.trim().length > 0

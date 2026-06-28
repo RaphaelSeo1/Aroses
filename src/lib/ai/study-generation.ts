@@ -186,7 +186,9 @@ function resolveCourseBuildProfile(): CourseBuildProfile {
   if (p === "balanced") return "balanced";
   if (p === "fast") return "fast";
   if (p === "express") return "express";
-  return "express";
+  // Default when COURSE_BUILD_PROFILE is unset (e.g. production without the env
+  // var): `balanced` is detailed but fast enough for many parallel PDF uploads.
+  return "balanced";
 }
 
 /** Same truncation as outline/module generation — store on the job for expand steps. */
@@ -450,9 +452,9 @@ function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
     return `${core} The excerpt below may omit the document middle for speed—use headings/numbering in the head and tail to infer later topics. Modules and lesson_titles together should still **map** the full arc of the course; full lessons use a longer excerpt later.`;
   }
   if (mode === "module") {
-    return `${core} Output **exactly one full lesson per planned lesson title** below, in the **same order** and **same count**. Do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material. Teach what the source covers for that slice — neither pad with outside topics nor skip assigned content.`;
+    return `${core} Output **exactly one full lesson per planned lesson title** below, in the **same order** and **same count**. Do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material. Teach what the source covers for that slice — neither pad with outside topics nor skip assigned content. **Within each lesson, cover EVERY distinct concept, definition, named entity, and claim present in that lesson's source slice** — if the slice introduces several separate ideas, each one must be taught; do not stop after the first one or two. Before finishing a lesson, verify no sub-topic from its source slice was left out.`;
   }
-  return `${core} Across the full course JSON, every substantive part of the source should appear in some lesson; do not only cover the introduction.`;
+  return `${core} Across the full course JSON, every substantive part of the source should appear in some lesson; do not only cover the introduction. Teach each concept the source raises — do not leave later sections or sub-topics untaught.`;
 }
 
 /**
@@ -476,10 +478,14 @@ function factualAccuracyRules(): string {
 }
 
 function sourceFidelityRules(): string {
-  return `SOURCE FIDELITY (strict):
-- Generate course content ONLY from the provided source material. Do not introduce outside facts, corrections, or knowledge not present in the source. If the source states something, reproduce its framing and figures faithfully even if you believe it is incorrect. Do not "fix" the source.
-- Do not fabricate computed values, journal entries, tables, balance sheets, or worked examples that the source did not provide or that are not directly and unambiguously derivable from numbers the source gives. If the source does not compute a result, do not invent one.
-- If a calculation or table would require you to supply numbers the source didn't state, omit it rather than guess.`;
+  return `SOURCE FIDELITY (strict — teach the source, do not copy it, do not embellish it):
+- TEACH, don't transcribe. Re-express the material as a clear, self-contained lesson in your own instructional words. Do NOT paste or lightly reword the source's sentences verbatim, and NEVER label passages with attributions such as "From your material", "In this lecture/this lecture", a filename, "Screenshot …", a slide number, or a page number. The lesson is taught content, not a quoted excerpt. (Markdown image embeds the pipeline injects are the only exception — leave those untouched.)
+- Explaining is allowed; inventing is not. You may define, clarify, restructure, and connect the ideas the source presents — but every fact, reason, cause, consequence, comparison, statistic, and example you state MUST be explicitly present in the source. Do NOT add outside knowledge, background, history, real-world context, applications, pros/cons, or "why it matters" reasoning that the source does not itself give.
+- No plausible elaboration. If the source gives one reason, teach exactly that one reason — never supply extra reasons, mechanisms, benefits, or implications that merely sound correct. Do NOT use hedging openers ("may", "can", "could", "often", "typically", "in general", "this means that…") to smuggle in claims the source never made.
+- COMPLETE the source. Conversely, do not drop or skim content: teach every distinct concept, definition, named entity, rule, and claim that appears in this lesson's assigned source text. Leaving a source sub-topic untaught is as serious as inventing one.
+- Keep the source's framing and figures faithfully even if you believe they are incorrect. Do not "fix", "correct", or "improve" the source.
+- Do not fabricate computed values, journal entries, tables, balance sheets, or worked examples the source did not provide or that are not directly and unambiguously derivable from numbers the source gives. If teaching a point would require information the source did not provide, omit that point rather than invent it.
+- key_terms must be terms the source actually defines or treats as important. Do not pad with generic, self-evident, or filler labels the source does not present as terms.`;
 }
 
 function voiceRules(): string {
@@ -1091,6 +1097,10 @@ function moduleInstruction(
   const moduleTitleDirective = moduleTitleIsPlaceholder
     ? `The provisional module title is ${JSON.stringify(stub.title)}, but that is a placeholder — **replace it** with a concise topic name (2–5 words, max 40 chars) drawn from this module's actual content. NEVER start with "Master", "Explore", "Understand", "Introduction to", "Overview of", "Learn", or any verb. Just name the topic (e.g. "The Accounting Equation", "Closing Entries").`
     : `Module title **must be** ${JSON.stringify(stub.title)}.`;
+  // Keep the lesson titles the source actually uses (the planned/scraped slide
+  // headings) verbatim and in order; only invent a title when the planned one
+  // is a bare placeholder ("Part 1"). This is the original behavior — it tracks
+  // the document's own structure instead of letting the model rewrite headings.
   const lessonTitleDirective = lessonTitlesArePlaceholders
     ? `The planned lesson titles below are placeholders (e.g. "Part 1"). **Replace each** with a concise topic title (3–6 words, max 50 chars) from that lesson's content — keep the SAME number of lessons in the SAME order. No verb-led or "Introduction to …" phrasing.`
     : `Each lesson's JSON "title" **must match** the planned title at the same index exactly (same wording, same order). If a planned title is a placeholder like "Part 1", replace just that one with a concise topic title from its content.`;
@@ -1105,14 +1115,15 @@ function moduleInstruction(
         : profile === "balanced"
           ? `STYLE (balanced): Teach clearly with examples; aim **under ~500 words** per lesson.`
           : "";
+  const exampleSourcingRule = `Examples MUST be grounded in the source — use the scenarios, cases, or illustrations the source itself gives. Do NOT invent outside "real-world" examples; if the source offers none for a lesson, use fewer (or none) rather than fabricating one. key_terms must be terms the source actually defines.`;
   const lessonRequirements =
     profile === "express"
-      ? `For EACH lesson: include **2** key_terms (term+definition) and **2** short examples (strings).`
+      ? `For EACH lesson: include **2** key_terms (term+definition) and up to **2** short examples (strings). ${exampleSourcingRule}`
       : profile === "fast"
-        ? `For EACH lesson: include 2–4 key_terms (term+definition) and exactly 2 real-world examples (short strings).`
+        ? `For EACH lesson: include 2–4 key_terms (term+definition) and up to 2 examples (short strings). ${exampleSourcingRule}`
         : profile === "balanced"
-          ? `For EACH lesson: include 2–4 key_terms (term+definition) and 2 short real-world examples (strings).`
-          : `For EACH lesson: include key_terms (term+definition) and examples (strings).`;
+          ? `For EACH lesson: include 2–4 key_terms (term+definition) and up to 2 examples (strings). ${exampleSourcingRule}`
+          : `For EACH lesson: include key_terms (term+definition) and examples (strings). ${exampleSourcingRule}`;
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. ${moduleTitleDirective}
 ${generationContextSuffix(studyContext, outputLanguage)}

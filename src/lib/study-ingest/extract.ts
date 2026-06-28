@@ -246,9 +246,13 @@ function extractTextLikeBuffer(
   };
 }
 
-function imageMediaType(
-  fileName: string
-): "image/jpeg" | "image/png" | "image/gif" | "image/webp" | null {
+type SupportedImageMediaType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/gif"
+  | "image/webp";
+
+function imageMediaType(fileName: string): SupportedImageMediaType | null {
   const ext = extensionOfFileName(fileName);
   if (ext === "png") return "image/png";
   if (ext === "gif") return "image/gif";
@@ -258,6 +262,38 @@ function imageMediaType(
   }
   return null;
 }
+
+/**
+ * Determine the image type from the file's magic bytes. This is the source of
+ * truth — the filename/extension is only a hint and is unreliable (renamed
+ * files, missing extensions, re-labeled grouped uploads). Returns the media
+ * type Anthropic's vision API accepts, or null if the bytes aren't a supported
+ * raster image.
+ */
+function sniffImageMediaType(buf: Buffer): SupportedImageMediaType | null {
+  if (buf.length >= 8 && buf.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    return "image/png";
+  }
+  // JPEG: FF D8 FF
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return "image/jpeg";
+  }
+  // GIF: "GIF87a" / "GIF89a"
+  if (buf.length >= 6 && buf.toString("ascii", 0, 3) === "GIF") {
+    return "image/gif";
+  }
+  // WEBP: "RIFF"...."WEBP"
+  if (
+    buf.length >= 12 &&
+    buf.toString("ascii", 0, 4) === "RIFF" &&
+    buf.toString("ascii", 8, 12) === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return null;
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 async function extractImageBuffer(
   buf: Buffer,
@@ -270,10 +306,13 @@ async function extractImageBuffer(
       "Image reading requires ANTHROPIC_API_KEY on the server. Upload a PDF or text file instead."
     );
   }
-  const mediaType = imageMediaType(fileName);
+  // Trust the bytes over the filename: a real PNG/JPEG/GIF/WEBP is accepted even
+  // when its name lost the extension; a misnamed/unsupported format is rejected
+  // even if the name claims otherwise.
+  const mediaType = sniffImageMediaType(buf) ?? imageMediaType(fileName);
   if (!mediaType) {
     throw new Error(
-      "This image format isn't supported yet. Try PNG or JPEG."
+      "This image format isn't supported yet. Try PNG, JPEG, GIF, or WebP."
     );
   }
 
