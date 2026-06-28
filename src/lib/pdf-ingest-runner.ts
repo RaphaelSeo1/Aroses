@@ -548,6 +548,62 @@ async function loadIngestAssetManifest(
   );
 }
 
+/**
+ * Cap finalize's optional visual-extraction step at ~150 s (override with
+ * `PDF_INGEST_FINALIZE_VISUAL_BUDGET_MS`). When this fallback runs it can
+ * render + vision-crop up to 120 PDF pages, which on big decks blows past the
+ * 300 s function budget — the worker is killed before it can flip the job to
+ * `complete`, so the UI sits stuck at "Saving your study set" / N/N forever.
+ * The course body is already fully built by this point; figures are a
+ * best-effort enhancement, so we time-box them and always proceed to the
+ * insert-material + flip-to-complete critical path.
+ */
+function finalizeVisualBudgetMs(): number {
+  const raw = process.env.PDF_INGEST_FINALIZE_VISUAL_BUDGET_MS?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  if (Number.isFinite(parsed) && parsed >= 15_000 && parsed <= 280_000) {
+    return parsed;
+  }
+  return 150_000;
+}
+
+/**
+ * Await `work`, but stop blocking after `ms` and return `fallback` instead. The
+ * underlying promise is not cancellable (PDF render / vision crop), so it may
+ * keep running until the function exits — we just no longer gate completion on
+ * it. A rejection also yields `fallback` so an optional enrichment failure can
+ * never abort finalize.
+ */
+async function withFinalizeBudget<T>(
+  work: Promise<T>,
+  ms: number,
+  fallback: T,
+  label: string,
+  jobId: string
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(
+        `[pdf-ingest] finalize step "${label}" exceeded ${ms}ms — completing without it`,
+        jobId
+      );
+      resolve(fallback);
+    }, ms);
+  });
+  try {
+    return await Promise.race([
+      work.catch((e) => {
+        console.error(`[pdf-ingest] finalize step "${label}" failed`, jobId, e);
+        return fallback;
+      }),
+      timeout,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function finalizePdfIngest(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string,
@@ -613,21 +669,31 @@ async function finalizePdfIngest(
       typeof ownerRow?.user_id === "string" ? ownerRow.user_id : null;
     if (ownerId) {
       try {
-        const ensured = await ensurePdfVisualsAtFinalize({
-          admin,
-          userId: ownerId,
-          jobId,
-          storagePath: primaryStoragePath,
-          fileName: fallbackFileName,
-          pageArtifacts,
-          sourceImages: sourceImagesForFinalize,
-          chunks: options?.sourceIndex?.chunks ?? [],
-          plan: options?.sourceIndex?.plan ?? null,
-          knownPageCount:
-            options?.knownPageCount && options.knownPageCount > 0
-              ? options.knownPageCount
-              : undefined,
-        });
+        const ensured = await withFinalizeBudget(
+          ensurePdfVisualsAtFinalize({
+            admin,
+            userId: ownerId,
+            jobId,
+            storagePath: primaryStoragePath,
+            fileName: fallbackFileName,
+            pageArtifacts,
+            sourceImages: sourceImagesForFinalize,
+            chunks: options?.sourceIndex?.chunks ?? [],
+            plan: options?.sourceIndex?.plan ?? null,
+            knownPageCount:
+              options?.knownPageCount && options.knownPageCount > 0
+                ? options.knownPageCount
+                : undefined,
+          }),
+          finalizeVisualBudgetMs(),
+          {
+            pageArtifacts,
+            sourceImages: sourceImagesForFinalize,
+            manifest: null,
+          },
+          "ensurePdfVisualsAtFinalize",
+          jobId
+        );
         pageArtifacts = ensured.pageArtifacts;
         sourceImagesForFinalize = ensured.sourceImages;
         if (ensured.manifest) {
