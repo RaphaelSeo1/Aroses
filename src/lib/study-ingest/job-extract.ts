@@ -223,9 +223,32 @@ export async function extractContentForIngestJob(input: {
     }
   }
 
+  // Per-file extraction summary — proves a multi-file job actually read EVERY
+  // source (not just the first). On a mixed upload you'll see one line per file
+  // with its real char count, then the combined total below.
+  if (refs.length > 1) {
+    console.info("[pdf-ingest] multi-source extract", {
+      jobId: input.jobId,
+      fileCount: refs.length,
+      sources: extractedParts.map((p) => ({
+        file: p.meta.fileName,
+        kind: p.meta.kind,
+        chars: p.charCount,
+      })),
+    });
+  }
+
   const { plainText, retainStorage: combinedRetain } =
     combineExtractedSources(extractedParts);
   if (combinedRetain) retainStorage = true;
+
+  if (refs.length > 1) {
+    console.info("[pdf-ingest] combined sources", {
+      jobId: input.jobId,
+      sources: extractedParts.length,
+      combinedChars: plainText.length,
+    });
+  }
 
   let textForCourse = plainText;
   if (textForCourse.length < 80) {

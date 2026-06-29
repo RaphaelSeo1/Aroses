@@ -75,6 +75,42 @@ function parseFilesInput(body: Record<string, unknown>): IngestFileInput[] | nul
   return null;
 }
 
+/**
+ * Columns added by later migrations. On a database that hasn't applied a given
+ * migration the insert fails with `42703` / `PGRST204`. We then drop ONLY the
+ * offending column and retry — instead of collapsing to a single "minimal" row
+ * that also threw away `source_files`. Ordered so `source_files` (which carries
+ * EVERY file of a multi-file lecture) is the very last column we ever give up:
+ * a missing unrelated column such as `material_sort_order` must never strip the
+ * other files from the job, or only the first uploaded file gets extracted.
+ */
+const OPTIONAL_INGEST_JOB_COLUMNS = [
+  "material_sort_order",
+  "output_language",
+  "study_context",
+  "source_format",
+  "source_files",
+] as const;
+
+/** Best-effort parse of the offending column name from a Postgres/PostgREST error. */
+function missingColumnFromError(
+  err: { message?: string } | null | undefined
+): string | null {
+  const msg = err?.message ?? "";
+  const patterns = [
+    // Postgres: `column pdf_ingest_jobs.material_sort_order does not exist`
+    /column\s+(?:[\w]+\.)?([a-z_]+)\s+does not exist/i,
+    // PostgREST schema cache: `Could not find the 'x' column of '...'`
+    /could not find the '([a-z_]+)' column/i,
+    /column "([a-z_]+)"/i,
+  ];
+  for (const re of patterns) {
+    const m = msg.match(re);
+    if (m && m[1]) return m[1];
+  }
+  return null;
+}
+
 async function handleProcessPdfPost(request: Request): Promise<Response> {
   const cookieStore = await cookies();
   const supabase = createServerClient(
@@ -282,7 +318,11 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     .eq("exam_group_id", examGroupId);
   const intendedSortOrder = (existingMaterialCount ?? 0) + orderIndex;
 
-  const minimalJobInsert: Record<string, unknown> = {
+  // Full job row. `source_files` records EVERY file in a multi-file lecture so
+  // the extractor reads + concatenates them all (not just the first). Optional
+  // columns are stripped one-at-a-time below only when a column is genuinely
+  // unmigrated, so an unrelated missing column never drops `source_files`.
+  const jobInsert: Record<string, unknown> = {
     user_id: user.id,
     course_id: courseId,
     exam_group_id: examGroupId,
@@ -292,46 +332,52 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
         ? primaryName
         : `${primaryName} + ${files.length - 1} more`,
     status: "pending",
-  };
-
-  const extendedJobInsert: Record<string, unknown> = {
-    ...minimalJobInsert,
     source_format: primaryKind,
     source_files: files.length > 1 ? sourceFilesJson : null,
     material_sort_order: intendedSortOrder,
+    output_language: outputLanguage,
   };
-
   if (studyContextValue) {
-    minimalJobInsert.study_context = studyContextValue;
-    extendedJobInsert.study_context = studyContextValue;
+    jobInsert.study_context = studyContextValue;
   }
-  minimalJobInsert.output_language = outputLanguage;
-  extendedJobInsert.output_language = outputLanguage;
 
-  let { data: jobRow, error: jobInsErr } = await supabase
-    .from("pdf_ingest_jobs")
-    .insert(extendedJobInsert as never)
-    .select("id")
-    .single();
-
-  if (
-    jobInsErr &&
-    isMissingDbColumnError(
-      jobInsErr,
-      "source_format",
-      "source_files",
-      "study_context",
-      "output_language",
-      "material_sort_order"
-    )
-  ) {
-    const retry = await supabase
-      .from("pdf_ingest_jobs")
-      .insert(minimalJobInsert as never)
-      .select("id")
-      .single();
-    jobRow = retry.data;
-    jobInsErr = retry.error;
+  let jobRow: { id: string } | null = null;
+  let jobInsErr: { code?: string; message?: string } | null = null;
+  {
+    const insert: Record<string, unknown> = { ...jobInsert };
+    // At most one retry per optional column, + one final attempt.
+    for (
+      let attempt = 0;
+      attempt <= OPTIONAL_INGEST_JOB_COLUMNS.length;
+      attempt++
+    ) {
+      const res = await supabase
+        .from("pdf_ingest_jobs")
+        .insert(insert as never)
+        .select("id")
+        .single();
+      jobRow = res.data;
+      jobInsErr = res.error;
+      if (!res.error) break;
+      if (!isMissingDbColumnError(res.error, ...OPTIONAL_INGEST_JOB_COLUMNS)) {
+        break;
+      }
+      const named = missingColumnFromError(res.error);
+      const toDrop =
+        named &&
+        named in insert &&
+        (OPTIONAL_INGEST_JOB_COLUMNS as readonly string[]).includes(named)
+          ? named
+          : // Column-agnostic error (e.g. schema cache): drop in priority order,
+            // keeping `source_files` for last so we never lose other files early.
+            OPTIONAL_INGEST_JOB_COLUMNS.find((c) => c in insert) ?? null;
+      if (!toDrop) break;
+      delete insert[toDrop];
+      console.warn(
+        "[process-pdf] unmigrated column; retrying job insert without it",
+        { column: toDrop, kept: Object.keys(insert) }
+      );
+    }
   }
 
   if (jobInsErr || !jobRow) {
