@@ -31,6 +31,10 @@ import { StudyChatDrawer } from "@/components/StudyChatDrawer";
 import { VoiceTutorDock } from "@/components/VoiceTutorDock";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import {
+  isWeakModuleTitle,
+  moduleTitleFromLessonTitles,
+} from "@/lib/study-ingest/normalize-ingest-title";
+import {
   AROSES_COURSE_REFINED_EVENT,
   type ArosesCourseRefinedDetail,
 } from "@/lib/refine-course-events";
@@ -52,13 +56,25 @@ function stripLeadingSectionNumber(s: string): string {
 }
 
 /**
- * Header/sidebar title for a module: show the module's own stored title as the
- * generator produced it, only stripping a leading section number for tidiness.
- * (We no longer rewrite the title from the lessons — the stored title is the
- * source of truth.)
+ * Header/sidebar title for a module. Normally the stored title is already a
+ * descriptive, generator-produced label, so we just strip a leading section
+ * number for tidiness. When the stored title is still a weak placeholder
+ * ("Section 3", "Part 1", a bare acronym) — common in older builds — and the
+ * module's lessons are available, derive a descriptive title from the lesson
+ * topics so the UI never shows a positional label.
  */
-function moduleDisplayTitle(m: { title: string }): string {
-  return stripLeadingSectionNumber(m.title);
+function moduleDisplayTitle(m: {
+  title: string;
+  lessons?: { title: string }[];
+}): string {
+  const stripped = stripLeadingSectionNumber(m.title);
+  if (m.lessons && m.lessons.length > 0 && isWeakModuleTitle(stripped)) {
+    const derived = moduleTitleFromLessonTitles(m.lessons.map((l) => l.title));
+    if (derived && !isWeakModuleTitle(derived)) {
+      return stripLeadingSectionNumber(derived);
+    }
+  }
+  return stripped;
 }
 
 function ModuleLessonJumpNav({
@@ -1250,7 +1266,7 @@ export function CoursePlayer({
                                 {done ? "✓" : mod.id}
                               </span>
                               <span className="leading-snug">
-                                {stripLeadingSectionNumber(mod.title)}
+                                {moduleDisplayTitle(mod)}
                               </span>
                             </button>
                           );

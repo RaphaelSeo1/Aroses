@@ -38,6 +38,7 @@ import {
   isBadIngestTitle,
   isGenericIngestPlaceholder,
   isWeakModuleTitle,
+  moduleTitleFromLessonTitles,
   normalizeIngestDisplayTitle,
   resolveCourseDisplayTitle,
 } from "@/lib/study-ingest/normalize-ingest-title";
@@ -1075,7 +1076,7 @@ ${materialText}
  */
 function titleStyleRules(): string {
   return `TITLE STYLE (very important — follow strictly):
-- **course title**: short topic name, 2 to 5 words. Example: "Ionic Bonding", "World War II Causes", "Linear Algebra Basics". NOT "A Comprehensive Guide to ...".
+- **course title**: a DESCRIPTIVE objective that states what the whole material teaches — a topic + scope phrase, roughly **4 to 12 words** (keep it under ~90 characters; never a run-on sentence or a paragraph). It MAY begin with a verb such as "Master" or "Explore". Examples: "Master ionic bonding through electron transfer and noble gas configurations", "Explore how electronegativity, molecular geometry, and polarity interact". Avoid marketing fluff like "A Comprehensive Guide to …" or "Everything You Need to Know About …".
 - **module titles**: short noun phrases, **2 to 5 words each, max 40 characters**. Just name the topic. Example: "Covalent Bonding", "VSEPR Geometry", "Ideal Gas Law". **NEVER** start with "Master", "Explore", "Understand", "Introduction to", "Overview of", "Deep Dive into", "Foundations of", "The Fundamentals of", or any verb-led phrase.
 - **lesson_titles**: short noun phrases, **3 to 6 words each, max 50 characters**. Example: "Electron Sharing", "Bond Polarity", "Lewis Structures". Same forbidden openers as module titles.
 - **description**: ONE short sentence under ~20 words. No marketing fluff, no "designed for self-study", no second paragraph.
@@ -1131,13 +1132,13 @@ function moduleInstruction(
   const moduleTitleDirective = moduleTitleIsPlaceholder
     ? `The provisional module title is ${JSON.stringify(stub.title)}, but that is a placeholder — **replace it** with a concise topic name (2–5 words, max 40 chars) drawn from this module's actual content. NEVER start with "Master", "Explore", "Understand", "Introduction to", "Overview of", "Learn", or any verb. Just name the topic (e.g. "The Accounting Equation", "Closing Entries").`
     : `Module title **must be** ${JSON.stringify(stub.title)}.`;
-  // Keep the lesson titles the source actually uses (the planned/scraped slide
-  // headings) verbatim and in order; only invent a title when the planned one
-  // is a bare placeholder ("Part 1"). This is the original behavior — it tracks
-  // the document's own structure instead of letting the model rewrite headings.
+  // NAME each lesson by the concept it actually teaches. The planned/scraped
+  // slide headings are only hints to the order/topic — never echo them verbatim
+  // (raw slide headings, professor names, dates, "Lecture N:" chrome). This
+  // yields descriptive lesson titles instead of literal deck headings.
   const lessonTitleDirective = lessonTitlesArePlaceholders
-    ? `The planned lesson titles below are placeholders (e.g. "Part 1"). **Replace each** with a concise topic title (3–6 words, max 50 chars) from that lesson's content — keep the SAME number of lessons in the SAME order. No verb-led or "Introduction to …" phrasing.`
-    : `Each lesson's JSON "title" **must match** the planned title at the same index exactly (same wording, same order). If a planned title is a placeholder like "Part 1", replace just that one with a concise topic title from its content.`;
+    ? `The planned lesson titles below are placeholders (e.g. "Part 1"). NAME each lesson by the specific concept it teaches — a concise, descriptive topic phrase (3–7 words, max ~60 chars) drawn from that lesson's content. Keep the SAME number of lessons in the SAME order. Do not echo raw slide headings, professor/speaker names, dates, or "Lecture N:"/"Part N" chrome.`
+    : `Treat the planned lesson titles below ONLY as hints to the order and rough topic — do NOT copy them verbatim. NAME each lesson by the specific concept it actually teaches: a concise, descriptive topic phrase (3–7 words, max ~60 chars), e.g. "Periodic Trends and Electronic Structure", "Electron Transfer & Noble Gas Envy", "Foundations of Covalent Bonding". Keep the SAME number of lessons in the SAME order. NEVER reuse a raw scraped slide/section heading, a professor or speaker name, a date, a "Lecture N:"/"Part N" label, or administrative slide chrome ("Agenda", "Objectives", "Warm Up", "Welcome to …", "Succeeding in …") as a title.`;
   const wrapperTitle = moduleTitleIsPlaceholder
     ? `"<concise topic title>"`
     : JSON.stringify(stub.title);
@@ -1853,17 +1854,22 @@ function isPlaceholderLessonTitle(title: string): boolean {
   return isBadIngestTitle(t);
 }
 
-/** Prefer a real planned lesson title; otherwise keep the LLM's generated one. */
+/**
+ * Prefer the model's content-derived (descriptive) lesson title; fall back to
+ * the planned/scraped title only when the generated one is a placeholder. This
+ * is what makes lesson titles describe the concept taught instead of echoing a
+ * raw slide heading.
+ */
 function pickLessonTitle(
   plannedTitle: string | undefined,
   generatedTitle: string | undefined,
   lessonIndex: number
 ): string {
-  const planned = normalizeIngestDisplayTitle(plannedTitle ?? "");
-  if (planned && !isPlaceholderLessonTitle(planned)) return planned;
   const generated = normalizeIngestDisplayTitle(generatedTitle ?? "");
   if (generated && !isPlaceholderLessonTitle(generated)) return generated;
-  return planned || generated || `Part ${lessonIndex + 1}`;
+  const planned = normalizeIngestDisplayTitle(plannedTitle ?? "");
+  if (planned && !isPlaceholderLessonTitle(planned)) return planned;
+  return generated || planned || `Part ${lessonIndex + 1}`;
 }
 
 function applyPlannedModuleTitles(
@@ -1873,14 +1879,20 @@ function applyPlannedModuleTitles(
 ): CourseModule {
   const stub = outline.modules[moduleIndex];
   if (!stub) return mod;
-  return {
-    ...mod,
-    title: pickModuleTitle(stub.title, mod.title, moduleIndex),
-    lessons: mod.lessons.map((lesson, li) => ({
-      ...lesson,
-      title: pickLessonTitle(stub.lesson_titles[li], lesson.title, li),
-    })),
-  };
+  const lessons = mod.lessons.map((lesson, li) => ({
+    ...lesson,
+    title: pickLessonTitle(stub.lesson_titles[li], lesson.title, li),
+  }));
+  let title = pickModuleTitle(stub.title, mod.title, moduleIndex);
+  // When both the planned and generated module titles are weak placeholders
+  // ("Section 3", "Part 1", a bare acronym), derive a descriptive title from
+  // the (now descriptive) lesson titles — e.g. "A & B" — instead of leaving a
+  // positional label in the header.
+  if (isWeakModuleTitle(title)) {
+    const derived = moduleTitleFromLessonTitles(lessons.map((l) => l.title));
+    if (derived && !isWeakModuleTitle(derived)) title = derived;
+  }
+  return { ...mod, title, lessons };
 }
 
 /** Expand one module for chunked PDF ingest (separate server invocation). */

@@ -1,5 +1,5 @@
 import type { CoursePayload } from "@/types/course";
-import { isGenericIngestPlaceholder, isBadIngestTitle, normalizeIngestDisplayTitle, deriveTitleFromUploadFileName } from "@/lib/study-ingest/normalize-ingest-title";
+import { isGenericIngestPlaceholder, isBadCourseTitle, normalizeIngestDisplayTitle, deriveTitleFromUploadFileName } from "@/lib/study-ingest/normalize-ingest-title";
 
 const INVALID_FILENAME_CHARS = /[/\\?%*:|"<>]/g;
 
@@ -69,9 +69,11 @@ function firstDescriptionLine(desc: string): string | null {
 
 function scoreStemForMaterialLabel(stem: string, sourceIndex: number): number {
   let score = Math.min(100, stem.length);
-  // Keep hard guards against genuine garbage (transcript fragments, "Part 1").
+  // Keep hard guards against genuine garbage (transcript fragments, "Part 1"),
+  // but accept descriptive/verb-led objective titles ("Master …", "Explore …")
+  // — the elaborate "summary of your PDF" label users want at the top.
   if (isGenericIngestPlaceholder(stem)) score -= 200;
-  if (isBadIngestTitle(stem)) score -= 250;
+  if (isBadCourseTitle(stem)) score -= 250;
   if (GENERIC_TITLE_LINE.test(stem)) score -= 42;
   if (GENERIC_LECTURE_NUM.test(stem)) score -= 18;
   if (/^week\s*\d+\b/i.test(stem)) score -= 6;
@@ -104,7 +106,7 @@ function collectPayloadTitleCandidates(p: Partial<CoursePayload>): string[] {
   for (let i = 0; i < raw.length; i++) {
     const r = raw[i];
     const k = r.trim().toLowerCase();
-    if (k.length < 3 || seen.has(k) || isBadIngestTitle(r)) continue;
+    if (k.length < 3 || seen.has(k) || isBadCourseTitle(r)) continue;
     seen.add(k);
     out.push(r);
   }
@@ -154,7 +156,7 @@ export function resolveMaterialSectionLabel(input: {
   if (
     outlineTitle &&
     !isGenericIngestPlaceholder(outlineTitle) &&
-    !isBadIngestTitle(outlineTitle)
+    !isBadCourseTitle(outlineTitle)
   ) {
     candidates.push(outlineTitle);
   }
@@ -163,7 +165,7 @@ export function resolveMaterialSectionLabel(input: {
     if (
       typeof p.title === "string" &&
       p.title.trim() &&
-      !isBadIngestTitle(p.title)
+      !isBadCourseTitle(p.title)
     ) {
       candidates.push(p.title.trim());
     }
@@ -184,7 +186,7 @@ export function resolveMaterialSectionLabel(input: {
     if (
       label &&
       !isGenericIngestPlaceholder(label) &&
-      !isBadIngestTitle(label)
+      !isBadCourseTitle(label)
     ) {
       return label;
     }

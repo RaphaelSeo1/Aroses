@@ -106,6 +106,8 @@ const WEAK_MODULE_TITLE =
 const UPLOAD_FILE_EXT =
   /\.(pdf|docx?|pptx?|xlsx?|txt|rtf|md|pages|key|numbers|png|jpe?g|gif|webp|heic|svg|csv|tsv|zip|rar|7z)$/i;
 
+const HANGUL = /[\uac00-\ud7a3]/;
+
 const GENERIC_COURSE_TITLE =
   /^(약리학|개요|서론|목차|introduction|overview|course|untitled section)$/i;
 
@@ -176,6 +178,63 @@ export function isBadIngestTitle(raw: string): boolean {
   return false;
 }
 
+/**
+ * Acceptance gate for the COURSE / MATERIAL section title ONLY.
+ *
+ * Unlike {@link isBadIngestTitle} — which is tuned for short module/lesson
+ * labels and therefore rejects verb-led, sentence-like, or longer titles — this
+ * predicate ALLOWS the descriptive, objective-style course titles the product
+ * wants, e.g. "Master ionic bonding through electron transfer & noble gas
+ * configurations" or "Explore how electronegativity, molecular geometry, and
+ * polarity interact". It still rejects genuinely broken titles: transcript
+ * fragments, trailing-comma fragments, speaker "NAME:" prefixes, bare
+ * enumeration, file-extension leftovers, single bare words, and absurd run-ons.
+ *
+ * Use this for the course/material title path; keep isBadIngestTitle for
+ * module/lesson/placeholder detection.
+ */
+export function isBadCourseTitle(raw: string): boolean {
+  const rawTrimmed = raw.trim();
+  if (!rawTrimmed) return true;
+  // Soft upper bound: an objective title is descriptive, not a paragraph.
+  if (rawTrimmed.length > 90) return true;
+  const t = normalizeIngestDisplayTitle(raw).trim();
+  if (!t) return true;
+  if (/^\d+$/.test(t)) return true;
+  if (t.length === 1) return true;
+  if (t.length === 2 && !/^[\uac00-\ud7a3]{2}$/.test(t)) return true;
+  // A single bare (non-Korean) word names no scope — not a course objective.
+  if (!/\s/.test(t) && !HANGUL.test(t)) return true;
+  if (SECTION_PLACEHOLDER.test(t)) return true;
+  if (BARE_ENUM_TITLE.test(t)) return true;
+  if (/^untitled section$/i.test(t)) return true;
+  if (SPEAKER_PREFIX.test(t)) return true;
+  if (/^[A-Z][A-Z0-9\s.'-]{2,48}:$/.test(t)) return true;
+  if (TRANSCRIPT_FRAGMENT.test(t)) return true;
+  if (INCOMPLETE_PHRASE.test(t)) return true;
+  if (SPOKEN_CLAUSE.test(t)) return true;
+  // Incomplete spoken lists: "company's assets, liabilities,"
+  if (/,\s*$/.test(t)) return true;
+  if (/^[a-z][a-z'-]*['']s\s+/i.test(t) && /,/.test(t)) return true;
+  // Leftover file-extension fragments.
+  if (UPLOAD_FILE_EXT.test(t) || /\.(pdf|docx?|pptx?|txt|rtf|md)\b/i.test(t)) {
+    return true;
+  }
+  // Multiple sentence clauses usually means spoken transcript, not a title.
+  if (t.includes(".") && t.split(/\.\s+/).length >= 2 && t.length < 72) return true;
+  // Lowercase-first multi-word prose is almost always a transcript fragment.
+  if (
+    /^[a-z]/.test(t) &&
+    t.split(/\s+/).length >= 4 &&
+    /\b(the|and|or|to|a|an|is|are|was|were|of|in|on|for|that|this|with|we|you|what|so)\b/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** Module/lesson placeholder labels that should not repeat across a course. */
 export function isWeakModuleTitle(raw: string): boolean {
   const t = normalizeIngestDisplayTitle(raw).trim();
@@ -183,6 +242,14 @@ export function isWeakModuleTitle(raw: string): boolean {
   if (WEAK_MODULE_TITLE.test(t)) return true;
   if (GENERIC_INTRO_LESSON.test(t)) return true;
   if (isBadIngestTitle(t)) return true;
+  // Bare acronym / very short single-word label ("DNA", "ATP", a course code
+  // like "UGBA", "Q1") names no concept — treat it as weak so the module writer
+  // or the lesson-derived fallback supplies a descriptive title. Korean single
+  // words are left alone (they can be legitimately short topic words).
+  if (!/\s/.test(t) && !HANGUL.test(t)) {
+    if (/^[A-Za-z][A-Za-z0-9]{0,5}$/.test(t) && t === t.toUpperCase()) return true;
+    if (t.length <= 3) return true;
+  }
   return false;
 }
 
@@ -385,8 +452,6 @@ function disambiguateModuleTitle(title: string, index: number, used: Set<string>
 }
 
 export { disambiguateModuleTitle };
-
-const HANGUL = /[\uac00-\ud7a3]/;
 
 /**
  * Join two topic labels with a connector that matches their script:

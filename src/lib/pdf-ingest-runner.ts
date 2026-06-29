@@ -109,7 +109,9 @@ import {
   finalizeMaterialSectionLabel,
 } from "@/lib/study-material-display-name";
 import {
+  isBadCourseTitle,
   isGenericIngestPlaceholder,
+  isSentenceLikeIngestTitle,
   isWeakModuleTitle,
   resolveCourseDisplayTitle,
 } from "@/lib/study-ingest/normalize-ingest-title";
@@ -816,7 +818,15 @@ async function finalizePdfIngest(
 
   // Upgrade a placeholder course title (e.g. "Part 1", "Section 1", "Course")
   // using the real module titles the writer produced, then the upload name.
-  if (isWeakModuleTitle(outline.title) || isGenericIngestPlaceholder(outline.title)) {
+  // BUT preserve a genuinely descriptive objective title ("Master ionic bonding
+  // through …") — isWeakModuleTitle flags those as "weak" only because they read
+  // as sentence-like, yet they are exactly the course titles we want to keep.
+  const titleIsDescriptiveObjective =
+    !isBadCourseTitle(outline.title) && isSentenceLikeIngestTitle(outline.title);
+  if (
+    !titleIsDescriptiveObjective &&
+    (isWeakModuleTitle(outline.title) || isGenericIngestPlaceholder(outline.title))
+  ) {
     const upgraded = resolveCourseDisplayTitle({
       planTitle: null,
       chunkTitles: modules.map((m) => m.title),
