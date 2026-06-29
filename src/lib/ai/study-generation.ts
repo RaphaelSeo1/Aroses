@@ -331,7 +331,7 @@ function resolveOutlineModel(profile: CourseBuildProfile): string {
 }
 
 /** Rough input budget — large PDFs + long outputs often hit limits or timeouts. */
-const MAX_MATERIAL_CHARS = 120_000;
+const MAX_MATERIAL_CHARS = 160_000;
 /** Aggressively small for `fast` so outline/module calls stay quick. */
 const FAST_MATERIAL_CHARS = 40_000;
 /** `balanced`: default input budget; override with `COURSE_BALANCED_MATERIAL_CHARS`. */
@@ -375,7 +375,7 @@ function outlineMaterialCharLimit(profile: CourseBuildProfile): number {
       moduleCap
     );
   }
-  return clampInt(envInt("COURSE_FULL_OUTLINE_MATERIAL_CHARS", 56_000), 24_000, moduleCap);
+  return clampInt(envInt("COURSE_FULL_OUTLINE_MATERIAL_CHARS", 90_000), 24_000, moduleCap);
 }
 
 const PRESERVE_MARKER_RE =
@@ -578,7 +578,7 @@ function courseInstruction(
   const frMin = moduleFreeResponseMin(profile, quizTarget);
 
   if (profile === "full") {
-    sizeRules = `Rules for output size (important): use at least 2 modules and at most 8 unless the source is extremely short. Keep each lesson "content" thorough but under roughly 1000 words so the full answer fits in one response. Every module must include at least one lesson.
+    sizeRules = `Rules for output size (important): use **at least 5 modules and up to 14** unless the source is extremely short — split the material into many focused modules so each major topic gets its own. Keep each lesson "content" thorough but under roughly 1000 words so the full answer fits in one response. Every module must include at least one lesson.
 
 QUIZ (critical): Each module needs a rich practice set — **at least ${quizTarget} questions per module**, with **at least ${frMin} items** whose type is free_response (short written answer). The rest should be mcq. Aim for roughly half MCQ and half free-response overall. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, several sentences of rubric — key ideas and acceptable points).`;
     quizFooter =
@@ -1035,9 +1035,9 @@ function outlineInstruction(
     moduleCount = `Use **2 to ${maxModules}** modules. Prefer a compact plan that still covers the excerpt.`;
     maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 6), 2, 8);
   } else {
-    moduleCount =
-      "Use **2 to 8** modules depending on how much content the source has.";
-    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 8), 2, 12);
+    const maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 14), 4, 20);
+    moduleCount = `Use **at least 5** and up to **${maxModules}** modules. Split the material into many focused modules so each major topic, section, or learning objective gets its own module — prefer MORE, narrower modules over a few broad ones. Scale the count up with how much the source covers.`;
+    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 10), 3, 16);
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
@@ -1076,7 +1076,7 @@ ${materialText}
  */
 function titleStyleRules(): string {
   return `TITLE STYLE (very important — follow strictly):
-- **course title**: a DESCRIPTIVE objective that states what the whole material teaches — a topic + scope phrase, roughly **4 to 12 words** (keep it under ~90 characters; never a run-on sentence or a paragraph). It MAY begin with a verb such as "Master" or "Explore". Examples: "Master ionic bonding through electron transfer and noble gas configurations", "Explore how electronegativity, molecular geometry, and polarity interact". Avoid marketing fluff like "A Comprehensive Guide to …" or "Everything You Need to Know About …".
+- **course title**: short topic name, 2 to 5 words. Example: "Ionic Bonding", "World War II Causes", "Linear Algebra Basics". NOT "A Comprehensive Guide to ...".
 - **module titles**: short noun phrases, **2 to 5 words each, max 40 characters**. Just name the topic. Example: "Covalent Bonding", "VSEPR Geometry", "Ideal Gas Law". **NEVER** start with "Master", "Explore", "Understand", "Introduction to", "Overview of", "Deep Dive into", "Foundations of", "The Fundamentals of", or any verb-led phrase.
 - **lesson_titles**: short noun phrases, **3 to 6 words each, max 50 characters**. Example: "Electron Sharing", "Bond Polarity", "Lewis Structures". Same forbidden openers as module titles.
 - **description**: ONE short sentence under ~20 words. No marketing fluff, no "designed for self-study", no second paragraph.
@@ -1125,23 +1125,12 @@ function moduleInstruction(
   const stub = outline.modules[moduleIndex];
   const n = outline.modules.length;
   const titles = stub.lesson_titles.map((t) => JSON.stringify(t)).join(", ");
-  const moduleTitleIsPlaceholder = isWeakModuleTitle(stub.title);
-  const lessonTitlesArePlaceholders = stub.lesson_titles.every(
-    (t) => isBadIngestTitle(t) || /^(part|page|slide|section)\s+\d+$/i.test(t.trim())
-  );
-  const moduleTitleDirective = moduleTitleIsPlaceholder
-    ? `The provisional module title is ${JSON.stringify(stub.title)}, but that is a placeholder — **replace it** with a concise topic name (2–5 words, max 40 chars) drawn from this module's actual content. NEVER start with "Master", "Explore", "Understand", "Introduction to", "Overview of", "Learn", or any verb. Just name the topic (e.g. "The Accounting Equation", "Closing Entries").`
-    : `Module title **must be** ${JSON.stringify(stub.title)}.`;
-  // NAME each lesson by the concept it actually teaches. The planned/scraped
-  // slide headings are only hints to the order/topic — never echo them verbatim
-  // (raw slide headings, professor names, dates, "Lecture N:" chrome). This
-  // yields descriptive lesson titles instead of literal deck headings.
-  const lessonTitleDirective = lessonTitlesArePlaceholders
-    ? `The planned lesson titles below are placeholders (e.g. "Part 1"). NAME each lesson by the specific concept it teaches — a concise, descriptive topic phrase (3–7 words, max ~60 chars) drawn from that lesson's content. Keep the SAME number of lessons in the SAME order. Do not echo raw slide headings, professor/speaker names, dates, or "Lecture N:"/"Part N" chrome.`
-    : `Treat the planned lesson titles below ONLY as hints to the order and rough topic — do NOT copy them verbatim. NAME each lesson by the specific concept it actually teaches: a concise, descriptive topic phrase (3–7 words, max ~60 chars), e.g. "Periodic Trends and Electronic Structure", "Electron Transfer & Noble Gas Envy", "Foundations of Covalent Bonding". Keep the SAME number of lessons in the SAME order. NEVER reuse a raw scraped slide/section heading, a professor or speaker name, a date, a "Lecture N:"/"Part N" label, or administrative slide chrome ("Agenda", "Objectives", "Warm Up", "Welcome to …", "Succeeding in …") as a title.`;
-  const wrapperTitle = moduleTitleIsPlaceholder
-    ? `"<concise topic title>"`
-    : JSON.stringify(stub.title);
+  // June-1 title behavior: the outline/structure-plan already produced the
+  // module + lesson titles, so the module writer must KEEP them verbatim
+  // (same count, same order) rather than re-deriving "descriptive" titles.
+  const moduleTitleDirective = `Module title **must be** ${JSON.stringify(stub.title)}.`;
+  const lessonTitleDirective = `Use the planned lesson titles below **exactly as given**, in the SAME order and SAME count — one full lesson per planned title. Do not rename, merge, split, or reorder them.`;
+  const wrapperTitle = JSON.stringify(stub.title);
   const styleRule =
     profile === "express"
       ? `STYLE (express): Focused lessons (**under ~500 words** each). Cover every planned topic from the source — do not skip subtopics assigned to this module.`
@@ -1855,21 +1844,21 @@ function isPlaceholderLessonTitle(title: string): boolean {
 }
 
 /**
- * Prefer the model's content-derived (descriptive) lesson title; fall back to
- * the planned/scraped title only when the generated one is a placeholder. This
- * is what makes lesson titles describe the concept taught instead of echoing a
- * raw slide heading.
+ * June-1 behavior: prefer the planned (outline / structure-plan) lesson title,
+ * since that is the title the user reviewed and approved. Fall back to the
+ * model's generated title only when the planned one is a positional placeholder
+ * ("Part 1", "Slide 3"), and to a numbered label as a last resort.
  */
 function pickLessonTitle(
   plannedTitle: string | undefined,
   generatedTitle: string | undefined,
   lessonIndex: number
 ): string {
-  const generated = normalizeIngestDisplayTitle(generatedTitle ?? "");
-  if (generated && !isPlaceholderLessonTitle(generated)) return generated;
   const planned = normalizeIngestDisplayTitle(plannedTitle ?? "");
   if (planned && !isPlaceholderLessonTitle(planned)) return planned;
-  return generated || planned || `Part ${lessonIndex + 1}`;
+  const generated = normalizeIngestDisplayTitle(generatedTitle ?? "");
+  if (generated && !isPlaceholderLessonTitle(generated)) return generated;
+  return planned || generated || `Part ${lessonIndex + 1}`;
 }
 
 function applyPlannedModuleTitles(

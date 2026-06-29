@@ -85,6 +85,13 @@ function clampInt(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 /** Depth vs speed knobs derived from chunk count and build profile. */
 export function structurePlanTargets(
   chunkCount: number,
@@ -114,12 +121,19 @@ export function structurePlanTargets(
     minLessons = clampInt(Math.ceil(chunkCount / 1.5), 2, 22);
     maxModules = 6;
   } else {
-    minLessons = clampInt(Math.ceil(chunkCount / 1.25), 2, 28);
-    maxModules = 8;
+    // full: deepest profile — more modules and more lessons per the source.
+    minLessons = clampInt(Math.ceil(chunkCount / 1.1), 3, 40);
+    maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 14), 4, 20);
   }
 
   const minModules =
-    minLessons >= 5 ? 2 : minLessons >= 3 ? 2 : 1;
+    profile === "full"
+      ? clampInt(Math.min(maxModules, Math.ceil(minLessons / 3)), 3, maxModules)
+      : minLessons >= 5
+        ? 2
+        : minLessons >= 3
+          ? 2
+          : 1;
 
   return { chunkCount, minLessons, minModules, maxModules };
 }
@@ -380,7 +394,14 @@ export function normalizeStructurePlanTitles(
       ...lesson,
       title: polished[i] ?? normalizeIngestDisplayTitle(lesson.title),
     }));
-    let candidate = moduleTitleFromLessonTitles(lessons.map((l) => l.title));
+    // June-1 behavior: keep the planner's own module title when it is a real
+    // topic name. Only fall back to a lesson-derived ("A & B") or positional
+    // label when the planner gave a weak/placeholder title (or for the
+    // deterministic plan, which has no real module titles).
+    let candidate = normalizeIngestDisplayTitle(mod.title);
+    if (isWeakModuleTitle(candidate)) {
+      candidate = moduleTitleFromLessonTitles(lessons.map((l) => l.title));
+    }
     if (isWeakModuleTitle(candidate)) {
       // Placeholder — the per-module writer renames it from the lesson content.
       candidate = `Section ${modIndex + 1}`;

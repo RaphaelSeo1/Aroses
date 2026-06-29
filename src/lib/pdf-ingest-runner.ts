@@ -13,6 +13,7 @@ import {
 } from "@/lib/study-ingest/job-extract";
 import {
   summarizeChunksForPlanner,
+  isStructurePlanningEnabled,
   type IngestChunk,
 } from "@/lib/study-ingest/chunking";
 import {
@@ -70,7 +71,10 @@ import {
   renumberModules,
 } from "@/lib/ai/course-payload";
 import type { CourseModule } from "@/types/course";
-import type { CourseOutlinePayload } from "@/lib/ai/course-payload";
+import type {
+  CourseOutlinePayload,
+  CourseStructurePlan,
+} from "@/lib/ai/course-payload";
 import type { CoursePayload } from "@/types/course";
 import {
   assembleModuleSourcesFromPlan,
@@ -2418,11 +2422,21 @@ async function runPdfIngestOutlinePhase(
     void touchJobProgress(admin, jobId);
   }, 8_000);
 
-  // Content-driven structure planning whenever we have chunks — maps each
-  // lesson to source_chunk_ids for per-lesson attribution at finalize.
-  const useStructurePlanning = chunks.length > 0;
+  // STRUCTURE_PLANNING (June-1 routing): use the content planner only when the
+  // global flag is on OR the job combines more than one source file (a manually
+  // grouped "lecture"). Single-file uploads fall back to
+  // generateCourseOutlineFromMaterial, which produces the short, pedagogical
+  // module/lesson titles the product wants. Visual enrichment (figures + table
+  // vision) and per-lesson source attribution still run for BOTH paths below.
+  const distinctSourceFiles = new Set(
+    chunks.map((c) => c.sourceFileName).filter((n) => Boolean(n))
+  ).size;
+  const useStructurePlanning =
+    chunks.length > 0 &&
+    (isStructurePlanningEnabled() || distinctSourceFiles > 1);
 
   let outline: CourseOutlinePayload;
+  let plan: CourseStructurePlan | null = null;
   let planModuleSources: string[] | null = null;
   let planJson: unknown = null;
   let sourceImages = sourceImagesInput;
@@ -2431,7 +2445,7 @@ async function runPdfIngestOutlinePhase(
   let assetManifestForJob: CourseAssetManifest | null = null;
   try {
     if (useStructurePlanning) {
-      const plan = await withAnthropicRateLimitRetries(
+      plan = await withAnthropicRateLimitRetries(
         jobId,
         "structure-plan",
         () =>
@@ -2456,130 +2470,6 @@ async function runPdfIngestOutlinePhase(
         modules: outline.modules.length,
         chunks: chunks.length,
       });
-
-      // Surface the outline immediately so the build UI can show module
-      // titles while page renders + table vision run (often 1–3 min on
-      // large pharmacology PDFs).
-      await admin
-        .from("pdf_ingest_jobs")
-        .update({
-          ingest_outline: outline,
-          ingest_plan: planJson,
-          ingest_phase: "enriching_sources",
-          stream_preview: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", jobId)
-        .eq("ingest_epoch", claimedEpoch);
-
-      if (isPdfPageRenderEnabled() && (primaryStoragePath || primaryPdfBuffer)) {
-        console.info("[pdf-ingest] visual enrich starting", {
-          jobId,
-          hasStoragePath: Boolean(primaryStoragePath),
-          hasPdfBuffer: Boolean(primaryPdfBuffer),
-          bufferBytes: primaryPdfBuffer?.length ?? 0,
-        });
-        try {
-          const supplemented = await supplementPdfPageFigures({
-            admin,
-            userId: claimed.user_id,
-            jobId,
-            chunks: persistIngestChunks(chunks),
-            plan,
-            existingImages: sourceImages,
-            sourceFiles,
-            primaryStoragePath,
-            primaryFileName,
-            primaryPdfBuffer,
-            knownPageCount: knownPageCount > 0 ? knownPageCount : undefined,
-          });
-          sourceImages = filterCroppedFiguresOnly(supplemented.images);
-          pageArtifactsForJob = supplemented.pageArtifacts;
-          const pageTables = pageTableExtractionsToMap(
-            supplemented.pageTableExtractions
-          );
-          const pageFigures = pageArtifactsForJob.figures;
-          if (pageTables.size > 0) {
-            chunksForGeneration = enrichChunksWithPageTables(chunks, pageTables);
-          }
-          if (pageFigures.length > 0) {
-            chunksForGeneration = enrichChunksWithPageFigures(
-              chunksForGeneration,
-              pageFigures
-            );
-          }
-          if (pageTables.size > 0 || pageFigures.length > 0) {
-            console.info("[pdf-ingest] enriched chunks with page artifacts", {
-              jobId,
-              tablePages: pageTables.size,
-              figurePages: pageFigures.length,
-            });
-          }
-          try {
-            assetManifestForJob = await buildCourseAssetManifest(
-              pageArtifactsForJob
-            );
-            if (assetManifestForJob.assets.length > 0) {
-              console.info("[pdf-ingest] asset manifest", {
-                jobId,
-                assets: assetManifestForJob.assets.length,
-              });
-            }
-          } catch (e) {
-            console.warn("[pdf-ingest] buildCourseAssetManifest", jobId, e);
-          }
-        } catch (e) {
-          console.error("[pdf-ingest] supplementPdfPageFigures FAILED", jobId, e);
-          await failJobUnlessStale(
-            admin,
-            jobId,
-            cleanupPaths,
-            e instanceof Error ? e.message : "PDF visual extraction failed.",
-            claimedEpoch
-          );
-          return;
-        }
-      } else if (
-        isPdfTableVisionEnabled() &&
-        primaryPdfBuffer &&
-        primaryPdfBuffer.length > 0
-      ) {
-        try {
-          const extractions = await supplementPdfTablesOnly({
-            pdfBuffer: primaryPdfBuffer,
-            sourceFileName: primaryFileName?.trim() || "upload.pdf",
-            chunks,
-            jobId,
-          });
-          const pageTables = pageTableExtractionsToMap(extractions);
-          if (pageTables.size > 0) {
-            pageArtifactsForJob = {
-              tables: Object.fromEntries(pageTables),
-              figures: [],
-            };
-            chunksForGeneration = enrichChunksWithPageTables(chunks, pageTables);
-            console.info("[pdf-ingest] table-only vision enrich", {
-              jobId,
-              tablePages: pageTables.size,
-            });
-          }
-        } catch (e) {
-          console.warn("[pdf-ingest] supplementPdfTablesOnly", jobId, e);
-        }
-      } else {
-        console.warn("[pdf-ingest] visual enrich skipped at outline", {
-          jobId,
-          pageRenderEnabled: isPdfPageRenderEnabled(),
-          tableVisionEnabled: isPdfTableVisionEnabled(),
-          hasStoragePath: Boolean(primaryStoragePath),
-          hasPdfBuffer: Boolean(primaryPdfBuffer),
-        });
-      }
-
-      planModuleSources = assembleModuleSourcesFromPlan(
-        plan,
-        chunksForGeneration
-      );
     } else {
       outline = await withAnthropicRateLimitRetries(
         jobId,
@@ -2599,6 +2489,143 @@ async function runPdfIngestOutlinePhase(
             }
           ),
         { maxAttempts: 14 }
+      );
+      console.info("[pdf-ingest] outline ok", {
+        jobId,
+        modules: outline.modules.length,
+        chunks: chunks.length,
+      });
+    }
+
+    // Surface the outline immediately so the build UI can show module titles
+    // while page renders + table vision run (often 1–3 min on large PDFs).
+    // Runs for both routes; `ingest_plan` is null for single-file uploads.
+    await admin
+      .from("pdf_ingest_jobs")
+      .update({
+        ingest_outline: outline,
+        ingest_plan: planJson,
+        ingest_phase: "enriching_sources",
+        stream_preview: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .eq("ingest_epoch", claimedEpoch);
+
+    // Visual enrichment runs for BOTH outline routes so single-file uploads
+    // keep tables + figures. `plan` may be null (single-file): figure mapping
+    // then falls back to page-order heuristics inside supplementPdfPageFigures.
+    if (isPdfPageRenderEnabled() && (primaryStoragePath || primaryPdfBuffer)) {
+      console.info("[pdf-ingest] visual enrich starting", {
+        jobId,
+        hasStoragePath: Boolean(primaryStoragePath),
+        hasPdfBuffer: Boolean(primaryPdfBuffer),
+        bufferBytes: primaryPdfBuffer?.length ?? 0,
+      });
+      try {
+        const supplemented = await supplementPdfPageFigures({
+          admin,
+          userId: claimed.user_id,
+          jobId,
+          chunks: persistIngestChunks(chunks),
+          plan,
+          existingImages: sourceImages,
+          sourceFiles,
+          primaryStoragePath,
+          primaryFileName,
+          primaryPdfBuffer,
+          knownPageCount: knownPageCount > 0 ? knownPageCount : undefined,
+        });
+        sourceImages = filterCroppedFiguresOnly(supplemented.images);
+        pageArtifactsForJob = supplemented.pageArtifacts;
+        const pageTables = pageTableExtractionsToMap(
+          supplemented.pageTableExtractions
+        );
+        const pageFigures = pageArtifactsForJob.figures;
+        if (pageTables.size > 0) {
+          chunksForGeneration = enrichChunksWithPageTables(chunks, pageTables);
+        }
+        if (pageFigures.length > 0) {
+          chunksForGeneration = enrichChunksWithPageFigures(
+            chunksForGeneration,
+            pageFigures
+          );
+        }
+        if (pageTables.size > 0 || pageFigures.length > 0) {
+          console.info("[pdf-ingest] enriched chunks with page artifacts", {
+            jobId,
+            tablePages: pageTables.size,
+            figurePages: pageFigures.length,
+          });
+        }
+        try {
+          assetManifestForJob = await buildCourseAssetManifest(
+            pageArtifactsForJob
+          );
+          if (assetManifestForJob.assets.length > 0) {
+            console.info("[pdf-ingest] asset manifest", {
+              jobId,
+              assets: assetManifestForJob.assets.length,
+            });
+          }
+        } catch (e) {
+          console.warn("[pdf-ingest] buildCourseAssetManifest", jobId, e);
+        }
+      } catch (e) {
+        console.error("[pdf-ingest] supplementPdfPageFigures FAILED", jobId, e);
+        await failJobUnlessStale(
+          admin,
+          jobId,
+          cleanupPaths,
+          e instanceof Error ? e.message : "PDF visual extraction failed.",
+          claimedEpoch
+        );
+        return;
+      }
+    } else if (
+      isPdfTableVisionEnabled() &&
+      primaryPdfBuffer &&
+      primaryPdfBuffer.length > 0
+    ) {
+      try {
+        const extractions = await supplementPdfTablesOnly({
+          pdfBuffer: primaryPdfBuffer,
+          sourceFileName: primaryFileName?.trim() || "upload.pdf",
+          chunks,
+          jobId,
+        });
+        const pageTables = pageTableExtractionsToMap(extractions);
+        if (pageTables.size > 0) {
+          pageArtifactsForJob = {
+            tables: Object.fromEntries(pageTables),
+            figures: [],
+          };
+          chunksForGeneration = enrichChunksWithPageTables(chunks, pageTables);
+          console.info("[pdf-ingest] table-only vision enrich", {
+            jobId,
+            tablePages: pageTables.size,
+          });
+        }
+      } catch (e) {
+        console.warn("[pdf-ingest] supplementPdfTablesOnly", jobId, e);
+      }
+    } else {
+      console.warn("[pdf-ingest] visual enrich skipped at outline", {
+        jobId,
+        pageRenderEnabled: isPdfPageRenderEnabled(),
+        tableVisionEnabled: isPdfTableVisionEnabled(),
+        hasStoragePath: Boolean(primaryStoragePath),
+        hasPdfBuffer: Boolean(primaryPdfBuffer),
+      });
+    }
+
+    // Per-lesson source attribution: only the planner maps lessons to
+    // source_chunk_ids, so single-file uploads keep planModuleSources = null
+    // (module expand falls back to the whole combined source text).
+    if (plan) {
+      planModuleSources = assembleModuleSourcesFromPlan(
+        plan,
+        chunksForGeneration
       );
     }
   } catch (e) {
