@@ -181,6 +181,20 @@ export function CourseUploadForm({
   // Live DOM rects for each lecture card, keyed by group id.
   const groupElRef = useRef<Map<string, HTMLDivElement | null>>(new Map());
 
+  // ---- individual material (file chip) reordering ----
+  // A second, independent pointer-based reorder: each file chip carries its own
+  // grab handle that reorders that file WITHIN its lecture group, leaving the
+  // chip body free for the HTML5 drag-into-another-group gesture. The order of
+  // `keys` inside a group is the order its files are combined + generated in, so
+  // reordering here flows straight through to the build (see onSubmit).
+  const [reorderingKey, setReorderingKey] = useState<string | null>(null);
+  // Live DOM rects for each file chip, keyed by file key.
+  const fileElRef = useRef<Map<string, HTMLLIElement | null>>(new Map());
+  // Set while a chip's reorder handle is engaged so the chip's own HTML5
+  // `dragstart` (which would otherwise fire because the <li> is draggable) is
+  // suppressed — pointer-reorder and drag-into-group must never run together.
+  const chipReorderActiveRef = useRef(false);
+
   useEffect(() => {
     setOutputLanguage(
       defaultOutputLanguage === DEFAULT_COURSE_OUTPUT_LANGUAGE && uiLocale === "ko"
@@ -305,6 +319,31 @@ export function CourseUploadForm({
     });
   }, []);
 
+  /** Reorder a single file within its lecture group (clamped, no-op safe). */
+  const moveKeyWithinGroup = useCallback(
+    (groupId: string, fromIndex: number, toIndex: number) => {
+      setGroups((prev) =>
+        prev.map((g) => {
+          if (g.id !== groupId) return g;
+          if (
+            fromIndex === toIndex ||
+            fromIndex < 0 ||
+            toIndex < 0 ||
+            fromIndex >= g.keys.length ||
+            toIndex >= g.keys.length
+          ) {
+            return g;
+          }
+          const keys = [...g.keys];
+          const [moved] = keys.splice(fromIndex, 1);
+          keys.splice(toIndex, 0, moved);
+          return { ...g, keys };
+        })
+      );
+    },
+    []
+  );
+
   // Pointer-based reorder loop. We deliberately avoid HTML5 drag-and-drop here
   // (it was flaky in Safari for this form) and instead listen on `window` for
   // the duration of a drag. As the pointer crosses a neighbouring card's
@@ -356,6 +395,63 @@ export function CourseUploadForm({
       document.body.style.userSelect = prevUserSelect;
     };
   }, [reorderingGroupId, moveGroup]);
+
+  // Pointer-based reorder loop for individual file chips. Mirrors the lecture
+  // card loop above (window listeners, swap on neighbour-midpoint crossing) but
+  // operates on a file's position INSIDE its group. Kept off HTML5 DnD for the
+  // same Safari-reliability reason the lecture-card reorder is.
+  useEffect(() => {
+    if (reorderingKey === null) return;
+
+    const onMove = (e: PointerEvent) => {
+      const group = groupsRef.current.find((g) =>
+        g.keys.includes(reorderingKey)
+      );
+      if (!group) return;
+      const keys = group.keys;
+      const fromIndex = keys.indexOf(reorderingKey);
+      if (fromIndex < 0) return;
+      const y = e.clientY;
+
+      if (fromIndex > 0) {
+        const prevEl = fileElRef.current.get(keys[fromIndex - 1]!);
+        if (prevEl) {
+          const r = prevEl.getBoundingClientRect();
+          if (y < r.top + r.height / 2) {
+            moveKeyWithinGroup(group.id, fromIndex, fromIndex - 1);
+            return;
+          }
+        }
+      }
+      if (fromIndex < keys.length - 1) {
+        const nextEl = fileElRef.current.get(keys[fromIndex + 1]!);
+        if (nextEl) {
+          const r = nextEl.getBoundingClientRect();
+          if (y > r.top + r.height / 2) {
+            moveKeyWithinGroup(group.id, fromIndex, fromIndex + 1);
+          }
+        }
+      }
+    };
+
+    const onUp = () => {
+      setReorderingKey(null);
+      chipReorderActiveRef.current = false;
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.style.userSelect = prevUserSelect;
+    };
+  }, [reorderingKey, moveKeyWithinGroup]);
 
   useEffect(() => {
     let cancelled = false;
@@ -494,6 +590,12 @@ export function CourseUploadForm({
   // lecture" zone to split it back out.
   function handleChipDragStart(e: React.DragEvent, key: string) {
     if (loading) return;
+    // The chip's reorder handle is engaged — this is a within-group reorder, not
+    // a drag-into-group. Cancel the HTML5 drag the draggable <li> would start.
+    if (chipReorderActiveRef.current) {
+      e.preventDefault();
+      return;
+    }
     setDraggedKey(key);
     e.dataTransfer.effectAllowed = "move";
     try {
@@ -556,6 +658,37 @@ export function CourseUploadForm({
     } else if (e.key === "ArrowDown" || e.key === "ArrowRight") {
       e.preventDefault();
       moveGroup(index, index + 1);
+    }
+  }
+
+  function handleFileReorderPointerDown(
+    e: React.PointerEvent,
+    groupId: string,
+    key: string
+  ) {
+    const group = groups.find((g) => g.id === groupId);
+    if (loading || !group || group.keys.length <= 1) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Flag so the chip's own HTML5 dragstart is suppressed for this gesture.
+    chipReorderActiveRef.current = true;
+    setReorderingKey(key);
+  }
+
+  function handleFileReorderKeyDown(
+    e: React.KeyboardEvent,
+    groupId: string,
+    index: number
+  ) {
+    const group = groups.find((g) => g.id === groupId);
+    if (loading || !group || group.keys.length <= 1) return;
+    if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      moveKeyWithinGroup(groupId, index, index - 1);
+    } else if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+      e.preventDefault();
+      moveKeyWithinGroup(groupId, index, index + 1);
     }
   }
 
@@ -1172,17 +1305,26 @@ export function CourseUploadForm({
                     </div>
 
                     <ul className="space-y-2">
-                      {groupFiles.map((file) => {
+                      {groupFiles.map((file, fi) => {
                         const key = fileKey(file);
                         const isDragging = draggedKey === key;
+                        const isReorderingFile = reorderingKey === key;
+                        // Reordering within a group only makes sense with 2+ files.
+                        const canReorderFile = !loading && groupFiles.length > 1;
                         return (
                           <li
                             key={key}
+                            ref={(el) => {
+                              fileElRef.current.set(key, el);
+                            }}
                             draggable={!loading && files.length > 1}
                             onDragStart={(e) => handleChipDragStart(e, key)}
                             onDragEnd={handleChipDragEnd}
                             className={[
-                              "flex items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm transition-[opacity,transform] duration-150 dark:border-zinc-700 dark:bg-zinc-950",
+                              "flex items-center gap-2 rounded-xl border px-3 py-2.5 text-sm transition-[opacity,transform,box-shadow,border-color] duration-150",
+                              isReorderingFile
+                                ? "border-brand bg-white shadow-lg shadow-red-500/15 ring-2 ring-brand/40 dark:border-brand-soft dark:bg-zinc-950"
+                                : "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-950",
                               isDragging
                                 ? "opacity-40 scale-95"
                                 : "opacity-100 scale-100",
@@ -1191,7 +1333,33 @@ export function CourseUploadForm({
                                 : "",
                             ].join(" ")}
                           >
-                            {files.length > 1 ? (
+                            {canReorderFile ? (
+                              <button
+                                type="button"
+                                aria-label={t.dashboard.reorderFileHandleAria}
+                                onPointerDown={(e) =>
+                                  handleFileReorderPointerDown(e, group.id, key)
+                                }
+                                onKeyDown={(e) =>
+                                  handleFileReorderKeyDown(e, group.id, fi)
+                                }
+                                className="flex h-6 w-5 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-zinc-400 hover:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand active:cursor-grabbing dark:text-zinc-500 dark:hover:text-zinc-300"
+                              >
+                                <svg
+                                  viewBox="0 0 10 16"
+                                  fill="currentColor"
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden
+                                >
+                                  <circle cx="2.5" cy="2" r="1.5" />
+                                  <circle cx="7.5" cy="2" r="1.5" />
+                                  <circle cx="2.5" cy="7" r="1.5" />
+                                  <circle cx="7.5" cy="7" r="1.5" />
+                                  <circle cx="2.5" cy="12" r="1.5" />
+                                  <circle cx="7.5" cy="12" r="1.5" />
+                                </svg>
+                              </button>
+                            ) : files.length > 1 ? (
                               <span
                                 className="flex h-6 w-5 shrink-0 items-center justify-center text-zinc-300 dark:text-zinc-600"
                                 aria-hidden
