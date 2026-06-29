@@ -330,8 +330,14 @@ function resolveOutlineModel(profile: CourseBuildProfile): string {
   return "claude-sonnet-4-6";
 }
 
-/** Rough input budget — large PDFs + long outputs often hit limits or timeouts. */
-const MAX_MATERIAL_CHARS = 160_000;
+/**
+ * Rough input budget — large PDFs + long outputs often hit limits or timeouts.
+ * Raised so `full` builds can ingest a whole lecture deck / chapter without the
+ * later pages being truncated away before generation (a major source of
+ * "the course skipped half my PDF"). Sonnet's 200k-token context comfortably
+ * holds this much source text plus the prompt; `full` is env-overridable below.
+ */
+const MAX_MATERIAL_CHARS = 240_000;
 /** Aggressively small for `fast` so outline/module calls stay quick. */
 const FAST_MATERIAL_CHARS = 40_000;
 /** `balanced`: default input budget; override with `COURSE_BALANCED_MATERIAL_CHARS`. */
@@ -352,7 +358,12 @@ function materialCharLimit(profile: CourseBuildProfile): number {
     );
     return clampInt(fromEnv, 20_000, MAX_MATERIAL_CHARS);
   }
-  return MAX_MATERIAL_CHARS;
+  // full: ingest the whole source by default so no later section is dropped.
+  return clampInt(
+    envInt("COURSE_FULL_MATERIAL_CHARS", MAX_MATERIAL_CHARS),
+    60_000,
+    480_000
+  );
 }
 
 /**
@@ -375,7 +386,16 @@ function outlineMaterialCharLimit(profile: CourseBuildProfile): number {
       moduleCap
     );
   }
-  return clampInt(envInt("COURSE_FULL_OUTLINE_MATERIAL_CHARS", 90_000), 24_000, moduleCap);
+  // full: plan the outline over the WHOLE document (default == module budget)
+  // so every section/heading — including the middle and later pages — can be
+  // mapped to a module. Capping this low previously omitted the document middle
+  // (see `truncateMaterial`), so those topics never became modules/lessons and
+  // their content was silently dropped from the course.
+  return clampInt(
+    envInt("COURSE_FULL_OUTLINE_MATERIAL_CHARS", moduleCap),
+    24_000,
+    moduleCap
+  );
 }
 
 const PRESERVE_MARKER_RE =
@@ -478,7 +498,7 @@ function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
   const core =
     "COVERAGE (critical): You must represent **every major subject-matter topic, section, heading, and learning objective** in the uploaded material (administrative/logistical material is out of scope — see the SCOPE rule). Do not stop early, skim, or merge distinct concepts to save tokens. If the deck is long or dense, use **more** lesson entries (up to the stated caps) and **more** modules (up to the stated caps) rather than skipping later sections.";
   if (mode === "outline") {
-    return `${core} The excerpt below may omit the document middle for speed—use headings/numbering in the head and tail to infer later topics. Modules and lesson_titles together should still **map** the full arc of the course; full lessons use a longer excerpt later.`;
+    return `${core} The material below is the **full document** (first page to last) unless it is extremely large. Walk it end to end and make sure modules + lesson_titles together **map every section/heading across the entire document** — do not plan only for the opening pages and then stop; later pages and the document middle each need their own modules/lessons. Full lesson bodies are written from the same source later.`;
   }
   if (mode === "module") {
     return `${core} Output **one full lesson per planned lesson title** below, in the **same order**. Keep the same count, with ONE exception: if a planned lesson's entire source slice is purely administrative/logistical (see the SCOPE rule), omit that lesson rather than manufacturing logistics into teaching content — return the remaining substantive lessons in order (keep at least one lesson in the module). Otherwise do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material. Teach what the source covers for that slice — neither pad with outside topics nor skip assigned subject matter. **Within each lesson, cover EVERY distinct subject-matter concept, definition, named entity, and claim present in that lesson's source slice** — if the slice introduces several separate ideas, each one must be taught; do not stop after the first one or two. Before finishing a lesson, verify no subject-matter sub-topic from its source slice was left out (administrative/logistical asides are excluded, not "left out").`;
@@ -994,7 +1014,7 @@ function outlineMaxTokens(profile: CourseBuildProfile): number {
   if (profile === "balanced") {
     return clampInt(envInt("COURSE_BALANCED_OUTLINE_MAX_TOKENS", 4096), 4096, 8192);
   }
-  return clampInt(envInt("COURSE_FULL_OUTLINE_MAX_TOKENS", 10_240), 4096, 16_384);
+  return clampInt(envInt("COURSE_FULL_OUTLINE_MAX_TOKENS", 12_288), 4096, 16_384);
 }
 
 function selfStudyBlock(studyContext: string): string {
@@ -1035,9 +1055,9 @@ function outlineInstruction(
     moduleCount = `Use **2 to ${maxModules}** modules. Prefer a compact plan that still covers the excerpt.`;
     maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 6), 2, 8);
   } else {
-    const maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 14), 4, 20);
-    moduleCount = `Use **at least 5** and up to **${maxModules}** modules. Split the material into many focused modules so each major topic, section, or learning objective gets its own module — prefer MORE, narrower modules over a few broad ones. Scale the count up with how much the source covers.`;
-    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 10), 3, 16);
+    const maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
+    moduleCount = `Use **at least 5** and up to **${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 5–6, but a long lecture deck, chapter, or multi-topic document should use many more (toward the maximum). Split the material into focused modules so each major topic, section, or learning objective gets its own module — prefer MORE, narrower modules over a few broad ones. Do NOT compress later pages into one catch-all module; every distinct section of the document, from first page to last, must be represented.`;
+    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 12), 3, 20);
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).

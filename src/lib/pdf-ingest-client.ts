@@ -122,10 +122,14 @@ async function pollJobProgressWhileExpandRuns(
   const pollOnce = async () => {
     const got = await fetchJobStatusWithRetry(jobId, signal);
     if (got.kind !== "ok") return;
-    const built =
+    const reported =
       typeof got.data.modulesBuilt === "number"
         ? got.data.modulesBuilt
         : lastBuilt;
+    // Clamp the displayed count to be monotonic: built modules only ever grow,
+    // so a transient lower reading (stale read / brief server race) must never
+    // make the counter visibly regress (e.g. "2/2 → 1/2").
+    const built = Math.max(lastBuilt, reported);
     if (built !== lastBuilt) {
       lastBuilt = built;
       options.onProgress?.(formatLine(built, ""));
@@ -432,6 +436,8 @@ export async function pollPdfIngestJob(
       ? options.maxWaitMs
       : DEFAULT_POLL_MAX_WAIT_MS;
   const deadline = Date.now() + maxWait;
+  /** Monotonic high-water mark for built modules across the whole poll. */
+  let builtHighWater = 0;
 
   while (Date.now() < deadline) {
     if (signal?.aborted) {
@@ -519,7 +525,11 @@ export async function pollPdfIngestJob(
     // if the client never got the completion response from the last module expand, or
     // finalize lagged, GET can sit at N/N + running — without another expand the UI
     // would spin on "Writing module N of N" forever).
-    const built = data.modulesBuilt;
+    const builtRaw = data.modulesBuilt;
+    if (typeof builtRaw === "number") {
+      builtHighWater = Math.max(builtHighWater, builtRaw);
+    }
+    const built = builtRaw;
     const total = data.modulesTotal;
     if (ingestPhase === "enriching_sources") {
       const started = jobStartedAtMs(data.createdAt);
@@ -551,7 +561,7 @@ export async function pollPdfIngestJob(
         {
           createdAt: data.createdAt,
           modulesTotal: total,
-          modulesBuiltStart: built,
+          modulesBuiltStart: Math.max(built, builtHighWater),
           onProgress,
           onJobSnapshot: options?.onJobSnapshot,
           onPreviewCourse: options?.onPreviewCourse,
@@ -599,11 +609,13 @@ export async function pollPdfIngestJob(
           startedMid != null
             ? ` · ${formatElapsedShort(Date.now() - startedMid)}`
             : "";
+        // Keep the count monotonic across iterations (never regress the display).
+        builtHighWater = Math.max(builtHighWater, expJson.modulesBuilt);
         onProgress?.({
-          line: `Built ${expJson.modulesBuilt}/${expJson.modulesTotal} modules${elapsedMid}. Continuing…`,
+          line: `Built ${builtHighWater}/${expJson.modulesTotal} modules${elapsedMid}. Continuing…`,
           bar: Math.min(
             100,
-            (expJson.modulesBuilt / expJson.modulesTotal) * 100
+            (builtHighWater / expJson.modulesTotal) * 100
           ),
         });
       }

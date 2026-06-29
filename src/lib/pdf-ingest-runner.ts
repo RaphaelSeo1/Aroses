@@ -1527,11 +1527,38 @@ export async function runPdfIngestExpandOne(
       : "upload.pdf";
 
   const persistIndexedModules = async () => {
-    const slots: IndexedStoredModules = Array.from({ length: n }, (_, i) => {
-      if (i < storedModules.length && storedModules[i] != null) {
-        return storedModules[i];
+    // Re-read the latest persisted modules first. Multiple `/expand` invocations
+    // can run for the same job at once (client poll + GET-route stall re-kick +
+    // worker/reaper), and each holds its own in-memory `storedModules` snapshot
+    // from when it started. Without merging the live DB row, a slower/staler
+    // invocation would overwrite a module a concurrent one already wrote with a
+    // `null` slot, making the built counter regress (e.g. "2/2 → 1/2"). We treat
+    // built modules as monotonic: a slot that is already filled (in our local
+    // snapshot, in this run's freshly-resolved set, OR in the current DB row)
+    // must never be reset to null.
+    let dbModules: IndexedStoredModules = [];
+    try {
+      const { data: freshRow } = await admin
+        .from("pdf_ingest_jobs")
+        .select("ingest_modules")
+        .eq("id", jobId)
+        .eq("ingest_epoch", expandEpoch)
+        .maybeSingle();
+      if (freshRow) {
+        dbModules = parseStoredModulesIndexed(
+          (freshRow as { ingest_modules?: unknown }).ingest_modules
+        );
       }
-      return resolvedModules.get(i) ?? null;
+    } catch (e) {
+      console.warn("[pdf-ingest] re-read modules before persist", jobId, e);
+    }
+    const slots: IndexedStoredModules = Array.from({ length: n }, (_, i) => {
+      const local = i < storedModules.length ? storedModules[i] : null;
+      if (local != null) return local;
+      const resolved = resolvedModules.get(i);
+      if (resolved != null) return resolved;
+      // Preserve a module a concurrent invocation already persisted.
+      return i < dbModules.length ? dbModules[i] : null;
     });
     const enrichIndices: number[] = [];
     const toEnrich: CourseModule[] = [];
@@ -1695,6 +1722,33 @@ export async function runPdfIngestExpandOne(
   } finally {
     clearInterval(moduleHeartbeat);
   }
+
+  // Final batch write: merge once more against the live row so any module a
+  // concurrent `/expand` persisted between our last `persistIndexedModules`
+  // and now is preserved (monotonic — never reset a built slot to null). This
+  // closes the last window where the built counter could regress ("2/2 → 1/2").
+  let mergedFinal: IndexedStoredModules = storedModules.slice(0, n);
+  try {
+    const { data: freshRow } = await admin
+      .from("pdf_ingest_jobs")
+      .select("ingest_modules")
+      .eq("id", jobId)
+      .eq("ingest_epoch", expandEpoch)
+      .maybeSingle();
+    if (freshRow) {
+      const dbModules = parseStoredModulesIndexed(
+        (freshRow as { ingest_modules?: unknown }).ingest_modules
+      );
+      mergedFinal = Array.from({ length: n }, (_, i) => {
+        const local = i < storedModules.length ? storedModules[i] : null;
+        if (local != null) return local;
+        return i < dbModules.length ? dbModules[i] : null;
+      });
+    }
+  } catch (e) {
+    console.warn("[pdf-ingest] final merge read", jobId, e);
+  }
+  storedModules = mergedFinal;
 
   const contiguousEnd = contiguousPrefixLength(storedModules);
   const cappedNext = storedModules

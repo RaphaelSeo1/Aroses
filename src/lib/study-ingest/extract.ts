@@ -110,7 +110,7 @@ async function extractPdfBuffer(
   fileName: string,
   onHeartbeat?: () => void
 ): Promise<ExtractedStudyContent> {
-  const safeMaxPages = envPositiveInt("PDF_INGEST_MAX_PAGES", 150, 400);
+  const safeMaxPages = envPositiveInt("PDF_INGEST_MAX_PAGES", 250, 400);
   const beat = onHeartbeat ? () => Promise.resolve(onHeartbeat()) : undefined;
 
   // Single PDF load + batched page render (no head/tail peek that re-parsed the file).
@@ -325,12 +325,16 @@ async function extractImageBuffer(
   const anthropic = new Anthropic({ apiKey, timeout: 90_000, maxRetries: 1 });
   const msg = await anthropic.messages.create({
     model: process.env.ANTHROPIC_FAST_MODEL?.trim() || "claude-haiku-4-5",
-    max_tokens: 4096,
+    // Dense textbook pages / packed slides can carry a lot of text + tables;
+    // a small token budget truncated the transcription and dropped content
+    // from the resulting course. Give vision room to capture the whole image.
+    max_tokens: envPositiveInt("IMAGE_VISION_MAX_TOKENS", 8192, 16_384),
     temperature: 0.2,
     system: `You extract study material from photos for course generation. For each image:
-1. Transcribe ALL visible text (handwriting, slides, textbook pages) accurately.
-2. Describe diagrams, charts, equations, and whiteboard drawings briefly.
-3. Preserve structure with headings where obvious.
+1. Transcribe ALL visible text (handwriting, slides, textbook pages) accurately and COMPLETELY — do not stop early, summarize, or skip sections; capture every line of text on the image.
+2. Reproduce any table as a GitHub-flavored markdown table (header row + |---| separator), keeping every row, column, and number exactly.
+3. Describe diagrams, charts, equations, and whiteboard drawings briefly.
+4. Preserve structure with headings where obvious.
 
 Output plain text only — no markdown code fences.`,
     messages: [

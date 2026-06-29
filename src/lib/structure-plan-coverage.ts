@@ -122,8 +122,11 @@ export function structurePlanTargets(
     maxModules = 6;
   } else {
     // full: deepest profile — more modules and more lessons per the source.
-    minLessons = clampInt(Math.ceil(chunkCount / 1.1), 3, 40);
-    maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 14), 4, 20);
+    // Lesson floor scales ~1:1 with chunk count (each source section earns a
+    // lesson) and the upper clamp is generous so very large decks are not
+    // compressed into too few lessons (dropped coverage).
+    minLessons = clampInt(Math.ceil(chunkCount / 1.1), 3, 60);
+    maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
   }
 
   const minModules =
