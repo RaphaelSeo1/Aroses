@@ -900,11 +900,14 @@ async function finalizePdfIngest(
     return null;
   }
 
-  // Prefer the upload-order sort_order snapshotted on the job at creation time
-  // (count of prior materials + the build's upload index). This keeps the
-  // sidebar in upload order even though parallel builds finalize out of order.
-  // Falls back to "append after existing" when the column/value is absent
-  // (older jobs, or a DB without migration 076).
+  // Resolve this material's sidebar position so the section stays in UPLOAD
+  // order even though parallel builds finalize out of order. Three tiers:
+  //   1. `pdf_ingest_jobs.material_sort_order` snapshotted at job creation
+  //      (count of prior materials + the build's upload index) — used when
+  //      migration 076 is applied and the value persisted.
+  //   2. Otherwise derive the position from sibling-job creation order below
+  //      (works without any migration — the real-world path today).
+  //   3. Last resort: append after the current max sort_order.
   let nextSortOrder: number | null = null;
   const { data: jobSortRow, error: jobSortErr } = await admin
     .from("pdf_ingest_jobs")
@@ -924,7 +927,30 @@ async function finalizePdfIngest(
   }
 
   if (nextSortOrder === null) {
-    /** Append after existing uploads so the list follows “first added first” (ascending sort_order). */
+    // No persisted `material_sort_order` (e.g. migration 076 not applied).
+    // Derive a stable upload-order position deterministically from the JOBS in
+    // this section instead of from material completion order. Jobs are created
+    // in upload order (the client creates them sequentially, so `created_at` is
+    // monotonic), and one job produces one material — so this job's rank among
+    // its sibling jobs by `(created_at, id)` equals its upload position,
+    // regardless of which parallel build finishes first. This fixes the
+    // "uploaded 1,2,3 → shows 1,3,2" scramble that `max(sort_order)+1` caused.
+    const { data: siblingJobs } = await admin
+      .from("pdf_ingest_jobs")
+      .select("id, created_at")
+      .eq("exam_group_id", examGroupId)
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true });
+    if (Array.isArray(siblingJobs) && siblingJobs.length > 0) {
+      const rank = siblingJobs.findIndex(
+        (j) => (j as { id?: unknown }).id === jobId
+      );
+      if (rank >= 0) nextSortOrder = rank;
+    }
+  }
+
+  if (nextSortOrder === null) {
+    /** Last resort: append after existing uploads (ascending sort_order). */
     const { data: maxRow } = await admin
       .from("study_materials")
       .select("sort_order")

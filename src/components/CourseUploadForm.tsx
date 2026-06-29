@@ -624,53 +624,61 @@ export function CourseUploadForm({
         bar: "indeterminate",
       });
 
-      // Kicked off in parallel so all jobs are created at once and the build
-      // page opens with every lecture building simultaneously.
+      // Create the ingest jobs **sequentially** (await each POST before the
+      // next) so the jobs' `created_at` is monotonic in upload order. Finalize
+      // derives the sidebar position from that order, which keeps "uploaded
+      // 1,2,3" showing as 1,2,3 even though the actual builds run in parallel
+      // in the background (each POST returns 202 quickly after creating the
+      // job; the heavy build happens after the response).
       type StartOutcome = {
         group: { name: string };
         jobId?: string;
         materialId?: string;
         error?: string;
       };
-      const startOutcomes: StartOutcome[] = await Promise.all(
-        buildGroups.map(async (g, orderIndex): Promise<StartOutcome> => {
-          try {
-            const res = await fetch("/api/process-pdf", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                courseId,
-                examGroupId,
-                files: g.files,
-                studyContext: studyGoal.trim() || undefined,
-                outputLanguage,
-                // Upload position within this batch — finalize uses it to keep
-                // sidebar order = upload order even though builds run in parallel.
-                orderIndex,
-              }),
-            });
-            const raw = await res.text();
-            if (!res.ok) {
-              return {
-                group: g,
-                error: messageFromUploadResponse(res, raw, t.dashboard),
-              };
-            }
-            const body = JSON.parse(raw) as {
-              materialId?: string;
-              jobId?: string;
-            };
-            return {
+      const startOutcomes: StartOutcome[] = [];
+      for (let orderIndex = 0; orderIndex < buildGroups.length; orderIndex++) {
+        const g = buildGroups[orderIndex]!;
+        try {
+          const res = await fetch("/api/process-pdf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              courseId,
+              examGroupId,
+              files: g.files,
+              studyContext: studyGoal.trim() || undefined,
+              outputLanguage,
+              // Upload position within this batch — finalize uses it to keep
+              // sidebar order = upload order even though builds run in parallel.
+              orderIndex,
+            }),
+          });
+          const raw = await res.text();
+          if (!res.ok) {
+            startOutcomes.push({
               group: g,
-              jobId: typeof body.jobId === "string" ? body.jobId : undefined,
-              materialId:
-                typeof body.materialId === "string" ? body.materialId : undefined,
-            };
-          } catch {
-            return { group: g, error: t.dashboard.errNetworkStartingBuild };
+              error: messageFromUploadResponse(res, raw, t.dashboard),
+            });
+            continue;
           }
-        })
-      );
+          const body = JSON.parse(raw) as {
+            materialId?: string;
+            jobId?: string;
+          };
+          startOutcomes.push({
+            group: g,
+            jobId: typeof body.jobId === "string" ? body.jobId : undefined,
+            materialId:
+              typeof body.materialId === "string" ? body.materialId : undefined,
+          });
+        } catch {
+          startOutcomes.push({
+            group: g,
+            error: t.dashboard.errNetworkStartingBuild,
+          });
+        }
+      }
 
       // Preserve upload order so tab numbering matches the file list.
       const jobIds = startOutcomes

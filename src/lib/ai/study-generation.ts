@@ -446,15 +446,41 @@ function outlineCoverageBlock(profile: CourseBuildProfile): string {
   return sourceCoverageRules("outline");
 }
 
+/**
+ * GENERAL, course-agnostic rule telling the model to exclude administrative /
+ * logistical material (deadlines, schedules, platform/account setup, grading,
+ * orientation, "what to do next") and teach only genuine subject matter.
+ *
+ * Reconciled with the COVERAGE / SOURCE-FIDELITY rules elsewhere: "cover
+ * everything" and "do not drop content" apply to **subject-matter** content
+ * only — logistics is out of scope by definition, so excluding it is not a
+ * fidelity violation. Kept deliberately category-based (no course/school/
+ * platform names) so it generalizes to any uploaded document.
+ */
+function administrativeContentExclusionRules(): string {
+  return `SCOPE — TEACH SUBJECT MATTER, NOT COURSE LOGISTICS (critical):
+- Teach only the **academic / subject-matter** content of the source: concepts, definitions, theories, principles, methods, processes, named entities, formulas, data, and the worked examples and reasoning that explain them.
+- Source documents (syllabi, lecture decks, handouts) also carry **administrative / logistical** material that is NOT subject matter. Treat the following categories as **out of scope** and EXCLUDE them from every module, lesson, title, key term, example, and quiz question:
+  • assignment / homework / problem-set instructions and **due dates**;
+  • exam / quiz / test **dates, schedules, locations, durations, or formats**;
+  • signing up for, logging into, installing, or **paying for** a platform, tool, app, code, or account, and instructions on how/where to access readings or materials;
+  • grading policy, point weighting, late penalties, attendance, or academic-integrity rules;
+  • office hours, contact details, instructor/TA/staff lists, and course-orientation logistics;
+  • calendar / agenda / housekeeping slides and "getting started", "what to do next", "looking ahead", "preparing for next class/lecture", or recap-of-logistics content.
+- If an **entire** section, slide, or chunk is purely administrative/logistical, do NOT create a module, lesson, or title for it — skip it.
+- If a section is mostly subject matter with an **incidental** logistical aside (e.g. one line giving a due date inside an otherwise substantive slide), drop the aside and teach only the subject matter.
+- This exclusion takes precedence over coverage/completeness: never keep logistics just to fill a planned title, and never invent subject matter to replace excluded logistics.`;
+}
+
 /** Injected into module / monolith prompts (and full outline via `outlineCoverageBlock`). */
 function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
   const core =
-    "COVERAGE (critical): You must represent **every major topic, section, heading, and learning objective** in the uploaded material. Do not stop early, skim, or merge distinct concepts to save tokens. If the deck is long or dense, use **more** lesson entries (up to the stated caps) and **more** modules (up to the stated caps) rather than skipping later sections.";
+    "COVERAGE (critical): You must represent **every major subject-matter topic, section, heading, and learning objective** in the uploaded material (administrative/logistical material is out of scope — see the SCOPE rule). Do not stop early, skim, or merge distinct concepts to save tokens. If the deck is long or dense, use **more** lesson entries (up to the stated caps) and **more** modules (up to the stated caps) rather than skipping later sections.";
   if (mode === "outline") {
     return `${core} The excerpt below may omit the document middle for speed—use headings/numbering in the head and tail to infer later topics. Modules and lesson_titles together should still **map** the full arc of the course; full lessons use a longer excerpt later.`;
   }
   if (mode === "module") {
-    return `${core} Output **exactly one full lesson per planned lesson title** below, in the **same order** and **same count**. Do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material. Teach what the source covers for that slice — neither pad with outside topics nor skip assigned content. **Within each lesson, cover EVERY distinct concept, definition, named entity, and claim present in that lesson's source slice** — if the slice introduces several separate ideas, each one must be taught; do not stop after the first one or two. Before finishing a lesson, verify no sub-topic from its source slice was left out.`;
+    return `${core} Output **one full lesson per planned lesson title** below, in the **same order**. Keep the same count, with ONE exception: if a planned lesson's entire source slice is purely administrative/logistical (see the SCOPE rule), omit that lesson rather than manufacturing logistics into teaching content — return the remaining substantive lessons in order (keep at least one lesson in the module). Otherwise do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material. Teach what the source covers for that slice — neither pad with outside topics nor skip assigned subject matter. **Within each lesson, cover EVERY distinct subject-matter concept, definition, named entity, and claim present in that lesson's source slice** — if the slice introduces several separate ideas, each one must be taught; do not stop after the first one or two. Before finishing a lesson, verify no subject-matter sub-topic from its source slice was left out (administrative/logistical asides are excluded, not "left out").`;
   }
   return `${core} Across the full course JSON, every substantive part of the source should appear in some lesson; do not only cover the introduction. Teach each concept the source raises — do not leave later sections or sub-topics untaught.`;
 }
@@ -484,7 +510,7 @@ function sourceFidelityRules(): string {
 - TEACH, don't transcribe. Re-express the material as a clear, self-contained lesson in your own instructional words. Do NOT paste or lightly reword the source's sentences verbatim, and NEVER label passages with attributions such as "From your material", "In this lecture/this lecture", a filename, "Screenshot …", a slide number, or a page number. The lesson is taught content, not a quoted excerpt. (Markdown image embeds the pipeline injects are the only exception — leave those untouched.)
 - Explaining is allowed; inventing is not. You may define, clarify, restructure, and connect the ideas the source presents — but every fact, reason, cause, consequence, comparison, statistic, and example you state MUST be explicitly present in the source. Do NOT add outside knowledge, background, history, real-world context, applications, pros/cons, or "why it matters" reasoning that the source does not itself give.
 - No plausible elaboration. If the source gives one reason, teach exactly that one reason — never supply extra reasons, mechanisms, benefits, or implications that merely sound correct. Do NOT use hedging openers ("may", "can", "could", "often", "typically", "in general", "this means that…") to smuggle in claims the source never made.
-- COMPLETE the source. Conversely, do not drop or skim content: teach every distinct concept, definition, named entity, rule, and claim that appears in this lesson's assigned source text. Leaving a source sub-topic untaught is as serious as inventing one.
+- COMPLETE the source. Conversely, do not drop or skim subject matter: teach every distinct concept, definition, named entity, rule, and claim that appears in this lesson's assigned source text. Leaving a subject-matter sub-topic untaught is as serious as inventing one. (This applies to subject matter only — administrative/logistical material, per the SCOPE rule, must be excluded, not taught.)
 - Keep the source's framing and figures faithfully even if you believe they are incorrect. Do not "fix", "correct", or "improve" the source.
 - Do not fabricate computed values, journal entries, tables, balance sheets, or worked examples the source did not provide or that are not directly and unambiguously derivable from numbers the source gives. If teaching a point would require information the source did not provide, omit that point rather than invent it.
 - key_terms must be terms the source actually defines or treats as important. Do not pad with generic, self-evident, or filler labels the source does not present as terms.`;
@@ -516,6 +542,8 @@ function dataFidelityRules(): string {
 - Preserve every proper noun and NUMBER exactly. Do not round, omit, merge rows, or regroup values.
 - Keep mixed-language terms in full, BOTH languages, exactly as written (e.g. "디아제팜(diazepam)").
 - **NUMERIC RANGES**: always write ranges with an en-dash between endpoints: 1–4, 2–3, 10–18, 47–100. NEVER concatenate endpoints (wrong: 14단계, 23시간, 1018시간, 47100시간).
+
+${administrativeContentExclusionRules()}
 
 ${factualAccuracyRules()}
 
@@ -1029,6 +1057,8 @@ ${titleStyleRules()}
 
 ${outlineCoverageBlock(profile)}
 
+${administrativeContentExclusionRules()}
+
 Rules: base everything on the material; do not invent unrelated topics. No markdown fences, no commentary.
 
 --- MATERIAL START ---
@@ -1391,7 +1421,8 @@ CRITICAL GROUPING RULES:
 ${generationContextSuffix(studyContext, outputLanguage)}
 ${structurePlanCoveragePromptBlock(targets)}
 
-Do not invent chunk ids that are not in the list.
+${administrativeContentExclusionRules()}
+- Every chunk id must still be assigned to exactly one lesson for coverage, so when a chunk is purely administrative/logistical, attach it to the nearest subject-matter lesson as a supplementary chunk; the later writing step will exclude its logistics. Do NOT give a purely-logistical chunk its own lesson or module.
 
 ${titleStyleRules()}
 
