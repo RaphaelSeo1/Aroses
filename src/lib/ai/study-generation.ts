@@ -19,6 +19,7 @@ import type {
   IngestChunkSummary,
 } from "@/lib/study-ingest/chunking";
 import { parsePageNumbersFromPosition } from "@/lib/study-ingest/chunk-position";
+import { combinedSourceMarker } from "@/lib/study-ingest/combine";
 import { filterChunkTableBlocksToPages } from "@/lib/study-ingest/enrich-chunks-with-page-tables";
 import {
   enhanceTabularPlaintext,
@@ -404,12 +405,133 @@ const PIPE_TABLE_RE = /(\|[^\n]+\|\n\|[\s\-:|]+\|(?:\n\|[^\n]+\|)*)/g;
 const MD_IMAGE_RE = /!\[[^\]]*\]\([^)]+\)/g;
 
 /**
+ * Matches the per-source delimiter emitted by `combinedSourceMarker`
+ * (`src/lib/study-ingest/combine.ts`) and by `assembleModuleSourcesFromPlan`
+ * below. When a combined multi-source material exceeds the char budget we split
+ * on these markers and allocate the budget FAIRLY across sources instead of
+ * first-come-first-served, so a long PDF/transcript that follows an image is
+ * never silently dropped. Keep the format in sync with `combinedSourceMarker`.
+ */
+const SOURCE_BLOCK_MARKER_RE =
+  /^===== SOURCE \d+\/\d+ — FILE: .+? =====$/gm;
+
+/**
+ * Round-robin fair allocation of `bodyBudget` characters across N source bodies:
+ * every source gets an equal share; sources that need less donate their slack to
+ * sources that need more. Guarantees no single source is starved because another
+ * came first. Returns the chars allocated to each body, summing to ≤ bodyBudget.
+ */
+function allocateBudgetAcrossSources(
+  lengths: number[],
+  bodyBudget: number
+): number[] {
+  const alloc = new Array<number>(lengths.length).fill(0);
+  let remaining = bodyBudget;
+  let active = lengths.map((_, i) => i).filter((i) => lengths[i] > 0);
+  while (active.length > 0 && remaining > 0) {
+    const share = Math.floor(remaining / active.length);
+    if (share <= 0) break;
+    const stillActive: number[] = [];
+    let used = 0;
+    for (const i of active) {
+      const want = lengths[i]! - alloc[i]!;
+      const give = Math.min(share, want);
+      alloc[i]! += give;
+      used += give;
+      if (alloc[i]! < lengths[i]!) stillActive.push(i);
+    }
+    if (used === 0) break;
+    remaining -= used;
+    active = stillActive;
+  }
+  // Hand any leftover (from flooring) to the still-hungry sources in order so we
+  // use the budget fully rather than leaving a few hundred chars on the table.
+  for (let i = 0; i < lengths.length && remaining > 0; i++) {
+    const want = lengths[i]! - alloc[i]!;
+    if (want <= 0) continue;
+    const give = Math.min(want, remaining);
+    alloc[i]! += give;
+    remaining -= give;
+  }
+  return alloc;
+}
+
+/**
+ * When `text` is a combination of several labeled sources and exceeds `maxChars`,
+ * trim each source to its FAIR share of the budget (see `allocateBudgetAcrossSources`)
+ * rather than letting earlier sources consume the whole budget. Each over-budget
+ * source is trimmed with the single-source `truncateMaterial` (which still
+ * protects tables/figures). Returns null when there are fewer than two source
+ * markers (so the caller falls back to the normal single-source path).
+ */
+function truncateMaterialFairlyAcrossSources(
+  text: string,
+  maxChars: number
+): string | null {
+  SOURCE_BLOCK_MARKER_RE.lastIndex = 0;
+  const markers: { index: number; line: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = SOURCE_BLOCK_MARKER_RE.exec(text)) !== null) {
+    markers.push({ index: m.index, line: m[0] });
+  }
+  if (markers.length < 2) return null;
+
+  const preamble = text.slice(0, markers[0]!.index).trim();
+  const blocks: { marker: string; body: string }[] = [];
+  for (let i = 0; i < markers.length; i++) {
+    const start = markers[i]!.index;
+    const end = i + 1 < markers.length ? markers[i + 1]!.index : text.length;
+    const segment = text.slice(start, end);
+    const nl = segment.indexOf("\n");
+    const marker = (nl >= 0 ? segment.slice(0, nl) : segment).trim();
+    const body = (nl >= 0 ? segment.slice(nl + 1) : "").trim();
+    blocks.push({ marker, body });
+  }
+
+  const markerOverhead =
+    blocks.reduce((n, b) => n + b.marker.length + 2, 0) +
+    (preamble.length > 0 ? preamble.length + 2 : 0) +
+    8;
+  const bodyBudget = Math.max(2_000, maxChars - markerOverhead);
+
+  const lengths = blocks.map((b) => b.body.length);
+  const totalLen = lengths.reduce((a, c) => a + c, 0);
+  if (totalLen <= bodyBudget) {
+    // Whole thing fits within budget once overhead is accounted for — keep all.
+    const rebuilt = blocks
+      .map((b) => `${b.marker}\n${b.body}`)
+      .join("\n\n");
+    return [preamble, rebuilt].filter((s) => s.length > 0).join("\n\n");
+  }
+
+  const alloc = allocateBudgetAcrossSources(lengths, bodyBudget);
+  const trimmedBlocks = blocks.map((b, i) => {
+    const budget = alloc[i]!;
+    const body =
+      budget >= b.body.length
+        ? b.body
+        : truncateMaterial(b.body, Math.max(800, budget));
+    return `${b.marker}\n${body}`;
+  });
+  return [preamble, trimmedBlocks.join("\n\n")]
+    .filter((s) => s.length > 0)
+    .join("\n\n");
+}
+
+/**
  * Never truncate inside PDF table/figure blocks or markdown tables/images —
  * drop prose first (critical for express profile + pharmacology PDFs).
+ *
+ * For COMBINED multi-source material (several uploaded files), the budget is
+ * split fairly per source first, so no modality (e.g. an image placed first)
+ * can crowd out another (e.g. a long PDF transcript placed after it).
  */
 function truncateMaterial(text: string, maxChars: number = MAX_MATERIAL_CHARS): string {
   const t = text.trim();
   if (t.length <= maxChars) return t;
+
+  const fair = truncateMaterialFairlyAcrossSources(t, maxChars);
+  if (fair !== null) return fair;
 
   const preserved: string[] = [];
   let work = t;
@@ -1727,14 +1849,39 @@ export function assembleModuleSourcesFromPlan(
       .filter((id) => byId.has(id))
       .sort((a, b) => (orderOf.get(a) ?? 0) - (orderOf.get(b) ?? 0));
     if (ordered.length === 0) return "";
-    const blocks = ordered.map((id) => {
+
+    // Group this module's chunks by their originating FILE (preserving first-seen
+    // order) so a module that mixes sources (e.g. an image + a PDF) is labeled
+    // per source and gets a FAIR share of the char budget — `truncateMaterial`
+    // splits on the SOURCE marker below and allocates the budget round-robin
+    // across sources instead of letting whichever file comes first win.
+    const fileOrder: string[] = [];
+    const blocksByFile = new Map<string, string[]>();
+    for (const id of ordered) {
       const c = byId.get(id)!;
       const allowedPages = new Set(parsePageNumbersFromPosition(c.position));
       const chunkText = filterChunkTableBlocksToPages(c.text, allowedPages);
-      return `[from ${c.sourceFileName} — ${c.position}]\n${enhanceTabularPlaintext(chunkText)}`;
+      const block = `[from ${c.sourceFileName} — ${c.position}]\n${enhanceTabularPlaintext(chunkText)}`;
+      if (!blocksByFile.has(c.sourceFileName)) {
+        blocksByFile.set(c.sourceFileName, []);
+        fileOrder.push(c.sourceFileName);
+      }
+      blocksByFile.get(c.sourceFileName)!.push(block);
+    }
+
+    if (fileOrder.length <= 1) {
+      const joined = enhanceTabularPlaintext(
+        (blocksByFile.get(fileOrder[0]!) ?? []).join("\n\n")
+      );
+      return truncateMaterial(joined, cap);
+    }
+
+    const total = fileOrder.length;
+    const sections = fileOrder.map((file, i) => {
+      const marker = combinedSourceMarker(i + 1, total, file);
+      return `${marker}\n${blocksByFile.get(file)!.join("\n\n")}`;
     });
-    const joined = enhanceTabularPlaintext(blocks.join("\n\n"));
-    return truncateMaterial(joined, cap);
+    return truncateMaterial(sections.join("\n\n"), cap);
   });
 }
 
