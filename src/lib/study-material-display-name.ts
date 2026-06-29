@@ -1,5 +1,5 @@
 import type { CoursePayload } from "@/types/course";
-import { isGenericIngestPlaceholder, isBadIngestTitle, isSentenceLikeIngestTitle, normalizeIngestDisplayTitle, deriveTitleFromUploadFileName } from "@/lib/study-ingest/normalize-ingest-title";
+import { isGenericIngestPlaceholder, isBadIngestTitle, normalizeIngestDisplayTitle, deriveTitleFromUploadFileName } from "@/lib/study-ingest/normalize-ingest-title";
 
 const INVALID_FILENAME_CHARS = /[/\\?%*:|"<>]/g;
 
@@ -69,16 +69,16 @@ function firstDescriptionLine(desc: string): string | null {
 
 function scoreStemForMaterialLabel(stem: string, sourceIndex: number): number {
   let score = Math.min(100, stem.length);
+  // Keep hard guards against genuine garbage (transcript fragments, "Part 1").
   if (isGenericIngestPlaceholder(stem)) score -= 200;
   if (isBadIngestTitle(stem)) score -= 250;
-  if (isSentenceLikeIngestTitle(stem)) score -= 220;
   if (GENERIC_TITLE_LINE.test(stem)) score -= 42;
   if (GENERIC_LECTURE_NUM.test(stem)) score -= 18;
   if (/^week\s*\d+\b/i.test(stem)) score -= 6;
-  // Course title (index 0) beats generic outline descriptions appended later.
-  if (sourceIndex === 0) score += 28;
-  // Later module/lesson candidates tend to be the concrete lecture topic.
-  else score += Math.min(18, sourceIndex * 2);
+  // Later candidates (the course description sentence, concrete lecture topics)
+  // win over a short generic course title — this is what surfaces the elaborate
+  // "summary of your PDF" label users expect at the top of a material.
+  score += Math.min(24, sourceIndex * 3);
   return score;
 }
 

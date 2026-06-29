@@ -105,6 +105,8 @@ import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { logActivity, pruneActivityEvents } from "@/lib/activity-log";
 import {
   resolveMaterialSectionLabel,
+  deriveFileStemFromPayload,
+  finalizeMaterialSectionLabel,
 } from "@/lib/study-material-display-name";
 import {
   isGenericIngestPlaceholder,
@@ -941,11 +943,20 @@ async function finalizePdfIngest(
     typeof originalFileName === "string" && originalFileName.trim().length > 0
       ? originalFileName.trim()
       : "upload.pdf";
-  const storedFileName = resolveMaterialSectionLabel({
-    outlineTitle: outline.title,
-    payload,
-    originalFileName: uploadLabel,
-  });
+  // Prefer a label derived from the generated course content — the elaborate
+  // AI summary of the PDF (e.g. "Master ionic bonding through electron
+  // transfer…") that reads as a real topic, not the raw upload filename
+  // ("L7 Slides"). Only fall back to the filename / outline title when the
+  // content yields nothing usable.
+  const stemFromContent = deriveFileStemFromPayload(payload);
+  const storedFileName =
+    stemFromContent && !isGenericIngestPlaceholder(stemFromContent)
+      ? finalizeMaterialSectionLabel(stemFromContent)
+      : resolveMaterialSectionLabel({
+          outlineTitle: outline.title,
+          payload,
+          originalFileName: uploadLabel,
+        });
   const materialSummary =
     typeof payload.description === "string" &&
     payload.description.trim() &&

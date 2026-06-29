@@ -1050,6 +1050,8 @@ function titleStyleRules(): string {
 - **lesson_titles**: short noun phrases, **3 to 6 words each, max 50 characters**. Example: "Electron Sharing", "Bond Polarity", "Lewis Structures". Same forbidden openers as module titles.
 - **description**: ONE short sentence under ~20 words. No marketing fluff, no "designed for self-study", no second paragraph.
 
+NEVER use slide chrome or administrative headings as a module or lesson title. Titles like "Warm Up", "Aktiv Warm Up", "Test Your Understanding", "Understanding Check", "Agenda", "Objectives", "Learning Outcomes", "Recap", "Review", "Clicker Question", "Poll", "Discussion", "Announcements", "Today's Plan", or a bare slide/page number are NOT topics. Replace each with the actual academic concept that slide teaches (e.g. a "Test Your Understanding" slide about gas laws becomes "Applying the Ideal Gas Law"). The title must name what the student learns, not the slide's role in the deck.
+
 Repetition rule: across the whole outline, no two modules (or two lesson titles) may start with the same first word. If you'd produce "Master the X" and "Master the Y", rewrite both as bare topic names.`;
 }
 
