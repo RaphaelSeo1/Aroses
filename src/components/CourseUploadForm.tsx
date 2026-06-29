@@ -166,6 +166,21 @@ export function CourseUploadForm({
   const [draggedKey, setDraggedKey] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
 
+  // ---- lecture reordering ----
+  // Separate from grouping: a dedicated grab handle on each lecture card drives
+  // a pointer-based (not HTML5 DnD) reorder so it stays reliable in Safari.
+  // The visual order of `groups` IS the order the course is built in — it feeds
+  // both the per-build `orderIndex` and the sequential job-creation order at
+  // submit, so reordering here is all that's needed for sections to follow it.
+  const [reorderingGroupId, setReorderingGroupId] = useState<string | null>(
+    null
+  );
+  // Latest `groups` for the window pointer listeners (avoids stale closures).
+  const groupsRef = useRef<Stack[]>(groups);
+  groupsRef.current = groups;
+  // Live DOM rects for each lecture card, keyed by group id.
+  const groupElRef = useRef<Map<string, HTMLDivElement | null>>(new Map());
+
   useEffect(() => {
     setOutputLanguage(
       defaultOutputLanguage === DEFAULT_COURSE_OUTPUT_LANGUAGE && uiLocale === "ko"
@@ -270,6 +285,77 @@ export function CourseUploadForm({
       })
     );
   }, [files]);
+
+  /** Move a lecture card from one position to another (clamped, no-op safe). */
+  const moveGroup = useCallback((fromIndex: number, toIndex: number) => {
+    setGroups((prev) => {
+      if (
+        fromIndex === toIndex ||
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= prev.length ||
+        toIndex >= prev.length
+      ) {
+        return prev;
+      }
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }, []);
+
+  // Pointer-based reorder loop. We deliberately avoid HTML5 drag-and-drop here
+  // (it was flaky in Safari for this form) and instead listen on `window` for
+  // the duration of a drag. As the pointer crosses a neighbouring card's
+  // midpoint we swap with that neighbour; the list reflows immediately so the
+  // new order is reflected live and fast drags catch up swap-by-swap.
+  useEffect(() => {
+    if (reorderingGroupId === null) return;
+
+    const onMove = (e: PointerEvent) => {
+      const current = groupsRef.current;
+      const fromIndex = current.findIndex((g) => g.id === reorderingGroupId);
+      if (fromIndex < 0) return;
+      const y = e.clientY;
+
+      if (fromIndex > 0) {
+        const prevEl = groupElRef.current.get(current[fromIndex - 1]!.id);
+        if (prevEl) {
+          const r = prevEl.getBoundingClientRect();
+          if (y < r.top + r.height / 2) {
+            moveGroup(fromIndex, fromIndex - 1);
+            return;
+          }
+        }
+      }
+      if (fromIndex < current.length - 1) {
+        const nextEl = groupElRef.current.get(current[fromIndex + 1]!.id);
+        if (nextEl) {
+          const r = nextEl.getBoundingClientRect();
+          if (y > r.top + r.height / 2) {
+            moveGroup(fromIndex, fromIndex + 1);
+          }
+        }
+      }
+    };
+
+    const onUp = () => setReorderingGroupId(null);
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    // Stop text selection / scroll-jank while dragging (esp. touch + Safari).
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.style.userSelect = prevUserSelect;
+    };
+  }, [reorderingGroupId, moveGroup]);
 
   useEffect(() => {
     let cancelled = false;
@@ -452,6 +538,25 @@ export function CourseUploadForm({
   function handleChipDragEnd() {
     setDraggedKey(null);
     setDropTarget(null);
+  }
+
+  function handleReorderPointerDown(e: React.PointerEvent, groupId: string) {
+    if (loading || groups.length <= 1) return;
+    // Only the primary button / a touch contact starts a reorder.
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    e.preventDefault();
+    setReorderingGroupId(groupId);
+  }
+
+  function handleReorderKeyDown(e: React.KeyboardEvent, index: number) {
+    if (loading || groups.length <= 1) return;
+    if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      moveGroup(index, index - 1);
+    } else if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+      e.preventDefault();
+      moveGroup(index, index + 1);
+    }
   }
 
   async function onSubmit(e: FormEvent) {
@@ -968,6 +1073,25 @@ export function CourseUploadForm({
               ) : null}
             </div>
 
+            {groups.length > 1 ? (
+              <p className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                <svg
+                  viewBox="0 0 10 16"
+                  fill="currentColor"
+                  className="h-3 w-2 shrink-0 text-zinc-400 dark:text-zinc-500"
+                  aria-hidden
+                >
+                  <circle cx="2.5" cy="2" r="1.5" />
+                  <circle cx="7.5" cy="2" r="1.5" />
+                  <circle cx="2.5" cy="7" r="1.5" />
+                  <circle cx="7.5" cy="7" r="1.5" />
+                  <circle cx="2.5" cy="12" r="1.5" />
+                  <circle cx="7.5" cy="12" r="1.5" />
+                </svg>
+                {t.dashboard.reorderHint}
+              </p>
+            ) : null}
+
             <div className="space-y-3">
               {groups.map((group, gi) => {
                 const groupFiles = group.keys
@@ -975,24 +1099,58 @@ export function CourseUploadForm({
                   .filter((f): f is File => Boolean(f));
                 const combined = groupFiles.length > 1;
                 const isTarget = dropTarget === group.id;
+                const isReordering = reorderingGroupId === group.id;
+                const canReorder = !loading && groups.length > 1;
                 return (
                   <div
                     key={group.id}
+                    ref={(el) => {
+                      groupElRef.current.set(group.id, el);
+                    }}
                     onDragOver={(e) => handleGroupDragOver(e, group.id)}
                     onDrop={(e) => handleGroupDrop(e, group.id)}
                     onDragLeave={() => {
                       if (dropTarget === group.id) setDropTarget(null);
                     }}
                     className={[
-                      "rounded-2xl border p-3 transition-colors",
-                      isTarget
-                        ? "border-brand bg-brand-blush/70 dark:border-brand-soft dark:bg-brand-blush/10"
-                        : combined
-                          ? "border-zinc-300 bg-zinc-50/80 dark:border-zinc-700 dark:bg-zinc-900/50"
-                          : "border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/30",
+                      "rounded-2xl border p-3 transition-[colors,box-shadow]",
+                      isReordering
+                        ? "border-brand bg-white shadow-lg shadow-red-500/15 ring-2 ring-brand/40 dark:border-brand-soft dark:bg-zinc-950"
+                        : isTarget
+                          ? "border-brand bg-brand-blush/70 dark:border-brand-soft dark:bg-brand-blush/10"
+                          : combined
+                            ? "border-zinc-300 bg-zinc-50/80 dark:border-zinc-700 dark:bg-zinc-900/50"
+                            : "border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/30",
                     ].join(" ")}
                   >
                     <div className="mb-2 flex items-center gap-2">
+                      {canReorder ? (
+                        <button
+                          type="button"
+                          aria-label={tf(t.dashboard.reorderHandleAria, {
+                            n: gi + 1,
+                          })}
+                          onPointerDown={(e) =>
+                            handleReorderPointerDown(e, group.id)
+                          }
+                          onKeyDown={(e) => handleReorderKeyDown(e, gi)}
+                          className="shrink-0 cursor-grab touch-none rounded-md px-0.5 py-1 text-zinc-400 hover:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand active:cursor-grabbing dark:text-zinc-500 dark:hover:text-zinc-300"
+                        >
+                          <svg
+                            viewBox="0 0 10 16"
+                            fill="currentColor"
+                            className="h-4 w-3"
+                            aria-hidden
+                          >
+                            <circle cx="2.5" cy="2" r="1.5" />
+                            <circle cx="7.5" cy="2" r="1.5" />
+                            <circle cx="2.5" cy="7" r="1.5" />
+                            <circle cx="7.5" cy="7" r="1.5" />
+                            <circle cx="2.5" cy="12" r="1.5" />
+                            <circle cx="7.5" cy="12" r="1.5" />
+                          </svg>
+                        </button>
+                      ) : null}
                       <span className="shrink-0 text-xs font-semibold text-zinc-400 dark:text-zinc-500">
                         {gi + 1}
                       </span>

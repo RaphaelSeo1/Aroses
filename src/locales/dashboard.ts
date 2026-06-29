@@ -158,6 +158,9 @@ const en = {
   nameThisLecture: "Name this lecture (optional)",
   filesCombined: "{count} files combined",
   dropToSplit: "Drop here to split into its own lecture",
+  reorderHint:
+    "Drag the handle to reorder — your course sections follow this order.",
+  reorderHandleAria: "Drag to reorder lecture {n}. Use arrow up or down keys to move.",
   durationMinutes: "{count} min",
   privacyNote:
     "Your files are private to your account. Make sure you have permission to use copyrighted material. Videos and audio are transcribed (up to 25MB per file for transcription). Processing can take several minutes for long recordings.",
@@ -327,6 +330,9 @@ const ko: typeof en = {
   nameThisLecture: "강의 이름 입력 (선택)",
   filesCombined: "파일 {count}개 합침",
   dropToSplit: "여기에 놓으면 별도의 강의로 분리돼요",
+  reorderHint:
+    "손잡이를 끌어 순서를 바꿔요 — 코스 섹션이 이 순서대로 만들어져요.",
+  reorderHandleAria: "강의 {n} 순서 변경. 위/아래 방향키로 이동할 수 있어요.",
   durationMinutes: "{count}분",
   privacyNote:
     "업로드한 파일은 내 계정에만 비공개로 저장돼요. 저작권이 있는 자료는 사용 권한이 있는지 확인해 주세요. 동영상과 오디오는 텍스트로 변환돼요(변환은 파일당 최대 25MB). 긴 녹음은 처리에 몇 분이 걸릴 수 있어요.",
