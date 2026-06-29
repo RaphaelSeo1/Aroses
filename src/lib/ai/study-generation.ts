@@ -453,7 +453,11 @@ async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-/** Shorter outline coverage for express/fast (fewer input tokens); full/balanced use `sourceCoverageRules`. */
+/**
+ * Outline-phase coverage (structure planning only — NOT lesson content). The
+ * lesson/module CONTENT-generation paths are governed by `lessonGenerationSpec`;
+ * this just tells the outliner to map every section/heading to a module/lesson.
+ */
 function outlineCoverageBlock(profile: CourseBuildProfile): string {
   if (profile === "express") {
     return "COVERAGE: Map **every major section/heading** in the excerpt to its own lesson_title — do not merge unrelated topics. Use enough modules to cover the full deck.";
@@ -464,7 +468,7 @@ function outlineCoverageBlock(profile: CourseBuildProfile): string {
   if (profile === "balanced") {
     return "COVERAGE: Cover this excerpt well; use headings to infer structure—keep the outline compact.";
   }
-  return sourceCoverageRules("outline");
+  return `COVERAGE (critical): Plan modules + lesson_titles that together **map every section, heading, and distinct topic across the entire document** — first page to last. The material below is the **full document** unless it is extremely large. Walk it end to end; do not plan only for the opening pages and stop. Later pages and the document middle each need their own modules/lessons. Full lesson bodies are written from the same source later.`;
 }
 
 /**
@@ -493,17 +497,77 @@ function administrativeContentExclusionRules(): string {
 - This exclusion takes precedence over coverage/completeness: never keep logistics just to fill a planned title, and never invent subject matter to replace excluded logistics.`;
 }
 
-/** Injected into module / monolith prompts (and full outline via `outlineCoverageBlock`). */
-function sourceCoverageRules(mode: "outline" | "module" | "monolith"): string {
-  const core =
-    "COVERAGE (critical): You must represent **every major subject-matter topic, section, heading, and learning objective** in the uploaded material (administrative/logistical material is out of scope — see the SCOPE rule). Do not stop early, skim, or merge distinct concepts to save tokens. If the deck is long or dense, use **more** lesson entries (up to the stated caps) and **more** modules (up to the stated caps) rather than skipping later sections.";
-  if (mode === "outline") {
-    return `${core} The material below is the **full document** (first page to last) unless it is extremely large. Walk it end to end and make sure modules + lesson_titles together **map every section/heading across the entire document** — do not plan only for the opening pages and then stop; later pages and the document middle each need their own modules/lessons. Full lesson bodies are written from the same source later.`;
-  }
-  if (mode === "module") {
-    return `${core} Output **one full lesson per planned lesson title** below, in the **same order**. Keep the same count, with ONE exception: if a planned lesson's entire source slice is purely administrative/logistical (see the SCOPE rule), omit that lesson rather than manufacturing logistics into teaching content — return the remaining substantive lessons in order (keep at least one lesson in the module). Otherwise do not omit, merge, or collapse lessons; each title must become substantive lesson content grounded in the material. Teach what the source covers for that slice — neither pad with outside topics nor skip assigned subject matter. **Within each lesson, cover EVERY distinct subject-matter concept, definition, named entity, and claim present in that lesson's source slice** — if the slice introduces several separate ideas, each one must be taught; do not stop after the first one or two. Before finishing a lesson, verify no subject-matter sub-topic from its source slice was left out (administrative/logistical asides are excluded, not "left out").`;
-  }
-  return `${core} Across the full course JSON, every substantive part of the source should appear in some lesson; do not only cover the introduction. Teach each concept the source raises — do not leave later sections or sub-topics untaught.`;
+/**
+ * GOVERNING lesson-generation spec — the single source of truth for how the
+ * model converts source material into lessons (coverage, what to keep/drop,
+ * worked-example-vs-activity, fidelity, and the per-lesson output). Injected
+ * into EVERY content-generation path (per-module/expand and monolith) so
+ * behavior is uniform and global (no per-course/subject special casing).
+ *
+ * This SUPERSEDES the former `sourceCoverageRules` (module/monolith),
+ * `sourceFidelityRules`, and `administrativeContentExclusionRules` prose in the
+ * content paths. The verbatim spec already mandates dropping logistics and
+ * not inventing; the only adaptations are (1) binding OUTPUT to the lesson JSON
+ * fields the app consumes and (2) folding the table/figure fidelity instruction
+ * into the FIDELITY section (detailed table mechanics follow via
+ * `tableAndDataFidelityRules`).
+ */
+function lessonGenerationSpec(): string {
+  return `You convert source teaching material into self-contained study lessons. The source may be slides, a lecture transcript, a textbook page, an article, or a mix. Your job is to preserve everything teachable in the source and expand it into prose a student can learn from WITHOUT the original.
+
+COVERAGE — the core rule:
+Every concept, distinction, mechanism, worked example, named entity, framework, and cause→effect explanation in the source must appear in the lessons. Do not drop material because it is hard to phrase, buried in a messy transcript, or only stated once. If the source teaches it, the lesson keeps it.
+
+Treat ALL sources as equal in weight. A rambling spoken transcript carries as much teachable content as a clean slide — often more. Do NOT favor neatly formatted sources over messy ones. The connective reasoning a lecturer says out loud is usually the most valuable content and the easiest to lose. Mine every source as hard as the cleanest one.
+
+WHAT TO KEEP:
+- definitions and the distinctions between similar terms
+- step-by-step methods, procedures, and frameworks, in their order
+- worked examples and the reasoning inside them, with their actual details — not just the conclusion
+- the specific named people, organizations, cases, and examples the source uses; do not replace a specific case with a generic stand-in
+- consequences, stakes, and "why it matters" reasoning
+- interpretive skills the source teaches
+
+WHAT TO DROP:
+- pure logistics: deadlines, sign-up steps, platform names, dates, staff names, where to submit etc
+- in-source self-check questions and "now you try" activity prompts — the downstream system generates its own practice items
+- filler the source itself flags as skippable
+
+WORKED EXAMPLE vs ACTIVITY:
+A worked example (the source shows the reasoning and its result) is teaching content → keep and explain it fully. An activity (a prompt for the student to attempt) → drop it, but keep any concept it was testing. A solved item is exposition; an unsolved prompt is an exercise.
+
+FIDELITY — do not invent:
+- Use ONLY what the source supports. Never add facts, figures, examples, or claims not present in or directly implied by the source.
+- Reproduce the source faithfully even if you believe it contains an error. Do not silently correct it.
+- Reproduce every table, chart, and structured data block the source contains faithfully — as complete GitHub-flavored markdown tables (one row per source row, every column header, every number and proper noun exactly, mixed-language terms in full). Never collapse a table into prose. Leave any markdown image/figure embeds the pipeline injects untouched. (Detailed table mechanics follow below.)
+- If a section of source is thin, write a proportionally short lesson. Never pad to hit a length.
+
+OUTPUT per lesson — map onto the lesson JSON object the system consumes:
+- "title": a title naming the concept.
+- "content": connected prose fully explaining the concept(s), including any worked examples with their actual details and any source tables reproduced as markdown.
+- "key_terms": each distinct term the source introduces, defined — array of { "term", "definition" } objects.
+- "examples": only examples grounded in the source. Use the source's own specific example where it gives one. Where the source gives none, output an empty array (or omit the field) — never a placeholder string and never an invented scenario.
+
+Before finishing, check each distinct teachable point in the source against your lessons. If anything in the source isn't covered, add it.`;
+}
+
+/**
+ * Detailed table / structured-data mechanics that back the FIDELITY bullet in
+ * `lessonGenerationSpec`. Forces the model to carry source tables / enumerated
+ * data into the lesson body verbatim instead of summarizing them into prose.
+ * Critical for technical material (e.g. pharmacology drug tables) where the
+ * table IS the highest-value, most testable content.
+ */
+function structuredDataFidelityRules(): string {
+  return `STRUCTURED DATA FIDELITY (critical — full tables, not summaries):
+- Every table, drug list, potency chart, side-effect matrix, seizure-type mapping, and numbered reference grid from the source MUST appear in lesson "content" as **complete GitHub-flavored markdown tables** (header row + \`|---|\` separator + **one row per source row**). Do NOT summarize tables into prose-only bullets.
+- Prose may explain mechanisms and concepts; **tables carry the verbatim reference data** students must memorize (drug names, doses, half-lives, MAC values, potency ratios, side-effects, contraindications, etc.).
+- Include **every row** from 표 N tables — never drop entries (e.g. if the source lists 페티딘, 펜타조신, 부프레노르핀, they must appear in a table row, not only morphine/fentanyl in prose).
+- Blocks marked \`--- TABLE DATA FROM PDF ---\` contain authoritative table markdown — **copy them into the matching lesson "content"** (add a short heading like \`### 표 3-14\` above each when the slide label is known). Do not leave them only in the material block.
+- Do NOT use {{asset:...}} tokens for tables — students read markdown tables in the lesson body. Leave any markdown image/figure embeds the pipeline injects untouched (do not relabel or remove them).
+- Preserve every proper noun and NUMBER exactly. Do not round, omit, merge rows, or regroup values.
+- Keep mixed-language terms in full, BOTH languages, exactly as written (e.g. "디아제팜(diazepam)").
+- **NUMERIC RANGES**: always write ranges with an en-dash between endpoints: 1–4, 2–3, 10–18, 47–100. NEVER concatenate endpoints (wrong: 14단계, 23시간, 1018시간, 47100시간).`;
 }
 
 /**
@@ -526,17 +590,6 @@ function factualAccuracyRules(): string {
 - Do **not** invent table columns or rows not present in the source. If the source table has **N** columns, output exactly **N** columns with the same headers — never add invented columns such as "임상적 의미" unless the PDF includes them.`;
 }
 
-function sourceFidelityRules(): string {
-  return `SOURCE FIDELITY (strict — teach the source, do not copy it, do not embellish it):
-- TEACH, don't transcribe. Re-express the material as a clear, self-contained lesson in your own instructional words. Do NOT paste or lightly reword the source's sentences verbatim, and NEVER label passages with attributions such as "From your material", "In this lecture/this lecture", a filename, "Screenshot …", a slide number, or a page number. The lesson is taught content, not a quoted excerpt. (Markdown image embeds the pipeline injects are the only exception — leave those untouched.)
-- Explaining is allowed; inventing is not. You may define, clarify, restructure, and connect the ideas the source presents — but every fact, reason, cause, consequence, comparison, statistic, and example you state MUST be explicitly present in the source. Do NOT add outside knowledge, background, history, real-world context, applications, pros/cons, or "why it matters" reasoning that the source does not itself give.
-- No plausible elaboration. If the source gives one reason, teach exactly that one reason — never supply extra reasons, mechanisms, benefits, or implications that merely sound correct. Do NOT use hedging openers ("may", "can", "could", "often", "typically", "in general", "this means that…") to smuggle in claims the source never made.
-- COMPLETE the source. Conversely, do not drop or skim subject matter: teach every distinct concept, definition, named entity, rule, and claim that appears in this lesson's assigned source text. Leaving a subject-matter sub-topic untaught is as serious as inventing one. (This applies to subject matter only — administrative/logistical material, per the SCOPE rule, must be excluded, not taught.)
-- Keep the source's framing and figures faithfully even if you believe they are incorrect. Do not "fix", "correct", or "improve" the source.
-- Do not fabricate computed values, journal entries, tables, balance sheets, or worked examples the source did not provide or that are not directly and unambiguously derivable from numbers the source gives. If teaching a point would require information the source did not provide, omit that point rather than invent it.
-- key_terms must be terms the source actually defines or treats as important. Do not pad with generic, self-evident, or filler labels the source does not present as terms.`;
-}
-
 function voiceRules(): string {
   return `VOICE (strict):
 - Write in a declarative, instructional tone. Never use conversational asides, first-person hedging, or self-referential commentary about your own reasoning or uncertainty (e.g. no "Wait—this doesn't balance", "hmm", "let me reconsider", "as an AI", "it seems").
@@ -553,24 +606,18 @@ function quantitativeTeachingRules(): string {
 - Never narrate an arithmetic check, discrepancy, or fix inside the lesson (no "this doesn't balance", no inventing a reason like "we haven't recorded depreciation" to explain a gap). Present the source's figures as given, without commentary.`;
 }
 
-function dataFidelityRules(): string {
-  return `STRUCTURED DATA FIDELITY (critical — full tables, not summaries):
-- Every table, drug list, potency chart, side-effect matrix, seizure-type mapping, and numbered reference grid from the source MUST appear in lesson "content" as **complete GitHub-flavored markdown tables** (header row + \`|---|\` separator + **one row per source row**). Do NOT summarize tables into prose-only bullets.
-- Prose may explain mechanisms and concepts; **tables carry the verbatim reference data** students must memorize (drug names, doses, half-lives, MAC values, potency ratios, side-effects, contraindications, etc.).
-- Include **every row** from 표 N tables — never drop entries (e.g. if the source lists 페티딘, 펜타조신, 부프레노르핀, they must appear in a table row, not only morphine/fentanyl in prose).
-- Blocks marked \`--- TABLE DATA FROM PDF ---\` contain authoritative table markdown — **copy them into the matching lesson "content"** (add a short heading like \`### 표 3-14\` above each when the slide label is known). Do not leave them only in the material block.
-- Do NOT use {{asset:...}} tokens for tables — students read markdown tables in the lesson body.
-- Preserve every proper noun and NUMBER exactly. Do not round, omit, merge rows, or regroup values.
-- Keep mixed-language terms in full, BOTH languages, exactly as written (e.g. "디아제팜(diazepam)").
-- **NUMERIC RANGES**: always write ranges with an en-dash between endpoints: 1–4, 2–3, 10–18, 47–100. NEVER concatenate endpoints (wrong: 14단계, 23시간, 1018시간, 47100시간).
-
-${administrativeContentExclusionRules()}
+/**
+ * Table / numeric / voice fidelity that supports the governing
+ * `lessonGenerationSpec` in the CONTENT-generation paths. Kept deliberately
+ * separate from the spec so the table/figure-reproduction capability survives.
+ * (The former `dataFidelityRules` also embedded `administrativeContentExclusionRules`
+ * and `sourceFidelityRules`; both are now SUPERSEDED by `lessonGenerationSpec`'s
+ * WHAT-TO-DROP / FIDELITY sections and are no longer injected into content paths.)
+ */
+function tableAndDataFidelityRules(): string {
+  return `${structuredDataFidelityRules()}
 
 ${factualAccuracyRules()}
-
-${sourceFidelityRules()}
-
-${voiceRules()}
 
 ${quantitativeTeachingRules()}`;
 }
@@ -633,9 +680,11 @@ ${sizeRules}
 
 ${titleStyleRules()}
 
-${sourceCoverageRules("monolith")}
+${lessonGenerationSpec()}
 
-${dataFidelityRules()}
+${tableAndDataFidelityRules()}
+
+${voiceRules()}
 
 Generate the course in this exact JSON format:
 {
@@ -647,10 +696,10 @@ Generate the course in this exact JSON format:
       "title": "module title",
       "lessons": [
         {
-          "title": "lesson title",
-          "content": "deep, thorough explanation written like a great teacher. Use analogies, real world examples, break it down simply — and when the source has a table or list of data, INCLUDE it as a markdown table (do not turn it into prose)",
+          "title": "title naming the concept",
+          "content": "connected prose that fully teaches the concept(s) from the source, including any worked examples with their actual details — and when the source has a table or list of data, INCLUDE it as a markdown table (do not turn it into prose)",
           "key_terms": [{"term": "word", "definition": "definition"}],
-          "examples": ["real world example 1", "real world example 2"]
+          "examples": ["only examples grounded in the source — empty array if the source gives none; never a placeholder or invented scenario"]
         }
       ],
       "quiz": [
@@ -1159,29 +1208,21 @@ function moduleInstruction(
         : profile === "balanced"
           ? `STYLE (balanced): Teach clearly with examples; aim **under ~500 words** per lesson.`
           : "";
-  const exampleSourcingRule = `Examples MUST be grounded in the source — use the scenarios, cases, or illustrations the source itself gives. Do NOT invent outside "real-world" examples; if the source offers none for a lesson, use fewer (or none) rather than fabricating one. key_terms must be terms the source actually defines.`;
-  const lessonRequirements =
-    profile === "express"
-      ? `For EACH lesson: include **2** key_terms (term+definition) and up to **2** short examples (strings). ${exampleSourcingRule}`
-      : profile === "fast"
-        ? `For EACH lesson: include 2–4 key_terms (term+definition) and up to 2 examples (short strings). ${exampleSourcingRule}`
-        : profile === "balanced"
-          ? `For EACH lesson: include 2–4 key_terms (term+definition) and up to 2 examples (strings). ${exampleSourcingRule}`
-          : `For EACH lesson: include key_terms (term+definition) and examples (strings). ${exampleSourcingRule}`;
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. ${moduleTitleDirective}
 ${generationContextSuffix(studyContext, outputLanguage)}
-Create one full module object: lessons (one per planned lesson title below, in order — same count as lesson_titles, each with rich "content", "key_terms", "examples"), plus quiz.
+Create one full module object: lessons (one per planned lesson title below, in order — same count as lesson_titles, each with "content", "key_terms", and "examples" per the spec below), plus quiz.
 
 Planned lesson titles for this module: ${titles}.
 ${lessonTitleDirective}
 
-${sourceCoverageRules("module")}
+${lessonGenerationSpec()}
 
 ${styleRule}
-${lessonRequirements}
 
-${dataFidelityRules()}
+${tableAndDataFidelityRules()}
+
+${voiceRules()}
 
 ${assetManifestBlock?.trim() ? `${assetManifestBlock.trim()}\n\n` : ""}${moduleQuizRules(profile)}
 
@@ -1235,10 +1276,10 @@ async function repairModuleJson(
 ): Promise<CourseModule> {
   const requirements =
     profile === "express"
-      ? `Requirements for EACH lesson (express): include 2 key_terms (term+definition) and 2 examples (short strings). Do not leave key_terms empty.`
+      ? `Requirements for EACH lesson (express): include key_terms (term+definition) for each term the source introduces — do not leave key_terms empty. "examples" must be grounded in the source; if the source gives none, use an empty array (never a placeholder string).`
       : profile === "fast"
-        ? `Requirements for EACH lesson (fast): include 2–4 key_terms (term+definition) and at least 2 examples (short strings). Do not leave key_terms empty.`
-        : `Requirements for EACH lesson: include key_terms (term+definition) and examples (strings).`;
+        ? `Requirements for EACH lesson (fast): include key_terms (term+definition) for each term the source introduces — do not leave key_terms empty. "examples" must be grounded in the source; if the source gives none, use an empty array (never a placeholder string).`
+        : `Requirements for EACH lesson: include key_terms (term+definition) for each term the source introduces. "examples" must be grounded in the source; if the source gives none, use an empty array (never a placeholder string).`;
 
   const prompt = `You returned JSON that could not be parsed or did not meet requirements for a single course "module" (id, title, lessons[], quiz[]). Output ONLY: { "module": { ... } } with valid JSON. No markdown.
 
@@ -1297,9 +1338,10 @@ ${brokenAssistantText.slice(0, 100_000)}`;
 }
 
 function moduleNeedsLessonGlossary(m: CourseModule): boolean {
-  return m.lessons.some(
-    (l) => l.key_terms.length === 0 || l.examples.length === 0
-  );
+  // Only key_terms are required by the governing spec. "examples" are
+  // source-grounded and may legitimately be empty when the source gives none —
+  // forcing them would produce the placeholder/invented examples the spec bans.
+  return m.lessons.some((l) => l.key_terms.length === 0);
 }
 
 /** Second pass: model omitted glossary fields but JSON was otherwise valid. */
@@ -1315,8 +1357,8 @@ async function repairModuleMissingLessonFields(
 
 Rules:
 - Keep the same module id, module title, lesson titles, lesson content, and quiz as much as possible.
-- REQUIRED: every lesson must have non-empty key_terms (array of objects with "term" and "definition" strings). At least 2 per lesson.
-- REQUIRED: every lesson must have non-empty examples (array of strings). At least 2 per lesson.
+- REQUIRED: every lesson must have non-empty key_terms (array of objects with "term" and "definition" strings) — one for each distinct term the source introduces.
+- "examples" must be grounded in the source. Use the source's own specific example where it gives one; where the source gives none, output an empty array — NEVER a placeholder string or an invented scenario.
 - Use snake_case keys: "key_terms" and "examples" (not camelCase).
 
 ${clipped}`;
@@ -1375,14 +1417,10 @@ function fillMinimalLessonFields(module: CourseModule): CourseModule {
                   "Definitions and drug data follow the uploaded lecture material.",
               },
             ];
-      const examples =
-        lesson.examples.length >= 2
-          ? lesson.examples
-          : [
-              "Clinical scenario from the lecture material",
-              "Board-exam style application of this topic",
-            ];
-      return { ...lesson, key_terms, examples };
+      // Do NOT fabricate examples: the governing spec requires examples to be
+      // grounded in the source and an empty array when the source gives none
+      // (never a placeholder string). Leave whatever the model produced.
+      return { ...lesson, key_terms, examples: lesson.examples };
     }),
   };
 }
