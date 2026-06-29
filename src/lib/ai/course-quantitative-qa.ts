@@ -124,7 +124,17 @@ export async function auditModuleQuantitativeConsistency(
         messages: [{ role: "user", content: instruction }],
       });
       const text = extractTextBlock(msg);
-      const parsed = JSON.parse(stripJsonFence(text)) as { module?: unknown };
+      // Tolerate stray prose around the JSON by extracting the first balanced
+      // brace block, so a model that appends commentary after the JSON object
+      // doesn't make us skip the whole audit.
+      const cleaned = stripJsonFence(text).trim();
+      const objStart = cleaned.indexOf("{");
+      const objEnd = cleaned.lastIndexOf("}");
+      const jsonSlice =
+        objStart >= 0 && objEnd > objStart
+          ? cleaned.slice(objStart, objEnd + 1)
+          : cleaned;
+      const parsed = JSON.parse(jsonSlice) as { module?: unknown };
       if (!parsed.module) return mod;
       const repaired = parseCourseModuleLoose(parsed.module);
       if (repaired.lessons.length !== mod.lessons.length) return mod;
