@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# one-off data-cleanup backups (full course payload dumps; do not commit)
+/scripts/backups/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
