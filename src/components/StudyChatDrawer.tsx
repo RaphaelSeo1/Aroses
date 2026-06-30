@@ -292,14 +292,14 @@ export function StudyChatDrawer({
                       Try asking
                     </p>
                     <ul className="space-y-1 text-[12px] text-zinc-500 dark:text-zinc-400">
-                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Take me to the module about carbohydrates")}>
-                        "Take me to the module about carbohydrates"
-                      </li>
-                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Which module covers DNA replication?")}>
-                        "Which module covers DNA replication?"
-                      </li>
                       <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Explain this concept in simpler terms")}>
                         "Explain this in simpler terms"
+                      </li>
+                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Walk me through an example of this")}>
+                        "Walk me through an example of this"
+                      </li>
+                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Take me to the module about carbohydrates")}>
+                        "Take me to the module about carbohydrates"
                       </li>
                     </ul>
                   </div>

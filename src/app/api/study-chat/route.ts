@@ -31,21 +31,24 @@ const UUID_RE =
 const MAX_CONTENT_PER_MESSAGE = 8000;
 const MAX_MESSAGES = 24;
 
+/**
+ * Only TRUE for an explicit "take me there" request. Plain questions — even ones
+ * that contain words like "where", "find", or "which module" — must NOT count as
+ * navigation, because Rose's primary job is to ANSWER them, not ship the student
+ * off to a course page.
+ */
 function looksLikeNavigationIntent(text: string): boolean {
-  const t = text.toLowerCase();
+  const t = text.toLowerCase().trim();
   return (
     t.includes("take me") ||
     t.includes("go to") ||
     t.includes("jump to") ||
     t.includes("send me") ||
     t.includes("bring me") ||
-    t.includes("where") ||
-    t.includes("which module") ||
-    t.includes("what module") ||
-    t.includes("find") ||
-    t.includes("search") ||
-    t.includes("open module") ||
-    t.includes("show me module")
+    t.includes("navigate") ||
+    /\bopen (the )?module\b/.test(t) ||
+    /\bopen (the )?lesson\b/.test(t) ||
+    /\bshow me (the )?module\b/.test(t)
   );
 }
 
@@ -266,19 +269,30 @@ export async function POST(request: Request) {
         : [{ id: b.materialId, course_payload: payload!, label: "Current upload" }];
     const labels = materialLabelsFrom(navMaterials);
 
-    let navQuery = extractNavigationQuery(last.content);
-    let navMatches = hasStructuredCourse
-      ? findAllStudyLocationsForQuery({
-          materials: navMaterials,
-          query: navQuery || last.content,
-        })
-      : [];
+    const explicitNavIntent =
+      hasStructuredCourse && looksLikeNavigationIntent(last.content);
 
     // User picked a numbered option from a prior turn ("2" / "module 2" / label text).
-    if (hasStructuredCourse && navMatches.length === 0) {
-      const pickMatch = last.content.match(
-        /^module\s*(\d+)\s*[:.\-]?\s*(.*)$/i
-      );
+    const pickMatchTest = last.content.match(/^module\s*(\d+)\s*[:.\-]?\s*(.*)$/i);
+    const pickedNumberedOption = hasStructuredCourse && pickMatchTest !== null;
+
+    // Navigation is OPTIONAL: only resolve locations when the student EXPLICITLY
+    // asked to go somewhere (or tapped a numbered option). Otherwise we fall
+    // straight through to runStudyChat so Rose actually answers the question.
+    const wantsNavigation = explicitNavIntent || pickedNumberedOption;
+
+    const navQuery = wantsNavigation ? extractNavigationQuery(last.content) : "";
+    let navMatches =
+      wantsNavigation && hasStructuredCourse
+        ? findAllStudyLocationsForQuery({
+            materials: navMaterials,
+            query: navQuery || last.content,
+          })
+        : [];
+
+    // User picked a numbered option from a prior turn ("2" / "module 2" / label text).
+    if (wantsNavigation && hasStructuredCourse && navMatches.length === 0) {
+      const pickMatch = pickMatchTest;
       if (pickMatch) {
         const modNum = Number.parseInt(pickMatch[1]!, 10);
         if (Number.isFinite(modNum)) {
@@ -308,9 +322,7 @@ export async function POST(request: Request) {
       }
     }
 
-    const navIntent =
-      hasStructuredCourse &&
-      (looksLikeNavigationIntent(last.content) || navMatches.length > 0);
+    const navIntent = wantsNavigation && hasStructuredCourse;
 
     if (navIntent && navMatches.length > 0) {
       const options = buildNavigationOptions({
@@ -347,17 +359,8 @@ export async function POST(request: Request) {
       });
     }
 
-    if (navIntent && navMatches.length === 0) {
-      navQuery = navQuery || extractNavigationQuery(last.content);
-      const uploadCount = navMaterials.length;
-      return NextResponse.json({
-        reply: sanitizeStudyChatReply(
-          `I couldn't find "${navQuery || last.content.trim()}" in your course materials (${uploadCount} upload${uploadCount === 1 ? "" : "s"} searched). Try a shorter topic or browse the sidebar.`
-        ),
-        action: null,
-        options: [],
-      });
-    }
+    // Explicit nav request but nothing matched: don't dead-end. Fall through so
+    // Rose actually answers/helps (and may still surface a navigation suggestion).
 
     const studyContext = await loadStudyContextForMaterial(
       supabase,
