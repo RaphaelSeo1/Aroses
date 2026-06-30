@@ -666,11 +666,11 @@ FIDELITY — do not invent:
 
 OUTPUT per lesson — map onto the lesson JSON object the system consumes:
 - "title": a title naming the concept.
-- "content": connected prose fully explaining the concept(s), including any worked examples with their actual details and any source tables reproduced as markdown.
-- "key_terms": each distinct term the source introduces, defined — array of { "term", "definition" } objects.
+- "content" (REQUIRED — never empty): connected teaching prose that fully explains the concept(s) in complete sentences, including any worked examples with their actual details and any source tables reproduced as markdown. EVERY lesson must teach something in prose: a real lesson body a student can learn from. NEVER emit a lesson whose body is empty, whitespace, a bare title, or "key terms only" — a lesson that only lists key_terms (or only a table) with no explanatory prose is INVALID. If a section is thin, write a proportionally short body, but it must still explain the idea in real sentences.
+- "key_terms" (DISCRETIONARY — no fixed count; judge from the source): an array of { "term", "definition" } objects. Include a key term ONLY when it is a distinct, important term the source introduces and defines or uses meaningfully. Add as many as the material genuinely warrants — that may be ZERO for a lesson with no notable terminology, or many for a terminology-dense lesson. The model decides which terms are genuinely worth learning. Do NOT pad with trivial or common words, do NOT hit a quota, and never invent terms not grounded in the source. An empty key_terms array is valid and is preferred over filler.
 - "examples": only examples grounded in the source. Use the source's own specific example where it gives one. Where the source gives none, output an empty array (or omit the field) — never a placeholder string and never an invented scenario.
 
-Before finishing, check each distinct teachable point in the source against your lessons. If anything in the source isn't covered, add it.`;
+Before finishing, check each distinct teachable point in the source against your lessons. If anything in the source isn't covered, add it. Also confirm every lesson's "content" is real teaching prose, not an empty or key-terms-only body.`;
 }
 
 /**
@@ -819,7 +819,7 @@ Generate the course in this exact JSON format:
       "lessons": [
         {
           "title": "title naming the concept",
-          "content": "connected prose that fully teaches the concept(s) from the source, including any worked examples with their actual details — and when the source has a table or list of data, INCLUDE it as a markdown table (do not turn it into prose)",
+          "content": "REQUIRED non-empty teaching prose that fully teaches the concept(s) from the source, including any worked examples with their actual details — and when the source has a table or list of data, INCLUDE it as a markdown table (do not turn it into prose). Never empty, never key-terms-only.",
           "key_terms": [{"term": "word", "definition": "definition"}],
           "examples": ["only examples grounded in the source — empty array if the source gives none; never a placeholder or invented scenario"]
         }
@@ -1137,6 +1137,7 @@ export async function generateCourseFromMaterial(
     try {
       const repaired = await repairPayloadJson(anthropic, rawText, profile);
       const modules = await finalizeGeneratedModules(
+        anthropic,
         repaired.modules,
         profile,
         trimmed,
@@ -1152,6 +1153,7 @@ export async function generateCourseFromMaterial(
   try {
     const payload = parseCoursePayload(parsed);
     const modules = await finalizeGeneratedModules(
+      anthropic,
       payload.modules,
       profile,
       trimmed,
@@ -1163,6 +1165,7 @@ export async function generateCourseFromMaterial(
     try {
       const repaired = await repairPayloadJson(anthropic, rawText, profile);
       const modules = await finalizeGeneratedModules(
+        anthropic,
         repaired.modules,
         profile,
         trimmed,
@@ -1396,12 +1399,7 @@ async function repairModuleJson(
   brokenAssistantText: string,
   profile: CourseBuildProfile
 ): Promise<CourseModule> {
-  const requirements =
-    profile === "express"
-      ? `Requirements for EACH lesson (express): include key_terms (term+definition) for each term the source introduces — do not leave key_terms empty. "examples" must be grounded in the source; if the source gives none, use an empty array (never a placeholder string).`
-      : profile === "fast"
-        ? `Requirements for EACH lesson (fast): include key_terms (term+definition) for each term the source introduces — do not leave key_terms empty. "examples" must be grounded in the source; if the source gives none, use an empty array (never a placeholder string).`
-        : `Requirements for EACH lesson: include key_terms (term+definition) for each term the source introduces. "examples" must be grounded in the source; if the source gives none, use an empty array (never a placeholder string).`;
+  const requirements = `Requirements for EACH lesson: "content" MUST be non-empty teaching prose grounded in the source (never empty, never a bare title, never "key terms only"). "key_terms" are DISCRETIONARY (term+definition) — include only genuinely important terms the source defines; an empty key_terms array is valid, and you must not invent terms or pad to a count. "examples" must be grounded in the source; if the source gives none, use an empty array (never a placeholder string).`;
 
   const prompt = `You returned JSON that could not be parsed or did not meet requirements for a single course "module" (id, title, lessons[], quiz[]). Output ONLY: { "module": { ... } } with valid JSON. No markdown.
 
@@ -1459,52 +1457,94 @@ ${brokenAssistantText.slice(0, 100_000)}`;
   throw new Error("Claude did not return valid JSON after module repair");
 }
 
-function moduleNeedsLessonGlossary(m: CourseModule): boolean {
-  // Only key_terms are required by the governing spec. "examples" are
-  // source-grounded and may legitimately be empty when the source gives none —
-  // forcing them would produce the placeholder/invented examples the spec bans.
-  return m.lessons.some((l) => l.key_terms.length === 0);
+/**
+ * A lesson body must be real teaching prose. Treat an empty / whitespace /
+ * near-empty body (a bare title, or a "key terms only" lesson) as MISSING
+ * content — these get repaired. A genuine short explanation or a real markdown
+ * table is NOT empty (a table carries teachable data). This guards the bug
+ * where a lesson rendered with key_terms but no lesson body.
+ */
+function lessonContentIsEmpty(content: string | undefined): boolean {
+  const t = (content ?? "").replace(/\s+/g, " ").trim();
+  return t.length < 24;
 }
 
-/** Second pass: model omitted glossary fields but JSON was otherwise valid. */
-async function repairModuleMissingLessonFields(
+function moduleNeedsLessonContent(m: CourseModule): boolean {
+  return m.lessons.some((l) => lessonContentIsEmpty(l.content));
+}
+
+/**
+ * Second pass: the model produced a lesson with a title (and possibly
+ * key_terms) but an EMPTY / near-empty "content" body. Re-prompt with the
+ * SOURCE so it writes the missing lesson BODIES as real teaching prose (not
+ * just a glossary). Other lessons, titles, key_terms, examples, and quiz are
+ * preserved. key_terms stay DISCRETIONARY — no count is forced.
+ */
+async function repairModuleMissingLessonContent(
   anthropic: Anthropic,
   module: CourseModule,
-  profile: CourseBuildProfile
+  profile: CourseBuildProfile,
+  sourceExcerpt: string,
+  outputLanguage: CourseOutputLanguage
 ): Promise<CourseModule> {
+  const emptyTitles = module.lessons
+    .filter((l) => lessonContentIsEmpty(l.content))
+    .map((l) => l.title);
+  if (emptyTitles.length === 0) return module;
+
   const payload = JSON.stringify({ module });
-  const clipped =
-    payload.length > 115_000 ? `${payload.slice(0, 115_000)}\n…(truncated)` : payload;
-  const prompt = `You are given JSON for one course "module". Return ONLY valid JSON: { "module": { ... } }.
+  const clippedModule =
+    payload.length > 60_000 ? `${payload.slice(0, 60_000)}\n…(truncated)` : payload;
+  const sourceForRepair = truncateMaterial(
+    sourceExcerpt,
+    Math.min(materialCharLimit(profile), 60_000)
+  );
+
+  const prompt = `One or more lessons in this course "module" have an EMPTY or near-empty "content" body — that is invalid. Every lesson must teach in real prose. Using ONLY the source material below, WRITE the missing lesson bodies.
+${generationContextSuffix(undefined, outputLanguage)}
+Lessons needing a real "content" body (by title): ${emptyTitles
+    .map((t) => JSON.stringify(t))
+    .join(", ")}.
 
 Rules:
-- Keep the same module id, module title, lesson titles, lesson content, and quiz as much as possible.
-- REQUIRED: every lesson must have non-empty key_terms (array of objects with "term" and "definition" strings) — one for each distinct term the source introduces.
-- "examples" must be grounded in the source. Use the source's own specific example where it gives one; where the source gives none, output an empty array — NEVER a placeholder string or an invented scenario.
-- Use snake_case keys: "key_terms" and "examples" (not camelCase).
+- Return ONLY valid JSON: { "module": { ... } } with the SAME module id, module title, lesson titles (same order and count), and quiz.
+- For every lesson, "content" MUST be non-empty teaching prose grounded in the source — complete sentences a student can learn from, including any worked examples with their details and any source tables reproduced as markdown. NEVER a bare title, an empty string, or a "key terms only" body.
+- Keep lessons that already have a real body essentially unchanged.
+- "key_terms" are DISCRETIONARY: keep only genuinely important terms the source defines; an empty key_terms array is valid. Do not invent terms or pad to a count.
+- "examples" must be grounded in the source; where the source gives none, use an empty array (never a placeholder or invented scenario).
+- Use snake_case keys ("key_terms", "examples"). Base everything strictly on the source; add no outside information.
 
-${clipped}`;
+CURRENT MODULE JSON:
+${clippedModule}
 
-  const glossaryRepairMax =
+--- SOURCE MATERIAL START ---
+${sourceForRepair}
+--- SOURCE MATERIAL END ---`;
+
+  const contentRepairMax =
     profile === "express"
-      ? 5120
+      ? 10_240
       : profile === "fast"
-        ? 8192
+        ? 12_288
         : profile === "balanced"
-          ? 8192
-          : 18_432;
+          ? 16_384
+          : 24_576;
 
   const msg = await createMessageWithRetries(
     anthropic,
     {
       model: resolveCourseModel(profile),
-      max_tokens: glossaryRepairMax,
-      temperature: 0.15,
+      max_tokens: contentRepairMax,
+      temperature: 0.2,
       messages: [{ role: "user", content: prompt }],
     },
     {
       maxAttempts:
-        profile === "fast" || profile === "balanced" ? 2 : 3,
+        profile === "express" || profile === "fast"
+          ? 1
+          : profile === "balanced"
+            ? 2
+            : 3,
     }
   );
 
@@ -1513,53 +1553,62 @@ ${clipped}`;
   try {
     parsed = JSON.parse(stripJsonFence(text));
   } catch {
-    throw new Error("Claude did not return valid JSON after glossary repair");
+    throw new Error(
+      "Claude did not return valid JSON after lesson-content repair"
+    );
   }
   const obj = parsed as Record<string, unknown>;
   return parseCourseModuleLoose(obj.module);
 }
 
-function fillMinimalLessonFields(module: CourseModule): CourseModule {
-  return {
-    ...module,
-    lessons: module.lessons.map((lesson) => {
-      const title = lesson.title.trim() || "Lesson topic";
-      const key_terms =
-        lesson.key_terms.length >= 2
-          ? lesson.key_terms
-          : [
-              {
-                term: title.slice(0, 48),
-                definition:
-                  "Primary topic covered in this lesson — see lesson content for source definitions.",
-              },
-              {
-                term: "Source PDF",
-                definition:
-                  "Definitions and drug data follow the uploaded lecture material.",
-              },
-            ];
-      // Do NOT fabricate examples: the governing spec requires examples to be
-      // grounded in the source and an empty array when the source gives none
-      // (never a placeholder string). Leave whatever the model produced.
-      return { ...lesson, key_terms, examples: lesson.examples };
-    }),
-  };
+/**
+ * Drop any lesson that STILL has an empty body after repair so the app never
+ * renders a content-less lesson. Never empties a module: if EVERY lesson is
+ * empty (degenerate), keep them so the module still has its planned structure.
+ */
+function dropContentlessLessons(module: CourseModule): CourseModule {
+  const kept = module.lessons.filter((l) => !lessonContentIsEmpty(l.content));
+  if (kept.length === 0 || kept.length === module.lessons.length) return module;
+  return { ...module, lessons: kept };
 }
 
+/**
+ * Ensure every lesson in a module has a real prose body. Runs for ALL profiles
+ * — an empty lesson body is a correctness bug, not a depth setting. Attempts a
+ * source-grounded content repair, then drops any lesson still empty.
+ *
+ * key_terms are intentionally NOT forced here: they are discretionary and an
+ * empty key_terms array is valid (BUG 2).
+ */
 async function ensureModuleLessonFields(
   anthropic: Anthropic,
   module: CourseModule,
-  profile: CourseBuildProfile
+  profile: CourseBuildProfile,
+  sourceExcerpt: string,
+  outputLanguage: CourseOutputLanguage
 ): Promise<CourseModule> {
-  if (profile === "express" || profile === "fast" || profile === "balanced") {
-    return fillMinimalLessonFields(module);
-  }
+  if (!moduleNeedsLessonContent(module)) return module;
+
+  const maxRepairs = profile === "express" || profile === "fast" ? 1 : 2;
   let out = module;
-  for (let i = 0; i < 2 && moduleNeedsLessonGlossary(out); i++) {
-    out = await repairModuleMissingLessonFields(anthropic, out, profile);
+  for (let i = 0; i < maxRepairs && moduleNeedsLessonContent(out); i++) {
+    try {
+      out = await repairModuleMissingLessonContent(
+        anthropic,
+        out,
+        profile,
+        sourceExcerpt,
+        outputLanguage
+      );
+    } catch (e) {
+      console.warn(
+        `[study-generation] module ${module.id} lesson-content repair failed`,
+        e
+      );
+      break;
+    }
   }
-  return out;
+  return dropContentlessLessons(out);
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -2010,6 +2059,7 @@ function sanitizeGeneratedModuleLessons(mod: CourseModule): CourseModule {
 }
 
 async function finalizeGeneratedModules(
+  anthropic: Anthropic,
   modules: CourseModule[],
   profile: CourseBuildProfile,
   sourceExcerpt: string,
@@ -2017,7 +2067,19 @@ async function finalizeGeneratedModules(
 ): Promise<CourseModule[]> {
   return Promise.all(
     modules.map(async (mod) => {
-      const withQuiz = await ensureModuleQuizCount(mod, profile, outputLanguage);
+      // Guarantee every lesson has a real prose body before finalizing (BUG 1).
+      const withLessons = await ensureModuleLessonFields(
+        anthropic,
+        mod,
+        profile,
+        sourceExcerpt,
+        outputLanguage
+      );
+      const withQuiz = await ensureModuleQuizCount(
+        withLessons,
+        profile,
+        outputLanguage
+      );
       const sanitized = sanitizeGeneratedModuleLessons(withQuiz);
       return auditModuleQuantitativeConsistency(
         sanitized,
@@ -2154,7 +2216,13 @@ export async function generateCourseModuleFromMaterial(
     const expectedId = outline.modules[moduleIndex].id;
     const normalized =
       courseMod.id !== expectedId ? { ...courseMod, id: expectedId } : courseMod;
-    const withLessons = await ensureModuleLessonFields(anthropic, normalized, profile);
+    const withLessons = await ensureModuleLessonFields(
+      anthropic,
+      normalized,
+      profile,
+      trimmed,
+      outputLanguage
+    );
     const withQuiz =
       moduleOptions?.skipQuizBackfill === true
         ? withLessons
@@ -2209,7 +2277,13 @@ export async function generateCourseModuleFromMaterial(
       );
       try {
         let repaired = await repairModuleJson(anthropic, rawText, profile);
-        repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
+        repaired = await ensureModuleLessonFields(
+          anthropic,
+          repaired,
+          profile,
+          trimmed,
+          outputLanguage
+        );
         if (moduleOptions?.skipQuizBackfill !== true) {
           repaired = await ensureModuleQuizCount(
             repaired,
@@ -2232,7 +2306,13 @@ export async function generateCourseModuleFromMaterial(
   }
 
   let repaired = await repairModuleJson(anthropic, lastRaw, profile);
-  repaired = await ensureModuleLessonFields(anthropic, repaired, profile);
+  repaired = await ensureModuleLessonFields(
+    anthropic,
+    repaired,
+    profile,
+    trimmed,
+    outputLanguage
+  );
   if (moduleOptions?.skipQuizBackfill !== true) {
     repaired = await ensureModuleQuizCount(repaired, profile, outputLanguage);
   }
