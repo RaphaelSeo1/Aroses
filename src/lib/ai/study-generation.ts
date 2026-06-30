@@ -642,6 +642,13 @@ Every concept, distinction, mechanism, worked example, named entity, framework, 
 
 Treat ALL sources as equal in weight. A rambling spoken transcript carries as much teachable content as a clean slide — often more. Do NOT favor neatly formatted sources over messy ones. The connective reasoning a lecturer says out loud is usually the most valuable content and the easiest to lose. Mine every source as hard as the cleanest one.
 
+NON-REDUNDANCY — teach each thing exactly ONCE:
+- Teach each concept thoroughly EXACTLY ONCE, in the single most logical place. Do NOT explain the same concept in depth more than once — not within a lesson, and not across lessons or modules.
+- A brief one-line recap or an explicit back-reference ("as covered earlier in the section on X") is fine, but do NOT re-derive, re-define, or re-explain in depth material already taught earlier.
+- Across modules and lessons, build on earlier coverage instead of repeating it: each later lesson must add NEW material, not restate a prior lesson's explanation. If two planned lessons would cover the same idea, teach it fully in the first and only reference it from the second.
+- Within a single lesson, present each point once; never restate the same explanation in different words later in the same lesson.
+- This does NOT weaken COVERAGE: still cover EVERYTHING the source teaches — but each distinct thing ONCE, in its best location.
+
 WHAT TO KEEP:
 - definitions and the distinctions between similar terms
 - step-by-step methods, procedures, and frameworks, in their order
@@ -659,7 +666,7 @@ WORKED EXAMPLE vs ACTIVITY:
 A worked example (the source shows the reasoning and its result) is teaching content → keep and explain it fully. An activity (a prompt for the student to attempt) → drop it, but keep any concept it was testing. A solved item is exposition; an unsolved prompt is an exercise.
 
 FIDELITY — do not invent:
-- Use ONLY what the source supports. Never add facts, figures, examples, or claims not present in or directly implied by the source.
+- Use ONLY what the source supports for all teaching content. Never add facts, figures, numbers, named cases, or claims not present in or directly implied by the source. (The ONE narrow exception is the brief illustrative real-world examples described in the OUTPUT "examples" rule below — those may be generic scenarios you supply, but they must still invent no source-specific facts or figures and must never contradict the source.)
 - Reproduce the source faithfully even if you believe it contains an error. Do not silently correct it.
 - Reproduce every table, chart, and structured data block the source contains faithfully — as complete GitHub-flavored markdown tables (one row per source row, every column header, every number and proper noun exactly, mixed-language terms in full). Never collapse a table into prose. Leave any markdown image/figure embeds the pipeline injects untouched. (Detailed table mechanics follow below.)
 - If a section of source is thin, write a proportionally short lesson. Never pad to hit a length.
@@ -668,9 +675,9 @@ OUTPUT per lesson — map onto the lesson JSON object the system consumes:
 - "title": a title naming the concept.
 - "content" (REQUIRED — never empty): connected teaching prose that fully explains the concept(s) in complete sentences, including any worked examples with their actual details and any source tables reproduced as markdown. EVERY lesson must teach something in prose: a real lesson body a student can learn from. NEVER emit a lesson whose body is empty, whitespace, a bare title, or "key terms only" — a lesson that only lists key_terms (or only a table) with no explanatory prose is INVALID. If a section is thin, write a proportionally short body, but it must still explain the idea in real sentences.
 - "key_terms" (DISCRETIONARY — no fixed count; judge from the source): an array of { "term", "definition" } objects. Include a key term ONLY when it is a distinct, important term the source introduces and defines or uses meaningfully. Add as many as the material genuinely warrants — that may be ZERO for a lesson with no notable terminology, or many for a terminology-dense lesson. The model decides which terms are genuinely worth learning. Do NOT pad with trivial or common words, do NOT hit a quota, and never invent terms not grounded in the source. An empty key_terms array is valid and is preferred over filler.
-- "examples": only examples grounded in the source. Use the source's own specific example where it gives one. Where the source gives none, output an empty array (or omit the field) — never a placeholder string and never an invented scenario.
+- "examples" (aim for AT LEAST 1–2 per lesson): concrete real-world examples that help a student understand the concept. PREFER the source's own specific example whenever it provides one, keeping its actual details. When the source gives NO example, you MAY add a brief, clearly illustrative real-world example of your own that correctly illustrates the concept. GUARDRAIL: an added example must be a GENERIC illustrative scenario only — it must NOT invent source-specific facts, figures, numbers, named cases, doses, or data, and must NOT contradict the source; the lesson's core facts and figures stay strictly source-faithful. NEVER output a placeholder string like "real world example 1" or "Clinical scenario…" — every example must be a real, substantive illustration. Output an array of example strings.
 
-Before finishing, check each distinct teachable point in the source against your lessons. If anything in the source isn't covered, add it. Also confirm every lesson's "content" is real teaching prose, not an empty or key-terms-only body.`;
+Before finishing, check each distinct teachable point in the source against your lessons. If anything in the source isn't covered, add it. Also confirm every lesson's "content" is real teaching prose (not empty or key-terms-only), that each concept is taught in depth only once, and that each lesson carries at least one helpful real-world example.`;
 }
 
 /**
@@ -821,7 +828,7 @@ Generate the course in this exact JSON format:
           "title": "title naming the concept",
           "content": "REQUIRED non-empty teaching prose that fully teaches the concept(s) from the source, including any worked examples with their actual details — and when the source has a table or list of data, INCLUDE it as a markdown table (do not turn it into prose). Never empty, never key-terms-only.",
           "key_terms": [{"term": "word", "definition": "definition"}],
-          "examples": ["only examples grounded in the source — empty array if the source gives none; never a placeholder or invented scenario"]
+          "examples": ["at least 1–2 real-world examples that aid understanding — prefer the source's own; if the source gives none, a brief GENERIC illustrative scenario is allowed (no invented source-specific facts/figures, no contradiction of the source); never a placeholder string"]
         }
       ],
       "quiz": [
@@ -1399,7 +1406,7 @@ async function repairModuleJson(
   brokenAssistantText: string,
   profile: CourseBuildProfile
 ): Promise<CourseModule> {
-  const requirements = `Requirements for EACH lesson: "content" MUST be non-empty teaching prose grounded in the source (never empty, never a bare title, never "key terms only"). "key_terms" are DISCRETIONARY (term+definition) — include only genuinely important terms the source defines; an empty key_terms array is valid, and you must not invent terms or pad to a count. "examples" must be grounded in the source; if the source gives none, use an empty array (never a placeholder string).`;
+  const requirements = `Requirements for EACH lesson: "content" MUST be non-empty teaching prose grounded in the source (never empty, never a bare title, never "key terms only"). Teach each concept in depth only once — do not repeat an explanation already given earlier. "key_terms" are DISCRETIONARY (term+definition) — include only genuinely important terms the source defines; an empty key_terms array is valid, and you must not invent terms or pad to a count. "examples": aim for at least 1–2 real-world examples per lesson — prefer the source's own; if the source gives none, a brief GENERIC illustrative scenario is allowed (it must invent no source-specific facts/figures and not contradict the source). Never a placeholder string.`;
 
   const prompt = `You returned JSON that could not be parsed or did not meet requirements for a single course "module" (id, title, lessons[], quiz[]). Output ONLY: { "module": { ... } } with valid JSON. No markdown.
 
@@ -1511,7 +1518,7 @@ Rules:
 - For every lesson, "content" MUST be non-empty teaching prose grounded in the source — complete sentences a student can learn from, including any worked examples with their details and any source tables reproduced as markdown. NEVER a bare title, an empty string, or a "key terms only" body.
 - Keep lessons that already have a real body essentially unchanged.
 - "key_terms" are DISCRETIONARY: keep only genuinely important terms the source defines; an empty key_terms array is valid. Do not invent terms or pad to a count.
-- "examples" must be grounded in the source; where the source gives none, use an empty array (never a placeholder or invented scenario).
+- "examples": include at least 1–2 real-world examples per lesson — prefer the source's own; where the source gives none, a brief GENERIC illustrative scenario is allowed (it must invent no source-specific facts/figures and must not contradict the source). Never a placeholder string.
 - Use snake_case keys ("key_terms", "examples"). Base everything strictly on the source; add no outside information.
 
 CURRENT MODULE JSON:

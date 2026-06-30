@@ -261,6 +261,24 @@ function normalizeKeyTerms(raw: unknown): KeyTerm[] {
   return out;
 }
 
+/**
+ * Reject obvious placeholder / non-example strings (e.g. "real world example 1",
+ * "example:", "n/a") while KEEPING genuine illustrative examples — including
+ * model-supplied generic scenarios when the source had none. We do NOT require
+ * examples to be source-grounded here; fidelity of illustrative scenarios is
+ * governed by the generation prompt's guardrail.
+ */
+function isPlaceholderExample(s: string): boolean {
+  const t = s.trim().toLowerCase().replace(/[\s.:_-]+$/g, "");
+  if (t.length < 4) return true;
+  if (/^(n\/?a|none|tbd|todo|placeholder|example|examples)$/.test(t)) return true;
+  // "real world example 1", "real-world example #2", "clinical scenario 3", etc.
+  if (/^(real[\s-]?world\s+example|example|scenario|clinical\s+scenario)\s*#?\d*$/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeLesson(raw: unknown): CourseLesson {
   if (!raw || typeof raw !== "object") throw new Error("Invalid lesson");
   const o = raw as Record<string, unknown>;
@@ -278,7 +296,7 @@ function normalizeLesson(raw: unknown): CourseLesson {
           }
           return "";
         })
-        .filter((s) => s.length > 0)
+        .filter((s) => s.length > 0 && !isPlaceholderExample(s))
     : [];
   const keyTermsRaw = o.key_terms ?? o.keyTerms ?? o.KeyTerms ?? o["Key terms"];
   const sourcesRaw = o.sources ?? o.Sources;
