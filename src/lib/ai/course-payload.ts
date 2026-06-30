@@ -8,6 +8,7 @@ import type {
   KeyTerm,
   SourceRef,
 } from "@/types/course";
+import { stripStrikethroughCorrections } from "@/lib/ai/strip-strikethrough";
 
 export function stripJsonFence(raw: string): string {
   let s = raw.trim();
@@ -226,8 +227,10 @@ function normalizeKeyTerms(raw: unknown): KeyTerm[] {
       const s = x.trim();
       const idx = s.indexOf(":");
       if (idx > 0 && idx < s.length - 1) {
-        const term = s.slice(0, idx).trim();
-        const definition = s.slice(idx + 1).trim();
+        const term = stripStrikethroughCorrections(s.slice(0, idx).trim());
+        const definition = stripStrikethroughCorrections(
+          s.slice(idx + 1).trim()
+        );
         if (term.length >= 2 && definition.length >= 4) {
           out.push({ term, definition });
         }
@@ -236,7 +239,7 @@ function normalizeKeyTerms(raw: unknown): KeyTerm[] {
     }
     if (!x || typeof x !== "object") continue;
     const rec = x as Record<string, unknown>;
-    const term =
+    const term = stripStrikethroughCorrections(
       readLooseStringField(rec, [
         "term",
         "Term",
@@ -244,8 +247,9 @@ function normalizeKeyTerms(raw: unknown): KeyTerm[] {
         "keyword",
         "title",
         "concept",
-      ]) ?? "";
-    const definition =
+      ]) ?? ""
+    );
+    const definition = stripStrikethroughCorrections(
       readLooseStringField(rec, [
         "definition",
         "Definition",
@@ -253,7 +257,8 @@ function normalizeKeyTerms(raw: unknown): KeyTerm[] {
         "explanation",
         "description",
         "def",
-      ]) ?? "";
+      ]) ?? ""
+    );
     if (term.length >= 2 && definition.length >= 4) {
       out.push({ term, definition });
     }
@@ -290,9 +295,9 @@ function normalizeLesson(raw: unknown): CourseLesson {
   const examples = Array.isArray(examplesRaw)
     ? examplesRaw
         .map((e) => {
-          if (typeof e === "string") return e.trim();
+          if (typeof e === "string") return stripStrikethroughCorrections(e.trim());
           if (e && typeof e === "object" && typeof (e as { text: unknown }).text === "string") {
-            return String((e as { text: string }).text).trim();
+            return stripStrikethroughCorrections(String((e as { text: string }).text).trim());
           }
           return "";
         })
@@ -387,8 +392,8 @@ function normalizeLesson(raw: unknown): CourseLesson {
   }
 
   return {
-    title: o.title,
-    content: o.content,
+    title: stripStrikethroughCorrections(o.title),
+    content: stripStrikethroughCorrections(o.content),
     key_terms: normalizeKeyTerms(keyTermsRaw),
     examples,
     ...(sources ? { sources } : {}),
@@ -418,7 +423,7 @@ function normalizeModule(
     throw new Error("Each module needs at least one valid quiz question");
   }
 
-  return { id, title: o.title, lessons, quiz };
+  return { id, title: stripStrikethroughCorrections(o.title), lessons, quiz };
 }
 
 /** Assign module ids 1…n in array order (after delete/reorder). */

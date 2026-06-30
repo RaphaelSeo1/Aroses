@@ -673,6 +673,11 @@ WHAT TO DROP:
 WORKED EXAMPLE vs ACTIVITY:
 A worked example (the source shows the reasoning and its result) is teaching content → keep and explain it fully. An activity (a prompt for the student to attempt) → drop it, but keep any concept it was testing. A solved item is exposition; an unsolved prompt is an exercise.
 
+NO SELF-CORRECTION / EDIT MARKUP — output only final, clean text:
+- Output ONLY the final, corrected text. NEVER show your own edits, second-guessing, or correction trail to the student.
+- FORBIDDEN: markdown strikethrough \`~~...~~\`; HTML \`<del>\`, \`<s>\`, or \`<strike>\` elements; and any "crossed-out-error-then-correction" pattern (e.g. "~~A~~ B", an "A → B" used as a correction, or "(corrected: …)" / "(should be …)" annotations).
+- If you would correct yourself, simply write the final correct text directly with no trace of the discarded version.
+
 FIDELITY — do not invent:
 - Use ONLY what the source supports for all teaching content. Never add facts, figures, numbers, named cases, or claims not present in or directly implied by the source. (The ONE narrow exception is the brief illustrative real-world examples described in the OUTPUT "examples" rule below — those may be generic scenarios you supply, but they must still invent no source-specific facts or figures and must never contradict the source.)
 - Reproduce the source faithfully even if you believe it contains an error. Do not silently correct it.
@@ -1414,7 +1419,7 @@ async function repairModuleJson(
   brokenAssistantText: string,
   profile: CourseBuildProfile
 ): Promise<CourseModule> {
-  const requirements = `Requirements for EACH lesson: "content" MUST be non-empty teaching prose grounded in the source (never empty, never a bare title, never "key terms only"). Teach each concept in depth only once — do not repeat an explanation already given earlier. "key_terms" are DISCRETIONARY (term+definition) — include only genuinely important terms the source defines; an empty key_terms array is valid, and you must not invent terms or pad to a count. "examples": aim for at least 1–2 real-world examples per lesson — prefer the source's own; if the source gives none, a brief GENERIC illustrative scenario is allowed (it must invent no source-specific facts/figures and not contradict the source). Never a placeholder string.`;
+  const requirements = `Requirements for EACH lesson: "content" MUST be non-empty teaching prose grounded in the source (never empty, never a bare title, never "key terms only"). Teach each concept in depth only once — do not repeat an explanation already given earlier. "key_terms" are DISCRETIONARY (term+definition) — include only genuinely important terms the source defines; an empty key_terms array is valid, and you must not invent terms or pad to a count. "examples": aim for at least 1–2 real-world examples per lesson — prefer the source's own; if the source gives none, a brief GENERIC illustrative scenario is allowed (it must invent no source-specific facts/figures and not contradict the source). Never a placeholder string. Output only final, clean text — NO strikethrough or self-correction markup (no markdown \`~~...~~\`, no \`<del>\`/\`<s>\`/\`<strike>\`, no "~~A~~ B" / "A → B" correction patterns); if you would correct yourself, just write the final correct text.`;
 
   const prompt = `You returned JSON that could not be parsed or did not meet requirements for a single course "module" (id, title, lessons[], quiz[]). Output ONLY: { "module": { ... } } with valid JSON. No markdown.
 
@@ -1527,6 +1532,7 @@ Rules:
 - Keep lessons that already have a real body essentially unchanged.
 - "key_terms" are DISCRETIONARY: keep only genuinely important terms the source defines; an empty key_terms array is valid. Do not invent terms or pad to a count.
 - "examples": include at least 1–2 real-world examples per lesson — prefer the source's own; where the source gives none, a brief GENERIC illustrative scenario is allowed (it must invent no source-specific facts/figures and must not contradict the source). Never a placeholder string.
+- Output only final, clean text — NO strikethrough or self-correction markup (no markdown \`~~...~~\`, no \`<del>\`/\`<s>\`/\`<strike>\`, no "~~A~~ B" / "A → B" correction patterns); if you would correct yourself, write the final correct text directly.
 - Use snake_case keys ("key_terms", "examples"). Base everything strictly on the source; add no outside information.
 
 CURRENT MODULE JSON:
