@@ -317,18 +317,26 @@ function resolveCourseModel(profile: CourseBuildProfile): string {
 }
 
 /**
- * Compact outline JSON — **`express`**, **`fast`**, and **`balanced`** use Haiku for the outline
- * when neither `ANTHROPIC_OUTLINE_MODEL` nor `ANTHROPIC_COURSE_MODEL` is set.
+ * Compact outline / structure-plan / digest JSON. This is a NON-CONTENT step:
+ * it only decides how the source is grouped into modules/lessons and produces
+ * the structural skeleton + titles — the deep teaching prose is written later by
+ * `resolveCourseModel` (Sonnet on `full`). Haiku plans this structure ~3–5×
+ * faster and frees Sonnet OTPM for the module-writing phase, so ALL profiles —
+ * including `full` — use Haiku for the outline by default. The module count and
+ * coverage are governed by the prompt targets (`COURSE_FULL_MAX_MODULES`, the
+ * coverage block), which Haiku follows, so depth is unaffected.
+ *
+ * To force Sonnet for the outline on `full` again, set
+ * `ANTHROPIC_OUTLINE_MODEL=claude-sonnet-4-6` (or `ANTHROPIC_COURSE_MODEL`,
+ * which overrides both steps).
  */
 function resolveOutlineModel(profile: CourseBuildProfile): string {
   const outlineOnly = process.env.ANTHROPIC_OUTLINE_MODEL?.trim();
   if (outlineOnly) return outlineOnly;
   const courseOverride = process.env.ANTHROPIC_COURSE_MODEL?.trim();
   if (courseOverride) return courseOverride;
-  if (profile === "express" || profile === "fast" || profile === "balanced") {
-    return "claude-haiku-4-5";
-  }
-  return "claude-sonnet-4-6";
+  void profile;
+  return "claude-haiku-4-5";
 }
 
 /**

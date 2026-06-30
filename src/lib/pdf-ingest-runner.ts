@@ -477,20 +477,23 @@ function storagePathsForJob(job: {
 
 function pdfIngestModuleBatchSize(remaining: number, peerCount: number): number {
   // Module concurrency. TPM is now guarded globally by the DB-backed Claude
-  // rate limiter (`acquireClaudeBudget`), so we no longer have to clamp to 1
-  // when peers exist — the global budget absorbs the combined stream load and
-  // backs off precisely when the org limit is near, instead of this heuristic
-  // guessing. We still parallelize a couple of modules per call for speed.
-  //   - Solo PDF (peerCount=0): up to 8 modules per /expand call (all modules
-  //     when the outline has ≤8).
-  //   - With peers: 4 per call (the limiter throttles if the org budget is hit).
+  // rate limiter (`acquireClaudeBudget`), so we no longer have to clamp when
+  // peers exist — the global budget absorbs the combined stream load and backs
+  // off precisely when the org limit is near, instead of this heuristic
+  // guessing. Larger batches mean fewer serial waves: an 18-module `full`
+  // course finishes in ~2 waves instead of 3, and the limiter (with realistic
+  // output reservations) still gates true concurrency to the org OTPM.
+  //   - Solo PDF (peerCount=0): up to 12 modules per /expand call (all modules
+  //     when the outline has ≤12).
+  //   - With peers: 6 per call (the limiter throttles if the org budget is hit).
   //   - Env override (`PDF_INGEST_MODULE_BATCH_SIZE`) wins when set.
   const raw = process.env.PDF_INGEST_MODULE_BATCH_SIZE?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   const fromEnv = Number.isFinite(parsed) ? Math.trunc(parsed) : null;
   if (fromEnv != null) return Math.max(1, Math.min(remaining, fromEnv));
-  if (peerCount === 0 && remaining <= 8) return remaining;
-  const target = peerCount === 0 ? 8 : 4;
+  const soloTarget = 12;
+  if (peerCount === 0 && remaining <= soloTarget) return remaining;
+  const target = peerCount === 0 ? soloTarget : 6;
   return Math.max(1, Math.min(remaining, target));
 }
 

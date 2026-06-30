@@ -34,6 +34,35 @@ function budget(): { maxRequests: number; maxInput: number; maxOutput: number } 
   };
 }
 
+function floatEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * Callers reserve `max_tokens` as the worst-case output, but a typical
+ * lesson/module/outline call emits far fewer tokens than its cap (e.g. a `full`
+ * module reserves 30,720 yet usually returns ~8–15k). Reserving the worst case
+ * throttles concurrency ~2–3× below what the org OTPM actually allows, so module
+ * batches serialize through the limiter even when the account has spare budget.
+ *
+ * We scale the *output* reservation by this ratio (input is already estimated
+ * from real prompt size, so it is left intact). The reactive 429 backoff in the
+ * runner backstops any rare overshoot. Lower = more concurrency / faster builds
+ * but more 429 pressure; raise toward 1.0 to be conservative. Floor keeps tiny
+ * calls reserving something. Tune with `CLAUDE_OUTPUT_RESERVE_RATIO` /
+ * `CLAUDE_OUTPUT_RESERVE_FLOOR`.
+ */
+function outputReserveRatio(): number {
+  return Math.min(1, Math.max(0.1, floatEnv("CLAUDE_OUTPUT_RESERVE_RATIO", 0.5)));
+}
+
+function outputReserveFloor(): number {
+  return intEnv("CLAUDE_OUTPUT_RESERVE_FLOOR", 2_000);
+}
+
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -79,9 +108,14 @@ export async function acquireClaudeBudget(opts: AcquireOpts): Promise<void> {
   const { maxRequests, maxInput, maxOutput } = budget();
   const estInput =
     opts.estInputTokens ?? estimateInputTokens(opts.messages);
-  // Clamp a single call's estimate to the window cap so one big request can't
-  // deadlock itself against the budget.
-  const estOutput = Math.min(opts.estOutputTokens, maxOutput);
+  // Scale the worst-case output reservation down to a realistic level so module
+  // batches aren't artificially serialized (see `outputReserveRatio`), then
+  // clamp to the window cap so one big request can't deadlock itself.
+  const scaledOutput = Math.max(
+    Math.min(opts.estOutputTokens, outputReserveFloor()),
+    Math.round(opts.estOutputTokens * outputReserveRatio())
+  );
+  const estOutput = Math.min(scaledOutput, maxOutput);
   const deadline = Date.now() + (opts.maxWaitMs ?? 90_000);
 
   for (;;) {
