@@ -42,6 +42,12 @@ const en = {
     "Module complete — open the practice room to run questions again anytime.",
   goToPracticeRoom: "Go to practice room",
 
+  // Bottom-of-lesson "continue" navigation
+  continueToNextLesson: "Continue to next lesson →",
+  nextModuleNamed: "Next module: {title} →",
+  nextUploadNamed: "Next upload: {file} →",
+  courseEndReached: "You've reached the end of this course.",
+
   // Practice page header / tabs
   practiceIntroBeforeModule: "Switch with the tabs below — ",
   practiceIntroBetween: " is the shared bank; ",
@@ -204,6 +210,12 @@ const ko: typeof en = {
   moduleCompleteBanner:
     "모듈 완료 — 연습실에서 언제든 문제를 다시 풀 수 있어요.",
   goToPracticeRoom: "연습실로 가기",
+
+  // Bottom-of-lesson "continue" navigation
+  continueToNextLesson: "다음 레슨으로 계속 →",
+  nextModuleNamed: "다음 모듈: {title} →",
+  nextUploadNamed: "다음 자료: {file} →",
+  courseEndReached: "이 코스의 끝에 도달했어요.",
 
   // Practice page header / tabs
   practiceIntroBeforeModule: "아래 탭으로 전환하세요 — ",

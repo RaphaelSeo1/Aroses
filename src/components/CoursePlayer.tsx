@@ -235,6 +235,14 @@ export function CoursePlayer({
   const refineClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  // True once the learner has actively navigated (sidebar/next buttons) within
+  // this mounted material. While false we honour the resume-position effect on
+  // initial open; once true we always land at the top on navigation. Resets on
+  // a real remount (cross-material `router.push` rebuilds with key={materialId}).
+  const hasNavigatedRef = useRef(false);
+  // Last committed navigation identity; the scroll-to-top effect uses it to
+  // skip the initial commit (so resume wins) and to stay strict-mode safe.
+  const lastNavKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     setRefineApplyFlash(false);
@@ -357,6 +365,11 @@ export function CoursePlayer({
 
   useEffect(() => {
     if (mode !== "lessons") return;
+    // Resume the saved reading position only on the initial open of this
+    // material. Once the learner navigates (sidebar / next-lesson / next-module
+    // buttons) we never restore an old position — navigation lands at the top,
+    // handled by the scroll-reset effect below.
+    if (hasNavigatedRef.current) return;
     const lesson =
       typeof initialLessonIndex === "number" ? initialLessonIndex : null;
     const scroll =
@@ -379,6 +392,27 @@ export function CoursePlayer({
     mode,
     scrollToLesson,
   ]);
+
+  // Reset the viewport to the top of the content whenever the active
+  // module/tab/mode changes, so a freshly opened lesson never starts halfway
+  // down the page (e.g. opening lesson B while scrolled to the bottom of A).
+  // The whole document scrolls (the sidebar is sticky, the content is in normal
+  // flow), so `window` is the scroll container — matching every other
+  // scroll read/write in this component. We skip the first committed nav key so
+  // the resume-position effect can win on initial open, and compare against the
+  // last committed key so React StrictMode's double-invoke can't trigger a
+  // spurious scroll on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const navKey = `${materialId}|${activeModuleId}|${practiceTab}|${mode}`;
+    if (lastNavKeyRef.current === null) {
+      lastNavKeyRef.current = navKey;
+      return;
+    }
+    if (lastNavKeyRef.current === navKey) return;
+    lastNavKeyRef.current = navKey;
+    window.scrollTo({ top: 0 });
+  }, [materialId, activeModuleId, practiceTab, mode]);
 
   useEffect(() => {
     if (mode !== "lessons") return;
@@ -581,6 +615,7 @@ export function CoursePlayer({
       // Snapshot before mutation so the "did the user actually navigate?"
       // check below sees the previous active module.
       const previousModuleId = activeModuleId;
+      hasNavigatedRef.current = true;
       setActiveModuleId(modId);
       setQuizOpen(false);
       const tab =
@@ -870,6 +905,7 @@ export function CoursePlayer({
     (targetMaterialId: string, modId: number) => {
       const previousModuleId = activeModuleId;
       const isSameMaterial = targetMaterialId === materialId;
+      hasNavigatedRef.current = true;
       setQuizOpen(false);
       setRenamingModuleId(null);
       const tab =
@@ -1508,6 +1544,76 @@ export function CoursePlayer({
                       lessonIndex={li}
                       lessonTitle={lesson.title}
                     />
+                    {(() => {
+                      const isLastLesson =
+                        li === activeModule.lessons.length - 1;
+                      // Not the last lesson — advance within this module by
+                      // reusing the same handler the sidebar lesson list uses.
+                      if (!isLastLesson) {
+                        return (
+                          <div className="mt-8 flex justify-end border-t border-zinc-100 pt-6 dark:border-zinc-900">
+                            <button
+                              type="button"
+                              onClick={() => scrollToLesson(li + 1)}
+                              className="inline-flex items-center justify-center rounded-full border border-brand-border bg-white px-6 py-3 text-sm font-semibold text-brand-ink shadow-sm transition hover:bg-brand-blush dark:border-brand-border/50 dark:bg-zinc-950 dark:text-brand-soft dark:hover:bg-brand-blush/10"
+                            >
+                              {t.study.continueToNextLesson}
+                            </button>
+                          </div>
+                        );
+                      }
+                      // Last lesson, next module in this material — reuse the
+                      // sidebar module-switch handler so progress, mode
+                      // persistence, and the scroll-to-top effect all fire.
+                      const nextModule =
+                        hasNextModule && activeModuleIndex >= 0
+                          ? course.modules[activeModuleIndex + 1]
+                          : undefined;
+                      if (nextModule) {
+                        return (
+                          <div className="mt-8 flex justify-end border-t border-zinc-100 pt-6 dark:border-zinc-900">
+                            <button
+                              type="button"
+                              onClick={() => syncModuleToUrl(nextModule.id)}
+                              className="inline-flex items-center justify-center rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
+                            >
+                              {tf(t.study.nextModuleNamed, {
+                                title: moduleDisplayTitle(nextModule),
+                              })}
+                            </button>
+                          </div>
+                        );
+                      }
+                      // Last lesson of the last module — offer the next upload
+                      // (cross-material) when one exists, else an end state.
+                      if (nextMaterialInfo) {
+                        return (
+                          <div className="mt-8 flex justify-end border-t border-zinc-100 pt-6 dark:border-zinc-900">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                goToModule(
+                                  nextMaterialInfo.materialId,
+                                  nextMaterialInfo.moduleId
+                                )
+                              }
+                              className="inline-flex items-center justify-center rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
+                            >
+                              {tf(t.study.nextUploadNamed, {
+                                file: nextMaterialInfo.fileName,
+                              })}
+                            </button>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="mt-8 border-t border-zinc-100 pt-6 dark:border-zinc-900">
+                          <p className="rounded-xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-center text-sm font-medium text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-100">
+                            {t.study.courseEndReached}
+                          </p>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
