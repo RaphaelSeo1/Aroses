@@ -6,6 +6,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -235,6 +236,18 @@ export function CoursePlayer({
   const refineClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  // The lesson column. Reset here as a belt-and-braces measure in case a layout
+  // ever makes this the scroll container (currently the document scrolls).
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  // True once the learner has actively navigated (sidebar / next-module button)
+  // within this mounted material. While false we honour the resume-position
+  // effect on initial open; once true, navigation always lands at the top and we
+  // never restore an old saved offset. Resets on a real remount (cross-material
+  // `router.push` rebuilds with key={materialId}).
+  const hasNavigatedRef = useRef(false);
+  // Last committed module identity; the scroll-to-top effect uses it to skip the
+  // initial commit (so resume wins) and to stay React StrictMode safe.
+  const lastNavKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     setRefineApplyFlash(false);
@@ -357,6 +370,12 @@ export function CoursePlayer({
 
   useEffect(() => {
     if (mode !== "lessons") return;
+    // Resume the saved reading position only on the initial open of this
+    // material. Once the learner navigates between modules, we never restore an
+    // old offset — navigation lands at the top (handled by the scroll-to-top
+    // effect below). Without this guard, `initialScrollPosition` (a static prop)
+    // gets re-applied on every module change and yanks the user back down.
+    if (hasNavigatedRef.current) return;
     const lesson =
       typeof initialLessonIndex === "number" ? initialLessonIndex : null;
     const scroll =
@@ -379,6 +398,33 @@ export function CoursePlayer({
     mode,
     scrollToLesson,
   ]);
+
+  // Jump to the top of the lesson content whenever the learner switches modules
+  // (sidebar click or the "Next module" button — both funnel through
+  // `setActiveModuleId`) or switches material. Keyed strictly on module/material
+  // identity so unrelated state (typing, quiz answers, opening chat, tab
+  // changes) never triggers a scroll. We skip the first committed key so the
+  // resume-position effect above wins on initial open, and compare the last
+  // committed key so StrictMode's double-invoke can't fire a spurious scroll.
+  //
+  // The document is the real scroll container here (the sidebar is sticky and
+  // the content sits in normal flow), so `window` is the primary target; we also
+  // reset documentElement/body and the content ref as robust fallbacks in case a
+  // layout ever makes an inner element the scroller.
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    const navKey = `${materialId}|${activeModuleId}`;
+    if (lastNavKeyRef.current === null) {
+      lastNavKeyRef.current = navKey;
+      return;
+    }
+    if (lastNavKeyRef.current === navKey) return;
+    lastNavKeyRef.current = navKey;
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    if (document.documentElement) document.documentElement.scrollTop = 0;
+    if (document.body) document.body.scrollTop = 0;
+    if (contentScrollRef.current) contentScrollRef.current.scrollTop = 0;
+  }, [materialId, activeModuleId]);
 
   useEffect(() => {
     if (mode !== "lessons") return;
@@ -581,6 +627,7 @@ export function CoursePlayer({
       // Snapshot before mutation so the "did the user actually navigate?"
       // check below sees the previous active module.
       const previousModuleId = activeModuleId;
+      hasNavigatedRef.current = true;
       setActiveModuleId(modId);
       setQuizOpen(false);
       const tab =
@@ -870,6 +917,7 @@ export function CoursePlayer({
     (targetMaterialId: string, modId: number) => {
       const previousModuleId = activeModuleId;
       const isSameMaterial = targetMaterialId === materialId;
+      hasNavigatedRef.current = true;
       setQuizOpen(false);
       setRenamingModuleId(null);
       const tab =
@@ -1395,7 +1443,10 @@ export function CoursePlayer({
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1 bg-white dark:bg-zinc-950 xl:pr-[var(--rose-dock-rail)]">
+      <div
+        ref={contentScrollRef}
+        className="min-w-0 flex-1 bg-white dark:bg-zinc-950 xl:pr-[var(--rose-dock-rail)]"
+      >
         <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6 lg:px-8">
           {mode === "quiz" ? (
             <div className="mb-3">
