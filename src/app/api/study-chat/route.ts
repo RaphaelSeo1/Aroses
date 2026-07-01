@@ -168,13 +168,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "messages required" }, { status: 400 });
   }
 
-  // Roll a window of the most recent turns instead of hard-erroring. Trimming the
-  // oldest conversation turns is safe — `messages` is just chat history passed to
-  // the model; there's no required leading/system turn in this array.
-  const recentMessages = b.messages.slice(-MAX_MESSAGES);
+  if (b.messages.length > MAX_MESSAGES) {
+    return NextResponse.json({ error: "Too many messages" }, { status: 400 });
+  }
 
   const messages: StudyChatTurn[] = [];
-  for (const m of recentMessages) {
+  for (const m of b.messages) {
     if (
       !m ||
       (m.role !== "user" && m.role !== "assistant") ||

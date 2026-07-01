@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import {
-  MAX_STORED_MESSAGES,
   loadStudyChatMessages,
   saveStudyChatMessages,
   studyChatStorageKey,
@@ -49,7 +48,7 @@ export function StudyChatDrawer({
   variant = "course",
 }: Props) {
   const router = useRouter();
-  const storageKey = studyChatStorageKey(courseId, materialId, moduleId);
+  const storageKey = studyChatStorageKey(courseId, materialId);
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hydrated, setHydrated] = useState(false);
@@ -145,9 +144,7 @@ export function StudyChatDrawer({
           materialId,
           moduleId,
           quizOpen,
-          messages: nextMessages
-            .slice(-MAX_STORED_MESSAGES)
-            .map(({ role, content }) => ({ role, content })),
+          messages: nextMessages.map(({ role, content }) => ({ role, content })),
         }),
       });
       const body = await res.json().catch(() => ({}));
