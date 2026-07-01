@@ -245,8 +245,8 @@ export function StudyChatDrawer({
           onClick={() => setOpen(true)}
           className={
             docked
-              ? "min-w-[11rem] rounded-full bg-brand px-5 py-3 text-sm font-semibold text-white shadow-xl shadow-rose-600/25 ring-1 ring-white/10 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
-              : "fixed bottom-6 right-6 z-[100] min-w-[11rem] rounded-full bg-brand px-5 py-3 text-sm font-semibold text-white shadow-xl shadow-rose-600/25 ring-1 ring-white/10 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
+              ? "min-w-[11rem] rounded-2xl bg-brand px-5 py-3 text-sm font-semibold text-white shadow-xl shadow-red-600/25 ring-1 ring-white/10 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
+              : "fixed bottom-6 right-6 z-[100] min-w-[11rem] rounded-2xl bg-brand px-5 py-3 text-sm font-semibold text-white shadow-xl shadow-red-600/25 ring-1 ring-white/10 hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
           }
         >
           Ask {AI_ASSISTANT_NAME}!
@@ -259,59 +259,51 @@ export function StudyChatDrawer({
           role="dialog"
           aria-modal="false"
           aria-label={`${AI_ASSISTANT_NAME} study chat`}
-          className="fixed inset-x-3 bottom-3 top-16 z-[100] flex flex-col overflow-hidden rounded-3xl border border-brand-border bg-white/95 shadow-2xl shadow-rose-900/10 backdrop-blur-xl dark:border-brand-border/40 dark:bg-zinc-950/90 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:top-20 sm:w-[min(100vw-2rem,26rem)]"
+          className="fixed top-14 right-0 z-[100] flex h-[calc(100vh-3.5rem)] w-[min(100vw-12px,22rem)] flex-col border-l border-zinc-200/95 bg-white dark:border-zinc-700 dark:bg-zinc-950 sm:top-16 sm:h-[calc(100vh-4rem)] sm:w-[min(100vw-16px,26rem)]"
+          style={{
+            boxShadow:
+              "-12px 0 40px -12px rgba(0,0,0,0.12), -4px 0 16px rgba(0,0,0,0.06)",
+          }}
         >
-          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-brand-border/70 bg-gradient-to-r from-brand-blush/90 to-white px-4 py-3.5 dark:border-brand-border/40 dark:from-[#1e1616]/50 dark:to-zinc-950 sm:px-5 sm:py-4">
-            <div className="flex min-w-0 items-start gap-3">
-              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand text-sm font-semibold text-white shadow-sm shadow-rose-900/20 ring-2 ring-white/70 dark:ring-white/10">
-                {AI_ASSISTANT_NAME.slice(0, 1)}
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                  {AI_ASSISTANT_NAME}
-                </p>
-                <p className="text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
-                  {variant === "legacy"
-                    ? "Uses your summary and practice questions only."
-                    : `Side-by-side with your lesson — chat is saved for this course.${quizOpen ? " Active quiz: guides reasoning without giving away letters." : ""}`}
-                </p>
-              </div>
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-brand-border bg-gradient-to-r from-brand-blush/90 to-white px-4 py-3 dark:border-brand-border/40 dark:from-[#1e1616]/40 dark:to-zinc-950 sm:px-5 sm:py-4">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                {AI_ASSISTANT_NAME}
+              </p>
+              <p className="text-[11px] leading-snug text-zinc-500">
+                {variant === "legacy"
+                  ? "Uses your summary and practice questions only."
+                  : `Side-by-side with your lesson — chat is saved for this course.${quizOpen ? " Active quiz: guides reasoning without giving away letters." : ""}`}
+              </p>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              aria-label="Close chat"
-              className="shrink-0 rounded-full px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-white/70 hover:text-brand dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+              className="shrink-0 rounded-lg px-2.5 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
             >
               Close
             </button>
           </div>
 
-          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
             {messages.length === 0 ? (
               <div className="space-y-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                 <p>{`Ask ${AI_ASSISTANT_NAME} anything about what you're viewing — definitions, intuition, or how ideas connect.`}</p>
                 {variant === "course" && (
-                  <div className="rounded-2xl border border-brand-border/70 bg-rose-50/70 px-4 py-3.5 dark:border-brand-border/40 dark:bg-rose-950/30">
-                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-brand dark:text-brand-soft">
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                       Try asking
                     </p>
-                    <ul className="space-y-1.5 text-[12.5px] text-zinc-600 dark:text-zinc-300">
-                      {[
-                        "Explain this concept in simpler terms",
-                        "Walk me through an example of this",
-                        "Take me to the module about carbohydrates",
-                      ].map((example) => (
-                        <li key={example}>
-                          <button
-                            type="button"
-                            onClick={() => setInput(example)}
-                            className="w-full rounded-xl px-3 py-2 text-left transition hover:bg-white/80 hover:text-brand dark:hover:bg-zinc-900/60 dark:hover:text-brand-soft"
-                          >
-                            {`“${example.charAt(0).toLowerCase() + example.slice(1)}”`}
-                          </button>
-                        </li>
-                      ))}
+                    <ul className="space-y-1 text-[12px] text-zinc-500 dark:text-zinc-400">
+                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Explain this concept in simpler terms")}>
+                        "Explain this in simpler terms"
+                      </li>
+                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Walk me through an example of this")}>
+                        "Walk me through an example of this"
+                      </li>
+                      <li className="cursor-pointer hover:text-zinc-800 dark:hover:text-zinc-200" onClick={() => setInput("Take me to the module about carbohydrates")}>
+                        "Take me to the module about carbohydrates"
+                      </li>
                     </ul>
                   </div>
                 )}
@@ -323,10 +315,10 @@ export function StudyChatDrawer({
                 className={`flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}
               >
                 <div
-                  className={`max-w-[92%] px-4 py-3 text-sm leading-relaxed shadow-sm ${
+                  className={`max-w-[95%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                     m.role === "user"
-                      ? "rounded-3xl rounded-br-lg bg-brand text-white shadow-rose-900/15"
-                      : "rounded-3xl rounded-bl-lg border border-brand-border/60 bg-rose-50/60 text-zinc-800 shadow-rose-900/[0.03] dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-100"
+                      ? "bg-brand text-white"
+                      : "bg-zinc-100 text-zinc-900 dark:bg-zinc-900 dark:text-zinc-100"
                   }`}
                 >
                   {m.role === "user" ? (
@@ -336,14 +328,14 @@ export function StudyChatDrawer({
                   )}
                 </div>
                 {m.role === "assistant" && m.options && m.options.length > 0 ? (
-                  <ul className="mt-2.5 flex w-full max-w-[92%] flex-col gap-2">
+                  <ul className="mt-2 flex w-full max-w-[95%] flex-col gap-1.5">
                     {m.options.map((opt) => (
                       <li key={opt.id}>
                         <button
                           type="button"
                           disabled={loading}
                           onClick={() => pickOption(opt)}
-                          className="w-full rounded-2xl border border-brand-border/70 bg-white px-3.5 py-2.5 text-left text-xs transition hover:border-brand hover:bg-rose-50/70 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-brand dark:hover:bg-zinc-900/60"
+                          className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-left text-xs transition hover:border-brand hover:bg-brand/5 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-brand"
                         >
                           <span className="font-semibold text-zinc-900 dark:text-zinc-100">
                             {opt.label}
@@ -361,25 +353,16 @@ export function StudyChatDrawer({
               </div>
             ))}
             {loading ? (
-              <div className="flex items-center gap-2 text-xs text-brand dark:text-brand-soft">
-                <span className="flex gap-1" aria-hidden="true">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand [animation-delay:-0.2s]" />
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand [animation-delay:-0.1s]" />
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand" />
-                </span>
-                <span>{`${AI_ASSISTANT_NAME} is thinking…`}</span>
-              </div>
+              <p className="text-xs text-zinc-500">Thinking…</p>
             ) : null}
             {error ? (
-              <p className="rounded-2xl border border-red-200 bg-red-50/80 px-3.5 py-2.5 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400">
-                {error}
-              </p>
+              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
             ) : null}
             <div ref={bottomRef} />
           </div>
 
-          <div className="shrink-0 border-t border-brand-border/70 bg-white/80 p-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/80">
-            <div className="flex items-end gap-2">
+          <div className="shrink-0 border-t border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex gap-2">
               <textarea
                 rows={2}
                 value={input}
@@ -391,14 +374,14 @@ export function StudyChatDrawer({
                   }
                 }}
                 placeholder={`Ask ${AI_ASSISTANT_NAME}…`}
-                className="min-h-[44px] flex-1 resize-none rounded-2xl border border-zinc-300 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                className="min-h-[44px] flex-1 resize-none rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-brand placeholder:text-zinc-400 focus:border-brand focus:ring-2 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                 disabled={loading}
               />
               <button
                 type="button"
                 disabled={loading || !input.trim()}
                 onClick={() => void send()}
-                className="shrink-0 rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-900/20 transition hover:bg-brand-hover disabled:opacity-50 dark:hover:bg-brand-soft"
+                className="shrink-0 self-end rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
               >
                 Send
               </button>
