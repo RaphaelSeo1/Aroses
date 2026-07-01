@@ -1,24 +1,10 @@
 import type { StudyChatTurn } from "@/types/study-chat";
 
-export const MAX_STORED_MESSAGES = 24;
+const MAX_STORED_MESSAGES = 24;
 
-export function studyChatStorageKey(
-  courseId?: string,
-  materialId?: string,
-  moduleId?: number | string
-): string {
-  const hasModule =
-    moduleId !== undefined && moduleId !== null && `${moduleId}`.trim() !== "";
-  if (courseId) {
-    return hasModule
-      ? `aroses-study-chat:course:${courseId}:module:${moduleId}`
-      : `aroses-study-chat:course:${courseId}`;
-  }
-  if (materialId) {
-    return hasModule
-      ? `aroses-study-chat:material:${materialId}:module:${moduleId}`
-      : `aroses-study-chat:material:${materialId}`;
-  }
+export function studyChatStorageKey(courseId?: string, materialId?: string): string {
+  if (courseId) return `aroses-study-chat:course:${courseId}`;
+  if (materialId) return `aroses-study-chat:material:${materialId}`;
   return "aroses-study-chat:anonymous";
 }
 
