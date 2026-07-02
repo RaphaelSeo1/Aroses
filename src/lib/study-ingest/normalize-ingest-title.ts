@@ -117,6 +117,149 @@ const GENERIC_INGEST_PLACEHOLDER =
 const GENERIC_INTRO_LESSON =
   /^(약리학|서론|목차|introduction|overview|chapter\s+overview|lecture\s+overview)$/i;
 
+// ── Extended weak-title detection (Part C safety net) ──────────────────────
+// These predicates are GLOBAL and subject-agnostic. They catch the historical
+// LLM failure modes (bare acronyms, speaker names, "Lecture N", filenames,
+// leading numbering, wrong-script titles) so a deterministic repair/fallback
+// can replace them. No per-course/per-subject strings.
+
+const KANA = /[\u3040-\u30ff]/;
+const HAN = /[\u4e00-\u9fff]/;
+
+/** Honorifics that mark a title as a person's name, not a topic. */
+const NAME_HONORIFIC =
+  /^(?:dr|prof|professor|mr|mrs|ms|miss|sir|dame|dean|rev|fr|st|mx)\.?\s+\p{Lu}/u;
+
+/** A single initial like "J." or "J. K." used in personal names. */
+const NAME_INITIALS = /^\p{Lu}\.(?:\s*\p{Lu}\.)*\s+\p{Lu}\p{Ll}+$/u;
+
+/** Romanized CJK given names are often hyphenated: "Xiao-Jun", "Seung-Ho". */
+const HYPHENATED_ROMANIZED_NAME = /^\p{Lu}\p{Ll}+-\p{Lu}\p{Ll}+$/u;
+
+/** A single capitalized (Unicode) name-shaped token, optionally hyphenated. */
+const NAME_TOKEN = /^\p{Lu}[\p{Ll}'’]*(?:-\p{Lu}[\p{Ll}'’]*)?$/u;
+
+/**
+ * True when a title reads as ONLY a person's / speaker's / author's name with
+ * no topic words. Deliberately CONSERVATIVE: it relies on strong, unambiguous
+ * signals (honorific, initials, "Last, First" comma form, or a hyphenated
+ * romanized given name such as "Xiao-Jun Zhang"). A bare "First Last" is left
+ * alone because it is indistinguishable from real two-word topics ("Ionic
+ * Bonding"); the strengthened prompt + low temperature handle that case, and
+ * these false-negatives never produce a WRONG title, just an un-repaired one.
+ */
+export function isLikelyPersonNameTitle(raw: string): boolean {
+  const t = normalizeIngestDisplayTitle(raw).trim();
+  if (!t || HANGUL.test(t) || HAN.test(t) || KANA.test(t)) return false;
+  if (NAME_HONORIFIC.test(t)) return true;
+  if (NAME_INITIALS.test(t)) return true;
+
+  // "Zhang, Xiao-Jun" — surname-first comma form.
+  const commaParts = t.split(",").map((p) => p.trim());
+  if (
+    commaParts.length === 2 &&
+    NAME_TOKEN.test(commaParts[0]!) &&
+    NAME_TOKEN.test(commaParts[1]!)
+  ) {
+    return true;
+  }
+
+  const tokens = t.split(/\s+/);
+  if (tokens.length >= 2 && tokens.length <= 3 && tokens.every((w) => NAME_TOKEN.test(w))) {
+    // A hyphenated romanized given name ("Xiao-Jun Zhang") is a strong signal.
+    if (tokens.some((w) => HYPHENATED_ROMANIZED_NAME.test(w))) return true;
+  }
+  return false;
+}
+
+/**
+ * True when a single-token Latin title is a bare acronym, code, or otherwise
+ * too-short single word to name a concept ("FASB", "Gaap", "DNA", "UGBA",
+ * "Q1", "Redox"). The product wants descriptive multi-word titles, so a lone
+ * Latin word of 5 characters or fewer is treated as weak (it is either an
+ * acronym or a generic one-word label). Multi-word titles and Korean/CJK words
+ * are never treated as bare acronyms here.
+ */
+export function isBareAcronymTitle(raw: string): boolean {
+  const t = normalizeIngestDisplayTitle(raw).trim();
+  if (!t || /\s/.test(t) || HANGUL.test(t) || HAN.test(t) || KANA.test(t)) {
+    return false;
+  }
+  // All-caps token up to 6 chars: classic acronym ("FASB", "GAAP", "UNESCO").
+  if (/^[A-Za-z][A-Za-z0-9]{0,5}$/.test(t) && t === t.toUpperCase()) return true;
+  // Any single Latin word of <=5 letters is too terse for a descriptive title
+  // (covers "Fasb"/"Gaap" once title-cased, plus generic one-word labels).
+  const letters = t.replace(/[^A-Za-z]/g, "");
+  if (letters.length >= 2 && letters.length <= 5) return true;
+  return false;
+}
+
+/** True when a title looks like a filename, slug, or path rather than a phrase. */
+export function isFilenameLikeTitle(raw: string): boolean {
+  const t = raw.trim();
+  if (!t) return false;
+  if (UPLOAD_FILE_EXT.test(t)) return true;
+  if (/\.(pdf|docx?|pptx?|xlsx?|txt|rtf|md|csv|tsv)\b/i.test(t)) return true;
+  if (/[/\\]/.test(t)) return true;
+  // Slug: underscores joining word-ish tokens ("chapter3_notes", "week_01_intro").
+  if (/^[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+$/.test(t)) return true;
+  // No whitespace but multiple digit/letter runs joined by separators.
+  if (!/\s/.test(t) && /[a-z0-9]_[a-z0-9]/i.test(t)) return true;
+  return false;
+}
+
+/** Course output language reduced to the script a proper title should use. */
+export type TitleScript = "latin" | "hangul" | "han" | "kana";
+
+function scriptCounts(t: string): {
+  hangul: number;
+  kana: number;
+  han: number;
+  latin: number;
+} {
+  return {
+    hangul: (t.match(/[\uac00-\ud7a3]/g) ?? []).length,
+    kana: (t.match(/[\u3040-\u30ff]/g) ?? []).length,
+    han: (t.match(/[\u4e00-\u9fff]/g) ?? []).length,
+    latin: (t.match(/[A-Za-z]/g) ?? []).length,
+  };
+}
+
+/**
+ * True when a title's dominant writing system does not match the course's
+ * expected script — e.g. a predominantly-Korean title in an English course, or
+ * an English-sentence title in a Korean course. A lone bilingual technical term
+ * is tolerated; only a title that is PREDOMINANTLY the wrong script is flagged.
+ * Conservative for Chinese/Japanese (shared Han characters) to avoid false hits.
+ */
+export function titleLanguageMismatch(
+  raw: string,
+  expected: TitleScript
+): boolean {
+  const t = normalizeIngestDisplayTitle(raw).trim();
+  if (!t) return false;
+  const c = scriptCounts(t);
+  const total = c.hangul + c.kana + c.han + c.latin;
+  if (total === 0) return false;
+  const wordCount = t.split(/\s+/).filter(Boolean).length;
+
+  if (expected === "latin") {
+    // A Latin-script course should not get a predominantly CJK/Hangul title.
+    return (c.hangul + c.kana + c.han) / total > 0.5;
+  }
+  if (expected === "hangul") {
+    // A Korean course should not get an all-Latin, multi-word English title.
+    return c.hangul === 0 && wordCount >= 2 && c.latin / total > 0.6;
+  }
+  if (expected === "han") {
+    // Chinese: reject Hangul-dominant or clearly-English multi-word titles.
+    if (c.hangul / total > 0.5) return true;
+    return c.han === 0 && c.kana === 0 && wordCount >= 2 && c.latin / total > 0.6;
+  }
+  // kana (Japanese): reject Hangul-dominant titles; Han is shared, so tolerate.
+  return c.hangul / total > 0.5;
+}
+
 /** Boilerplate outline/description text — never use as a user-facing title. */
 export function isGenericIngestPlaceholder(text: string): boolean {
   const t = text.trim();
@@ -149,6 +292,9 @@ export function isBadIngestTitle(raw: string): boolean {
   if (/^untitled section$/i.test(t)) return true;
   if (SPEAKER_PREFIX.test(t)) return true;
   if (/^[A-Z][A-Z0-9\s.'-]{2,48}:$/.test(t)) return true;
+  // A person's / speaker's name or a filename/slug is never a topic label.
+  if (isLikelyPersonNameTitle(t)) return true;
+  if (isFilenameLikeTitle(raw)) return true;
   if (TRANSCRIPT_FRAGMENT.test(t)) return true;
   if (INCOMPLETE_PHRASE.test(t)) return true;
   if (SPOKEN_CLAUSE.test(t)) return true;
@@ -242,14 +388,12 @@ export function isWeakModuleTitle(raw: string): boolean {
   if (WEAK_MODULE_TITLE.test(t)) return true;
   if (GENERIC_INTRO_LESSON.test(t)) return true;
   if (isBadIngestTitle(t)) return true;
-  // Bare acronym / very short single-word label ("DNA", "ATP", a course code
-  // like "UGBA", "Q1") names no concept — treat it as weak so the module writer
-  // or the lesson-derived fallback supplies a descriptive title. Korean single
-  // words are left alone (they can be legitimately short topic words).
-  if (!/\s/.test(t) && !HANGUL.test(t)) {
-    if (/^[A-Za-z][A-Za-z0-9]{0,5}$/.test(t) && t === t.toUpperCase()) return true;
-    if (t.length <= 3) return true;
-  }
+  // Bare acronym / very short single-word label ("DNA", "ATP", "Fasb", a course
+  // code like "UGBA", "Q1") names no concept — treat it as weak so the module
+  // writer or the lesson-derived fallback supplies a descriptive title. Korean
+  // single words are left alone (they can be legitimately short topic words).
+  if (isBareAcronymTitle(t)) return true;
+  if (!/\s/.test(t) && !HANGUL.test(t) && t.length <= 3) return true;
   return false;
 }
 

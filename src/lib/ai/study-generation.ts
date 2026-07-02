@@ -37,23 +37,28 @@ import {
 } from "@/lib/structure-plan-coverage";
 import {
   isBadIngestTitle,
+  isBareAcronymTitle,
   isGenericIngestPlaceholder,
   isWeakModuleTitle,
   moduleTitleFromLessonTitles,
   normalizeIngestDisplayTitle,
+  pickBestTitleFromText,
   resolveCourseDisplayTitle,
+  titleLanguageMismatch,
+  type TitleScript,
 } from "@/lib/study-ingest/normalize-ingest-title";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
 import { auditModuleQuantitativeConsistency } from "@/lib/ai/course-quantitative-qa";
 import {
   DEFAULT_COURSE_OUTPUT_LANGUAGE,
   formatOutputLanguageGenerationBlock,
+  inferCourseLanguageFromText,
   type CourseOutputLanguage,
 } from "@/lib/course-output-language";
 import { formatSelfStudyGenerationBlock } from "@/lib/self-study-context";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
-import type { CourseModule, CoursePayload } from "@/types/course";
+import type { CourseLesson, CourseModule, CoursePayload } from "@/types/course";
 
 /**
  * Outline / structure-plan calls wait only briefly for global Claude budget so
@@ -1295,6 +1300,20 @@ function titleStyleRules(): string {
 - **lesson_titles**: short noun phrases, **3 to 6 words each, max 50 characters**. Example: "Electron Sharing", "Bond Polarity", "Lewis Structures". Same forbidden openers as module titles.
 - **description**: ONE short sentence under ~20 words. No marketing fluff, no "designed for self-study", no second paragraph.
 
+EVERY title MUST (no exceptions):
+1. Describe the actual TOPIC the lesson/module teaches, in plain language. Title Case. Specific, not generic ("Bond Polarity", not "Concepts").
+2. Expand a standalone acronym into a meaningful phrase — never leave a bare acronym as the whole title. BAD: "FASB" → GOOD: "FASB and the Standard-Setting Process". BAD: "DNA" → GOOD: "DNA Structure and Replication".
+3. NEVER be a person's / speaker's / author's / professor's name. BAD: "Jane Smith" or "Xiao-Jun Zhang" → GOOD: name the concept that person taught, e.g. "Institutional Background".
+4. NEVER start with a section number, "Lecture N", "Week N", "Chapter N", "Session N", "Unit N", or "Part N". BAD: "Lecture 1: Introduction" or "1 Institutional Background" → GOOD: "Introduction to the Annual Report" / "Institutional Background".
+5. NEVER be a filename, slug, or path (no ".pdf"/".pptx"/".txt" extensions, no "chapter3_notes" underscores). BAD: "chapter3.pdf" → GOOD: "Chapter Three: Market Structures".
+6. Be written in the SAME language as the rest of the course output (match the course's output language). Do NOT mix scripts (e.g. no Korean characters in an English course, or vice versa) except for a standard technical term the source itself keeps bilingual.
+
+Tiny examples (style only — never copy the words, use the real topic):
+- BAD: "Gaap"  → GOOD: "GAAP and Financial Reporting Standards"
+- BAD: "Lecture 3 - Bonding"  → GOOD: "Chemical Bonding Basics"
+- BAD: "chapter2.pptx"  → GOOD: "Cellular Respiration Pathways"
+- BAD: "Dr. Alan Turing"  → GOOD: "Foundations of Computation"
+
 NEVER use slide chrome or administrative headings as a module or lesson title. Titles like "Warm Up", "Aktiv Warm Up", "Test Your Understanding", "Understanding Check", "Agenda", "Objectives", "Learning Outcomes", "Recap", "Review", "Clicker Question", "Poll", "Discussion", "Announcements", "Today's Plan", or a bare slide/page number are NOT topics. Replace each with the actual academic concept that slide teaches (e.g. a "Test Your Understanding" slide about gas laws becomes "Applying the Ideal Gas Law"). The title must name what the student learns, not the slide's role in the deck.
 
 Repetition rule: across the whole outline, no two modules (or two lesson titles) may start with the same first word. If you'd produce "Master the X" and "Master the Y", rewrite both as bare topic names.`;
@@ -1396,7 +1415,8 @@ ${brokenAssistantText.slice(0, 60_000)}`;
     {
       model: resolveOutlineModel(profile),
       max_tokens: outlineMaxTokens(profile),
-      temperature: 0.1,
+      // Outline (title) repair — deterministic like the primary outline call.
+      temperature: 0,
       messages: [{ role: "user", content: prompt }],
     },
     {
@@ -1705,7 +1725,8 @@ ${brokenAssistantText.slice(0, 60_000)}`;
     {
       model: resolveOutlineModel(profile),
       max_tokens: planMaxTokens(profile),
-      temperature: 0.1,
+      // Structure-plan (title) repair — deterministic like the primary plan call.
+      temperature: 0,
       messages: [{ role: "user", content: prompt }],
     },
     { maxAttempts: profile === "full" ? 3 : 1 }
@@ -1814,7 +1835,11 @@ export async function planCourseStructureFromChunks(
       {
         model: resolveOutlineModel(profile),
         max_tokens: planMaxTokens(profile),
-        temperature: attempt === 0 ? 0.12 : 0.08,
+        // Titles come from this structure-plan call, so keep it deterministic:
+        // temperature 0 makes the same source produce the same module/lesson
+        // names across rebuilds (Part A of title hardening). Only the STRUCTURE
+        // is decided here — lesson BODY prose is written later at its own temp.
+        temperature: 0,
         messages: [{ role: "user", content: instruction }],
       },
       streamSink,
@@ -2014,7 +2039,11 @@ export async function generateCourseOutlineFromMaterial(
     {
       model: resolveOutlineModel(profile),
       max_tokens: outlineMaxTokens(profile),
-      temperature: 0.15,
+      // The outline call produces the course/module/lesson TITLES. Keep it
+      // deterministic (temperature 0) so titles are stable across rebuilds of
+      // the same material (Part A). Lesson BODY generation stays at its own
+      // higher temperature elsewhere so prose quality/variety is unaffected.
+      temperature: 0,
       messages: [{ role: "user", content: instruction }],
     },
     streamSink,
@@ -2087,7 +2116,7 @@ async function finalizeGeneratedModules(
   outputLanguage: CourseOutputLanguage
 ): Promise<CourseModule[]> {
   return Promise.all(
-    modules.map(async (mod) => {
+    modules.map(async (mod, moduleIndex) => {
       // Guarantee every lesson has a real prose body before finalizing (BUG 1).
       const withLessons = await ensureModuleLessonFields(
         anthropic,
@@ -2101,7 +2130,16 @@ async function finalizeGeneratedModules(
         profile,
         outputLanguage
       );
-      const sanitized = sanitizeGeneratedModuleLessons(withQuiz);
+      // Monolith titles come straight from the LLM (no planned outline), so
+      // run the deterministic title gate + repair/fallback here too.
+      const hardened = await hardenModuleTitles(
+        anthropic,
+        withQuiz,
+        moduleIndex,
+        profile,
+        outputLanguage
+      );
+      const sanitized = sanitizeGeneratedModuleLessons(hardened);
       return auditModuleQuantitativeConsistency(
         sanitized,
         sourceExcerpt,
@@ -2170,6 +2208,242 @@ function applyPlannedModuleTitles(
     if (derived && !isWeakModuleTitle(derived)) title = derived;
   }
   return { ...mod, title, lessons };
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Deterministic title quality gate + repair + fallback (Part C).
+//
+// Titles come from the LLM, so the same code can produce a good title on one
+// build and a bad one ("Fasb", "Xiao-Jun Zhang", "Lecture 1", "chapter3.pdf",
+// wrong-language) on the next. After titles are assigned, every module and
+// lesson title is validated by a DETERMINISTIC gate. A title that fails the
+// gate is first repaired by a small low-temperature LLM call grounded in the
+// lesson's own content; if that still fails (or no content exists) it falls
+// back to a deterministic, content-derived title. This guarantees no known
+// bad-title pattern reaches the UI and that repeated builds are stable.
+// ────────────────────────────────────────────────────────────────────────
+
+/** Reduce the course output language (+ a content sample for "auto") to a script. */
+function courseTitleScript(
+  outputLanguage: CourseOutputLanguage,
+  sample: string
+): TitleScript {
+  const lang =
+    outputLanguage === "auto"
+      ? inferCourseLanguageFromText(sample)
+      : outputLanguage;
+  switch (lang) {
+    case "ko":
+      return "hangul";
+    case "ja":
+      return "kana";
+    case "zh":
+      return "han";
+    default:
+      return "latin"; // en, es, fr
+  }
+}
+
+/**
+ * Lesson-title gate. Flags the historical bad-title failure modes without
+ * rejecting a legitimately generic intro lesson: bad ingest titles (person
+ * names, filenames/slugs, bare enumeration, transcript/sentence fragments,
+ * leading numbers), bare acronyms, and wrong-script titles.
+ */
+function isWeakLessonTitle(title: string, script: TitleScript): boolean {
+  const t = normalizeIngestDisplayTitle(title).trim();
+  if (!t) return true;
+  if (isBadIngestTitle(t)) return true;
+  if (isBareAcronymTitle(t)) return true;
+  if (titleLanguageMismatch(t, script)) return true;
+  return false;
+}
+
+/** Module-title gate — stricter (module titles must be short topic phrases). */
+function isWeakModuleTitleForCourse(title: string, script: TitleScript): boolean {
+  const t = normalizeIngestDisplayTitle(title).trim();
+  if (!t) return true;
+  if (isWeakModuleTitle(t)) return true;
+  if (titleLanguageMismatch(t, script)) return true;
+  return false;
+}
+
+/** Deterministic, content-derived lesson title — never random, so builds match. */
+function deterministicLessonTitle(
+  lesson: CourseLesson,
+  index: number,
+  script: TitleScript
+): string {
+  for (const kt of lesson.key_terms ?? []) {
+    const cand = normalizeIngestDisplayTitle(kt.term ?? "");
+    if (
+      cand &&
+      cand.split(/\s+/).length <= 8 &&
+      !isWeakLessonTitle(cand, script)
+    ) {
+      return cand;
+    }
+  }
+  const fromText = normalizeIngestDisplayTitle(
+    pickBestTitleFromText(lesson.content ?? "")
+  );
+  if (
+    fromText &&
+    !/^(part|page|slide|section)\s+\d+$/i.test(fromText) &&
+    !isWeakLessonTitle(fromText, script)
+  ) {
+    return fromText;
+  }
+  return `Part ${index + 1}`;
+}
+
+type ProposedTitles = {
+  moduleTitle?: string;
+  lessonTitles: Record<number, string>;
+};
+
+/**
+ * One low-temperature repair call for ALL weak titles in a module at once
+ * (fires only when the gate flagged something, so healthy builds pay nothing).
+ * The model is grounded in each lesson's own content and must follow the same
+ * title rules used in generation.
+ */
+async function repairWeakTitles(
+  anthropic: Anthropic,
+  module: CourseModule,
+  weakLessonIndexes: number[],
+  moduleTitleWeak: boolean,
+  profile: CourseBuildProfile,
+  outputLanguage: CourseOutputLanguage
+): Promise<ProposedTitles> {
+  const lessonItems = weakLessonIndexes.map((i) => {
+    const l = module.lessons[i]!;
+    const excerpt = (l.content ?? "").replace(/\s+/g, " ").trim().slice(0, 700);
+    const terms = (l.key_terms ?? [])
+      .map((k) => k.term)
+      .filter((s): s is string => Boolean(s && s.trim()))
+      .slice(0, 8)
+      .join(", ");
+    return { index: i, key_terms: terms, excerpt };
+  });
+
+  const moduleBlock = moduleTitleWeak
+    ? `\nAlso propose a "module_title" (2–5 words) naming this whole module's topic, based on its lessons.`
+    : "";
+
+  const prompt = `Some titles in one course module are low quality (a bare acronym, a person's name, a "Lecture N" label, a filename, a leading number, or the wrong language). Propose a REPLACEMENT title for each item below, based ONLY on the item's own content.
+${generationContextSuffix(undefined, outputLanguage)}
+${titleStyleRules()}
+
+Return ONLY this JSON (no markdown, no commentary):
+{ ${moduleTitleWeak ? `"module_title": "…", ` : ""}"lessons": [ { "index": <number>, "title": "…" } ] }
+Provide exactly one object per item below, echoing its "index".${moduleBlock}
+
+ITEMS (JSON):
+${JSON.stringify(lessonItems, null, 0)}`;
+
+  const msg = await createMessageWithRetries(
+    anthropic,
+    {
+      model: resolveOutlineModel(profile),
+      max_tokens: 640,
+      // Deterministic repair so a failed title resolves the same way each build.
+      temperature: 0,
+      messages: [{ role: "user", content: prompt }],
+    },
+    { maxAttempts: 2, acquireMaxWaitMs: OUTLINE_BUDGET_WAIT_MS }
+  );
+
+  const parsed = JSON.parse(stripJsonFence(extractTextBlock(msg))) as {
+    module_title?: unknown;
+    lessons?: unknown;
+  };
+  const lessonTitles: Record<number, string> = {};
+  if (Array.isArray(parsed.lessons)) {
+    for (const entry of parsed.lessons) {
+      const obj = entry as { index?: unknown; title?: unknown };
+      if (typeof obj.index === "number" && typeof obj.title === "string") {
+        lessonTitles[obj.index] = obj.title;
+      }
+    }
+  }
+  const result: ProposedTitles = { lessonTitles };
+  if (typeof parsed.module_title === "string") {
+    result.moduleTitle = parsed.module_title;
+  }
+  return result;
+}
+
+/**
+ * Validate a module's titles and repair/replace any that fail the gate. Runs
+ * for every module in both the chunked and monolith paths. No-op (and no LLM
+ * call) when all titles already pass, so it does not slow healthy builds.
+ */
+async function hardenModuleTitles(
+  anthropic: Anthropic,
+  module: CourseModule,
+  moduleIndex: number,
+  profile: CourseBuildProfile,
+  outputLanguage: CourseOutputLanguage
+): Promise<CourseModule> {
+  const sample = [
+    module.title,
+    ...module.lessons.map((l) => l.title),
+    ...module.lessons.map((l) => (l.content ?? "").slice(0, 240)),
+  ].join("\n");
+  const script = courseTitleScript(outputLanguage, sample);
+
+  const weakLessonIndexes = module.lessons.reduce<number[]>((acc, l, i) => {
+    if (isWeakLessonTitle(l.title, script)) acc.push(i);
+    return acc;
+  }, []);
+  const moduleTitleWeak = isWeakModuleTitleForCourse(module.title, script);
+
+  if (weakLessonIndexes.length === 0 && !moduleTitleWeak) {
+    return module; // Fast path: every title already passes the gate.
+  }
+
+  let proposed: ProposedTitles = { lessonTitles: {} };
+  try {
+    proposed = await repairWeakTitles(
+      anthropic,
+      module,
+      weakLessonIndexes,
+      moduleTitleWeak,
+      profile,
+      outputLanguage
+    );
+  } catch (e) {
+    console.warn(
+      `[study-generation] title repair failed for module ${module.id}; using deterministic fallback`,
+      e
+    );
+  }
+
+  const lessons = module.lessons.map((lesson, i) => {
+    if (!weakLessonIndexes.includes(i)) return lesson;
+    const repaired = normalizeIngestDisplayTitle(proposed.lessonTitles[i] ?? "");
+    if (repaired && !isWeakLessonTitle(repaired, script)) {
+      return { ...lesson, title: repaired };
+    }
+    return { ...lesson, title: deterministicLessonTitle(lesson, i, script) };
+  });
+
+  let title = module.title;
+  if (moduleTitleWeak) {
+    const repaired = normalizeIngestDisplayTitle(proposed.moduleTitle ?? "");
+    if (repaired && !isWeakModuleTitleForCourse(repaired, script)) {
+      title = repaired;
+    } else {
+      const derived = moduleTitleFromLessonTitles(lessons.map((l) => l.title));
+      title =
+        derived && !isWeakModuleTitleForCourse(derived, script)
+          ? derived
+          : `Section ${moduleIndex + 1}`;
+    }
+  }
+
+  return { ...module, title, lessons };
 }
 
 /** Expand one module for chunked PDF ingest (separate server invocation). */
@@ -2249,7 +2523,14 @@ export async function generateCourseModuleFromMaterial(
         ? withLessons
         : await ensureModuleQuizCount(withLessons, profile, outputLanguage);
     const titled = applyPlannedModuleTitles(withQuiz, outline, moduleIndex);
-    const sanitized = sanitizeGeneratedModuleLessons(titled);
+    const hardened = await hardenModuleTitles(
+      anthropic,
+      titled,
+      moduleIndex,
+      profile,
+      outputLanguage
+    );
+    const sanitized = sanitizeGeneratedModuleLessons(hardened);
     return auditModuleQuantitativeConsistency(
       sanitized,
       trimmed,
@@ -2312,10 +2593,20 @@ export async function generateCourseModuleFromMaterial(
             outputLanguage
           );
         }
+        const titledRepair = applyPlannedModuleTitles(
+          repaired,
+          outline,
+          moduleIndex
+        );
+        const hardenedRepair = await hardenModuleTitles(
+          anthropic,
+          titledRepair,
+          moduleIndex,
+          profile,
+          outputLanguage
+        );
         return auditModuleQuantitativeConsistency(
-          sanitizeGeneratedModuleLessons(
-            applyPlannedModuleTitles(repaired, outline, moduleIndex)
-          ),
+          sanitizeGeneratedModuleLessons(hardenedRepair),
           trimmed,
           outputLanguage
         );
@@ -2337,10 +2628,16 @@ export async function generateCourseModuleFromMaterial(
   if (moduleOptions?.skipQuizBackfill !== true) {
     repaired = await ensureModuleQuizCount(repaired, profile, outputLanguage);
   }
+  const titledFinal = applyPlannedModuleTitles(repaired, outline, moduleIndex);
+  const hardenedFinal = await hardenModuleTitles(
+    anthropic,
+    titledFinal,
+    moduleIndex,
+    profile,
+    outputLanguage
+  );
   return auditModuleQuantitativeConsistency(
-    sanitizeGeneratedModuleLessons(
-      applyPlannedModuleTitles(repaired, outline, moduleIndex)
-    ),
+    sanitizeGeneratedModuleLessons(hardenedFinal),
     trimmed,
     outputLanguage
   );

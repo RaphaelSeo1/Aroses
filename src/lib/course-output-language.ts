@@ -139,6 +139,17 @@ export function resolveTeachingLanguage(
 
 type TeachingLang = Exclude<CourseOutputLanguage, "auto">;
 
+/**
+ * Best-effort detection of a text sample's dominant language. Used to resolve
+ * an "auto" course output language into a concrete language when validating
+ * that a generated title matches the course's script.
+ */
+export function inferCourseLanguageFromText(
+  text: string
+): Exclude<CourseOutputLanguage, "auto"> {
+  return inferLanguageFromSample(text);
+}
+
 function inferLanguageFromSample(text: string): TeachingLang {
   const t = text.trim();
   if (!t) return "en";
