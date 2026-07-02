@@ -82,6 +82,7 @@ import {
   type ModuleGenerationOptions,
   generateCourseOutlineFromMaterial,
   buildMaterialDigestFromFullPdfText,
+  hardenCourseTitle,
   materialTextForPdfIngest,
   planCourseStructureFromChunks,
   structurePlanToOutline,
@@ -113,11 +114,7 @@ import {
   finalizeMaterialSectionLabel,
 } from "@/lib/study-material-display-name";
 import {
-  isBadCourseTitle,
   isGenericIngestPlaceholder,
-  isSentenceLikeIngestTitle,
-  isWeakModuleTitle,
-  resolveCourseDisplayTitle,
 } from "@/lib/study-ingest/normalize-ingest-title";
 
 function normalizeStoragePaths(storagePath: string | string[]): string[] {
@@ -823,25 +820,19 @@ async function finalizePdfIngest(
 
   const modules = placed.modules;
 
-  // Upgrade a placeholder course title (e.g. "Part 1", "Section 1", "Course")
-  // using the real module titles the writer produced, then the upload name.
-  // BUT preserve a genuinely descriptive objective title ("Master ionic bonding
-  // through …") — isWeakModuleTitle flags those as "weak" only because they read
-  // as sentence-like, yet they are exactly the course titles we want to keep.
-  const titleIsDescriptiveObjective =
-    !isBadCourseTitle(outline.title) && isSentenceLikeIngestTitle(outline.title);
-  if (
-    !titleIsDescriptiveObjective &&
-    (isWeakModuleTitle(outline.title) || isGenericIngestPlaceholder(outline.title))
-  ) {
-    const upgraded = resolveCourseDisplayTitle({
-      planTitle: null,
-      chunkTitles: modules.map((m) => m.title),
-      uploadFileNames: originalFileName ? [originalFileName] : [],
-    });
-    if (upgraded && !isWeakModuleTitle(upgraded)) {
-      outline = { ...outline, title: upgraded };
-    }
+  // Run the overall COURSE title through the same deterministic quality gate +
+  // repair + fallback used for module/lesson titles, so "Lecture N", filenames,
+  // bare numbers/acronyms, speaker names, and wrong-language course names never
+  // reach the UI. A genuinely descriptive/objective course title (e.g. "Master
+  // ionic bonding through …") passes the gate and is returned unchanged (no LLM
+  // call fires for a good title, so healthy builds are unaffected).
+  const hardenedCourseTitle = await hardenCourseTitle(outline.title, {
+    modules,
+    outputLanguage: options?.outputLanguage ?? DEFAULT_COURSE_OUTPUT_LANGUAGE,
+    uploadFileNames: originalFileName ? [originalFileName] : [],
+  });
+  if (hardenedCourseTitle && hardenedCourseTitle !== outline.title) {
+    outline = { ...outline, title: hardenedCourseTitle };
   }
 
   const allLessons = modules.flatMap((m) => m.lessons);

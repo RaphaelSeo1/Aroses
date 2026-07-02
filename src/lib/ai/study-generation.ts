@@ -36,6 +36,7 @@ import {
   type StructurePlanTargets,
 } from "@/lib/structure-plan-coverage";
 import {
+  isBadCourseTitle,
   isBadIngestTitle,
   isBareAcronymTitle,
   isGenericIngestPlaceholder,
@@ -1168,7 +1169,11 @@ export async function generateCourseFromMaterial(
         trimmed,
         outputLanguage
       );
-      return { ...repaired, modules };
+      const title = await hardenCourseTitle(repaired.title, {
+        modules,
+        outputLanguage,
+      });
+      return { ...repaired, title, modules };
     } catch (e) {
       console.error(e);
       throw new Error("Claude did not return valid JSON");
@@ -1184,7 +1189,11 @@ export async function generateCourseFromMaterial(
       trimmed,
       outputLanguage
     );
-    return { ...payload, modules };
+    const title = await hardenCourseTitle(payload.title, {
+      modules,
+      outputLanguage,
+    });
+    return { ...payload, title, modules };
   } catch (e) {
     console.warn("[study-generation] Payload validation failed; repairing", e);
     try {
@@ -1196,7 +1205,11 @@ export async function generateCourseFromMaterial(
         trimmed,
         outputLanguage
       );
-      return { ...repaired, modules };
+      const title = await hardenCourseTitle(repaired.title, {
+        modules,
+        outputLanguage,
+      });
+      return { ...repaired, title, modules };
     } catch {
       throw e;
     }
@@ -2444,6 +2457,130 @@ async function hardenModuleTitles(
   }
 
   return { ...module, title, lessons };
+}
+
+/**
+ * Course-title gate. Reuses {@link isBadCourseTitle} (which already allows the
+ * broad, descriptive, objective-style course names the product wants, while
+ * rejecting "Lecture N", filenames/slugs, bare numbers/acronyms, single bare
+ * words, and speaker names) and adds the wrong-language/script check. A
+ * legitimately good, broad course name is NOT flagged here.
+ */
+function isCourseTitleWeak(title: string, script: TitleScript): boolean {
+  const raw = (title ?? "").trim();
+  if (!raw) return true;
+  if (isBadCourseTitle(raw)) return true;
+  const t = normalizeIngestDisplayTitle(raw).trim();
+  if (!t) return true;
+  if (titleLanguageMismatch(t, script)) return true;
+  return false;
+}
+
+/** One low-temperature, deterministic call to name the course from its content. */
+async function repairCourseTitle(
+  anthropic: Anthropic,
+  moduleTitles: string[],
+  lessonSample: string[],
+  profile: CourseBuildProfile,
+  outputLanguage: CourseOutputLanguage
+): Promise<string | null> {
+  const modulesLine = moduleTitles
+    .filter(Boolean)
+    .slice(0, 12)
+    .join("; ");
+  const lessonsLine = lessonSample.filter(Boolean).slice(0, 12).join("; ");
+  const prompt = `Propose ONE overall COURSE title that names the whole course's subject, based only on what it covers.
+${generationContextSuffix(undefined, outputLanguage)}
+${titleStyleRules()}
+The course covers these modules: ${modulesLine || "(unknown)"}.
+Representative lesson topics: ${lessonsLine || "(unknown)"}.
+
+Return ONLY this JSON (no markdown): { "course_title": "…" }`;
+
+  try {
+    const msg = await createMessageWithRetries(
+      anthropic,
+      {
+        model: resolveOutlineModel(profile),
+        max_tokens: 128,
+        // Deterministic so a weak course title resolves the same way each build.
+        temperature: 0,
+        messages: [{ role: "user", content: prompt }],
+      },
+      { maxAttempts: 2, acquireMaxWaitMs: OUTLINE_BUDGET_WAIT_MS }
+    );
+    const parsed = JSON.parse(stripJsonFence(extractTextBlock(msg))) as {
+      course_title?: unknown;
+    };
+    return typeof parsed.course_title === "string" ? parsed.course_title : null;
+  } catch (e) {
+    console.warn("[study-generation] course-title repair failed", e);
+    return null;
+  }
+}
+
+/**
+ * Validate the overall COURSE title through the same deterministic gate used for
+ * module/lesson titles, then repair (temperature 0, grounded in the course's
+ * modules) and finally fall back to a deterministic content-derived title. A
+ * good, descriptive course name is returned unchanged (and no LLM call fires).
+ */
+export async function hardenCourseTitle(
+  currentTitle: string,
+  opts: {
+    modules: CourseModule[];
+    outputLanguage?: CourseOutputLanguage;
+    uploadFileNames?: string[];
+  }
+): Promise<string> {
+  const outputLanguage = opts.outputLanguage ?? DEFAULT_COURSE_OUTPUT_LANGUAGE;
+  const moduleTitles = opts.modules.map((m) => m.title);
+  const lessonTitles = opts.modules.flatMap((m) =>
+    m.lessons.map((l) => l.title)
+  );
+  const contentSample = opts.modules
+    .flatMap((m) => m.lessons.map((l) => (l.content ?? "").slice(0, 200)))
+    .join("\n");
+  const sample = [currentTitle, ...moduleTitles, ...lessonTitles, contentSample]
+    .filter(Boolean)
+    .join("\n");
+  const script = courseTitleScript(outputLanguage, sample);
+
+  if (!isCourseTitleWeak(currentTitle, script)) {
+    return currentTitle; // Fast path: a good, possibly-broad course name stays.
+  }
+
+  const profile = resolveCourseBuildProfile();
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (apiKey) {
+    const anthropic = new Anthropic({
+      apiKey,
+      timeout: getPdfAnthropicTimeoutMs(),
+      maxRetries: 0,
+    });
+    const repaired = await repairCourseTitle(
+      anthropic,
+      moduleTitles,
+      lessonTitles,
+      profile,
+      outputLanguage
+    );
+    const cleaned = repaired ? normalizeIngestDisplayTitle(repaired) : "";
+    if (cleaned && !isCourseTitleWeak(cleaned, script)) return cleaned;
+  }
+
+  // Deterministic fallback derived from existing utilities (no randomness).
+  const derivedFromContent = resolveCourseDisplayTitle({
+    planTitle: null,
+    chunkTitles: [...moduleTitles, ...lessonTitles],
+    uploadFileNames: opts.uploadFileNames ?? [],
+  });
+  if (derivedFromContent && !isCourseTitleWeak(derivedFromContent, script)) {
+    return derivedFromContent;
+  }
+  const fromModules = moduleTitleFromLessonTitles(moduleTitles);
+  if (fromModules && !isCourseTitleWeak(fromModules, script)) return fromModules;
+  return "Course";
 }
 
 /** Expand one module for chunked PDF ingest (separate server invocation). */

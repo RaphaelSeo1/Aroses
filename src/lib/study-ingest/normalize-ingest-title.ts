@@ -356,6 +356,9 @@ export function isBadCourseTitle(raw: string): boolean {
   if (/^untitled section$/i.test(t)) return true;
   if (SPEAKER_PREFIX.test(t)) return true;
   if (/^[A-Z][A-Z0-9\s.'-]{2,48}:$/.test(t)) return true;
+  // A person's / speaker's name or a filename/slug is never a course title.
+  if (isLikelyPersonNameTitle(t)) return true;
+  if (isFilenameLikeTitle(raw)) return true;
   if (TRANSCRIPT_FRAGMENT.test(t)) return true;
   if (INCOMPLETE_PHRASE.test(t)) return true;
   if (SPOKEN_CLAUSE.test(t)) return true;
