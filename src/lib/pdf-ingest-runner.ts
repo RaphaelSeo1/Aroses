@@ -56,6 +56,7 @@ import {
   type CourseAssetManifest,
 } from "@/lib/study-ingest/course-assets";
 import { ensurePdfVisualsAtFinalize } from "@/lib/pdf-ingest/ensure-pdf-visuals";
+import { report, addJobDegradedReason } from "@/lib/report-error";
 import { enrichModulesWithPdfAssets } from "@/lib/pdf-ingest/enrich-modules-with-assets";
 import { placeAllPdfAssetsIntoModules } from "@/lib/pdf-ingest/place-course-assets";
 import {
@@ -583,6 +584,7 @@ function finalizeVisualBudgetMs(): number {
  * never abort finalize.
  */
 async function withFinalizeBudget<T>(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
   work: Promise<T>,
   ms: number,
   fallback: T,
@@ -592,17 +594,23 @@ async function withFinalizeBudget<T>(
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<T>((resolve) => {
     timer = setTimeout(() => {
-      console.warn(
-        `[pdf-ingest] finalize step "${label}" exceeded ${ms}ms — completing without it`,
-        jobId
+      void report(
+        "pdf-ingest.finalize_budget_exceeded",
+        `finalize step "${label}" exceeded ${ms}ms — completing without it`,
+        { jobId, detail: { label, budgetMs: ms } }
       );
+      void addJobDegradedReason(admin, jobId, `finalize_skipped:${label}`);
       resolve(fallback);
     }, ms);
   });
   try {
     return await Promise.race([
-      work.catch((e) => {
-        console.error(`[pdf-ingest] finalize step "${label}" failed`, jobId, e);
+      work.catch(async (e) => {
+        await report("pdf-ingest.finalize_step_failed", e, {
+          jobId,
+          detail: { label },
+        });
+        void addJobDegradedReason(admin, jobId, `finalize_failed:${label}`);
         return fallback;
       }),
       timeout,
@@ -683,6 +691,7 @@ async function finalizePdfIngest(
       }, 15_000);
       try {
         const ensured = await withFinalizeBudget(
+          admin,
           ensurePdfVisualsAtFinalize({
             admin,
             userId: ownerId,
@@ -734,7 +743,8 @@ async function finalizePdfIngest(
             }, () => ({ error: null }));
         }
       } catch (e) {
-        console.error("[pdf-ingest] ensurePdfVisualsAtFinalize", jobId, e);
+        await report("pdf-ingest.finalize_visuals_failed", e, { jobId });
+        void addJobDegradedReason(admin, jobId, "finalize_visuals_failed");
       } finally {
         clearInterval(finalizeHeartbeat);
       }
@@ -787,7 +797,8 @@ async function finalizePdfIngest(
   try {
     courseAssetsFromDb = await loadCourseAssetsForJob(admin, jobId);
   } catch (e) {
-    console.error("[pdf-ingest] loadCourseAssetsForJob", jobId, e);
+    await report("pdf-ingest.course_assets_load_failed", e, { jobId });
+    void addJobDegradedReason(admin, jobId, "course_assets_load_failed");
   }
 
   const placed = await placeAllPdfAssetsIntoModules(modulesAfterFallback, {
@@ -805,7 +816,8 @@ async function finalizePdfIngest(
     try {
       effectiveManifest = await buildCourseAssetManifest(pageArtifacts);
     } catch (e) {
-      console.warn("[pdf-ingest] rebuild asset manifest at finalize", jobId, e);
+      await report("pdf-ingest.manifest_rebuild_failed", e, { jobId });
+      void addJobDegradedReason(admin, jobId, "manifest_rebuild_failed");
     }
   }
   effectiveManifest = mergeManifestWithDbAssets(
@@ -1215,7 +1227,10 @@ async function finalizePdfIngest(
   try {
     await linkCourseAssetsToMaterial(admin, jobId, row.id);
   } catch (e) {
-    console.error("[pdf-ingest] linkCourseAssetsToMaterial FAILED", jobId, e);
+    await report("pdf-ingest.link_course_assets_failed", e, {
+      jobId,
+      detail: { materialId: row.id },
+    });
     throw e;
   }
 
@@ -1576,7 +1591,8 @@ export async function runPdfIngestExpandOne(
           slots[enrichIndices[j]!] = enriched[j]!;
         }
       } catch (e) {
-        console.warn("[pdf-ingest] enrich modules for live preview", jobId, e);
+        // Preview-only: the finalize pass re-enriches, so no degraded reason.
+        await report("pdf-ingest.preview_enrich_failed", e, { jobId });
       }
     }
     storedModules = slots;
@@ -2617,7 +2633,8 @@ async function runPdfIngestOutlinePhase(
             });
           }
         } catch (e) {
-          console.warn("[pdf-ingest] buildCourseAssetManifest", jobId, e);
+          await report("pdf-ingest.asset_manifest_failed", e, { jobId });
+          void addJobDegradedReason(admin, jobId, "asset_manifest_failed");
         }
       } catch (e) {
         console.error("[pdf-ingest] supplementPdfPageFigures FAILED", jobId, e);
@@ -2655,7 +2672,8 @@ async function runPdfIngestOutlinePhase(
           });
         }
       } catch (e) {
-        console.warn("[pdf-ingest] supplementPdfTablesOnly", jobId, e);
+        await report("pdf-ingest.table_vision_failed", e, { jobId });
+        void addJobDegradedReason(admin, jobId, "table_vision_failed");
       }
     } else {
       console.warn("[pdf-ingest] visual enrich skipped at outline", {

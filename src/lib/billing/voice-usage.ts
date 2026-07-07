@@ -3,6 +3,7 @@ import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { getUserSubscription } from "@/lib/billing/subscription";
 import { voiceCapSeconds, type PlanTier } from "@/lib/billing/plans";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { report } from "@/lib/report-error";
 
 /**
  * Voice usage metering + cap enforcement.
@@ -159,6 +160,11 @@ export async function recordVoiceSeconds(
     p_period_start: start.toISOString(),
   });
   if (error) {
-    console.error("[billing] recordVoiceSeconds failed", error);
+    // Fail open for playback, but surface the metering gap: unrecorded seconds
+    // mean the user's cap is under-counted until this is investigated.
+    await report("billing.record_voice_seconds_failed", error, {
+      userId,
+      detail: { seconds, periodStart: start.toISOString() },
+    });
   }
 }
