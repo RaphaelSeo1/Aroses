@@ -2,6 +2,8 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { enterAiUsageContext } from "@/lib/billing/ai-usage";
+import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
+import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 import {
   buildLegacyStudyContext,
   buildStudyContextText,
@@ -26,7 +28,25 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const MAX_CONTENT_PER_MESSAGE = 8000;
-const MAX_MESSAGES = 24;
+// Rolling context window (turns) — mirrors /api/study-chat. Long voice
+// sessions keep working: we trim to the most recent turns instead of
+// hard-rejecting once the conversation grows past the cap.
+const MAX_MESSAGES = 40;
+
+/**
+ * Keep only the most recent `max` turns and guarantee the window starts on a
+ * user turn (Anthropic requires the first message to be `user`).
+ */
+function trimToConversationWindow(
+  messages: StudyChatTurn[],
+  max: number
+): StudyChatTurn[] {
+  let windowed = messages.length > max ? messages.slice(-max) : messages;
+  while (windowed.length > 0 && windowed[0].role !== "user") {
+    windowed = windowed.slice(1);
+  }
+  return windowed;
+}
 
 function looksLikeNavigationIntent(text: string): boolean {
   const t = text.toLowerCase();
@@ -79,6 +99,14 @@ export async function POST(request: Request) {
   }
   enterAiUsageContext({ userId: user.id, feature: "voice-converse" });
 
+  // Voice cap: /tts, /transcribe, and /deepgram-token were already gated, but
+  // this Claude stream was not — a capped user could still burn tokens here.
+  // 402 → client falls back to text mode (same contract as the other routes).
+  const allowance = await checkVoiceAllowance(user.id, { email: user.email });
+  if (!allowance.allowed) {
+    return NextResponse.json(voiceCapBody(), { status: 402 });
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -109,11 +137,8 @@ export async function POST(request: Request) {
   if (!Array.isArray(b.messages) || b.messages.length === 0) {
     return NextResponse.json({ error: "messages required" }, { status: 400 });
   }
-  if (b.messages.length > MAX_MESSAGES) {
-    return NextResponse.json({ error: "Too many messages" }, { status: 400 });
-  }
 
-  const messages: StudyChatTurn[] = [];
+  const validated: StudyChatTurn[] = [];
   for (const m of b.messages) {
     if (
       !m ||
@@ -125,8 +150,12 @@ export async function POST(request: Request) {
     if (m.content.length > MAX_CONTENT_PER_MESSAGE) {
       return NextResponse.json({ error: "Message too long" }, { status: 400 });
     }
-    messages.push({ role: m.role, content: m.content.trim() });
+    validated.push({ role: m.role, content: m.content.trim() });
   }
+
+  // Long sessions never error — keep a rolling window of recent turns (the
+  // newest question is preserved; the window is re-anchored on a user turn).
+  const messages = trimToConversationWindow(validated, MAX_MESSAGES);
 
   const last = messages[messages.length - 1];
   if (!last || last.role !== "user") {

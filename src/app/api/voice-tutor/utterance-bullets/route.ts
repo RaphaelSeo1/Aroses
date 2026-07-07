@@ -1,7 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
+import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
+import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -15,6 +17,13 @@ export async function POST(request: Request) {
   } = await supabase.auth.getUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Voice-session helper call (Haiku) — gate it with the same voice cap as the
+  // rest of the voice surfaces so capped users can't keep burning tokens.
+  const allowance = await checkVoiceAllowance(user.id, { email: user.email });
+  if (!allowance.allowed) {
+    return NextResponse.json(voiceCapBody(), { status: 402 });
   }
 
   let body: unknown;

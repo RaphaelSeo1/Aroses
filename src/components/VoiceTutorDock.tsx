@@ -237,6 +237,10 @@ export function VoiceTutorDock({
   const [pauseMs, setPauseMs] = useState<number>(DEFAULT_PAUSE_MS);
   const [voiceLanguage, setVoiceLanguage] =
     useState<VoiceLanguageCode>("auto");
+  // Set when the monthly voice allowance is exhausted (server 402). An effect
+  // below leaves live mode (defined later, so a direct call here would be a
+  // forward reference) and the cap message stays visible in the error slot.
+  const [voiceCapped, setVoiceCapped] = useState(false);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Only show errors after the user has actually used the mic at least once.
   const hasInteractedRef = useRef(false);
@@ -862,6 +866,12 @@ export function VoiceTutorDock({
           const eb = (await res.json().catch(() => ({}))) as {
             error?: string;
           };
+          // Monthly voice allowance exhausted: show the server's friendly cap
+          // message and shut the live session down (effect on voiceCapped)
+          // instead of leaving the mic running against a dead endpoint.
+          if (res.status === 402) {
+            setVoiceCapped(true);
+          }
           setError(
             typeof eb.error === "string" ? eb.error : "Tutor could not answer."
           );
@@ -1620,6 +1630,16 @@ export function VoiceTutorDock({
       leaveLiveMode();
     };
   }, [enterLiveMode, inputMode, leaveLiveMode]);
+
+  // Voice cap reached (server 402): stop the live session so the mic doesn't
+  // keep streaming against endpoints that will keep refusing. Hold-to-talk
+  // stays available in the UI but /transcribe is capped too, so the user sees
+  // the same friendly message rather than a stuck session.
+  useEffect(() => {
+    if (!voiceCapped) return;
+    setInputMode("hold");
+    leaveLiveMode();
+  }, [voiceCapped, leaveLiveMode]);
 
   useEffect(() => {
     return () => {
