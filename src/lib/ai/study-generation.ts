@@ -2133,16 +2133,23 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
   return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 12_288), 8192, 30_720);
 }
 
-/** Escalating output budgets when the first pass truncates mid-JSON. */
+/**
+ * Escalating output budgets when the first pass truncates mid-JSON. Balanced
+ * gets one escalation too (fidelity): a table-heavy module that truncates at
+ * the base budget retries with more room instead of falling straight into the
+ * JSON-repair path. The escalation call only fires on detected truncation, so
+ * healthy builds pay nothing extra.
+ */
 function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
   const base = moduleMaxTokens(profile);
-  if (profile === "balanced") return [base];
   const extra =
     profile === "express"
       ? [Math.min(20_480, Math.round(base * 1.6))]
       : profile === "fast"
         ? [Math.min(24_576, Math.round(base * 1.5))]
-        : [Math.min(30_720, Math.round(base * 1.4))];
+        : profile === "balanced"
+          ? [Math.min(30_720, Math.max(20_480, Math.round(base * 1.4)))]
+          : [Math.min(30_720, Math.round(base * 1.4))];
   return [...new Set([base, ...extra])].sort((a, b) => a - b);
 }
 
