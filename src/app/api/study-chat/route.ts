@@ -29,7 +29,27 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const MAX_CONTENT_PER_MESSAGE = 8000;
-const MAX_MESSAGES = 24;
+// Rolling context window (turns). Instead of hard-rejecting once a conversation
+// grows past this, we keep only the most recent turns so Ask Rose never stops
+// working mid-conversation. Bounds cost/latency while staying invisible to the
+// student.
+const MAX_MESSAGES = 40;
+
+/**
+ * Keep only the most recent `max` turns and guarantee the window starts on a
+ * user turn (Anthropic requires the first message in the array to be `user`).
+ * This lets long conversations continue seamlessly rather than erroring out.
+ */
+function trimToConversationWindow(
+  messages: StudyChatTurn[],
+  max: number
+): StudyChatTurn[] {
+  let windowed = messages.length > max ? messages.slice(-max) : messages;
+  while (windowed.length > 0 && windowed[0].role !== "user") {
+    windowed = windowed.slice(1);
+  }
+  return windowed;
+}
 
 /**
  * Only TRUE for an explicit "take me there" request. Plain questions — even ones
@@ -168,11 +188,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "messages required" }, { status: 400 });
   }
 
-  if (b.messages.length > MAX_MESSAGES) {
-    return NextResponse.json({ error: "Too many messages" }, { status: 400 });
-  }
-
-  const messages: StudyChatTurn[] = [];
+  const validated: StudyChatTurn[] = [];
   for (const m of b.messages) {
     if (
       !m ||
@@ -184,8 +200,12 @@ export async function POST(request: Request) {
     if (m.content.length > MAX_CONTENT_PER_MESSAGE) {
       return NextResponse.json({ error: "Message too long" }, { status: 400 });
     }
-    messages.push({ role: m.role, content: m.content.trim() });
+    validated.push({ role: m.role, content: m.content.trim() });
   }
+
+  // Long conversations don't error — keep a rolling window of recent turns so
+  // the newest question is always answered (the last turn is preserved below).
+  const messages = trimToConversationWindow(validated, MAX_MESSAGES);
 
   const last = messages[messages.length - 1];
   if (!last || last.role !== "user") {

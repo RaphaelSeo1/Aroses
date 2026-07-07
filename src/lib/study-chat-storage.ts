@@ -1,6 +1,9 @@
 import type { StudyChatTurn } from "@/types/study-chat";
 
-const MAX_STORED_MESSAGES = 24;
+// Keep a generous scrollback in the UI. The server independently trims to a
+// rolling window before calling the model, so this only bounds localStorage
+// growth — it never causes the chat to stop working.
+const MAX_STORED_MESSAGES = 60;
 
 export function studyChatStorageKey(courseId?: string, materialId?: string): string {
   if (courseId) return `aroses-study-chat:course:${courseId}`;
