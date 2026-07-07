@@ -6,6 +6,7 @@ import {
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import { runRefine } from "@/lib/ai/refine-course-orchestrator";
 import type { CoursePayload } from "@/types/course";
 
@@ -79,6 +80,7 @@ export async function POST(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  enterAiUsageContext({ userId: user.id, feature: "refine-course" });
 
   let body: unknown;
   try {

@@ -59,6 +59,7 @@ import {
 import { formatSelfStudyGenerationBlock } from "@/lib/self-study-context";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
+import { recordAiUsage } from "@/lib/billing/ai-usage";
 import type { CourseLesson, CourseModule, CoursePayload } from "@/types/course";
 
 /**
@@ -910,7 +911,13 @@ async function createMessageWithRetries(
           ? { maxWaitMs: opts.acquireMaxWaitMs }
           : {}),
       });
-      return await anthropic.messages.create({ ...params, stream: false });
+      const msg = await anthropic.messages.create({ ...params, stream: false });
+      recordAiUsage({
+        model: String(params.model),
+        inputTokens: msg.usage?.input_tokens,
+        outputTokens: msg.usage?.output_tokens,
+      });
+      return msg;
     } catch (err) {
       lastErr = err;
       const retry = isRetryableApiError(err) && attempt < maxAttempts - 1;
@@ -988,6 +995,11 @@ async function readPdfIngestStreamOnce(
   }
 
   const finalMessage = await stream.finalMessage();
+  recordAiUsage({
+    model: params.model,
+    inputTokens: finalMessage.usage?.input_tokens,
+    outputTokens: finalMessage.usage?.output_tokens,
+  });
   const stopReason = (finalMessage as { stop_reason?: string }).stop_reason;
   if (stopReason === "max_tokens") {
     console.warn("[study-generation] PDF ingest stream hit max_tokens", {

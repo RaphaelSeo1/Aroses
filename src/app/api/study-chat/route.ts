@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import {
   buildLegacyStudyContext,
   buildStudyContextText,
@@ -159,6 +160,7 @@ export async function POST(request: Request) {
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  enterAiUsageContext({ userId: user.id, feature: "study-chat" });
 
   let body: unknown;
   try {

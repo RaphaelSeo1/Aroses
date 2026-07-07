@@ -4,6 +4,7 @@ import {
   APIError,
   RateLimitError,
 } from "@anthropic-ai/sdk";
+import { recordAiUsage } from "@/lib/billing/ai-usage";
 import type { CourseModule, CoursePayload } from "@/types/course";
 import {
   parseCourseModuleLoose,
@@ -62,7 +63,14 @@ async function createMessageWithRetries(
   const maxAttempts = 5;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      return await anthropic.messages.create({ ...params, stream: false });
+      const msg = await anthropic.messages.create({ ...params, stream: false });
+      recordAiUsage({
+        model: String(params.model),
+        inputTokens: msg.usage?.input_tokens,
+        outputTokens: msg.usage?.output_tokens,
+        feature: "refine-course",
+      });
+      return msg;
     } catch (err) {
       lastErr = err;
       const retry = isRetryableApiError(err) && attempt < maxAttempts - 1;

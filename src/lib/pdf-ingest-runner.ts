@@ -57,6 +57,7 @@ import {
 } from "@/lib/study-ingest/course-assets";
 import { ensurePdfVisualsAtFinalize } from "@/lib/pdf-ingest/ensure-pdf-visuals";
 import { report, addJobDegradedReason } from "@/lib/report-error";
+import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import { enrichModulesWithPdfAssets } from "@/lib/pdf-ingest/enrich-modules-with-assets";
 import { placeAllPdfAssetsIntoModules } from "@/lib/pdf-ingest/place-course-assets";
 import {
@@ -1267,6 +1268,14 @@ export async function runPdfIngestExpandOne(
     .eq("id", jobId)
     .maybeSingle();
 
+  if (job?.id) {
+    enterAiUsageContext({
+      feature: "pdf-ingest",
+      jobId: job.id,
+      userId: typeof job.user_id === "string" ? job.user_id : null,
+    });
+  }
+
   const expandGenerationContext = job?.id
     ? await loadCourseGenerationContext(
         admin,
@@ -2018,6 +2027,13 @@ export async function runPdfIngestJob(
 
   const storagePath = claimed.storage_path;
 
+  // Attribute every Claude call in this run to the job + its owner (ledger).
+  enterAiUsageContext({
+    feature: "pdf-ingest",
+    jobId,
+    userId: typeof claimed.user_id === "string" ? claimed.user_id : null,
+  });
+
   const claimedEpoch =
     typeof (claimed as { ingest_epoch?: unknown }).ingest_epoch === "number"
       ? (claimed as { ingest_epoch: number }).ingest_epoch
@@ -2295,6 +2311,12 @@ export async function runPdfIngestContinueAfterTranscript(
       : 0;
 
   const cleanupPaths = storagePathsForJob(job as { storage_path: string; source_files?: unknown });
+
+  enterAiUsageContext({
+    feature: "pdf-ingest",
+    jobId,
+    userId: typeof job.user_id === "string" ? job.user_id : null,
+  });
 
   const generationContext = await loadCourseGenerationContext(
     admin,

@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { recordAiUsage } from "@/lib/billing/ai-usage";
 import { formatSelfStudyTutorBlock } from "@/lib/self-study-context";
 import { AI_ASSISTANT_NAME, APP_NAME } from "@/lib/brand";
 import { parseStudyChatResponse } from "@/lib/ai/study-chat-parse";
@@ -265,6 +266,18 @@ export async function* streamVoiceReply(
       yield event.delta.text;
     }
   }
+
+  try {
+    const final = await stream.finalMessage();
+    recordAiUsage({
+      model: MODEL,
+      inputTokens: final.usage?.input_tokens,
+      outputTokens: final.usage?.output_tokens,
+      feature: "voice-converse",
+    });
+  } catch {
+    // Usage telemetry only — the reply already streamed to the caller.
+  }
 }
 
 export async function runStudyChat(
@@ -316,6 +329,12 @@ ${contextText}
       role: m.role,
       content: m.content,
     })),
+  });
+  recordAiUsage({
+    model: MODEL,
+    inputTokens: msg.usage?.input_tokens,
+    outputTokens: msg.usage?.output_tokens,
+    feature: "study-chat",
   });
 
   const block = msg.content.find((b) => b.type === "text");

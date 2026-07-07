@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
+import { recordAiUsage } from "@/lib/billing/ai-usage";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 
 export const runtime = "nodejs";
@@ -53,6 +54,13 @@ export async function POST(request: Request) {
           content: text,
         },
       ],
+    });
+    recordAiUsage({
+      model: MODEL,
+      inputTokens: msg.usage?.input_tokens,
+      outputTokens: msg.usage?.output_tokens,
+      feature: "utterance-bullets",
+      userId: user.id,
     });
     const block = msg.content.find((c) => c.type === "text");
     const raw =
