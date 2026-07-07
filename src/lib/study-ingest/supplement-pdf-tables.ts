@@ -12,7 +12,7 @@ import {
 import { pageTableKey } from "@/lib/study-ingest/source-images/page-table-keys";
 import { renderPdfPagesToPng } from "@/lib/study-ingest/source-images/render-pdf-page";
 
-const MAX_TABLE_VISION_PAGES = 12;
+const MAX_TABLE_VISION_PAGES = 6;
 
 function chunkHasUsableTables(text: string): boolean {
   const blocks = extractMarkdownTableBlocks(text);

@@ -397,10 +397,10 @@ function outlineMaterialCharLimit(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_OUTLINE_MATERIAL_CHARS", 18_000), 8_000, moduleCap);
   }
   if (profile === "balanced") {
-    // Plan the outline over (nearly) the whole document like `full` so modules
-    // map the entire source end to end — Haiku makes this cheap even at 120k.
+    // Outline over a large slice of the doc, but cap below the full module budget
+    // so the planning call finishes faster on big PDFs.
     return clampInt(
-      envInt("COURSE_BALANCED_OUTLINE_MATERIAL_CHARS", moduleCap),
+      envInt("COURSE_BALANCED_OUTLINE_MATERIAL_CHARS", 80_000),
       12_000,
       moduleCap
     );
@@ -815,8 +815,8 @@ QUIZ (critical): Each module needs a practical practice set — **at least ${qui
     quizFooter =
       `Include enough quiz objects per module to meet the minimums above (≥${quizTarget} total, ≥${frMin} free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.`;
   } else if (profile === "balanced") {
-    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 6);
-    sizeRules = `Rules for output size (important): use at least 2 modules and at most ${maxBalMods} unless the source is extremely short. Keep each lesson "content" clear; aim under roughly 500 words per lesson. Every module must include at least one lesson.
+    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
+    sizeRules = `Rules for output size (important): use **4 to ${maxBalMods}** modules, scaling to the size of the source (short handout ≈ 4, long deck toward ${maxBalMods}). Keep each lesson "content" clear; aim under roughly 500 words per lesson. Every module must include at least one lesson.
 
 QUIZ (critical): Each module needs **at least ${quizTarget} questions per module**, with **at least ${frMin}** type free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
     quizFooter =
@@ -1267,8 +1267,8 @@ function outlineInstruction(
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
     maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 6);
   } else if (profile === "balanced") {
-    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 12), 2, 18);
-    moduleCount = `Use **at least 4** and up to **${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 4–5, but a long lecture deck, chapter, or multi-topic document should use many more (toward the maximum). Give each major topic, section, or learning objective its own focused module rather than a few broad catch-alls, and do not compress later pages into one module.`;
+    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
+    moduleCount = `Use **4 to ${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 4, but a long lecture deck or multi-topic document should use more (toward ${maxModules}). Give each major topic or section its own focused module; do not compress the whole document into one or two catch-alls.`;
     maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 8), 2, 12);
   } else {
     const maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
@@ -1647,7 +1647,8 @@ async function ensureModuleLessonFields(
 ): Promise<CourseModule> {
   if (!moduleNeedsLessonContent(module)) return module;
 
-  const maxRepairs = profile === "express" || profile === "fast" ? 1 : 2;
+  const maxRepairs =
+    profile === "express" || profile === "fast" || profile === "balanced" ? 1 : 2;
   let out = module;
   for (let i = 0; i < maxRepairs && moduleNeedsLessonContent(out); i++) {
     try {
@@ -1835,7 +1836,7 @@ export async function planCourseStructureFromChunks(
 
   const targets = structurePlanTargets(chunkSummaries.length, profile);
   const planAttempts =
-    profile === "express" || profile === "fast" ? 2 : 3;
+    profile === "express" || profile === "fast" || profile === "balanced" ? 2 : 3;
   let lastCoverageError: string | null = null;
 
   for (let attempt = 0; attempt < planAttempts; attempt++) {
@@ -2106,6 +2107,7 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
 /** Escalating output budgets when the first pass truncates mid-JSON. */
 function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
   const base = moduleMaxTokens(profile);
+  if (profile === "balanced") return [base];
   const extra =
     profile === "express"
       ? [Math.min(20_480, Math.round(base * 1.6))]
@@ -2160,7 +2162,8 @@ async function finalizeGeneratedModules(
       return auditModuleQuantitativeConsistency(
         sanitized,
         sourceExcerpt,
-        outputLanguage
+        outputLanguage,
+        profile
       );
     })
   );
@@ -2636,11 +2639,9 @@ export async function generateCourseModuleFromMaterial(
   );
 
   const maxAttempts =
-    profile === "express" || profile === "fast"
+    profile === "express" || profile === "fast" || profile === "balanced"
       ? 2
-      : profile === "balanced"
-        ? 3
-        : 5;
+      : 5;
 
   const tokenBudgets = moduleMaxTokenBudgets(profile);
   let lastRaw = "";
@@ -2675,7 +2676,8 @@ export async function generateCourseModuleFromMaterial(
     return auditModuleQuantitativeConsistency(
       sanitized,
       trimmed,
-      outputLanguage
+      outputLanguage,
+      profile
     );
   };
 
@@ -2749,7 +2751,8 @@ export async function generateCourseModuleFromMaterial(
         return auditModuleQuantitativeConsistency(
           sanitizeGeneratedModuleLessons(hardenedRepair),
           trimmed,
-          outputLanguage
+          outputLanguage,
+          profile
         );
       } catch (repairErr) {
         if (attempt < tokenBudgets.length - 1) continue;
@@ -2780,6 +2783,7 @@ export async function generateCourseModuleFromMaterial(
   return auditModuleQuantitativeConsistency(
     sanitizeGeneratedModuleLessons(hardenedFinal),
     trimmed,
-    outputLanguage
+    outputLanguage,
+    profile
   );
 }

@@ -1438,7 +1438,7 @@ export async function runPdfIngestExpandOne(
     : Number.NaN;
   const MODULE_CONCURRENCY = Number.isFinite(moduleConcurrencyParsed)
     ? Math.max(1, Math.min(40, moduleConcurrencyParsed))
-    : 10;
+    : 14;
   const QUEUE_POLL_MS = 3_500;
   const QUEUE_MAX_WAIT_MS = 4 * 60 * 1000;
 

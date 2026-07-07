@@ -19,9 +19,16 @@ function resolveQaModel(): string {
   return "claude-haiku-4-5";
 }
 
-export function isCourseQuantitativeQaEnabled(): boolean {
+type CourseBuildProfile = "express" | "fast" | "balanced" | "full";
+
+export function isCourseQuantitativeQaEnabled(
+  profile?: CourseBuildProfile
+): boolean {
   const flag = process.env.COURSE_NUMERIC_QA?.trim().toLowerCase();
   if (flag === "0" || flag === "false" || flag === "off") return false;
+  if (flag === "1" || flag === "true" || flag === "on") return true;
+  // Speed/cost: only run the extra audit pass by default on the deepest profile.
+  if (profile && profile !== "full") return false;
   return true;
 }
 
@@ -97,9 +104,10 @@ ${sourceExcerpt.slice(0, 48_000)}`;
 export async function auditModuleQuantitativeConsistency(
   mod: CourseModule,
   sourceExcerpt: string,
-  outputLanguage: CourseOutputLanguage
+  outputLanguage: CourseOutputLanguage,
+  profile: CourseBuildProfile = "full"
 ): Promise<CourseModule> {
-  if (!isCourseQuantitativeQaEnabled() || !moduleNeedsQuantitativeQa(mod)) {
+  if (!isCourseQuantitativeQaEnabled(profile) || !moduleNeedsQuantitativeQa(mod)) {
     return mod;
   }
 
