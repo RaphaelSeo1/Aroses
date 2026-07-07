@@ -384,6 +384,19 @@ function materialCharLimit(profile: CourseBuildProfile): number {
 }
 
 /**
+ * True when a source is too large for the shared head/tail excerpt every
+ * module writer sees (`truncateMaterial` drops the MIDDLE of the document past
+ * `materialCharLimit`). The ingest runner uses this to route large single-file
+ * uploads through structure planning, where each module gets its own
+ * chunk-aligned source text instead — so middle chapters actually reach the
+ * module writer. Disable via `STRUCTURE_PLAN_LARGE_SOURCE=0`.
+ */
+export function sourceExceedsSharedMaterialBudget(totalChars: number): boolean {
+  if (process.env.STRUCTURE_PLAN_LARGE_SOURCE?.trim() === "0") return false;
+  return totalChars > materialCharLimit(resolveCourseBuildProfile());
+}
+
+/**
  * Outline step only — **much smaller** than `materialCharLimit` so the outline model
  * finishes in ~1–2 minutes. Stored `ingest_source_text` / module expand still uses full
  * `materialCharLimit`.

@@ -86,6 +86,7 @@ import {
   hardenCourseTitle,
   materialTextForPdfIngest,
   planCourseStructureFromChunks,
+  sourceExceedsSharedMaterialBudget,
   structurePlanToOutline,
   type PdfIngestStreamSink,
 } from "@/lib/ai/study-generation";
@@ -2486,18 +2487,36 @@ async function runPdfIngestOutlinePhase(
     void touchJobProgress(admin, jobId);
   }, 8_000);
 
-  // STRUCTURE_PLANNING (June-1 routing): use the content planner only when the
-  // global flag is on OR the job combines more than one source file (a manually
-  // grouped "lecture"). Single-file uploads fall back to
-  // generateCourseOutlineFromMaterial, which produces the short, pedagogical
-  // module/lesson titles the product wants. Visual enrichment (figures + table
-  // vision) and per-lesson source attribution still run for BOTH paths below.
+  // STRUCTURE_PLANNING routing: use the content planner when the global flag
+  // is on, the job combines more than one source file (a manually grouped
+  // "lecture"), or a SINGLE file is larger than the shared material excerpt.
+  // The last case is a fidelity guard: on the plain outline path every module
+  // writer sees the same head/tail excerpt, so a document past the profile's
+  // material cap silently loses its MIDDLE chapters from all module prompts.
+  // The planner instead maps lessons to chunk ids and each module expands from
+  // its own chunk-aligned source. Small single files keep the cheap outline
+  // path (short, pedagogical titles; no extra plan call). Visual enrichment
+  // and per-lesson source attribution still run for BOTH paths below.
   const distinctSourceFiles = new Set(
     chunks.map((c) => c.sourceFileName).filter((n) => Boolean(n))
   ).size;
+  const totalChunkChars = chunks.reduce(
+    (n, c) => n + (c.approxChars > 0 ? c.approxChars : c.text.length),
+    0
+  );
+  const largeSingleSource = sourceExceedsSharedMaterialBudget(totalChunkChars);
   const useStructurePlanning =
     chunks.length > 0 &&
-    (isStructurePlanningEnabled() || distinctSourceFiles > 1);
+    (isStructurePlanningEnabled() ||
+      distinctSourceFiles > 1 ||
+      largeSingleSource);
+  if (largeSingleSource && distinctSourceFiles <= 1) {
+    console.info("[pdf-ingest] large single source routed through planner", {
+      jobId,
+      totalChunkChars,
+      chunks: chunks.length,
+    });
+  }
 
   let outline: CourseOutlinePayload;
   let plan: CourseStructurePlan | null = null;
