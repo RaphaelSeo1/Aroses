@@ -1272,20 +1272,17 @@ function outlineInstruction(
 ): string {
   let moduleCount: string;
   let maxLessonTitles: number;
+  const maxModules = outlineMaxModules(profile);
   if (profile === "express") {
-    const maxModules = clampInt(envInt("COURSE_EXPRESS_MAX_MODULES", 3), 2, 3);
     moduleCount = `Use **2 to ${maxModules}** modules — **prefer 2** so the build finishes in minutes.`;
     maxLessonTitles = clampInt(envInt("COURSE_EXPRESS_MAX_LESSON_TITLES", 3), 2, 3);
   } else if (profile === "fast") {
-    const maxModules = clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 6);
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
     maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 6);
   } else if (profile === "balanced") {
-    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
     moduleCount = `Use **4 to ${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 4, but a long lecture deck or multi-topic document should use more (toward ${maxModules}). Give each major topic or section its own focused module; do not compress the whole document into one or two catch-alls.`;
     maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 8), 2, 12);
   } else {
-    const maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
     moduleCount = `Use **at least 5** and up to **${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 5–6, but a long lecture deck, chapter, or multi-topic document should use many more (toward the maximum). Split the material into focused modules so each major topic, section, or learning objective gets its own module — prefer MORE, narrower modules over a few broad ones. Do NOT compress later pages into one catch-all module; every distinct section of the document, from first page to last, must be represented.`;
     maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 12), 3, 20);
   }
@@ -2028,11 +2025,62 @@ export function assembleModuleSourcesFromPlan(
 }
 
 /** Phase 1 of chunked PDF ingest — small JSON, usually finishes quickly. */
+/**
+ * Hard ceiling on outline module count per profile. Single source of truth for
+ * both the outline prompt (`outlineInstruction`) and the post-parse clamp in
+ * `normalizeOutlinePayload`, so the prompt's cap and the enforced cap never
+ * drift. The prompt alone is NOT a guarantee — the model can and does exceed
+ * it, and every extra module is a paid generation call.
+ */
+function outlineMaxModules(profile: CourseBuildProfile): number {
+  if (profile === "express") {
+    return clampInt(envInt("COURSE_EXPRESS_MAX_MODULES", 3), 2, 3);
+  }
+  if (profile === "fast") {
+    return clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 6);
+  }
+  if (profile === "balanced") {
+    return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
+  }
+  return clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
+}
+
+/**
+ * Enforce the per-profile module cap on a parsed outline. Overflow modules are
+ * MERGED into the last kept module (their lesson_titles appended) rather than
+ * dropped, so later document sections keep their lessons (fidelity: no source
+ * coverage is deleted) while the module-generation cost stays capped.
+ */
+function clampOutlineModuleCount(
+  modules: CourseOutlinePayload["modules"],
+  maxModules: number
+): CourseOutlinePayload["modules"] {
+  if (modules.length <= maxModules) return modules;
+  const kept = modules.slice(0, maxModules);
+  const overflow = modules.slice(maxModules);
+  const last = kept[kept.length - 1]!;
+  kept[kept.length - 1] = {
+    ...last,
+    lesson_titles: [
+      ...last.lesson_titles,
+      ...overflow.flatMap((m) => m.lesson_titles),
+    ],
+  };
+  console.warn(
+    `[study-generation] outline returned ${modules.length} modules (cap ${maxModules}); merged ${overflow.length} overflow module(s) into the last module`
+  );
+  return kept;
+}
+
 function normalizeOutlinePayload(
   outline: CourseOutlinePayload,
   options?: StructurePlanTitleOptions
 ): CourseOutlinePayload {
-  const modules = outline.modules.map((m) => ({
+  const clamped = clampOutlineModuleCount(
+    outline.modules,
+    outlineMaxModules(resolveCourseBuildProfile())
+  );
+  const modules = clamped.map((m) => ({
     ...m,
     title: normalizeIngestDisplayTitle(m.title),
     lesson_titles: m.lesson_titles.map((t) => normalizeIngestDisplayTitle(t)),
