@@ -51,7 +51,11 @@ export function StudyChatDrawer({
   const storageKey = studyChatStorageKey(courseId, materialId);
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [hydrated, setHydrated] = useState(false);
+  // Which storage key the current `messages` state was loaded from. Guards the
+  // save effect below: when the user switches lecture materials the key changes
+  // one render before the new thread is loaded, and saving in that window would
+  // copy the previous material's messages into the new material's storage.
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,13 +64,13 @@ export function StudyChatDrawer({
 
   useEffect(() => {
     setMessages(loadStudyChatMessages(storageKey));
-    setHydrated(true);
+    setLoadedKey(storageKey);
   }, [storageKey]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (loadedKey !== storageKey) return;
     saveStudyChatMessages(storageKey, messages);
-  }, [hydrated, messages, storageKey]);
+  }, [loadedKey, messages, storageKey]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -270,7 +274,7 @@ export function StudyChatDrawer({
               <p className="text-[11px] leading-snug text-zinc-500">
                 {variant === "legacy"
                   ? "Uses your summary and practice questions only."
-                  : `Side-by-side with your lesson — chat is saved for this course.${quizOpen ? " Active quiz: guides reasoning without giving away letters." : ""}`}
+                  : `Side-by-side with your lesson — chat is saved for this material.${quizOpen ? " Active quiz: guides reasoning without giving away letters." : ""}`}
               </p>
             </div>
             <button

@@ -6,6 +6,13 @@ import type { StudyChatTurn } from "@/types/study-chat";
 const MAX_STORED_MESSAGES = 60;
 
 export function studyChatStorageKey(courseId?: string, materialId?: string): string {
+  // Scope the thread to the lecture material (not the whole course): opening a
+  // different material starts a fresh conversation instead of carrying over
+  // messages from another upload. courseId stays in the key so material ids
+  // can never collide across dashboard/explore contexts.
+  if (courseId && materialId) {
+    return `aroses-study-chat:course:${courseId}:material:${materialId}`;
+  }
   if (courseId) return `aroses-study-chat:course:${courseId}`;
   if (materialId) return `aroses-study-chat:material:${materialId}`;
   return "aroses-study-chat:anonymous";
