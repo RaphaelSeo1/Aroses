@@ -235,9 +235,15 @@ export function CoursePlayer({
   const refineClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  // True once the user has navigated (module change) since this material loaded.
+  // The one-time "resume saved position" effect below checks this so it only
+  // restores the saved scroll on the initial page load — never after the user
+  // jumps to a new module, which must always start at the top.
+  const hasNavigatedRef = useRef(false);
 
   useEffect(() => {
     setRefineApplyFlash(false);
+    hasNavigatedRef.current = false;
     if (refineClearTimerRef.current) {
       clearTimeout(refineClearTimerRef.current);
       refineClearTimerRef.current = null;
@@ -357,6 +363,11 @@ export function CoursePlayer({
 
   useEffect(() => {
     if (mode !== "lessons") return;
+    // Only restore the saved scroll/lesson on the initial load. Once the user
+    // has navigated to another module, this effect re-runs (activeModuleId is a
+    // dep) but must NOT fire, or it would drag the viewport back down using the
+    // stale page-load position after we scrolled the new module to the top.
+    if (hasNavigatedRef.current) return;
     const lesson =
       typeof initialLessonIndex === "number" ? initialLessonIndex : null;
     const scroll =
@@ -600,6 +611,7 @@ export function CoursePlayer({
       // when the active module actually changed (avoids jumping when the
       // caller just re-syncs the same module, e.g. starting a rename).
       if (typeof window !== "undefined" && previousModuleId !== modId) {
+        hasNavigatedRef.current = true;
         window.scrollTo(0, 0);
       }
       persistStudyModulePosition(courseId, materialId, modId, { mode: "free" });
@@ -896,6 +908,7 @@ export function CoursePlayer({
         typeof window !== "undefined" &&
         (!isSameMaterial || previousModuleId !== modId)
       ) {
+        hasNavigatedRef.current = true;
         window.scrollTo(0, 0);
       }
     },
