@@ -1454,15 +1454,30 @@ ${brokenAssistantText.slice(0, 60_000)}`;
 async function repairModuleJson(
   anthropic: Anthropic,
   brokenAssistantText: string,
-  profile: CourseBuildProfile
+  profile: CourseBuildProfile,
+  sourceExcerpt: string
 ): Promise<CourseModule> {
   const requirements = `Requirements for EACH lesson: "content" MUST be non-empty teaching prose grounded in the source (never empty, never a bare title, never "key terms only"). Teach each concept in depth only once — do not repeat an explanation already given earlier. "key_terms" are DISCRETIONARY (term+definition) — include only genuinely important terms the source defines; an empty key_terms array is valid, and you must not invent terms or pad to a count. "examples": aim for at least 1–2 real-world examples per lesson — prefer the source's own; if the source gives none, a brief GENERIC illustrative scenario is allowed (it must invent no source-specific facts/figures and not contradict the source). Never a placeholder string. Output only final, clean text — NO strikethrough or self-correction markup (no markdown \`~~...~~\`, no \`<del>\`/\`<s>\`/\`<strike>\`, no "~~A~~ B" / "A → B" correction patterns); if you would correct yourself, just write the final correct text.`;
+
+  // Fidelity: repairs must be grounded in the same source material the original
+  // generation call used — never regenerated from schema hints alone. Reuse the
+  // table-preserving truncation so preserved table/figure blocks survive.
+  const groundedSource = truncateMaterial(sourceExcerpt, 60_000);
 
   const prompt = `You returned JSON that could not be parsed or did not meet requirements for a single course "module" (id, title, lessons[], quiz[]). Output ONLY: { "module": { ... } } with valid JSON. No markdown.
 
 ${requirements}
 
 ${moduleQuizRules(profile)}
+
+GROUNDING RULES (critical — these override everything above on conflict):
+- Repair the JSON using ONLY facts, figures, tables, terminology, and quiz answers present in the SOURCE MATERIAL below or recoverable from the broken output.
+- Do NOT invent lesson content, numbers, table rows, examples, or quiz items that are not supported by the source.
+- Exception to the non-empty rule above: if a lesson body cannot be recovered from the broken output and is not supported by the source material, return that lesson with an EMPTY "content" string instead of writing new material — it will be repaired separately from the source.
+
+--- SOURCE MATERIAL START ---
+${groundedSource}
+--- SOURCE MATERIAL END ---
 
 Broken output (repair):
 ${brokenAssistantText.slice(0, 100_000)}`;
@@ -2721,7 +2736,7 @@ export async function generateCourseModuleFromMaterial(
         parseErr
       );
       try {
-        let repaired = await repairModuleJson(anthropic, rawText, profile);
+        let repaired = await repairModuleJson(anthropic, rawText, profile, trimmed);
         repaired = await ensureModuleLessonFields(
           anthropic,
           repaired,
@@ -2761,7 +2776,7 @@ export async function generateCourseModuleFromMaterial(
     }
   }
 
-  let repaired = await repairModuleJson(anthropic, lastRaw, profile);
+  let repaired = await repairModuleJson(anthropic, lastRaw, profile, trimmed);
   repaired = await ensureModuleLessonFields(
     anthropic,
     repaired,
