@@ -1880,7 +1880,7 @@ async function resumeStalledExtraction(
     .select("id")
     .maybeSingle();
   if (!claimed) return; // another reaper already grabbed it
-  await runPdfIngestJob(row.id);
+  await runPdfIngestJob(row.id, { driveModules: true });
 }
 
 export async function reapStaleIngestJobs(options?: {
@@ -1922,8 +1922,8 @@ export async function reapStaleIngestJobs(options?: {
   const tasks: Promise<unknown>[] = [];
   for (const j of pendingJobs ?? []) {
     tasks.push(
-      runPdfIngestJob((j as { id: string }).id).catch((e) =>
-        console.warn("[pdf-ingest] reaper pending kick failed", e)
+      runPdfIngestJob((j as { id: string }).id, { driveModules: true }).catch(
+        (e) => console.warn("[pdf-ingest] reaper pending kick failed", e)
       )
     );
   }

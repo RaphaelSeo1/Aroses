@@ -156,12 +156,12 @@ export async function POST(_request: Request, ctx: Params) {
 
   if (useChunkedPdfIngest) {
     after(() => {
-      void runPdfIngestJob(jobId).catch((e) =>
+      void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
         console.error("[process-pdf/retry] after()", jobId, e)
       );
     });
   } else {
-    void runPdfIngestJob(jobId).catch((e) =>
+    void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
       console.error("[process-pdf/retry] sync", jobId, e)
     );
   }

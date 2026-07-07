@@ -12,6 +12,7 @@ import { parseCourseAssetManifest } from "@/lib/study-ingest/course-assets";
 import { parseIngestPageArtifacts } from "@/lib/study-ingest/inject-pdf-tables-into-module";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
+import { report } from "@/lib/report-error";
 import type { CoursePayload } from "@/types/course";
 
 export const runtime = "nodejs";
@@ -101,11 +102,47 @@ export async function GET(_request: Request, ctx: Params) {
       typeof row.original_file_name === "string" && row.original_file_name.trim()
         ? row.original_file_name.trim()
         : undefined;
+    const staleMessage =
+      "This build stopped making progress for a long time (the server may have hit a time limit or lost the connection). Try uploading the PDF again on a stable network. Hard-refresh the page first so your browser runs the latest upload code. Confirm migrations 020–028 are applied in Supabase and the service role key is set on the host.";
+
+    // Persist the failure instead of only synthesizing it in the response.
+    // Previously the UI said "failed" while the DB row stayed running, so the
+    // cron reaper could keep burning tokens on a build the user already gave
+    // up on. Conditional update (status + stale updated_at + epoch bump) so a
+    // worker that revived in the meantime is never clobbered.
+    const admin = createAdminClient();
+    if (admin) {
+      const prevEpoch =
+        typeof (row as { ingest_epoch?: unknown }).ingest_epoch === "number"
+          ? (row as { ingest_epoch: number }).ingest_epoch
+          : 0;
+      const { data: markedFailed } = await admin
+        .from("pdf_ingest_jobs")
+        .update({
+          status: "failed",
+          error_message: staleMessage,
+          ingest_phase: null,
+          ingest_epoch: prevEpoch + 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", jobId)
+        .in("status", ["pending", "running"])
+        .lt("updated_at", new Date(Date.now() - staleBudgetMs).toISOString())
+        .select("id")
+        .maybeSingle();
+      if (markedFailed) {
+        void report(
+          "pdf-ingest.stale_job_failed",
+          `job exceeded ${Math.round(staleBudgetMs / 60_000)}min stale budget in status "${row.status}"`,
+          { jobId, detail: { status: row.status, fileName: staleName } }
+        );
+      }
+    }
+
     return NextResponse.json({
       status: "failed",
       materialId: undefined,
-      error:
-        "This build stopped making progress for a long time (the server may have hit a time limit or lost the connection). Try uploading the PDF again on a stable network. Hard-refresh the page first so your browser runs the latest upload code. Confirm migrations 020–028 are applied in Supabase and the service role key is set on the host.",
+      error: staleMessage,
       outlineReady: false,
       ingestPhase: null,
       modulesBuilt: 0,
@@ -180,9 +217,10 @@ export async function GET(_request: Request, ctx: Params) {
     pendingForMs >= PENDING_KICK_MS
   ) {
     // Atomic claim inside `runPdfIngestJob` makes duplicate kicks safe — only
-    // one worker can flip status from `pending` to `running`.
+    // one worker can flip status from `pending` to `running`. driveModules so
+    // the re-kicked build also finishes without the tab staying open.
     after(() => {
-      void runPdfIngestJob(jobId).catch((e) =>
+      void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
         console.error("[jobs/get] kick pending job", jobId, e)
       );
     });
@@ -257,7 +295,7 @@ export async function GET(_request: Request, ctx: Params) {
         // The atomic claim inside `runPdfIngestJob` makes a duplicate kick a
         // no-op if the client also fires `/expand` on the next poll.
         after(() => {
-          void runPdfIngestJob(jobId).catch((e) =>
+          void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
             console.error("[jobs/get] kick after auto-recovery", jobId, e)
           );
         });

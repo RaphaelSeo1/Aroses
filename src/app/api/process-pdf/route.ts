@@ -411,8 +411,13 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
   const useChunkedPdfIngest = process.env.PDF_INGEST_SYNCHRONOUS !== "1";
 
   if (useChunkedPdfIngest) {
+    // driveModules: the server carries the build end-to-end (phase 1 + all
+    // module batches + finalize) inside this function's `after()` window, so
+    // the course finishes even if the user closes the tab immediately after
+    // uploading. Client /expand polling remains as progress UI + a redundant
+    // driver (batch claims are atomic, duplicates no-op).
     after(() => {
-      void runPdfIngestJob(jobId).catch((e) =>
+      void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
         console.error("[process-pdf] after()", jobId, e)
       );
     });

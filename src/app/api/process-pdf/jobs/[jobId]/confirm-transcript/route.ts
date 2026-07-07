@@ -108,9 +108,9 @@ export async function POST(request: Request, ctx: Params) {
   }
 
   after(() => {
-    void runPdfIngestContinueAfterTranscript(jobId).catch((e) =>
-      console.error("[confirm-transcript]", jobId, e)
-    );
+    void runPdfIngestContinueAfterTranscript(jobId, {
+      driveModules: true,
+    }).catch((e) => console.error("[confirm-transcript]", jobId, e));
   });
 
   return NextResponse.json({ ok: true }, { status: 202 });
