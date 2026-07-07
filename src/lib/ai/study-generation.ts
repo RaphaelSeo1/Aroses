@@ -1058,9 +1058,23 @@ async function invokeUserMessageForPdfText(
 async function repairPayloadJson(
   anthropic: Anthropic,
   brokenAssistantText: string,
-  profile: CourseBuildProfile
+  profile: CourseBuildProfile,
+  sourceExcerpt: string
 ): Promise<CoursePayload> {
+  // Fidelity: ground the repair in the same source the original call used so a
+  // broken-JSON recovery can never invent course content from schema hints.
+  const groundedSource = truncateMaterial(sourceExcerpt, 60_000);
+
   const prompt = `You previously returned JSON that could not be parsed or validated. Output ONLY a single valid JSON object for the same course schema (title, description, modules with lessons and quiz arrays). Fix truncation, stray commas, or malformed strings. No markdown, no commentary.
+
+GROUNDING RULES (critical):
+- Repair the JSON using ONLY facts, figures, tables, terminology, and quiz answers present in the SOURCE MATERIAL below or recoverable from the broken output.
+- Do NOT invent lesson content, numbers, table rows, examples, or quiz items that are not supported by the source.
+- If a lesson body cannot be recovered from the broken output and is not supported by the source material, return that lesson with an EMPTY "content" string instead of writing new material — it will be repaired separately from the source.
+
+--- SOURCE MATERIAL START ---
+${groundedSource}
+--- SOURCE MATERIAL END ---
 
 Broken output (repair it):
 ${brokenAssistantText.slice(0, 120_000)}`;
@@ -1165,7 +1179,7 @@ export async function generateCourseFromMaterial(
     parsed = JSON.parse(stripJsonFence(rawText));
   } catch {
     try {
-      const repaired = await repairPayloadJson(anthropic, rawText, profile);
+      const repaired = await repairPayloadJson(anthropic, rawText, profile, trimmed);
       const modules = await finalizeGeneratedModules(
         anthropic,
         repaired.modules,
@@ -1201,7 +1215,7 @@ export async function generateCourseFromMaterial(
   } catch (e) {
     console.warn("[study-generation] Payload validation failed; repairing", e);
     try {
-      const repaired = await repairPayloadJson(anthropic, rawText, profile);
+      const repaired = await repairPayloadJson(anthropic, rawText, profile, trimmed);
       const modules = await finalizeGeneratedModules(
         anthropic,
         repaired.modules,
