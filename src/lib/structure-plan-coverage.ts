@@ -118,8 +118,8 @@ export function structurePlanTargets(
     minLessons = clampInt(Math.ceil(chunkCount / 1.75), 2, 18);
     maxModules = 5;
   } else if (profile === "balanced") {
-    minLessons = clampInt(Math.ceil(chunkCount / 1.5), 2, 22);
-    maxModules = 6;
+    minLessons = clampInt(Math.ceil(chunkCount / 1.3), 2, 40);
+    maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 12), 4, 18);
   } else {
     // full: deepest profile — more modules and more lessons per the source.
     // Lesson floor scales ~1:1 with chunk count (each source section earns a

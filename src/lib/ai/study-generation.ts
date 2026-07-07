@@ -195,10 +195,12 @@ function resolveCourseBuildProfile(): CourseBuildProfile {
   if (p === "fast") return "fast";
   if (p === "express") return "express";
   // Default when COURSE_BUILD_PROFILE is unset (e.g. production without the env
-  // var): `full` (Sonnet) — the "Full Processing" depth that produces richly
-  // structured, pedagogically-titled courses. Set COURSE_BUILD_PROFILE=balanced
-  // (Haiku) for cheaper/faster but shallower multi-PDF builds.
-  return "full";
+  // var): `balanced` (Haiku) — cheaper and faster than `full` (Sonnet) while
+  // still producing genuinely in-depth, multi-module courses. The balanced
+  // depth knobs below (material chars, module/lesson caps, coverage prompt) are
+  // tuned up from stock so large PDFs keep near-`full` coverage. Set
+  // COURSE_BUILD_PROFILE=full to restore the Sonnet deep build.
+  return "balanced";
 }
 
 /** Same truncation as outline/module generation — store on the job for expand steps. */
@@ -356,7 +358,7 @@ const MAX_MATERIAL_CHARS = 240_000;
 /** Aggressively small for `fast` so outline/module calls stay quick. */
 const FAST_MATERIAL_CHARS = 40_000;
 /** `balanced`: default input budget; override with `COURSE_BALANCED_MATERIAL_CHARS`. */
-const BALANCED_MATERIAL_CHARS = 36_000;
+const BALANCED_MATERIAL_CHARS = 120_000;
 
 function materialCharLimit(profile: CourseBuildProfile): number {
   if (profile === "express") {
@@ -395,8 +397,10 @@ function outlineMaterialCharLimit(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_OUTLINE_MATERIAL_CHARS", 18_000), 8_000, moduleCap);
   }
   if (profile === "balanced") {
+    // Plan the outline over (nearly) the whole document like `full` so modules
+    // map the entire source end to end — Haiku makes this cheap even at 120k.
     return clampInt(
-      envInt("COURSE_BALANCED_OUTLINE_MATERIAL_CHARS", 22_000),
+      envInt("COURSE_BALANCED_OUTLINE_MATERIAL_CHARS", moduleCap),
       12_000,
       moduleCap
     );
@@ -602,7 +606,7 @@ function outlineCoverageBlock(profile: CourseBuildProfile): string {
     return "COVERAGE: Map obvious sections in this excerpt to modules; stay within the caps above.";
   }
   if (profile === "balanced") {
-    return "COVERAGE: Cover this excerpt well; use headings to infer structure—keep the outline compact.";
+    return "COVERAGE: Plan modules + lesson_titles that together map **every section, heading, and distinct topic across the whole document** — first page to last. Walk it end to end using the headings to infer structure; do not plan only for the opening pages. Later pages and the document middle each need their own modules/lessons.";
   }
   return `COVERAGE (critical): Plan modules + lesson_titles that together **map every section, heading, and distinct topic across the entire document** — first page to last. The material below is the **full document** unless it is extremely large. Walk it end to end; do not plan only for the opening pages and stop. Later pages and the document middle each need their own modules/lessons. Full lesson bodies are written from the same source later.`;
 }
@@ -1263,9 +1267,9 @@ function outlineInstruction(
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
     maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 6);
   } else if (profile === "balanced") {
-    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 6);
-    moduleCount = `Use **2 to ${maxModules}** modules. Prefer a compact plan that still covers the excerpt.`;
-    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 6), 2, 8);
+    const maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 12), 2, 18);
+    moduleCount = `Use **at least 4** and up to **${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 4–5, but a long lecture deck, chapter, or multi-topic document should use many more (toward the maximum). Give each major topic, section, or learning objective its own focused module rather than a few broad catch-alls, and do not compress later pages into one module.`;
+    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 8), 2, 12);
   } else {
     const maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
     moduleCount = `Use **at least 5** and up to **${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 5–6, but a long lecture deck, chapter, or multi-topic document should use many more (toward the maximum). Split the material into focused modules so each major topic, section, or learning objective gets its own module — prefer MORE, narrower modules over a few broad ones. Do NOT compress later pages into one catch-all module; every distinct section of the document, from first page to last, must be represented.`;
