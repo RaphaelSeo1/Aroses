@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { synthesizeLiveLectureNotes } from "@/lib/ai/live-lecture-notes";
+import {
+  MAX_REVISABLE_SECTIONS,
+  ROLLING_SUMMARY_MAX_CHARS,
+  streamLiveLectureNotes,
+  type RevisableSection,
+} from "@/lib/ai/live-lecture-notes";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
@@ -10,19 +15,32 @@ export const maxDuration = 60;
 type Params = { params: Promise<{ sessionId: string }> };
 
 const MAX_INPUT_CHARS = 12_000;
-/** Hard per-session cap on Haiku note-append calls (runaway guard). */
+const MAX_SECTION_CHARS = 2_000;
+const MAX_EXCERPT_CHARS = 3_000;
+/** Hard per-session cap on Haiku note calls (runaway guard). */
 const MAX_SYNTHESIZE_CALLS = 60;
 
 /**
- * POST /api/live-notes/[sessionId]/synthesize
+ * POST /api/live-notes/[sessionId]/synthesize — SSE.
  *
- * Turn the newest slice of live transcript into one structured notes block.
- * Body: { newSegmentText, recentHeadings?: string[] }
- * → { block: AutoGenerateBlock | null, updatedSummary }
+ * Body: {
+ *   newSegmentText: string,
+ *   recentHeadings?: string[],
+ *   revisable?: [{ sectionId, markdown, transcriptExcerpt? }]  // last ≤4
+ * }
  *
- * The rolling summary is loaded from and persisted to the session row here
- * (never trusted from the client), so a reload resumes cleanly and the
- * model input stays bounded on any lecture length.
+ * Streams (text/event-stream):
+ *   event: op    data: { "op": "revise"|"append", "sectionId": string }
+ *   event: text  data: { "delta": string }        // body of the active op
+ *   event: done  data: { "appendSectionId": string }
+ *   event: error data: { "message": string }
+ *
+ * Everything after the model's @@summary marker is withheld from the client
+ * and persisted to `live_lecture_sessions.rolling_summary` here — the
+ * summary stays server-owned. Revise targets are validated against the ids
+ * the client declared revisable (already filtered for student edits); the
+ * generator swallows ops for anything else. When the session is capped the
+ * route returns JSON `{ capped: true }` (200) instead of a stream.
  */
 export async function POST(request: Request, ctx: Params) {
   const { sessionId } = await ctx.params;
@@ -44,7 +62,11 @@ export async function POST(request: Request, ctx: Params) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-  const b = body as { newSegmentText?: unknown; recentHeadings?: unknown };
+  const b = body as {
+    newSegmentText?: unknown;
+    recentHeadings?: unknown;
+    revisable?: unknown;
+  };
   if (typeof b.newSegmentText !== "string" || !b.newSegmentText.trim()) {
     return NextResponse.json({ error: "newSegmentText required" }, { status: 400 });
   }
@@ -52,6 +74,27 @@ export async function POST(request: Request, ctx: Params) {
     ? b.recentHeadings
         .filter((h): h is string => typeof h === "string" && h.trim().length > 0)
         .slice(-5)
+    : [];
+  const revisable: RevisableSection[] = Array.isArray(b.revisable)
+    ? b.revisable
+        .filter(
+          (s): s is { sectionId: string; markdown: string; transcriptExcerpt?: string } =>
+            !!s &&
+            typeof s === "object" &&
+            typeof (s as { sectionId?: unknown }).sectionId === "string" &&
+            (s as { sectionId: string }).sectionId.length > 0 &&
+            (s as { sectionId: string }).sectionId.length <= 64 &&
+            typeof (s as { markdown?: unknown }).markdown === "string"
+        )
+        .slice(-MAX_REVISABLE_SECTIONS)
+        .map((s) => ({
+          sectionId: s.sectionId,
+          markdown: s.markdown.slice(0, MAX_SECTION_CHARS),
+          transcriptExcerpt:
+            typeof s.transcriptExcerpt === "string"
+              ? s.transcriptExcerpt.slice(0, MAX_EXCERPT_CHARS)
+              : undefined,
+        }))
     : [];
 
   const { data: session } = await supabase
@@ -70,11 +113,7 @@ export async function POST(request: Request, ctx: Params) {
     typeof session.synthesize_calls === "number" ? session.synthesize_calls : 0;
   if (calls >= MAX_SYNTHESIZE_CALLS) {
     // Transcript capture keeps working; only the AI note appends stop.
-    return NextResponse.json({
-      block: null,
-      updatedSummary: session.rolling_summary ?? "",
-      capped: true,
-    });
+    return NextResponse.json({ capped: true });
   }
 
   // Count the attempt before the model call so a crash mid-call still burns
@@ -88,39 +127,87 @@ export async function POST(request: Request, ctx: Params) {
     .eq("id", sessionId)
     .eq("user_id", user.id);
 
-  const result = await synthesizeLiveLectureNotes({
-    newSegmentText: b.newSegmentText.slice(0, MAX_INPUT_CHARS),
-    rollingSummary:
-      typeof session.rolling_summary === "string" ? session.rolling_summary : "",
-    recentHeadings,
-    lectureTitle: typeof session.title === "string" ? session.title : undefined,
-    userId: user.id,
+  const rollingSummary =
+    typeof session.rolling_summary === "string" ? session.rolling_summary : "";
+  const appendSectionId = `s-${crypto.randomUUID().slice(0, 8)}`;
+  const newSegmentText = b.newSegmentText.slice(0, MAX_INPUT_CHARS);
+  const lectureTitle =
+    typeof session.title === "string" ? session.title : undefined;
+
+  const encoder = new TextEncoder();
+  const sseLine = (event: string, data: unknown): string =>
+    `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: string, data: unknown) => {
+        try {
+          controller.enqueue(encoder.encode(sseLine(event, data)));
+        } catch {
+          /* client went away */
+        }
+      };
+      try {
+        let summary: string | null = null;
+        for await (const ev of streamLiveLectureNotes({
+          newSegmentText,
+          rollingSummary,
+          recentHeadings,
+          revisable,
+          appendSectionId,
+          lectureTitle,
+          userId: user.id,
+        })) {
+          if (ev.type === "op") {
+            send("op", { op: ev.op, sectionId: ev.sectionId });
+          } else if (ev.type === "text") {
+            send("text", { delta: ev.delta });
+          } else if (ev.type === "summary") {
+            summary = ev.summary;
+          }
+        }
+
+        if (
+          typeof summary === "string" &&
+          summary.trim() &&
+          summary !== rollingSummary
+        ) {
+          await supabase
+            .from("live_lecture_sessions")
+            .update({
+              rolling_summary: summary
+                .trim()
+                .slice(0, ROLLING_SUMMARY_MAX_CHARS),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", sessionId)
+            .eq("user_id", user.id);
+        }
+
+        send("done", { appendSectionId });
+      } catch (e) {
+        console.error("[live-notes/synthesize]", e);
+        void report("live-notes.synthesize_failed", e, {
+          userId: user.id,
+          detail: { sessionId },
+        });
+        send("error", { message: "Could not synthesize notes for this slice." });
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      }
+    },
   });
 
-  if (!result) {
-    void report("live-notes.synthesize_failed", "model call or parse failed", {
-      userId: user.id,
-      detail: { sessionId },
-    });
-    return NextResponse.json(
-      { error: "Could not synthesize notes for this slice." },
-      { status: 502 }
-    );
-  }
-
-  if (result.updatedSummary !== session.rolling_summary) {
-    await supabase
-      .from("live_lecture_sessions")
-      .update({
-        rolling_summary: result.updatedSummary,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", sessionId)
-      .eq("user_id", user.id);
-  }
-
-  return NextResponse.json({
-    block: result.block,
-    updatedSummary: result.updatedSummary,
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
   });
 }

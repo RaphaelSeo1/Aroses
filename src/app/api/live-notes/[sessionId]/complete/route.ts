@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
+import { reviewLiveLectureNotes } from "@/lib/ai/live-lecture-notes";
 import { recordVoiceSeconds } from "@/lib/billing/voice-usage";
 import {
   buildLiveNotesStudyContext,
   extractLiveNotesEmphasis,
 } from "@/lib/live-notes/notes-emphasis";
+import {
+  applyNoteRevisions,
+  collectAiNoteSections,
+} from "@/lib/live-notes/notes-review";
 import { report } from "@/lib/report-error";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -200,12 +205,45 @@ export async function POST(_request: Request, ctx: Params) {
     .select("id", { count: "exact", head: true })
     .eq("exam_group_id", examGroupId);
 
+  // ── Wrap-up consistency review (once, before course generation) ─────────
+  // One Haiku pass verifies every fully-AI note section against the full
+  // transcript (ground truth) and rewrites the ones that misrepresent it.
+  // Student-authored and student-edited blocks are never touched. Best
+  // effort: any failure leaves the notes as-is and generation proceeds.
+  let notesJson: unknown = session.notes_json;
+  try {
+    const sections = collectAiNoteSections(notesJson);
+    if (sections.length > 0) {
+      const revisions = await reviewLiveLectureNotes({
+        sections,
+        transcript,
+        lectureTitle: title,
+        userId: user.id,
+      });
+      if (revisions && revisions.length > 0) {
+        notesJson = applyNoteRevisions(notesJson, revisions);
+        const { error: notesErr } = await supabase
+          .from("live_lecture_sessions")
+          .update({ notes_json: notesJson, updated_at: new Date().toISOString() })
+          .eq("id", sessionId)
+          .eq("user_id", user.id);
+        if (notesErr) notesJson = session.notes_json;
+      }
+    }
+  } catch (e) {
+    notesJson = session.notes_json;
+    void report("live-notes.wrapup_review_failed", e, {
+      userId: user.id,
+      detail: { sessionId },
+    });
+  }
+
   // ── Three-input weighting (v2) ───────────────────────────────────────────
   // Student-authored/edited note blocks + the AI-notes heading outline flow
   // into `study_context`, which every outline/module prompt already renders
   // as learner context. Emphasis only — the transcript stays the sole
   // factual source.
-  const emphasis = extractLiveNotesEmphasis(session.notes_json);
+  const emphasis = extractLiveNotesEmphasis(notesJson);
   const studyContext = buildLiveNotesStudyContext({
     emphasis,
     lectureTitle: title,

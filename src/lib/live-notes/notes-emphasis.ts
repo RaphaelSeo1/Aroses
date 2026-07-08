@@ -42,8 +42,10 @@ export function extractLiveNotesEmphasis(notesJson: unknown): LiveNotesEmphasis 
       typeof node.attrs?.provenance === "string" ? node.attrs.provenance : null;
     const text = nodeText(node);
 
-    if (provenance === "ai") {
-      if (node.type === "heading" && text) {
+    if (provenance === "ai" || provenance === "ai-context") {
+      // "ai-context" is AI-added clarification the lecturer never said —
+      // it is neither student emphasis nor lecture structure.
+      if (provenance === "ai" && node.type === "heading" && text) {
         aiHeadings.push(text.slice(0, 120));
       }
       continue;

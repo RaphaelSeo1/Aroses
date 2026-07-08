@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   NotesPanel,
-  type AutoGenerateBlock,
   type NotesPanelHandle,
 } from "@/components/immersive/NotesPanel";
 import {
@@ -101,10 +100,15 @@ export function LiveNotesSurface({
 
   // ── Synthesis buffering ────────────────────────────────────────────────
   const unsynthesizedRef = useRef("");
-  const recentHeadingsRef = useRef<string[]>([]);
   const synthInFlightRef = useRef(false);
   const lastSynthAtRef = useRef(Date.now());
   const blockCountRef = useRef(0);
+  /**
+   * Ring buffer: transcript excerpt each AI section was written from —
+   * the ground truth the model checks its own notes against when deciding
+   * self-revisions. Bounded to the revision window (+ slack).
+   */
+  const sectionExcerptsRef = useRef<Map<string, string>>(new Map());
 
   const maybeSynthesize = useCallback(
     async (force: boolean) => {
@@ -114,54 +118,137 @@ export function LiveNotesSurface({
       const threshold = force ? SYNTH_MIN_CHARS : SYNTH_TARGET_CHARS;
       if (pending.length < threshold) return;
 
+      const writer = notesRef.current?.getStreamWriter();
+      if (!writer) return;
+
       synthInFlightRef.current = true;
       unsynthesizedRef.current = "";
       lastSynthAtRef.current = Date.now();
       setAiWriting(true);
+      notesRef.current?.setStreamingIndicator(true);
+
+      // Bounded self-revision context: the last fully-AI sections plus the
+      // raw transcript excerpts underlying them. The writer already excludes
+      // student-edited sections (edits are final) — that filter is enforced
+      // again on receipt via beginRevision.
+      const excerpts = sectionExcerptsRef.current;
+      const revisable = writer.listRevisableSections(4).map((s) => ({
+        sectionId: s.sectionId,
+        markdown: s.markdown,
+        transcriptExcerpt: excerpts.get(s.sectionId),
+      }));
+      const recentHeadings = revisable
+        .map((s) => s.markdown.match(/^##\s+(.+)$/m)?.[1]?.trim())
+        .filter((h): h is string => Boolean(h))
+        .slice(-5);
+
+      let appendSectionId: string | null = null;
+      let gotContent = false;
       try {
         const res = await fetch(`/api/live-notes/${sessionId}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             newSegmentText: pending,
-            recentHeadings: recentHeadingsRef.current.slice(-5),
+            recentHeadings,
+            revisable,
           }),
         });
-        if (!res.ok) {
-          // Put the slice back — the next natural break retries with it.
-          unsynthesizedRef.current =
-            `${pending} ${unsynthesizedRef.current}`.trim();
+        const contentType = res.headers.get("content-type") ?? "";
+        if (!res.ok || !contentType.includes("text/event-stream")) {
+          // JSON fallback: capped (stop quietly) or a hard error (put the
+          // slice back — the next natural break retries with it).
+          const data = (await res
+            .json()
+            .catch(() => ({}))) as { capped?: boolean };
+          if (!data.capped) {
+            unsynthesizedRef.current =
+              `${pending} ${unsynthesizedRef.current}`.trim();
+          }
           return;
         }
-        const data = (await res.json()) as {
-          block?: AutoGenerateBlock | null;
-          capped?: boolean;
-        };
-        if (data.block) {
-          const chunkId = `live-${sessionId}-${blockCountRef.current}`;
-          const appended = notesRef.current?.appendBlock({
-            ...data.block,
-            chunkId,
-            dividerBefore: blockCountRef.current > 0,
-            preserveSelection: true,
-            selfCheck: undefined,
-          });
-          if (appended) {
-            blockCountRef.current += 1;
-            if (data.block.heading) {
-              recentHeadingsRef.current = [
-                ...recentHeadingsRef.current,
-                data.block.heading,
-              ].slice(-5);
+
+        const reader = res.body?.getReader();
+        if (!reader) return;
+        const decoder = new TextDecoder();
+        let buf = "";
+        /** Deltas route to the writer only while the active op is valid. */
+        let opValid = false;
+
+        const handleEvent = async (
+          event: string,
+          parsed: Record<string, unknown>
+        ) => {
+          if (event === "op") {
+            writer.finishOp();
+            const sectionId =
+              typeof parsed.sectionId === "string" ? parsed.sectionId : "";
+            if (parsed.op === "append" && sectionId) {
+              writer.beginAppend({
+                sectionId,
+                dividerBefore: blockCountRef.current > 0,
+              });
+              appendSectionId = sectionId;
+              opValid = true;
+            } else if (parsed.op === "revise" && sectionId) {
+              // False when the section vanished or was student-edited since
+              // the request went out — the op's text is then discarded.
+              opValid = await writer.beginRevision(sectionId);
+            } else {
+              opValid = false;
             }
+          } else if (event === "text") {
+            if (opValid && typeof parsed.delta === "string" && parsed.delta) {
+              writer.write(parsed.delta);
+              gotContent = true;
+            }
+          } else if (event === "error") {
+            throw new Error(
+              typeof parsed.message === "string"
+                ? parsed.message
+                : "Synthesis failed."
+            );
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let sepIdx: number;
+          while ((sepIdx = buf.indexOf("\n\n")) >= 0) {
+            const raw = buf.slice(0, sepIdx);
+            buf = buf.slice(sepIdx + 2);
+            let event = "message";
+            let data = "";
+            for (const line of raw.split("\n")) {
+              if (line.startsWith("event:")) event = line.slice(6).trim();
+              else if (line.startsWith("data:")) data += line.slice(5).trim();
+            }
+            if (!data) continue;
+            await handleEvent(event, JSON.parse(data) as Record<string, unknown>);
+          }
+        }
+        writer.finishOp();
+
+        if (appendSectionId && gotContent) {
+          blockCountRef.current += 1;
+          excerpts.set(appendSectionId, pending.slice(0, 3_000));
+          // Keep only the excerpts the revision window can still reference.
+          while (excerpts.size > 6) {
+            const oldest = excerpts.keys().next().value;
+            if (oldest === undefined) break;
+            excerpts.delete(oldest);
           }
         }
       } catch {
+        writer.finishOp();
         unsynthesizedRef.current =
           `${pending} ${unsynthesizedRef.current}`.trim();
       } finally {
         synthInFlightRef.current = false;
         setAiWriting(false);
+        notesRef.current?.setStreamingIndicator(false);
       }
     },
     [sessionId]

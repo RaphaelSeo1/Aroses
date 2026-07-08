@@ -14,6 +14,7 @@ import Typography from "@tiptap/extension-typography";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
 import { AI_APPEND_META, Provenance } from "./notes/Provenance";
+import { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
 import { promptDialog } from "@/components/AppDialogs";
 import {
   readRoseAppendedChunkIds,
@@ -115,7 +116,7 @@ export type StreamedNotesOptions = {
 export type NotesPanelHandle = {
   /** Append a structured block (heading + optional intro + bullets + optional callout). */
   appendBlock: (input: AutoGenerateBlock) => boolean;
-  /** Start a streaming AI notes block (typewriter into the editor). */
+  /** Start a streaming AI notes block (tokens type into the editor live). */
   beginStreamedNotes: (input: StreamedNotesOptions) => boolean;
   /** Append streamed text deltas from the notes API. */
   appendStreamedNotesDelta: (delta: string) => void;
@@ -123,6 +124,14 @@ export type NotesPanelHandle = {
   finishStreamedNotes: (chunkId: string) => void;
   /** Cancel an in-progress stream (e.g. chunk changed). */
   abortStreamedNotes: () => void;
+  /**
+   * The shared token-streaming renderer (Live Notes drives it directly for
+   * op-marker streams with self-revision; mentored streaming delegates to
+   * it under the legacy method names above).
+   */
+  getStreamWriter: () => StreamingNotesWriter | null;
+  /** Toggle the "Rose is writing notes…" status line. */
+  setStreamingIndicator: (on: boolean) => void;
   /** True when the editor has any saved note content. */
   hasContent: () => boolean;
   /** True when this chunk was already auto-appended (in doc metadata or heading). */
@@ -412,45 +421,23 @@ export function NotesPanel({
   const [streamingNotes, setStreamingNotes] = useState(false);
   const streamingChunkIdRef = useRef<string | null>(null);
 
-  /** Insert text at doc end, splitting on paragraph / line breaks. */
-  const insertStreamText = useCallback(
-    (text: string) => {
-      if (!editor || editor.isDestroyed || !text) return;
-      let i = 0;
-      while (i < text.length) {
-        const paraBreak = text.indexOf("\n\n", i);
-        if (paraBreak === -1) {
-          const tail = text.slice(i);
-          if (!tail) break;
-          const lines = tail.split("\n");
-          lines.forEach((line, idx) => {
-            if (line) {
-              editor.chain().focus("end").insertContent(line).run();
-            }
-            if (idx < lines.length - 1) {
-              editor.chain().focus("end").setHardBreak().run();
-            }
-          });
-          break;
-        }
-        const before = text.slice(i, paraBreak);
-        if (before) {
-          const lines = before.split("\n");
-          lines.forEach((line, idx) => {
-            if (line) {
-              editor.chain().focus("end").insertContent(line).run();
-            }
-            if (idx < lines.length - 1) {
-              editor.chain().focus("end").setHardBreak().run();
-            }
-          });
-        }
-        editor.chain().focus("end").insertContent({ type: "paragraph" }).run();
-        i = paraBreak + 2;
+  // One shared token-streaming renderer per editor instance. Live Notes
+  // drives it directly (op-marker protocol with self-revision); mentored
+  // streaming reaches it through the legacy begin/append/finish methods.
+  const streamWriterRef = useRef<StreamingNotesWriter | null>(null);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const writer = new StreamingNotesWriter(editor, {
+      getScrollElement: () => scrollBodyRef.current,
+    });
+    streamWriterRef.current = writer;
+    return () => {
+      writer.destroy();
+      if (streamWriterRef.current === writer) {
+        streamWriterRef.current = null;
       }
-    },
-    [editor]
-  );
+    };
+  }, [editor]);
 
   // Imperative handle for the parent — auto-generate uses this to
   // append structured "Rose just covered X" blocks directly into the
@@ -807,18 +794,18 @@ export function NotesPanel({
           }
         }
 
-        const chain = editor.chain().focus("end");
-        if (dividerBefore) {
-          chain.insertContent({ type: "horizontalRule" });
+        // Delegate to the shared streaming writer: cursor-safe anchor
+        // placement, incremental markdown rendering, provenance stamping.
+        const writer = streamWriterRef.current;
+        if (!writer) {
+          autoGenLog("stream skipped — writer not ready");
+          return false;
         }
-        if (heading?.trim()) {
-          chain.insertContent({
-            type: "heading",
-            attrs: { level: 2 },
-            content: [{ type: "text", text: heading.trim() }],
-          });
-        }
-        chain.insertContent({ type: "paragraph" }).run();
+        writer.beginAppend({
+          sectionId: `chunk:${chunkId}`,
+          dividerBefore,
+          heading: heading?.trim() || undefined,
+        });
 
         streamingChunkIdRef.current = chunkId;
         setStreamingNotes(true);
@@ -826,9 +813,10 @@ export function NotesPanel({
         return true;
       },
       appendStreamedNotesDelta: (delta: string) => {
-        insertStreamText(delta);
+        streamWriterRef.current?.write(delta);
       },
       finishStreamedNotes: (chunkId: string) => {
+        streamWriterRef.current?.finishOp();
         if (editor && !editor.isDestroyed && chunkId) {
           const existing = readRoseAppendedChunkIds(editor.getJSON());
           if (!existing.includes(chunkId)) {
@@ -842,10 +830,13 @@ export function NotesPanel({
         autoGenLog("stream finished", { chunkId });
       },
       abortStreamedNotes: () => {
+        streamWriterRef.current?.finishOp();
         streamingChunkIdRef.current = null;
         setStreamingNotes(false);
         autoGenLog("stream aborted");
       },
+      getStreamWriter: () => streamWriterRef.current,
+      setStreamingIndicator: (on: boolean) => setStreamingNotes(on),
       hasContent: () => {
         if (!editor || editor.isDestroyed) return false;
         return docToPlainText(editor.getJSON()).trim().length > 0;
@@ -859,7 +850,7 @@ export function NotesPanel({
         autoGenLog("editor imperative handle cleared (this instance unmounted)");
       }
     };
-  }, [editor, editorRef, insertStreamText]);
+  }, [editor, editorRef]);
 
   const editorReadyFiredRef = useRef(false);
 
@@ -1654,6 +1645,52 @@ export function NotesPanel({
           padding: 0.05rem 0.2rem;
           border-radius: 0.25rem;
           color: inherit;
+        }
+
+        /* AI self-revision transitions (StreamingNotesWriter decorations).
+           The class arrives via a ProseMirror node decoration; the
+           transition declared on the class animates entry into the
+           faded/struck state before the section is rewritten. */
+        .tn-prose .rose-note-revising,
+        .tn-prose .rose-note-revising * {
+          text-decoration: line-through;
+          text-decoration-color: rgba(190, 18, 60, 0.4);
+        }
+        .tn-prose .rose-note-revising {
+          opacity: 0.35;
+          transition: opacity 0.3s ease;
+        }
+        .tn-prose .rose-note-revised {
+          animation: roseNoteRevised 1.1s ease;
+          border-radius: 0.35rem;
+        }
+        @keyframes roseNoteRevised {
+          0% {
+            background: rgba(199, 210, 254, 0.55);
+          }
+          100% {
+            background: transparent;
+          }
+        }
+
+        /* AI-added context (lecturer did NOT say this) — visually distinct
+           so it can never be confused with lecture content. */
+        .tn-prose .tn-callout[data-provenance="ai-context"] {
+          position: relative;
+          background: #eef2ff;
+          border-color: #c7d2fe;
+        }
+        .tn-prose .tn-callout[data-provenance="ai-context"]::after {
+          content: "AI context";
+          position: absolute;
+          top: 0.4rem;
+          right: 0.7rem;
+          font-size: 9px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: #6366f1;
+          pointer-events: none;
         }
 
         /* Callout */
