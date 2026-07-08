@@ -120,28 +120,13 @@ type DeepgramResultMessage = {
   };
 };
 
-// Voice Activity Detection tuning. RMS is on the 0..1 range of the
-// time-domain signal centered around 0. These are deliberately permissive
-// so short / quiet utterances like "hello" still register.
-const SPEECH_RMS = 0.025;
-const SILENCE_RMS = 0.014;
-const MIN_SPEECH_MS = 150;
-
 // How long the user can stay quiet before we treat the utterance as
-// finished. This is user-adjustable via the "Pause" slider; the constants
-// below define the slider bounds + default starting value.
+// finished. User-adjustable via the "Pause" slider; applied as Deepgram's
+// endpointing / utterance_end_ms when the live session connects.
 const DEFAULT_PAUSE_MS = 3000;
 const PAUSE_MIN_MS = 500;
 const PAUSE_MAX_MS = 5000;
 const PAUSE_STEP_MS = 250;
-// While the assistant is talking the mic is still open. We require a slightly
-// longer / louder signal before counting it as a real barge-in so room noise
-// and the assistant's own voice (after echo cancellation) don't trip it.
-const BARGE_IN_RMS = 0.07;
-const BARGE_IN_MS = 220;
-// How often we fire a speculative transcription while the user is speaking,
-// so by the time they stop we already have (most of) the transcript.
-const SPEC_INTERVAL_MS = 450;
 const SPEC_MIN_BLOB_BYTES = 4 * 1024;
 const THINKING_FILLERS = [
   "Hmm.",
@@ -364,9 +349,6 @@ export function VoiceTutorDock({
   const specLatestTextRef = useRef<string>("");
   const specLastFiredAtRef = useRef<number>(0);
   const finalSpecRequestedRef = useRef<boolean>(false);
-  // Guards against the VAD interval double-firing startLiveRecording while
-  // the previous call is still awaiting startRecording().
-  const startingRecordingRef = useRef<boolean>(false);
 
   const setLivePhase = useCallback((p: LivePhase) => {
     livePhaseRef.current = p;
@@ -1180,12 +1162,18 @@ export function VoiceTutorDock({
         );
       }
 
+      // The "Pause" slider controls how long a silence Deepgram waits before
+      // treating the utterance as finished (endpointing drives speech_final;
+      // utterance_end_ms is the fallback event and has a 1000ms server-side
+      // minimum). Previously these were hardcoded and the slider fed a local
+      // VAD loop that was never scheduled — i.e. the control did nothing.
+      const pauseMsForSession = pauseMsRef.current;
       const qs = new URLSearchParams({
         model: "nova-3",
         smart_format: "true",
         interim_results: "true",
-        endpointing: "300",
-        utterance_end_ms: "1000",
+        endpointing: String(pauseMsForSession),
+        utterance_end_ms: String(Math.max(1000, pauseMsForSession)),
         vad_events: "true",
       });
       const language = VOICE_LANGUAGES.find(
@@ -1291,6 +1279,25 @@ export function VoiceTutorDock({
     stopDeepgramLive,
   ]);
 
+  // Deepgram fixes endpointing/utterance_end_ms per connection, so a Pause
+  // slider change mid-live needs a socket restart to take effect. Debounced so
+  // dragging the slider doesn't churn connections; no-op outside live mode
+  // (the next session start reads the latest value anyway).
+  const lastAppliedPauseMsRef = useRef(DEFAULT_PAUSE_MS);
+  useEffect(() => {
+    if (pauseMs === lastAppliedPauseMsRef.current) return;
+    if (!liveModeRef.current || !deepgramSocketRef.current) {
+      lastAppliedPauseMsRef.current = pauseMs;
+      return;
+    }
+    const t = window.setTimeout(() => {
+      lastAppliedPauseMsRef.current = pauseMs;
+      stopDeepgramLive();
+      void startDeepgramLive();
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [pauseMs, startDeepgramLive, stopDeepgramLive]);
+
   const fireSpeculative = useCallback(
     async (opts: { final: boolean }) => {
       if (!liveModeRef.current) return;
@@ -1360,25 +1367,6 @@ export function VoiceTutorDock({
     },
     [materialId]
   );
-
-  const startLiveRecording = useCallback(async () => {
-    if (startingRecordingRef.current) return;
-    startingRecordingRef.current = true;
-    try {
-      setError(null);
-      resetSpeculative();
-      await startRecording();
-      speechStartedAtRef.current = performance.now();
-      silenceStartedAtRef.current = 0;
-      specLastFiredAtRef.current = performance.now();
-      setLivePhase("recording");
-    } catch {
-      setError("Microphone permission is required.");
-      setInputMode("hold");
-    } finally {
-      startingRecordingRef.current = false;
-    }
-  }, [resetSpeculative, setLivePhase, startRecording]);
 
   const finalizeLiveUtterance = useCallback(
     async (opts: { tooShort: boolean }) => {
@@ -1457,78 +1445,10 @@ export function VoiceTutorDock({
     ]
   );
 
-  const vadTick = useCallback(() => {
-    const analyser = analyserRef.current;
-    const buf = vadBufRef.current;
-    if (!liveModeRef.current || !analyser || !buf) {
-      return;
-    }
-
-    analyser.getByteTimeDomainData(buf);
-    let sum = 0;
-    for (let i = 0; i < buf.length; i++) {
-      const v = (buf[i] - 128) / 128;
-      sum += v * v;
-    }
-    const rms = Math.sqrt(sum / buf.length);
-    const now = performance.now();
-
-    const phase = livePhaseRef.current;
-    if (phase === "listening") {
-      if (rms > SPEECH_RMS && !startingRecordingRef.current) {
-        // Begin recording an utterance.
-        void startLiveRecording();
-      }
-    } else if (phase === "recording") {
-      if (rms < SILENCE_RMS) {
-        if (silenceStartedAtRef.current === 0) {
-          silenceStartedAtRef.current = now;
-          // Speech just ended — kick off a transcribe of everything captured
-          // so far. By the time the silence-hold window elapses we usually
-          // already have the text back.
-          if (!finalSpecRequestedRef.current) {
-            finalSpecRequestedRef.current = true;
-            void fireSpeculative({ final: false });
-          }
-        } else if (now - silenceStartedAtRef.current > pauseMsRef.current) {
-          const spokenFor =
-            silenceStartedAtRef.current - speechStartedAtRef.current;
-          const tooShort = spokenFor < MIN_SPEECH_MS;
-          // Snapshot then transition before awaiting to avoid races.
-          setLivePhase("thinking");
-          void finalizeLiveUtterance({ tooShort });
-        }
-      } else if (rms > SPEECH_RMS) {
-        silenceStartedAtRef.current = 0;
-        finalSpecRequestedRef.current = false;
-        // Periodically transcribe in the background while the user is still
-        // speaking — we throw the result away if they keep going, but keep
-        // the latest one for the eventual end-of-speech moment.
-        if (now - specLastFiredAtRef.current > SPEC_INTERVAL_MS) {
-          void fireSpeculative({ final: false });
-        }
-      }
-    } else if (phase === "speaking") {
-      // Barge-in: user starts talking while the assistant is mid-reply.
-      if (rms > BARGE_IN_RMS) {
-        if (bargeStartedAtRef.current === 0) {
-          bargeStartedAtRef.current = now;
-        } else if (now - bargeStartedAtRef.current > BARGE_IN_MS) {
-          bargeStartedAtRef.current = 0;
-          // Cancel the playback and start recording the interruption.
-          cancelPlaybackRef.current?.();
-          void startLiveRecording();
-        }
-      } else {
-        bargeStartedAtRef.current = 0;
-      }
-    }
-  }, [
-    finalizeLiveUtterance,
-    fireSpeculative,
-    setLivePhase,
-    startLiveRecording,
-  ]);
+  // NOTE: an older local RMS-based VAD loop (`vadTick`) lived here but was
+  // never scheduled — live mode's turn-taking is fully driven by Deepgram
+  // events (speech_final / UtteranceEnd, configured from the Pause slider
+  // above), and barge-in by the transcript handler. The dead loop is removed.
 
   const enterLiveMode = useCallback(async () => {
     liveModeRef.current = true;
@@ -1636,9 +1556,14 @@ export function VoiceTutorDock({
   // stays available in the UI but /transcribe is capped too, so the user sees
   // the same friendly message rather than a stuck session.
   useEffect(() => {
-    if (!voiceCapped) return;
-    setInputMode("hold");
-    leaveLiveMode();
+    if (!voiceCapped) return undefined;
+    // Defer to a macrotask so the effect doesn't synchronously setState
+    // (react-hooks/set-state-in-effect), matching the live-mode effect above.
+    const t = window.setTimeout(() => {
+      setInputMode("hold");
+      leaveLiveMode();
+    }, 0);
+    return () => window.clearTimeout(t);
   }, [voiceCapped, leaveLiveMode]);
 
   useEffect(() => {
