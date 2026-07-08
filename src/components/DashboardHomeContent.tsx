@@ -6,9 +6,8 @@ import {
 import type { DashboardCourse } from "@/components/CourseDashboardList";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { ContinueStudyingCarousel } from "@/components/ContinueStudyingCarousel";
-import { HomeNotesPreview } from "@/components/HomeNotesPreview";
+import { HomeNotesEntryLink } from "@/components/HomeNotesEntryLink";
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
-import type { HomeNotePreviewItem } from "@/lib/load-home-notes-preview";
 import { ReviewDueBanner } from "@/components/ReviewDueBanner";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
 import { PendingCollaboratorInvites } from "@/components/PendingCollaboratorInvites";
@@ -23,7 +22,6 @@ export async function DashboardHomeContent({
   studyingCourses,
   sharedCourses = [],
   progress,
-  recentNotes = [],
   omitHeader = false,
 }: {
   userEmail: string;
@@ -32,8 +30,6 @@ export async function DashboardHomeContent({
   studyingCourses: StudyingCourse[];
   sharedCourses?: SharedCourse[];
   progress: DashboardProgressPayload;
-  /** Recent notes for the home sidebar / mobile strip. */
-  recentNotes?: HomeNotePreviewItem[];
   /** When true, only render main workspace (parent supplies `<AppHeader />`). */
   omitHeader?: boolean;
 }) {
@@ -169,13 +165,7 @@ export async function DashboardHomeContent({
                     </div>
                   </Link>
                 </div>
-                <div className="mt-2 flex justify-end gap-4">
-                  <Link
-                    href="/notes"
-                    className="text-xs font-medium text-zinc-500 underline-offset-2 hover:text-violet-700 hover:underline dark:text-zinc-500 dark:hover:text-violet-300"
-                  >
-                    {t.dashboard.viewYourNotes} →
-                  </Link>
+                <div className="mt-2 flex justify-end">
                   <Link
                     href="/sessions"
                     className="text-xs font-medium text-zinc-500 underline-offset-2 hover:text-violet-700 hover:underline dark:text-zinc-500 dark:hover:text-violet-300"
@@ -187,14 +177,10 @@ export async function DashboardHomeContent({
 
               <ContinueStudyingCarousel entries={progress.recentPractice} />
 
-              {/* Mobile / tablet: horizontal note thumbnails (sidebar on lg+) */}
               <div className="mt-8 lg:hidden">
-                <HomeNotesPreview
-                  items={recentNotes}
-                  title={t.dashboard.recentNotes}
-                  viewAllLabel={t.dashboard.viewAllNotes}
-                  emptyHint={t.dashboard.recentNotesEmpty}
-                  layout="scroll"
+                <HomeNotesEntryLink
+                  label={t.dashboard.viewYourNotes}
+                  hint={t.dashboard.viewNotesHint}
                 />
               </div>
 
@@ -308,14 +294,11 @@ export async function DashboardHomeContent({
             </div>
           )}
             </div>
-            <div className="hidden lg:block lg:sticky lg:top-[5.5rem] lg:space-y-5">
-              <HomeRightSidebar activityBuckets14={progress.activityBuckets} />
-              <HomeNotesPreview
-                items={recentNotes}
-                title={t.dashboard.recentNotes}
-                viewAllLabel={t.dashboard.viewAllNotes}
-                emptyHint={t.dashboard.recentNotesEmpty}
-                layout="grid"
+            <div className="hidden lg:block">
+              <HomeRightSidebar
+                activityBuckets14={progress.activityBuckets}
+                viewNotesLabel={t.dashboard.viewYourNotes}
+                viewNotesHint={t.dashboard.viewNotesHint}
               />
             </div>
           </div>

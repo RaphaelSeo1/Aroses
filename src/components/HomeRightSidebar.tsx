@@ -1,5 +1,7 @@
 "use client";
 
+import { HomeNotesEntryLink } from "@/components/HomeNotesEntryLink";
+
 function weekdayLabelsLast7(): { key: string; label: string }[] {
   const out: { key: string; label: string }[] = [];
   const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -22,8 +24,12 @@ function streakFromBuckets(last7: number[]): number {
 
 export function HomeRightSidebar({
   activityBuckets14,
+  viewNotesLabel,
+  viewNotesHint,
 }: {
   activityBuckets14: number[];
+  viewNotesLabel: string;
+  viewNotesHint: string;
 }) {
   const days = weekdayLabelsLast7();
   const last7 = activityBuckets14.slice(-7);
@@ -79,6 +85,8 @@ export function HomeRightSidebar({
           </span>
         </p>
       </section>
+
+      <HomeNotesEntryLink label={viewNotesLabel} hint={viewNotesHint} />
     </aside>
   );
 }

@@ -5,7 +5,6 @@ import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { MainRouteSkeleton } from "@/components/MainRouteSkeleton";
 import { loadDashboardCourseLists } from "@/lib/load-dashboard-courses";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
-import { loadHomeNotesPreview } from "@/lib/load-home-notes-preview";
 import { profileNeedsOnboarding } from "@/lib/onboarding-gate";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import { redirect } from "next/navigation";
@@ -34,12 +33,10 @@ async function HomeContent() {
     redirect("/onboarding");
   }
 
-  const [{ owned, studying, sharedWithMe }, progress, recentNotes] =
-    await Promise.all([
-      loadDashboardCourseLists(supabase, user.id),
-      loadDashboardProgress(supabase, user.id),
-      loadHomeNotesPreview(supabase, user.id, 6),
-    ]);
+  const [{ owned, studying, sharedWithMe }, progress] = await Promise.all([
+    loadDashboardCourseLists(supabase, user.id),
+    loadDashboardProgress(supabase, user.id),
+  ]);
   return (
     <DashboardHomeContent
       omitHeader
@@ -49,7 +46,6 @@ async function HomeContent() {
       studyingCourses={studying}
       sharedCourses={sharedWithMe}
       progress={progress}
-      recentNotes={recentNotes}
     />
   );
 }

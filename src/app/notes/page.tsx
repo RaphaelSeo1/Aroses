@@ -1,7 +1,10 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
+import {
+  NotesDocGrid,
+  type NoteDocCardData,
+} from "@/components/notes-hub/NotesDocCard";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -20,15 +23,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
-type CardItem = {
-  key: string;
-  href: string;
-  title: string;
-  subtitle: string | null;
-  preview: string | null;
-  dateLabel: string;
-  chip?: { label: string; tone: "live" | "paused" | "done" | "failed" };
-};
+type CardItem = NoteDocCardData;
 
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -147,6 +142,7 @@ export default async function NotesHubPage() {
       subtitle: courseTitleById.get(s.course_id as string) ?? null,
       preview: preview(s.notes_text),
       dateLabel: formatDate((s.started_at as string) ?? (s.updated_at as string)),
+      isLive: status === "recording" || status === "paused",
       chip,
     };
   });
@@ -224,7 +220,7 @@ export default async function NotesHubPage() {
     <>
       <AppHeader right={<HeaderNavLoggedInServer />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-        <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
+        <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
             Your library
           </p>
@@ -276,13 +272,6 @@ export default async function NotesHubPage() {
   );
 }
 
-const CHIP_TONES: Record<string, string> = {
-  live: "bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300",
-  paused: "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300",
-  done: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-  failed: "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
-};
-
 function NotesSection({
   title,
   hint,
@@ -295,53 +284,13 @@ function NotesSection({
   if (cards.length === 0) return null;
   return (
     <section>
-      <header className="mb-3">
+      <header className="mb-4">
         <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
           {title}
         </h2>
         <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-500">{hint}</p>
       </header>
-      <div className="grid gap-4 sm:grid-cols-2">
-        {cards.map((c) => (
-          <Link
-            key={c.key}
-            href={c.href}
-            className="group flex flex-col rounded-2xl border border-zinc-200 bg-white/95 p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950/90 dark:hover:border-violet-800"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h3 className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                  {c.title}
-                </h3>
-                {c.subtitle ? (
-                  <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-500">
-                    {c.subtitle}
-                  </p>
-                ) : null}
-              </div>
-              {c.chip ? (
-                <span
-                  className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${CHIP_TONES[c.chip.tone]}`}
-                >
-                  {c.chip.label}
-                </span>
-              ) : null}
-            </div>
-            {c.preview ? (
-              <p className="mt-2.5 line-clamp-3 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                {c.preview}
-              </p>
-            ) : (
-              <p className="mt-2.5 text-xs italic text-zinc-400 dark:text-zinc-600">
-                No written notes yet
-              </p>
-            )}
-            <p className="mt-auto pt-3 text-[11px] text-zinc-400 dark:text-zinc-600">
-              {c.dateLabel}
-            </p>
-          </Link>
-        ))}
-      </div>
+      <NotesDocGrid cards={cards} />
     </section>
   );
 }
