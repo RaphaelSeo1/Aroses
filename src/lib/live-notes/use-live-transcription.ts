@@ -15,7 +15,8 @@ export type { LiveCaptureSource } from "@/lib/live-notes/capture";
  * Owns the whole capture chain: lecture audio (tab / system / mic — see
  * `capture.ts` for the source abstraction) → Deepgram live WebSocket
  * (nova-3, same params as the voice tutor) → finalized segments → periodic
- * flush to /api/live-notes/[sessionId]/segments.
+ * flush to /api/live-notes/[sessionId]/segments (on each finalized utterance,
+ * every ~5s as a safety net, and on pause/tab-hide/unmount).
  *
  * Hardening the voice-tutor dock never needed but a 90-minute lecture does:
  *   - AUTO-RECONNECT on socket drop with a fresh token + exponential backoff.
@@ -45,7 +46,9 @@ export type LiveTranscriptionStatus =
   | "reconnecting"
   | "error";
 
-const FLUSH_INTERVAL_MS = 15_000;
+export type TranscriptSaveStatus = "idle" | "saving" | "saved" | "error";
+
+const FLUSH_INTERVAL_MS = 5_000;
 const KEEPALIVE_INTERVAL_MS = 5_000;
 const RECORDER_TIMESLICE_MS = 250;
 const SOCKET_OPEN_TIMEOUT_MS = 8_000;
@@ -54,6 +57,12 @@ const ENDPOINTING_MS = 1_500;
 const RECONNECT_DELAYS_MS = [1_000, 3_000, 8_000];
 /** Commit a segment mid-utterance if the lecturer never pauses. */
 const MAX_UTTERANCE_CHARS = 1_200;
+/**
+ * If Deepgram never sends speech_final (marathon sentence, noisy room), bank
+ * whatever is in the utterance buffer after this idle window so it still hits
+ * the autosave flush instead of living only in RAM.
+ */
+const STALE_UTTERANCE_MS = 8_000;
 
 function pickMimeType(): string | undefined {
   if (typeof MediaRecorder === "undefined") return undefined;
@@ -102,6 +111,13 @@ export function useLiveLectureTranscription(options: {
   const [status, setStatus] = useState<LiveTranscriptionStatus>("idle");
   const [partialText, setPartialText] = useState("");
   const [elapsedMs, setElapsedMs] = useState(initialElapsedMs);
+  const [transcriptSaveStatus, setTranscriptSaveStatus] =
+    useState<TranscriptSaveStatus>("idle");
+  const [transcriptLastSavedAt, setTranscriptLastSavedAt] = useState<
+    number | null
+  >(null);
+  /** Segments committed locally but not yet confirmed by the server. */
+  const [transcriptPendingCount, setTranscriptPendingCount] = useState(0);
   /** Source currently feeding audio (null until the first start). */
   const [activeSource, setActiveSource] = useState<LiveCaptureSource | null>(
     null
@@ -153,26 +169,23 @@ export function useLiveLectureTranscription(options: {
   /** Committed segments waiting for the next flush. */
   const pendingFlushRef = useRef<LiveTranscriptSegment[]>([]);
   const flushInFlightRef = useRef(false);
+  const flushQueuedRef = useRef(false);
+  /** Last time Deepgram delivered transcript text (final or interim). */
+  const lastTranscriptAtRef = useRef(Date.now());
 
-  const commitUtterance = useCallback(() => {
-    const text = utteranceBufferRef.current.trim();
-    utteranceBufferRef.current = "";
-    setPartialText("");
-    if (!text) return;
-    const segment: LiveTranscriptSegment = {
-      seq: nextSeqRef.current++,
-      text,
-      atMs: Math.max(0, Math.round(currentElapsedMs())),
-    };
-    pendingFlushRef.current.push(segment);
-    onSegmentRef.current?.(segment);
-  }, [currentElapsedMs]);
+  const syncPendingCount = useCallback(() => {
+    setTranscriptPendingCount(pendingFlushRef.current.length);
+  }, []);
 
   const flushSegments = useCallback(async (): Promise<void> => {
-    if (flushInFlightRef.current) return;
+    if (flushInFlightRef.current) {
+      flushQueuedRef.current = true;
+      return;
+    }
     const batch = pendingFlushRef.current;
     if (batch.length === 0) return;
     flushInFlightRef.current = true;
+    setTranscriptSaveStatus("saving");
     try {
       const res = await fetch(`/api/live-notes/${sessionId}/segments`, {
         method: "POST",
@@ -188,14 +201,58 @@ export function useLiveLectureTranscription(options: {
         pendingFlushRef.current = pendingFlushRef.current.filter(
           (s) => !sentSeqs.has(s.seq)
         );
+        syncPendingCount();
+        setTranscriptSaveStatus("saved");
+        setTranscriptLastSavedAt(Date.now());
+      } else {
+        setTranscriptSaveStatus("error");
+        console.warn("[live-notes] segment flush failed", res.status);
       }
       // Non-OK: keep the batch; seq-idempotency makes the retry safe.
     } catch {
+      setTranscriptSaveStatus("error");
       // Network hiccup — retry on the next interval.
     } finally {
       flushInFlightRef.current = false;
+      if (flushQueuedRef.current && pendingFlushRef.current.length > 0) {
+        flushQueuedRef.current = false;
+        void flushSegments();
+      }
     }
-  }, [sessionId, currentElapsedMs]);
+  }, [sessionId, currentElapsedMs, syncPendingCount]);
+
+  const commitUtterance = useCallback(() => {
+    const text = utteranceBufferRef.current.trim();
+    utteranceBufferRef.current = "";
+    setPartialText("");
+    if (!text) return;
+    const segment: LiveTranscriptSegment = {
+      seq: nextSeqRef.current++,
+      text,
+      atMs: Math.max(0, Math.round(currentElapsedMs())),
+    };
+    pendingFlushRef.current.push(segment);
+    syncPendingCount();
+    onSegmentRef.current?.(segment);
+    // Autosave each finalized utterance — don't wait for the 5s safety timer.
+    void flushSegments();
+  }, [currentElapsedMs, syncPendingCount, flushSegments]);
+
+  /** Bank in-flight speech, then flush — used on pause, finish, and tab hide. */
+  const saveTranscriptNow = useCallback(async (): Promise<void> => {
+    commitUtterance();
+    await flushSegments();
+    if (pendingFlushRef.current.length > 0) {
+      await flushSegments();
+    }
+  }, [commitUtterance, flushSegments]);
+
+  const commitUtteranceRef = useRef(commitUtterance);
+  commitUtteranceRef.current = commitUtterance;
+  const saveTranscriptNowRef = useRef(saveTranscriptNow);
+  saveTranscriptNowRef.current = saveTranscriptNow;
+  const currentElapsedMsRef = useRef(currentElapsedMs);
+  currentElapsedMsRef.current = currentElapsedMs;
 
   const clearTimers = useCallback(() => {
     for (const ref of [
@@ -341,6 +398,7 @@ export function useLiveLectureTranscription(options: {
         const transcript =
           msg.channel?.alternatives?.[0]?.transcript?.trim() ?? "";
         if (transcript) {
+          lastTranscriptAtRef.current = Date.now();
           if (msg.is_final) {
             utteranceBufferRef.current =
               `${utteranceBufferRef.current} ${transcript}`.trim();
@@ -499,6 +557,14 @@ export function useLiveLectureTranscription(options: {
         setElapsedMs(currentElapsedMs());
       }, 1_000) as unknown as number;
       flushTimerRef.current = window.setInterval(() => {
+        // Safety net: bank speech that never got a speech_final, then flush
+        // anything still sitting in the pending buffer.
+        const stale =
+          utteranceBufferRef.current.trim().length >= 80 &&
+          Date.now() - lastTranscriptAtRef.current > STALE_UTTERANCE_MS;
+        if (stale) {
+          commitUtteranceRef.current();
+        }
         void flushSegments();
       }, FLUSH_INTERVAL_MS) as unknown as number;
       keepAliveTimerRef.current = window.setInterval(() => {
@@ -656,9 +722,8 @@ export function useLiveLectureTranscription(options: {
       bankedMsRef.current += Date.now() - runningSinceRef.current;
       runningSinceRef.current = null;
     }
-    commitUtterance();
     setStatusBoth("paused");
-    void flushSegments();
+    void saveTranscriptNow();
     void fetch(`/api/live-notes/${sessionId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -667,7 +732,7 @@ export function useLiveLectureTranscription(options: {
         durationSeconds: Math.round(currentElapsedMs() / 1000),
       }),
     }).catch(() => {});
-  }, [sessionId, commitUtterance, setStatusBoth, flushSegments, currentElapsedMs]);
+  }, [sessionId, setStatusBoth, saveTranscriptNow, currentElapsedMs]);
 
   const pauseRef = useRef<typeof pause | null>(null);
   pauseRef.current = pause;
@@ -789,11 +854,18 @@ export function useLiveLectureTranscription(options: {
     flushSegments,
   ]);
 
-  // Teardown on unmount; best-effort keepalive flush of any committed tail.
+  // Teardown + tab-hide: bank in-flight speech and keepalive-flush anything
+  // committed so navigating away mid-lecture doesn't strand transcript in RAM.
   useEffect(() => {
+    const onHide = () => {
+      void saveTranscriptNowRef.current();
+    };
+    window.addEventListener("pagehide", onHide);
     return () => {
+      window.removeEventListener("pagehide", onHide);
       intentionalCloseRef.current = true;
       clearTimers();
+      commitUtteranceRef.current();
       stopRecorderAndStream();
       closeSocket();
       const batch = pendingFlushRef.current;
@@ -808,6 +880,7 @@ export function useLiveLectureTranscription(options: {
                 text: s.text,
                 atMs: s.atMs,
               })),
+              durationSeconds: Math.round(currentElapsedMsRef.current() / 1000),
             }),
             keepalive: true,
           });
@@ -817,12 +890,15 @@ export function useLiveLectureTranscription(options: {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sessionId]);
 
   return {
     status,
     partialText,
     elapsedMs,
+    transcriptSaveStatus,
+    transcriptLastSavedAt,
+    transcriptPendingCount,
     /** Source currently feeding audio (null before the first start). */
     activeSource,
     start,
@@ -831,7 +907,7 @@ export function useLiveLectureTranscription(options: {
     stop,
     /** Hot-swap the audio source mid-session without losing anything. */
     switchSource,
-    /** Force a flush now (used right before wrap-up). */
-    flushNow: flushSegments,
+    /** Bank in-flight speech and flush now (finish, tab hide, manual). */
+    flushNow: saveTranscriptNow,
   };
 }

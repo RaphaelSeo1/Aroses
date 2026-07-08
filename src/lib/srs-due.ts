@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Client-side React hook that polls `/api/srs/due-counts` so the UI can show
@@ -44,6 +44,7 @@ export function useSrsDueCounts(
   );
   const [loading, setLoading] = useState(initialCounts == null);
   const [manualBump, setManualBump] = useState(0);
+  const skipMountFetchRef = useRef(initialCounts != null);
 
   useEffect(() => {
     if (!enabled) {
@@ -71,7 +72,13 @@ export function useSrsDueCounts(
       }
     };
 
-    void fetchCounts();
+    // SSR already hydrated the nav badge — skip the mount fetch and only
+    // refresh on the slow poll / window focus so we don't double-hit Supabase
+    // on every page load (several components mount this hook).
+    if (!skipMountFetchRef.current) {
+      void fetchCounts();
+    }
+    skipMountFetchRef.current = false;
     const interval = window.setInterval(fetchCounts, POLL_INTERVAL_MS);
     const onFocus = () => void fetchCounts();
     window.addEventListener("focus", onFocus);
