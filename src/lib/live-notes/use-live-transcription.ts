@@ -1,11 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  acquireLectureAudioStream,
+  LectureCaptureError,
+  type LiveCaptureSource,
+} from "@/lib/live-notes/capture";
+
+export type { LiveCaptureSource } from "@/lib/live-notes/capture";
 
 /**
  * Live lecture transcription hook (Live Notes).
  *
- * Owns the whole capture chain: mic/tab audio → Deepgram live WebSocket
+ * Owns the whole capture chain: lecture audio (tab / system / mic — see
+ * `capture.ts` for the source abstraction) → Deepgram live WebSocket
  * (nova-3, same params as the voice tutor) → finalized segments → periodic
  * flush to /api/live-notes/[sessionId]/segments.
  *
@@ -15,6 +23,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
  *     silence with no audio bytes).
  *   - IDEMPOTENT FLUSH: segments carry a client-assigned `seq`; retried
  *     flushes can never duplicate transcript text server-side.
+ *   - RECORDER/SOCKET PAIRING: a MediaRecorder writes its WebM container
+ *     header only into the FIRST chunk of a recording, so a socket that
+ *     joins mid-recording would get headerless Opus clusters it cannot
+ *     decode. Invariant: every new socket gets a brand-new recorder, and a
+ *     recorder only ever feeds the socket it was created for.
  */
 
 export type LiveTranscriptSegment = {
@@ -23,8 +36,6 @@ export type LiveTranscriptSegment = {
   /** Offset from recording start (excludes paused time). */
   atMs: number;
 };
-
-export type LiveCaptureSource = "mic" | "tab";
 
 export type LiveTranscriptionStatus =
   | "idle"
@@ -110,8 +121,12 @@ export function useLiveLectureTranscription(options: {
 
   const socketRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  /** Which socket the current recorder feeds (recorder/socket pairing). */
+  const recorderSocketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  /** True while we are tearing down deliberately (stop/pause restart). */
+  /** Last chosen source — Resume re-acquires from it after "Stop sharing". */
+  const lastSourceRef = useRef<LiveCaptureSource>("tab");
+  /** True while we are tearing down deliberately (stop). */
   const intentionalCloseRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -195,6 +210,8 @@ export function useLiveLectureTranscription(options: {
 
   const closeSocket = useCallback(() => {
     const ws = socketRef.current;
+    // Null the ref FIRST: the onclose handler treats a socket that is no
+    // longer current as superseded and never schedules a reconnect for it.
     socketRef.current = null;
     if (ws) {
       try {
@@ -215,6 +232,7 @@ export function useLiveLectureTranscription(options: {
   const stopRecorderAndStream = useCallback(() => {
     const recorder = recorderRef.current;
     recorderRef.current = null;
+    recorderSocketRef.current = null;
     if (recorder && recorder.state !== "inactive") {
       try {
         recorder.stop();
@@ -233,6 +251,25 @@ export function useLiveLectureTranscription(options: {
         }
       }
     }
+  }, []);
+
+  /**
+   * Pause when the user ends the share from the browser's own UI (Chrome's
+   * "Stop sharing" bar) or the mic device disappears. Resume re-acquires.
+   */
+  const watchTrackEnded = useCallback((stream: MediaStream) => {
+    const track = stream.getAudioTracks()[0];
+    if (!track) return;
+    track.addEventListener("ended", () => {
+      if (streamRef.current !== stream) return; // superseded stream
+      if (statusRef.current === "idle") return;
+      onErrorRef.current?.(
+        lastSourceRef.current === "mic"
+          ? "The microphone stopped. Press Resume to reconnect it, or Finish to build the course."
+          : "Audio sharing ended. Press Resume to pick the lecture source again, or Finish to build the course with what was captured."
+      );
+      void pauseRef.current?.();
+    });
   }, []);
 
   const connectSocket = useCallback(async (): Promise<WebSocket> => {
@@ -327,11 +364,12 @@ export function useLiveLectureTranscription(options: {
     };
 
     ws.onclose = () => {
-      if (socketRef.current === ws) {
-        socketRef.current = null;
-      }
+      // A socket that is no longer current was superseded (resume/pause
+      // restart or deliberate close) — never reconnect on its behalf, or a
+      // stale close event would race a fresh connection into a duplicate.
+      if (socketRef.current !== ws) return;
+      socketRef.current = null;
       if (intentionalCloseRef.current) return;
-      // Unexpected drop while live — reconnect with backoff.
       const st = statusRef.current;
       if (st !== "recording" && st !== "paused" && st !== "reconnecting") return;
       scheduleReconnectRef.current?.();
@@ -340,18 +378,41 @@ export function useLiveLectureTranscription(options: {
     return ws;
   }, [sessionId, commitUtterance]);
 
-  /** Defined via ref to avoid a circular useCallback dependency with connectSocket. */
-  const scheduleReconnectRef = useRef<(() => void) | null>(null);
-
-  const attachRecorderToSocket = useCallback((ws: WebSocket) => {
-    const recorder = recorderRef.current;
-    if (!recorder) return;
+  /**
+   * (Re)create the MediaRecorder for a FRESH socket. The WebM container
+   * header lives only in the first chunk a recorder emits, so this must
+   * never be called for a socket that has already received audio.
+   */
+  const startRecorderForSocket = useCallback((ws: WebSocket) => {
+    const old = recorderRef.current;
+    recorderRef.current = null;
+    recorderSocketRef.current = null;
+    if (old && old.state !== "inactive") {
+      try {
+        old.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    const stream = streamRef.current;
+    if (!stream) return;
+    const mimeType = pickMimeType();
+    const recorder = new MediaRecorder(
+      stream,
+      mimeType ? { mimeType } : undefined
+    );
+    recorderRef.current = recorder;
+    recorderSocketRef.current = ws;
     recorder.ondataavailable = (ev) => {
       if (ev.data.size > 0 && ws.readyState === WebSocket.OPEN) {
         ws.send(ev.data);
       }
     };
+    recorder.start(RECORDER_TIMESLICE_MS);
   }, []);
+
+  /** Defined via ref to avoid a circular useCallback dependency with connectSocket. */
+  const scheduleReconnectRef = useRef<(() => void) | null>(null);
 
   scheduleReconnectRef.current = () => {
     const attempt = reconnectAttemptRef.current;
@@ -372,7 +433,9 @@ export function useLiveLectureTranscription(options: {
       try {
         const ws = await connectSocket();
         socketRef.current = ws;
-        attachRecorderToSocket(ws);
+        // Fresh socket needs a fresh recorder (WebM header). While paused we
+        // leave the recorder alone — resume() creates one.
+        if (!wasPaused) startRecorderForSocket(ws);
         reconnectAttemptRef.current = 0;
         setStatusBoth(wasPaused ? "paused" : "recording");
       } catch {
@@ -388,54 +451,26 @@ export function useLiveLectureTranscription(options: {
       }
       intentionalCloseRef.current = false;
       reconnectAttemptRef.current = 0;
+      lastSourceRef.current = source;
       setStatusBoth("connecting");
 
-      // 1. Capture. Tab audio comes from getDisplayMedia (Chrome: user must
-      //    tick "Also share tab audio"); we keep only the audio tracks.
+      // 1. Capture — tab / system / mic all resolve to an audio-only stream;
+      //    missing audio (e.g. tab shared without "Also share tab audio")
+      //    throws with platform-specific guidance and blocks the start.
       let stream: MediaStream;
       try {
-        if (source === "tab") {
-          const display = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: true,
-          });
-          const audioTracks = display.getAudioTracks();
-          if (audioTracks.length === 0) {
-            for (const t of display.getTracks()) t.stop();
-            throw new Error(
-              'No tab audio was shared. Pick a Chrome tab and enable "Also share tab audio", or use the microphone instead.'
-            );
-          }
-          // Video is only needed to make the picker offer tabs — drop it.
-          for (const t of display.getVideoTracks()) t.stop();
-          stream = new MediaStream(audioTracks);
-          // If the user clicks Chrome's "Stop sharing" bar, end capture cleanly.
-          audioTracks[0].addEventListener("ended", () => {
-            if (statusRef.current !== "idle") {
-              onErrorRef.current?.(
-                "Tab audio sharing ended. Press Resume to reconnect or Finish to build the course."
-              );
-              void pauseRef.current?.();
-            }
-          });
-        } else {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-            },
-          });
-        }
+        stream = await acquireLectureAudioStream(source);
       } catch (e) {
         setStatusBoth("idle");
         onErrorRef.current?.(
-          e instanceof Error && e.message
-            ? e.message
+          e instanceof LectureCaptureError || (e instanceof Error && e.message)
+            ? (e as Error).message
             : "Could not access audio. Check browser permissions."
         );
         return false;
       }
       streamRef.current = stream;
+      watchTrackEnded(stream);
 
       // 2. Socket.
       let ws: WebSocket;
@@ -451,15 +486,8 @@ export function useLiveLectureTranscription(options: {
       }
       socketRef.current = ws;
 
-      // 3. Recorder.
-      const mimeType = pickMimeType();
-      const recorder = new MediaRecorder(
-        stream,
-        mimeType ? { mimeType } : undefined
-      );
-      recorderRef.current = recorder;
-      attachRecorderToSocket(ws);
-      recorder.start(RECORDER_TIMESLICE_MS);
+      // 3. Recorder (paired to this socket).
+      startRecorderForSocket(ws);
 
       // 4. Timers.
       runningSinceRef.current = Date.now();
@@ -491,8 +519,9 @@ export function useLiveLectureTranscription(options: {
     },
     [
       setStatusBoth,
+      watchTrackEnded,
       connectSocket,
-      attachRecorderToSocket,
+      startRecorderForSocket,
       stopRecorderAndStream,
       currentElapsedMs,
       flushSegments,
@@ -533,40 +562,90 @@ export function useLiveLectureTranscription(options: {
 
   const resume = useCallback(async () => {
     if (statusRef.current !== "paused" && statusRef.current !== "error") return;
-    // Socket may have died while paused/error'd; reconnect if needed.
-    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-      setStatusBoth("reconnecting");
+
+    const markRecording = () => {
+      if (runningSinceRef.current == null) {
+        runningSinceRef.current = Date.now();
+      }
+      setStatusBoth("recording");
+      void fetch(`/api/live-notes/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "recording" }),
+      }).catch(() => {});
+    };
+
+    // Fast path: same live socket, same paused recorder, live track — a
+    // plain MediaRecorder.resume() continues the original WebM stream.
+    const currentWs = socketRef.current;
+    const recorder = recorderRef.current;
+    const track = streamRef.current?.getAudioTracks()[0];
+    if (
+      currentWs &&
+      currentWs.readyState === WebSocket.OPEN &&
+      recorder &&
+      recorder.state === "paused" &&
+      recorderSocketRef.current === currentWs &&
+      track &&
+      track.readyState === "live"
+    ) {
+      let resumed = false;
       try {
-        const ws = await connectSocket();
-        socketRef.current = ws;
-        attachRecorderToSocket(ws);
-        reconnectAttemptRef.current = 0;
-      } catch (e) {
-        setStatusBoth("error");
-        onErrorRef.current?.(
-          e instanceof Error ? e.message : "Could not reconnect."
-        );
+        recorder.resume();
+        // Re-read via a widened type: TS narrowed `state` to "paused" from
+        // the guard above and doesn't model resume()'s mutation.
+        resumed =
+          (recorder as MediaRecorder).state === ("recording" as RecordingState);
+      } catch {
+        /* fall through to the full restart below */
+      }
+      if (resumed) {
+        markRecording();
         return;
       }
     }
-    const recorder = recorderRef.current;
-    if (recorder && recorder.state === "paused") {
-      try {
-        recorder.resume();
-      } catch {
-        /* ignore */
+
+    // Full restart: re-acquire the audio if the share ended (the Resume
+    // click is a user gesture, so getDisplayMedia may be called again), then
+    // pair a fresh recorder with a fresh socket — never reuse a socket that
+    // already received audio under an older WebM header.
+    setStatusBoth("reconnecting");
+    try {
+      if (!track || track.readyState !== "live") {
+        const fresh = await acquireLectureAudioStream(lastSourceRef.current);
+        const old = streamRef.current;
+        streamRef.current = fresh;
+        if (old) {
+          for (const t of old.getTracks()) {
+            try {
+              t.stop();
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        watchTrackEnded(fresh);
       }
+      closeSocket();
+      const ws = await connectSocket();
+      socketRef.current = ws;
+      startRecorderForSocket(ws);
+      reconnectAttemptRef.current = 0;
+      markRecording();
+    } catch (e) {
+      setStatusBoth("error");
+      onErrorRef.current?.(
+        e instanceof Error && e.message ? e.message : "Could not reconnect."
+      );
     }
-    if (runningSinceRef.current == null) {
-      runningSinceRef.current = Date.now();
-    }
-    setStatusBoth("recording");
-    void fetch(`/api/live-notes/${sessionId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "recording" }),
-    }).catch(() => {});
-  }, [sessionId, setStatusBoth, connectSocket, attachRecorderToSocket]);
+  }, [
+    sessionId,
+    setStatusBoth,
+    watchTrackEnded,
+    closeSocket,
+    connectSocket,
+    startRecorderForSocket,
+  ]);
 
   /**
    * Stop capture and flush everything. Resolves once the final flush attempt

@@ -9,6 +9,10 @@ import {
   type NotesPanelHandle,
 } from "@/components/immersive/NotesPanel";
 import {
+  detectCapturePlatform,
+  type CapturePlatform,
+} from "@/lib/live-notes/capture";
+import {
   useLiveLectureTranscription,
   type LiveCaptureSource,
   type LiveTranscriptSegment,
@@ -82,6 +86,12 @@ export function LiveNotesSurface({
   const [confirmFinish, setConfirmFinish] = useState(false);
   const [started, setStarted] = useState(false);
   const [aiWriting, setAiWriting] = useState(false);
+  // Detected after mount so the server-rendered HTML never depends on the
+  // client platform (hydration-safe). Null = still detecting.
+  const [platform, setPlatform] = useState<CapturePlatform | null>(null);
+  useEffect(() => {
+    setPlatform(detectCapturePlatform());
+  }, []);
 
   const notesRef = useRef<NotesPanelHandle | null>(null);
   const railScrollRef = useRef<HTMLDivElement | null>(null);
@@ -473,10 +483,26 @@ export function LiveNotesSurface({
                 >
                   Capture tab audio
                   <span className="mt-0.5 block text-xs font-normal text-rose-100">
-                    Online lecture in another Chrome tab — tick &quot;Also share
-                    tab audio&quot; in the picker.
+                    YouTube, Zoom or Meet in the browser — pick the lecture tab
+                    under &quot;Chrome Tab&quot; and tick &quot;Also share tab
+                    audio&quot;.
                   </span>
                 </button>
+                {platform?.systemAudioSupported ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleStart("system")}
+                    disabled={status === "connecting"}
+                    className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-left text-sm font-semibold text-zinc-800 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                  >
+                    Capture system audio
+                    <span className="mt-0.5 block text-xs font-normal text-zinc-500 dark:text-zinc-400">
+                      Lecture playing outside the browser (e.g. the Zoom app) —
+                      choose &quot;Entire screen&quot; and turn on &quot;Also
+                      share system audio&quot;.
+                    </span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => void handleStart("mic")}
@@ -489,6 +515,14 @@ export function LiveNotesSurface({
                   </span>
                 </button>
               </div>
+              {platform?.isMac ? (
+                <p className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs leading-relaxed text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+                  On a Mac the browser can&apos;t capture system audio. To
+                  record a Zoom lecture, join from your browser instead of the
+                  Zoom app (zoom.us → &quot;Join from your browser&quot;) and
+                  use <strong>Capture tab audio</strong>.
+                </p>
+              ) : null}
               {status === "connecting" ? (
                 <p className="mt-3 text-center text-xs text-zinc-400">
                   Connecting to live transcription…
