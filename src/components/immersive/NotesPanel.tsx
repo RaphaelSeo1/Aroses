@@ -13,6 +13,7 @@ import TaskItem from "@tiptap/extension-task-item";
 import Typography from "@tiptap/extension-typography";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
+import { AI_APPEND_META, Provenance } from "./notes/Provenance";
 import { promptDialog } from "@/components/AppDialogs";
 import {
   readRoseAppendedChunkIds,
@@ -95,6 +96,12 @@ export type AutoGenerateBlock = {
   skipDedupe?: boolean;
   /** Mentored chunk id — persisted on the doc to dedupe across refreshes. */
   chunkId?: string;
+  /**
+   * Live Notes: append at the doc end WITHOUT stealing focus or moving the
+   * student's cursor (they may be typing mid-document while the AI appends).
+   * Auto-scrolls only when the reader was already near the bottom.
+   */
+  preserveSelection?: boolean;
 };
 
 export type StreamedNotesOptions = {
@@ -296,6 +303,10 @@ export function NotesPanel({
   // reach commands without a use-before-define on `editor`.
   const editorInstanceRef = useRef<Editor | null>(null);
 
+  // Scrollable document-body wrapper — used by `preserveSelection` appends to
+  // decide whether to follow new content (only when already near the bottom).
+  const scrollBodyRef = useRef<HTMLDivElement | null>(null);
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -319,6 +330,7 @@ export function NotesPanel({
       TaskList,
       TaskItem.configure({ nested: true }),
       Callout,
+      Provenance,
       SlashCommand,
       Placeholder.configure({
         placeholder: ({ node }) => {
@@ -484,6 +496,7 @@ export function NotesPanel({
         skipHeading,
         skipDedupe,
         chunkId,
+        preserveSelection,
       }: AutoGenerateBlock) => {
         autoGenLog("inserting notes into editor", {
           hasEditor: !!editor,
@@ -559,14 +572,17 @@ export function NotesPanel({
           }
         }
 
-        const chain = editor.chain().focus("end");
+        // Build the block as a node array so it can be inserted either at the
+        // (focused) end — legacy behavior — or at the doc end WITHOUT touching
+        // focus/selection (`preserveSelection`, Live Notes).
+        const blockNodes: Array<Record<string, unknown>> = [];
 
         if (dividerBefore) {
-          chain.insertContent({ type: "horizontalRule" });
+          blockNodes.push({ type: "horizontalRule" });
         }
 
         if (heading && !skipHeading) {
-          chain.insertContent({
+          blockNodes.push({
             type: "heading",
             attrs: { level: 2 },
             content: [{ type: "text", text: heading }],
@@ -574,14 +590,14 @@ export function NotesPanel({
         }
 
         if (intro && intro.trim().length > 0) {
-          chain.insertContent({
+          blockNodes.push({
             type: "paragraph",
             content: [{ type: "text", text: intro.trim() }],
           });
         }
 
         if (bullets.length > 0) {
-          chain.insertContent({
+          blockNodes.push({
             type: "bulletList",
             content: bullets.map((b) => {
               const text = typeof b === "string" ? b : b.text;
@@ -632,12 +648,12 @@ export function NotesPanel({
         }
 
         if (vocabulary && vocabulary.length > 0) {
-          chain.insertContent({
+          blockNodes.push({
             type: "heading",
             attrs: { level: 3 },
             content: [{ type: "text", text: "Key vocabulary" }],
           });
-          chain.insertContent({
+          blockNodes.push({
             type: "bulletList",
             content: vocabulary.map(({ term, definition }) => ({
               type: "listItem",
@@ -661,7 +677,7 @@ export function NotesPanel({
         }
 
         if (callout && callout.text.trim().length > 0) {
-          chain.insertContent({
+          blockNodes.push({
             type: "callout",
             attrs: { emoji: callout.emoji ?? "💡" },
             content: [
@@ -674,12 +690,12 @@ export function NotesPanel({
         }
 
         if (selfCheck && selfCheck.length > 0) {
-          chain.insertContent({
+          blockNodes.push({
             type: "heading",
             attrs: { level: 3 },
             content: [{ type: "text", text: "Self-check" }],
           });
-          chain.insertContent({
+          blockNodes.push({
             type: "orderedList",
             content: selfCheck.map((q) => ({
               type: "listItem",
@@ -693,7 +709,42 @@ export function NotesPanel({
           });
         }
 
-        chain.run();
+        if (preserveSelection) {
+          // Insert at the doc end without focusing — the student's cursor and
+          // scroll position stay untouched (ProseMirror maps the selection
+          // through the transaction). Auto-scroll only when the reader was
+          // already following along at the bottom.
+          const scrollEl = scrollBodyRef.current;
+          const wasNearBottom = scrollEl
+            ? scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight <
+              160
+            : false;
+          // Stamp provenance so wrap-up can tell AI blocks from student
+          // writing; the tx meta stops the provenance tracker from treating
+          // this append as a student edit.
+          const stamped = blockNodes.map((n) => ({
+            ...n,
+            attrs: {
+              ...(n.attrs as Record<string, unknown> | undefined),
+              provenance: "ai",
+            },
+          }));
+          editor
+            .chain()
+            .command(({ tr }) => {
+              tr.setMeta(AI_APPEND_META, true);
+              return true;
+            })
+            .insertContentAt(editor.state.doc.content.size, stamped)
+            .run();
+          if (scrollEl && wasNearBottom) {
+            requestAnimationFrame(() => {
+              scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" });
+            });
+          }
+        } else {
+          editor.chain().focus("end").insertContent(blockNodes).run();
+        }
 
         if (chunkId) {
           const existing = readRoseAppendedChunkIds(editor.getJSON());
@@ -1182,7 +1233,7 @@ export function NotesPanel({
       </div>
 
       {/* Document body — generous padding, max-width centered. */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollBodyRef} className="min-h-0 flex-1 overflow-y-auto">
         <div
           className={`mx-auto w-full max-w-[720px] ${
             fillHeight
