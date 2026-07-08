@@ -10,6 +10,10 @@ import {
   type MaterialRow,
 } from "@/components/ExamGroupsPanel";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
+import {
+  LiveNotesEntry,
+  type LiveNotesActiveSession,
+} from "@/components/live-notes/LiveNotesEntry";
 import { ShareCourseButton } from "@/components/ShareCourseButton";
 import { parseCourseOutputLanguage } from "@/lib/course-output-language";
 import { fetchCoursePublishingPanels } from "@/lib/marketplace/course-publishing-data";
@@ -132,6 +136,30 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
     error_message: typeof j.error_message === "string" ? j.error_message : null,
   }));
 
+  // In-flight Live Notes sessions (closed tab, etc.) — the entry offers
+  // "Resume". Query fails soft when migration 079 isn't applied yet.
+  let liveNotesSessions: LiveNotesActiveSession[] = [];
+  {
+    const { data: liveSessions, error: liveErr } = await supabase
+      .from("live_lecture_sessions")
+      .select("id, title, started_at")
+      .eq("course_id", course.id)
+      .eq("user_id", user.id)
+      .in("status", ["recording", "paused"])
+      .order("created_at", { ascending: false })
+      .limit(3);
+    if (!liveErr) {
+      liveNotesSessions = (liveSessions ?? []).map((s) => ({
+        id: s.id as string,
+        title:
+          typeof s.title === "string" && s.title.trim()
+            ? s.title.trim()
+            : "Live lecture",
+        startedAt: (s.started_at as string) ?? "",
+      }));
+    }
+  }
+
   const adminViewingOthersCourse =
     typeof course.owner_user_id === "string" &&
     course.owner_user_id !== user.id &&
@@ -244,6 +272,14 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                   Drop in the PDFs you want to study. The AI will turn them
                   into lessons calibrated to your goal above.
                 </p>
+                {!readOnlyWorkspace ? (
+                  <div className="mt-5">
+                    <LiveNotesEntry
+                      courseId={course.id}
+                      activeSessions={liveNotesSessions}
+                    />
+                  </div>
+                ) : null}
                 <div className="mt-5">
                   <ExamGroupsPanel
                     courseId={course.id}
@@ -295,7 +331,16 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                 <CoursePublishingEntry courseId={course.id} summary={publishing} />
               ) : null}
 
-              <div className="mt-12">
+              {!readOnlyWorkspace ? (
+                <div className="mt-12">
+                  <LiveNotesEntry
+                    courseId={course.id}
+                    activeSessions={liveNotesSessions}
+                  />
+                </div>
+              ) : null}
+
+              <div className={readOnlyWorkspace ? "mt-12" : "mt-5"}>
                 <ExamGroupsPanel
                   courseId={course.id}
                   groups={groups}
