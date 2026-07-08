@@ -136,27 +136,36 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
     error_message: typeof j.error_message === "string" ? j.error_message : null,
   }));
 
-  // In-flight Live Notes sessions (closed tab, etc.) — the entry offers
-  // "Resume". Query fails soft when migration 079 isn't applied yet.
+  // Live Notes sessions: in-flight ones get a "Resume" chip; completed ones
+  // stay listed so their notes + transcript remain reachable after the
+  // course is built. Query fails soft when migration 079 isn't applied yet.
   let liveNotesSessions: LiveNotesActiveSession[] = [];
+  let pastLiveNotesSessions: LiveNotesActiveSession[] = [];
   {
     const { data: liveSessions, error: liveErr } = await supabase
       .from("live_lecture_sessions")
-      .select("id, title, started_at")
+      .select("id, title, status, started_at")
       .eq("course_id", course.id)
       .eq("user_id", user.id)
-      .in("status", ["recording", "paused"])
+      .in("status", ["recording", "paused", "completed"])
       .order("created_at", { ascending: false })
-      .limit(3);
+      .limit(8);
     if (!liveErr) {
-      liveNotesSessions = (liveSessions ?? []).map((s) => ({
+      const mapped = (liveSessions ?? []).map((s) => ({
         id: s.id as string,
+        status: s.status as string,
         title:
           typeof s.title === "string" && s.title.trim()
             ? s.title.trim()
             : "Live lecture",
         startedAt: (s.started_at as string) ?? "",
       }));
+      liveNotesSessions = mapped
+        .filter((s) => s.status !== "completed")
+        .slice(0, 3);
+      pastLiveNotesSessions = mapped
+        .filter((s) => s.status === "completed")
+        .slice(0, 5);
     }
   }
 
@@ -277,6 +286,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                     <LiveNotesEntry
                       courseId={course.id}
                       activeSessions={liveNotesSessions}
+                      pastSessions={pastLiveNotesSessions}
                     />
                   </div>
                 ) : null}
@@ -336,6 +346,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                   <LiveNotesEntry
                     courseId={course.id}
                     activeSessions={liveNotesSessions}
+                    pastSessions={pastLiveNotesSessions}
                   />
                 </div>
               ) : null}

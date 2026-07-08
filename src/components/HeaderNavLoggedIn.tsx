@@ -81,6 +81,12 @@ export function HeaderNavLoggedIn({
           <span>{t.nav.home}</span>
         </HeaderNavLink>
         <TutorSessionNavDropdown />
+        <HeaderNavLink
+          href="/notes"
+          activeWhen={(p) => p === "/notes" || p.startsWith("/notes/")}
+        >
+          {t.nav.notes}
+        </HeaderNavLink>
         <HeaderNavLink href="/explore">{t.nav.explore}</HeaderNavLink>
         <HeaderNavLink href="/forum">{t.nav.forum}</HeaderNavLink>
         <HeaderNavLink

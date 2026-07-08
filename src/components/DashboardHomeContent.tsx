@@ -164,7 +164,13 @@ export async function DashboardHomeContent({
                     </div>
                   </Link>
                 </div>
-                <div className="mt-2 flex justify-end">
+                <div className="mt-2 flex justify-end gap-4">
+                  <Link
+                    href="/notes"
+                    className="text-xs font-medium text-zinc-500 underline-offset-2 hover:text-violet-700 hover:underline dark:text-zinc-500 dark:hover:text-violet-300"
+                  >
+                    {t.dashboard.viewYourNotes} →
+                  </Link>
                   <Link
                     href="/sessions"
                     className="text-xs font-medium text-zinc-500 underline-offset-2 hover:text-violet-700 hover:underline dark:text-zinc-500 dark:hover:text-violet-300"

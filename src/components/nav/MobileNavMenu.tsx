@@ -130,6 +130,19 @@ export function MobileNavMenu({
             {t.nav.previousSessions}
           </Link>
           <MobileRow
+            href="/notes"
+            label={t.nav.notes}
+            onClick={close}
+            active={pathname === "/notes" || pathname.startsWith("/notes/")}
+            icon={
+              <>
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                <path d="M9 7h6M9 11h6" />
+              </>
+            }
+          />
+          <MobileRow
             href="/explore"
             label={t.nav.explore}
             onClick={close}

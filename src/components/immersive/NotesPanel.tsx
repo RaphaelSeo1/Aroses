@@ -248,6 +248,7 @@ export function NotesPanel({
   onAutoGenerateChange,
   onAutoGenerateUserToggle,
   autoGenerateBackfillOnlyWhenEmpty = false,
+  hideAutoGenerate = false,
   className,
   editorRef,
   onEditorReady,
@@ -280,6 +281,8 @@ export function NotesPanel({
   onAutoGenerateUserToggle?: (next: boolean) => void;
   /** When true, turning auto-generate on only triggers backfill if notes are empty. */
   autoGenerateBackfillOnlyWhenEmpty?: boolean;
+  /** Hide the auto-generate toggle (read/reference surfaces like the Notes hub). */
+  hideAutoGenerate?: boolean;
   className?: string;
   /** Optional imperative handle so the parent can append notes. */
   editorRef?: React.RefObject<NotesPanelHandle | null>;
@@ -1212,15 +1215,17 @@ export function NotesPanel({
           />
           {streamingNotes ? "Rose is writing notes…" : savedLabel}
         </span>
-        <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700">
-          <input
-            type="checkbox"
-            className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-700"
-            checked={autoGenerate}
-            onChange={(e) => void onToggleAutoGenerate(e.target.checked)}
-          />
-          ✨ Auto-generate
-        </label>
+        {hideAutoGenerate ? null : (
+          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-700"
+              checked={autoGenerate}
+              onChange={(e) => void onToggleAutoGenerate(e.target.checked)}
+            />
+            ✨ Auto-generate
+          </label>
+        )}
       </div>
 
       {/* Document body — generous padding, max-width centered. */}

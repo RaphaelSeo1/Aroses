@@ -19,6 +19,7 @@ const en = {
     "Got a topic, problem, or concept you need help with right now? Jump into a one-on-one conversation with Rose.",
   startSession: "Start session",
   pastTutorSessions: "Past tutor sessions",
+  viewYourNotes: "View your notes",
   nothingHereYet: "Nothing here yet",
   nothingHereYetDesc:
     "Create your own course or open something from Explore — once you study, it will show up here.",
@@ -192,6 +193,7 @@ const ko: typeof en = {
     "지금 바로 도움이 필요한 주제나 문제, 개념이 있나요? Rose와 일대일 대화를 시작해 보세요.",
   startSession: "세션 시작",
   pastTutorSessions: "지난 튜터 세션",
+  viewYourNotes: "내 노트 보기",
   nothingHereYet: "아직 아무것도 없어요",
   nothingHereYetDesc:
     "직접 코스를 만들거나 탐색에서 코스를 열어 보세요 — 학습을 시작하면 여기에 표시돼요.",

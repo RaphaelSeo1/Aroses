@@ -11,15 +11,19 @@ export type LiveNotesActiveSession = {
 };
 
 /**
- * Course-page entry point for Live Notes: starts a new capture session (and
- * offers "Resume" chips for in-flight ones left behind by a closed tab).
+ * Course-page entry point for Live Notes: starts a new capture session,
+ * offers "Resume" chips for in-flight sessions left behind by a closed tab,
+ * and lists completed lectures so their notes + transcript stay reachable
+ * after the course is built.
  */
 export function LiveNotesEntry({
   courseId,
   activeSessions,
+  pastSessions = [],
 }: {
   courseId: string;
   activeSessions: LiveNotesActiveSession[];
+  pastSessions?: LiveNotesActiveSession[];
 }) {
   const router = useRouter();
   const [starting, setStarting] = useState(false);
@@ -87,6 +91,33 @@ export function LiveNotesEntry({
               ⏺ Resume: {s.title}
             </Link>
           ))}
+        </div>
+      ) : null}
+
+      {pastSessions.length > 0 ? (
+        <div className="mt-3">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-rose-700/70 dark:text-rose-300/60">
+            Past lectures — notes &amp; transcript
+          </p>
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {pastSessions.map((s) => (
+              <Link
+                key={s.id}
+                href={`/dashboard/courses/${courseId}/live-notes/${s.id}`}
+                className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:border-rose-200 hover:bg-rose-50 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300 dark:hover:border-rose-800 dark:hover:bg-rose-950/40"
+              >
+                📄 {s.title}
+                {s.startedAt ? (
+                  <span className="text-zinc-400 dark:text-zinc-500">
+                    {new Date(s.startedAt).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </span>
+                ) : null}
+              </Link>
+            ))}
+          </div>
         </div>
       ) : null}
 

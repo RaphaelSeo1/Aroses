@@ -1,0 +1,40 @@
+"use client";
+
+import { useState } from "react";
+import { NotesPanel } from "@/components/immersive/NotesPanel";
+
+/**
+ * Notes-hub document view — the full NotesPanel editor pointed at an
+ * existing notes doc (tutor-session or mentored-course notes), so past
+ * notes stay readable AND editable outside their original surface.
+ *
+ * The auto-generate toggle is hidden here: this is a reference surface,
+ * not a live lecture/lesson, so there is nothing to generate from.
+ */
+export function NotesDocView({
+  notesEndpoint,
+  title,
+  subtitle,
+}: {
+  notesEndpoint: string;
+  title: string;
+  subtitle: string;
+}) {
+  const [autoGenerate, setAutoGenerate] = useState(false);
+
+  return (
+    <div className="h-[calc(100vh-11rem)] min-h-[24rem]">
+      <NotesPanel
+        notesEndpoint={notesEndpoint}
+        lessonTitle={title}
+        courseTitle={subtitle}
+        suggestions={[]}
+        onConsumeSuggestion={() => {}}
+        autoGenerate={autoGenerate}
+        onAutoGenerateChange={setAutoGenerate}
+        hideAutoGenerate
+        fillHeight
+      />
+    </div>
+  );
+}
