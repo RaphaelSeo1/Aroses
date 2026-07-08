@@ -576,12 +576,19 @@ export function LiveNotesSurface({
                   </span>
                 </button>
               </div>
-              {platform?.isMac ? (
+              {platform && !platform.captureAudioSupported ? (
+                <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100">
+                  This browser can&apos;t capture tab or screen audio. Open
+                  Rose in <strong>Google Chrome</strong> (or Edge) to record a
+                  screen lecture — the microphone still works here.
+                </p>
+              ) : platform?.isMac ? (
                 <p className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs leading-relaxed text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
-                  On a Mac the browser can&apos;t capture system audio. To
-                  record a Zoom lecture, join from your browser instead of the
-                  Zoom app (zoom.us → &quot;Join from your browser&quot;) and
-                  use <strong>Capture tab audio</strong>.
+                  On a Mac, &quot;Entire screen&quot; and &quot;Window&quot;
+                  sharing never include audio — share the <strong>tab</strong>{" "}
+                  itself and tick &quot;Also share tab audio&quot;. For a Zoom
+                  lecture, join from your browser instead of the Zoom app
+                  (zoom.us → &quot;Join from your browser&quot;).
                 </p>
               ) : null}
               {status === "connecting" ? (

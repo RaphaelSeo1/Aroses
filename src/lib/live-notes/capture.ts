@@ -28,6 +28,12 @@ export type LiveCaptureSource = "tab" | "system" | "mic";
 export type CapturePlatform = {
   isMac: boolean;
   /**
+   * True when the browser can share tab audio at all. Chromium-only —
+   * Safari and Firefox implement getDisplayMedia but never return an audio
+   * track, so screen-lecture capture is impossible there.
+   */
+  captureAudioSupported: boolean;
+  /**
    * True when the browser can share system (entire-screen) audio — Chromium
    * on Windows or ChromeOS. macOS/Linux browsers expose no system-audio
    * checkbox in the screen picker.
@@ -37,7 +43,7 @@ export type CapturePlatform = {
 
 export function detectCapturePlatform(): CapturePlatform {
   if (typeof navigator === "undefined") {
-    return { isMac: false, systemAudioSupported: false };
+    return { isMac: false, captureAudioSupported: false, systemAudioSupported: false };
   }
   const uaData = (
     navigator as Navigator & { userAgentData?: { platform?: string } }
@@ -48,12 +54,13 @@ export function detectCapturePlatform(): CapturePlatform {
   const isMac = platform.includes("mac") || ua.includes("mac os");
   const isWindows = platform.includes("win") && !platform.includes("darwin");
   const isChromeOS = platform.includes("cros") || ua.includes(" cros ");
-  // Chromium family (Chrome, Edge, Brave, …) — the only engines with
-  // getDisplayMedia system-audio support.
+  // Chromium family (Chrome, Edge, Brave, …) — the only engines that can
+  // capture tab/system audio via getDisplayMedia.
   const isChromium = Boolean(uaData) || /chrome|chromium|edg\//.test(ua);
 
   return {
     isMac,
+    captureAudioSupported: isChromium,
     systemAudioSupported: (isWindows || isChromeOS) && isChromium,
   };
 }
@@ -61,12 +68,48 @@ export function detectCapturePlatform(): CapturePlatform {
 /** Thrown when capture is blocked; `message` is user-facing. */
 export class LectureCaptureError extends Error {}
 
+/**
+ * What the user actually shared, read off the video track before teardown —
+ * lets the no-audio error say exactly what to change instead of guessing.
+ * Chrome reports "monitor" (entire screen), "window", or "browser" (a tab).
+ */
+type SharedSurface = "monitor" | "window" | "browser" | "unknown";
+
+function sharedSurfaceOf(display: MediaStream): SharedSurface {
+  const settings = display.getVideoTracks()[0]?.getSettings() as
+    | (MediaTrackSettings & { displaySurface?: string })
+    | undefined;
+  const s = settings?.displaySurface;
+  return s === "monitor" || s === "window" || s === "browser" ? s : "unknown";
+}
+
 function noAudioMessage(
   source: Exclude<LiveCaptureSource, "mic">,
-  platform: CapturePlatform
+  platform: CapturePlatform,
+  shared: SharedSurface
 ): string {
+  // They DID pick a tab — the only thing missing is the audio toggle.
+  if (shared === "browser") {
+    return 'You shared a tab, but "Also share tab audio" was off, so recording was blocked. Try again and turn on the "Also share tab audio" toggle at the bottom of the picker.';
+  }
+  // A window never carries audio in any browser/OS.
+  if (shared === "window") {
+    return platform.systemAudioSupported
+      ? 'You shared a window — windows never include audio, so recording was blocked. Pick the "Chrome Tab" pane and tick "Also share tab audio", or pick "Entire screen" and tick "Also share system audio".'
+      : 'You shared a window — windows never include audio, so recording was blocked. Pick the "Chrome Tab" pane at the top of the picker, select your lecture tab, and tick "Also share tab audio".';
+  }
+  // Entire screen.
+  if (shared === "monitor") {
+    if (platform.systemAudioSupported) {
+      return 'You shared your entire screen without audio, so recording was blocked. Try again and turn on "Also share system audio" at the bottom of the picker.';
+    }
+    return platform.isMac
+      ? 'You shared your entire screen — on a Mac, screen sharing can never include audio, so recording was blocked. Pick the "Chrome Tab" pane at the top of the picker instead, select your lecture tab, and tick "Also share tab audio". (For the Zoom app, join from the browser instead — zoom.us → "Join from your browser" — or use the microphone.)'
+      : 'You shared your entire screen, but this browser can\'t capture screen audio, so recording was blocked. Pick the "Chrome Tab" pane instead and tick "Also share tab audio".';
+  }
+  // Couldn't tell what was shared — fall back to source-based guidance.
   if (source === "tab") {
-    return 'No tab audio was shared, so recording was blocked. In the picker choose the "Chrome Tab" pane, select your lecture tab, and turn on "Also share tab audio" — then try again. (For a lecture playing outside the browser, use system audio or the microphone.)';
+    return 'No tab audio was shared, so recording was blocked. In the picker choose the "Chrome Tab" pane, select your lecture tab, and turn on "Also share tab audio" — then try again.';
   }
   if (platform.isMac) {
     return "macOS doesn't let the browser capture system audio, so recording was blocked. To record a Zoom lecture on Mac, join from your browser instead of the Zoom app (zoom.us → \"Join from your browser\") and use Capture tab audio — or use the microphone.";
@@ -99,10 +142,15 @@ export async function acquireLectureAudioStream(
     }
   }
 
+  // Blocked before the picker even opens — these browsers/OSes could only
+  // ever produce video-without-audio.
+  if (!platform.captureAudioSupported) {
+    throw new LectureCaptureError(
+      "This browser can't capture tab or screen audio. Open Rose in Google Chrome (or Edge) to record a screen lecture, or use the microphone instead."
+    );
+  }
   if (source === "system" && !platform.systemAudioSupported) {
-    // Blocked before the picker even opens — the user could only ever get
-    // video-without-audio out of it.
-    throw new LectureCaptureError(noAudioMessage("system", platform));
+    throw new LectureCaptureError(noAudioMessage("system", platform, "monitor"));
   }
 
   // Non-standard but widely supported Chromium options: steer the picker to
@@ -136,7 +184,9 @@ export async function acquireLectureAudioStream(
 
   const audioTracks = display.getAudioTracks();
   if (audioTracks.length === 0) {
-    // Never record video-without-audio: tear the capture down and explain.
+    // Never record video-without-audio: note what was shared, tear the
+    // capture down, and explain exactly what to change.
+    const shared = sharedSurfaceOf(display);
     for (const t of display.getTracks()) {
       try {
         t.stop();
@@ -144,7 +194,7 @@ export async function acquireLectureAudioStream(
         /* ignore */
       }
     }
-    throw new LectureCaptureError(noAudioMessage(source, platform));
+    throw new LectureCaptureError(noAudioMessage(source, platform, shared));
   }
 
   // Only the picker needs video; drop it so nothing visual is recorded.
