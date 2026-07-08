@@ -12,9 +12,10 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
 /**
  * Live Notes synthesis — streaming, grounded, with bounded self-revision.
  *
- * Every ~2.8k chars of fresh transcript, one Haiku call receives: the new
- * slice, the rolling summary, and the last-N AI note sections WITH the raw
- * transcript excerpts they were written from. The model streams a tiny
+ * Every ~700 chars of fresh transcript (~45s of speech; the client runs a
+ * 5s cadence heartbeat), one Haiku call receives: the new slice, the
+ * rolling summary, and the last-N AI note sections WITH the raw transcript
+ * excerpts they were written from. The model streams a tiny
  * line-marker protocol (parsed incrementally — no waiting for the full
  * response):
  *
@@ -38,7 +39,7 @@ const MODEL = process.env.ANTHROPIC_TUTOR_FAST_MODEL?.trim() || "claude-haiku-4-
 
 /** Hard cap on the rolling summary we store + send back to the model. */
 export const ROLLING_SUMMARY_MAX_CHARS = 1_600;
-/** Max transcript slice per call (client triggers around ~2.8k). */
+/** Max transcript slice per call (client triggers around ~700). */
 const MAX_SEGMENT_INPUT_CHARS = 12_000;
 /** Self-revision context caps (cost bound: ~4 sections/call). */
 export const MAX_REVISABLE_SECTIONS = 4;
@@ -67,9 +68,11 @@ ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
-SELF-REVISION (bounded):
-- Compare each RECENT NOTE SECTION against its transcript excerpt. If YOU misrepresented the lecturer — wrong number, inverted relationship, misattributed claim — or if the NEW transcript slice corrects or recontextualizes a recent section, rewrite that WHOLE section with @@revise.
-- The transcript is ground truth. Only revise sections you were given. Do not revise for style or wording preference. If nothing is wrong, emit no revisions. Most calls need none.
+SELF-REVISION (bounded, rare):
+- Compare each RECENT NOTE SECTION against its transcript excerpt. Rewrite that WHOLE section with @@revise ONLY when it is factually wrong: a wrong number, an inverted relationship, a misattributed claim, or meaning the NEW transcript slice proves incorrect.
+- @@revise is NEVER for adding new information. Everything the lecturer says in the NEW TRANSCRIPT SLICE goes under @@append — even when it continues, elaborates on, or gives more examples for a recent section's topic. Do not merge new material into an old section.
+- Do not revise for style, wording, ordering, or completeness. A revision must preserve the section's correct content verbatim and change only what was wrong.
+- The transcript is ground truth. Only revise sections you were given. Most calls have ZERO @@revise operations; if nothing is factually wrong, emit none.
 
 WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the rolling summary): still emit @@append but put NOTHING after it. Never pad.
 

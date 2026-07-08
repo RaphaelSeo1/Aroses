@@ -17,8 +17,13 @@ type Params = { params: Promise<{ sessionId: string }> };
 const MAX_INPUT_CHARS = 12_000;
 const MAX_SECTION_CHARS = 2_000;
 const MAX_EXCERPT_CHARS = 3_000;
-/** Hard per-session cap on Haiku note calls (runaway guard). */
-const MAX_SYNTHESIZE_CALLS = 60;
+/**
+ * Hard per-session cap on Haiku note calls (runaway guard). The client
+ * fires roughly every ~45–60s of continuous speech (5s heartbeat gated on
+ * ~700 fresh chars + the previous call finishing its typed-out render), so
+ * 200 covers a ~2.5–3h lecture at full pace.
+ */
+const MAX_SYNTHESIZE_CALLS = 200;
 
 /**
  * POST /api/live-notes/[sessionId]/synthesize — SSE.

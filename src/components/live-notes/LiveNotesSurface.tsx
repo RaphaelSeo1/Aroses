@@ -28,11 +28,35 @@ import {
  * course pipeline and the student lands on the standard build page.
  */
 
-/** Synthesis trigger thresholds (see plan §3). */
-const SYNTH_TARGET_CHARS = 2_800;
-const SYNTH_MIN_CHARS = 800;
-const SYNTH_FALLBACK_MS = 5 * 60 * 1000;
-const SYNTH_CHECK_INTERVAL_MS = 30 * 1000;
+/**
+ * Synthesis cadence. A 5s heartbeat plus every committed segment attempt a
+ * synthesis; the char thresholds below decide whether one actually fires:
+ *   - first section quickly (~300 chars ≈ 25s of speech — proof of life),
+ *   - then whenever ~700 new chars (~45s of speech) have accumulated.
+ * Calls self-throttle further because a synthesis holds `synthInFlight`
+ * until its output has finished *typing out* (see TYPE_CPS below), so the
+ * next call starts only after the previous one is visually done.
+ */
+const SYNTH_TARGET_CHARS = 700;
+const SYNTH_FIRST_SECTION_CHARS = 300;
+const SYNTH_MIN_CHARS = 300;
+const SYNTH_CHECK_INTERVAL_MS = 5 * 1000;
+
+/**
+ * Visible typing pace for AI notes. Model tokens arrive in bursts; instead
+ * of dumping them, a pump drains the stream into the editor at a steady
+ * character rate so the student can watch the notes being written.
+ */
+const TYPE_CPS = 45;
+const TYPE_TICK_MS = 40;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Ordered work items the typing pump consumes. */
+type PumpItem =
+  | { kind: "append"; sectionId: string; dividerBefore: boolean }
+  | { kind: "revise"; sectionId: string }
+  | { kind: "text"; text: string };
 
 export type LiveNotesInitialSession = {
   id: string;
@@ -60,6 +84,28 @@ function formatAtMs(ms: number): string {
   const m = Math.floor(totalSec / 60);
   const s = totalSec % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function transcriptSaveLabel(
+  status: "idle" | "saving" | "saved" | "error",
+  lastSavedAt: number | null,
+  pendingCount: number,
+  segmentCount: number
+): string {
+  if (status === "saving") return "Saving transcript…";
+  if (status === "error") {
+    return pendingCount > 0
+      ? `Save failed — ${pendingCount} segment${pendingCount === 1 ? "" : "s"} pending`
+      : "Transcript save failed — still retrying";
+  }
+  if (segmentCount === 0) return "Transcript autosaves as you record";
+  if (lastSavedAt) {
+    const sec = Math.max(0, Math.floor((Date.now() - lastSavedAt) / 1000));
+    if (sec < 8) return "Transcript saved";
+    if (sec < 60) return `Transcript saved ${sec}s ago`;
+    return `Transcript saved ${Math.floor(sec / 60)}m ago`;
+  }
+  return pendingCount > 0 ? "Saving transcript…" : "Transcript saved";
 }
 
 export function LiveNotesSurface({
@@ -101,7 +147,6 @@ export function LiveNotesSurface({
   // ── Synthesis buffering ────────────────────────────────────────────────
   const unsynthesizedRef = useRef("");
   const synthInFlightRef = useRef(false);
-  const lastSynthAtRef = useRef(Date.now());
   const blockCountRef = useRef(0);
   /**
    * Ring buffer: transcript excerpt each AI section was written from —
@@ -115,7 +160,13 @@ export function LiveNotesSurface({
       if (!autoGenerateRef.current) return;
       if (synthInFlightRef.current) return;
       const pending = unsynthesizedRef.current.trim();
-      const threshold = force ? SYNTH_MIN_CHARS : SYNTH_TARGET_CHARS;
+      // The first section should appear fast (proof the AI is listening);
+      // after that, batch to keep call counts and costs sane.
+      const threshold = force
+        ? SYNTH_MIN_CHARS
+        : blockCountRef.current === 0
+          ? SYNTH_FIRST_SECTION_CHARS
+          : SYNTH_TARGET_CHARS;
       if (pending.length < threshold) return;
 
       const writer = notesRef.current?.getStreamWriter();
@@ -123,27 +174,72 @@ export function LiveNotesSurface({
 
       synthInFlightRef.current = true;
       unsynthesizedRef.current = "";
-      lastSynthAtRef.current = Date.now();
       setAiWriting(true);
       notesRef.current?.setStreamingIndicator(true);
 
-      // Bounded self-revision context: the last fully-AI sections plus the
-      // raw transcript excerpts underlying them. The writer already excludes
-      // student-edited sections (edits are final) — that filter is enforced
-      // again on receipt via beginRevision.
+      // Bounded self-revision context: recent fully-AI sections plus the raw
+      // transcript excerpts underlying them. The NEWEST section is excluded —
+      // models love to "update" the section they just wrote by rewriting it
+      // wholesale, which reads as churn; new material must append instead. A
+      // section becomes correctable one call later. Student-edited sections
+      // are excluded by the writer (and re-checked on receipt).
       const excerpts = sectionExcerptsRef.current;
-      const revisable = writer.listRevisableSections(4).map((s) => ({
+      const allSections = writer.listRevisableSections(5);
+      const revisable = allSections.slice(0, -1).slice(-4).map((s) => ({
         sectionId: s.sectionId,
         markdown: s.markdown,
         transcriptExcerpt: excerpts.get(s.sectionId),
       }));
-      const recentHeadings = revisable
+      const recentHeadings = allSections
         .map((s) => s.markdown.match(/^##\s+(.+)$/m)?.[1]?.trim())
         .filter((h): h is string => Boolean(h))
         .slice(-5);
 
       let appendSectionId: string | null = null;
       let gotContent = false;
+
+      // ── Typing pump ─────────────────────────────────────────────────────
+      // SSE events land in `queue`; this loop drains them into the editor at
+      // TYPE_CPS so the notes visibly type out character by character even
+      // when the model streams faster. `synthInFlight` stays true until the
+      // pump finishes, which naturally spaces out synthesis calls.
+      const queue: PumpItem[] = [];
+      let queueClosed = false;
+      const charsPerTick = Math.max(1, Math.round((TYPE_CPS * TYPE_TICK_MS) / 1000));
+      const runPump = async () => {
+        let opValid = false;
+        while (true) {
+          const item = queue.shift();
+          if (!item) {
+            if (queueClosed) break;
+            await sleep(TYPE_TICK_MS);
+            continue;
+          }
+          if (item.kind === "append") {
+            writer.finishOp();
+            writer.beginAppend({
+              sectionId: item.sectionId,
+              dividerBefore: item.dividerBefore,
+            });
+            appendSectionId = item.sectionId;
+            opValid = true;
+          } else if (item.kind === "revise") {
+            writer.finishOp();
+            // False when the section vanished or was student-edited since
+            // the request went out — the op's text is then discarded.
+            opValid = await writer.beginRevision(item.sectionId);
+          } else if (opValid && item.text) {
+            for (let i = 0; i < item.text.length; i += charsPerTick) {
+              writer.write(item.text.slice(i, i + charsPerTick));
+              gotContent = true;
+              await sleep(TYPE_TICK_MS);
+            }
+          }
+        }
+        writer.finishOp();
+      };
+
+      const pumpDone = runPump();
       try {
         const res = await fetch(`/api/live-notes/${sessionId}/synthesize`, {
           method: "POST",
@@ -157,7 +253,7 @@ export function LiveNotesSurface({
         const contentType = res.headers.get("content-type") ?? "";
         if (!res.ok || !contentType.includes("text/event-stream")) {
           // JSON fallback: capped (stop quietly) or a hard error (put the
-          // slice back — the next natural break retries with it).
+          // slice back — the next cadence tick retries with it).
           const data = (await res
             .json()
             .catch(() => ({}))) as { capped?: boolean };
@@ -172,35 +268,23 @@ export function LiveNotesSurface({
         if (!reader) return;
         const decoder = new TextDecoder();
         let buf = "";
-        /** Deltas route to the writer only while the active op is valid. */
-        let opValid = false;
 
-        const handleEvent = async (
-          event: string,
-          parsed: Record<string, unknown>
-        ) => {
+        const handleEvent = (event: string, parsed: Record<string, unknown>) => {
           if (event === "op") {
-            writer.finishOp();
             const sectionId =
               typeof parsed.sectionId === "string" ? parsed.sectionId : "";
             if (parsed.op === "append" && sectionId) {
-              writer.beginAppend({
+              queue.push({
+                kind: "append",
                 sectionId,
                 dividerBefore: blockCountRef.current > 0,
               });
-              appendSectionId = sectionId;
-              opValid = true;
             } else if (parsed.op === "revise" && sectionId) {
-              // False when the section vanished or was student-edited since
-              // the request went out — the op's text is then discarded.
-              opValid = await writer.beginRevision(sectionId);
-            } else {
-              opValid = false;
+              queue.push({ kind: "revise", sectionId });
             }
           } else if (event === "text") {
-            if (opValid && typeof parsed.delta === "string" && parsed.delta) {
-              writer.write(parsed.delta);
-              gotContent = true;
+            if (typeof parsed.delta === "string" && parsed.delta) {
+              queue.push({ kind: "text", text: parsed.delta });
             }
           } else if (event === "error") {
             throw new Error(
@@ -226,10 +310,11 @@ export function LiveNotesSurface({
               else if (line.startsWith("data:")) data += line.slice(5).trim();
             }
             if (!data) continue;
-            await handleEvent(event, JSON.parse(data) as Record<string, unknown>);
+            handleEvent(event, JSON.parse(data) as Record<string, unknown>);
           }
         }
-        writer.finishOp();
+        queueClosed = true;
+        await pumpDone;
 
         if (appendSectionId && gotContent) {
           blockCountRef.current += 1;
@@ -242,10 +327,11 @@ export function LiveNotesSurface({
           }
         }
       } catch {
-        writer.finishOp();
         unsynthesizedRef.current =
           `${pending} ${unsynthesizedRef.current}`.trim();
       } finally {
+        queueClosed = true;
+        await pumpDone.catch(() => {});
         synthInFlightRef.current = false;
         setAiWriting(false);
         notesRef.current?.setStreamingIndicator(false);
@@ -254,13 +340,12 @@ export function LiveNotesSurface({
     [sessionId]
   );
 
-  // Fallback timer: if the lecturer never pauses long enough for a natural
-  // break, still synthesize every few minutes.
+  // Cadence heartbeat: attempt a synthesis every 5s. The char thresholds
+  // and the in-flight/typing guard inside maybeSynthesize decide whether
+  // one actually fires, so this is cheap to run constantly.
   useEffect(() => {
     const t = window.setInterval(() => {
-      if (Date.now() - lastSynthAtRef.current >= SYNTH_FALLBACK_MS) {
-        void maybeSynthesize(true);
-      }
+      void maybeSynthesize(false);
     }, SYNTH_CHECK_INTERVAL_MS);
     return () => window.clearInterval(t);
   }, [maybeSynthesize]);
@@ -277,6 +362,9 @@ export function LiveNotesSurface({
     stop,
     switchSource,
     flushNow,
+    transcriptSaveStatus,
+    transcriptLastSavedAt,
+    transcriptPendingCount,
   } = useLiveLectureTranscription({
     sessionId,
     initialNextSeq: session.lastSegmentSeq + 1,
@@ -285,6 +373,11 @@ export function LiveNotesSurface({
       setSegments((prev) => [...prev, segment]);
       unsynthesizedRef.current =
         `${unsynthesizedRef.current} ${segment.text}`.trim();
+      // Attempt on EVERY committed segment, not only Deepgram natural
+      // breaks — continuous lecture audio (YouTube at full pace) can go
+      // minutes without a speech_final, and segments then arrive via the
+      // max-length guard. The thresholds above make extra attempts free.
+      void maybeSynthesize(false);
     },
     onNaturalBreak: () => {
       void maybeSynthesize(false);
@@ -303,8 +396,8 @@ export function LiveNotesSurface({
     if (el) el.scrollTop = el.scrollHeight;
   }, [segments, partialText]);
 
-  // Warn before closing the tab mid-recording (transcript is flushed every
-  // ~15s, so at most a few seconds of speech are at risk — still worth a nudge).
+  // Warn before closing the tab mid-recording (transcript autosaves on each
+  // utterance + every ~5s, but a tab kill can still race the last flush).
   useEffect(() => {
     if (status !== "recording" && status !== "reconnecting") return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -366,7 +459,8 @@ export function LiveNotesSurface({
       };
       if (!res.ok || !data.redirect) {
         setError(
-          data.error || "Could not start the course build. Your notes and transcript are saved — try again."
+          data.error ||
+            "Could not start the course build. Your transcript and notes are saved to this session — use Resume on the course page to pick up where you left off."
         );
         setFinishing(false);
         return;
@@ -574,9 +668,29 @@ export function LiveNotesSurface({
 
         {railOpen ? (
           <aside className="flex w-72 shrink-0 flex-col border-l border-zinc-200 bg-white/70 dark:border-zinc-800 dark:bg-zinc-950/70 sm:w-80">
-            <p className="border-b border-zinc-200 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-              Live transcript
-            </p>
+            <div className="border-b border-zinc-200 px-4 py-2.5 dark:border-zinc-800">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                Live transcript
+              </p>
+              <p
+                className={`mt-0.5 text-[10px] font-medium ${
+                  transcriptSaveStatus === "error"
+                    ? "text-rose-600 dark:text-rose-400"
+                    : transcriptSaveStatus === "saving" ||
+                        transcriptPendingCount > 0
+                      ? "text-amber-600 dark:text-amber-400"
+                      : "text-zinc-400 dark:text-zinc-500"
+                }`}
+                aria-live="polite"
+              >
+                {transcriptSaveLabel(
+                  transcriptSaveStatus,
+                  transcriptLastSavedAt,
+                  transcriptPendingCount,
+                  segments.length
+                )}
+              </p>
+            </div>
             <div
               ref={railScrollRef}
               className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3"
