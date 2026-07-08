@@ -6,7 +6,9 @@ import {
 import type { DashboardCourse } from "@/components/CourseDashboardList";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { ContinueStudyingCarousel } from "@/components/ContinueStudyingCarousel";
+import { HomeNotesPreview } from "@/components/HomeNotesPreview";
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
+import type { HomeNotePreviewItem } from "@/lib/load-home-notes-preview";
 import { ReviewDueBanner } from "@/components/ReviewDueBanner";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
 import { PendingCollaboratorInvites } from "@/components/PendingCollaboratorInvites";
@@ -21,6 +23,7 @@ export async function DashboardHomeContent({
   studyingCourses,
   sharedCourses = [],
   progress,
+  recentNotes = [],
   omitHeader = false,
 }: {
   userEmail: string;
@@ -29,6 +32,8 @@ export async function DashboardHomeContent({
   studyingCourses: StudyingCourse[];
   sharedCourses?: SharedCourse[];
   progress: DashboardProgressPayload;
+  /** Recent notes for the home sidebar / mobile strip. */
+  recentNotes?: HomeNotePreviewItem[];
   /** When true, only render main workspace (parent supplies `<AppHeader />`). */
   omitHeader?: boolean;
 }) {
@@ -182,6 +187,17 @@ export async function DashboardHomeContent({
 
               <ContinueStudyingCarousel entries={progress.recentPractice} />
 
+              {/* Mobile / tablet: horizontal note thumbnails (sidebar on lg+) */}
+              <div className="mt-8 lg:hidden">
+                <HomeNotesPreview
+                  items={recentNotes}
+                  title={t.dashboard.recentNotes}
+                  viewAllLabel={t.dashboard.viewAllNotes}
+                  emptyHint={t.dashboard.recentNotesEmpty}
+                  layout="scroll"
+                />
+              </div>
+
           {empty ? (
             <div className="mx-auto mt-12 max-w-lg rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center shadow-lg shadow-zinc-900/5 dark:border-zinc-800 dark:bg-zinc-950/90 dark:shadow-black/20">
               <p className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
@@ -292,8 +308,15 @@ export async function DashboardHomeContent({
             </div>
           )}
             </div>
-            <div className="hidden lg:block">
+            <div className="hidden lg:block lg:sticky lg:top-[5.5rem] lg:space-y-5">
               <HomeRightSidebar activityBuckets14={progress.activityBuckets} />
+              <HomeNotesPreview
+                items={recentNotes}
+                title={t.dashboard.recentNotes}
+                viewAllLabel={t.dashboard.viewAllNotes}
+                emptyHint={t.dashboard.recentNotesEmpty}
+                layout="grid"
+              />
             </div>
           </div>
         </div>

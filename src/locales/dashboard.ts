@@ -20,6 +20,9 @@ const en = {
   startSession: "Start session",
   pastTutorSessions: "Past tutor sessions",
   viewYourNotes: "View your notes",
+  recentNotes: "Recent notes",
+  viewAllNotes: "View all notes",
+  recentNotesEmpty: "Notes from live lectures, tutor sessions, and courses will show up here.",
   nothingHereYet: "Nothing here yet",
   nothingHereYetDesc:
     "Create your own course or open something from Explore — once you study, it will show up here.",
@@ -194,6 +197,9 @@ const ko: typeof en = {
   startSession: "세션 시작",
   pastTutorSessions: "지난 튜터 세션",
   viewYourNotes: "내 노트 보기",
+  recentNotes: "최근 노트",
+  viewAllNotes: "모든 노트 보기",
+  recentNotesEmpty: "라이브 강의, 튜터 세션, 코스에서 작성한 노트가 여기에 표시됩니다.",
   nothingHereYet: "아직 아무것도 없어요",
   nothingHereYetDesc:
     "직접 코스를 만들거나 탐색에서 코스를 열어 보세요 — 학습을 시작하면 여기에 표시돼요.",
