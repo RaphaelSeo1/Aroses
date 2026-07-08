@@ -63,7 +63,8 @@ function stripJsonFence(s: string): string {
     .trim();
 }
 
-function normalizeBlock(raw: unknown): AutoGenerateBlock | null {
+/** Validate/clip a model-returned notes section into an `AutoGenerateBlock`. */
+export function normalizeBlock(raw: unknown): AutoGenerateBlock | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
 

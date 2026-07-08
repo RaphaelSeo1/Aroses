@@ -724,7 +724,7 @@ Before finishing, check each distinct teachable point in the source against your
  * Critical for technical material (e.g. pharmacology drug tables) where the
  * table IS the highest-value, most testable content.
  */
-function structuredDataFidelityRules(): string {
+export function structuredDataFidelityRules(): string {
   return `STRUCTURED DATA FIDELITY (critical — full tables, not summaries):
 - Every table, drug list, potency chart, side-effect matrix, seizure-type mapping, and numbered reference grid from the source MUST appear in lesson "content" as **complete GitHub-flavored markdown tables** (header row + \`|---|\` separator + **one row per source row**). Do NOT summarize tables into prose-only bullets.
 - Prose may explain mechanisms and concepts; **tables carry the verbatim reference data** students must memorize (drug names, doses, half-lives, MAC values, potency ratios, side-effects, contraindications, etc.).
@@ -743,7 +743,7 @@ function structuredDataFidelityRules(): string {
  * material (e.g. pharmacology drug tables) where the table IS the
  * highest-value, most testable content.
  */
-function factualAccuracyRules(): string {
+export function factualAccuracyRules(): string {
   return `FACTUAL ACCURACY (critical — no confabulation):
 - Use **only** drug names, spellings, and romanizations that appear in the source material. Do NOT invent English names (wrong: "Fluoxamine" — use 플루복사민(fluvoxamine) exactly as in the PDF).
 - **key_terms**: each "term" and its "definition" MUST describe the **same concept**. Never pair a label with an unrelated mechanism (wrong: term "뇌전증지속상태" with a Parkinson's dopamine definition).
@@ -756,7 +756,7 @@ function factualAccuracyRules(): string {
 - Do **not** invent table columns or rows not present in the source. If the source table has **N** columns, output exactly **N** columns with the same headers — never add invented columns such as "임상적 의미" unless the PDF includes them.`;
 }
 
-function voiceRules(): string {
+export function voiceRules(): string {
   return `VOICE (strict):
 - Write in a declarative, instructional tone. Never use conversational asides, first-person hedging, or self-referential commentary about your own reasoning or uncertainty (e.g. no "Wait—this doesn't balance", "hmm", "let me reconsider", "as an AI", "it seems").
 - Never flag your own doubt inside the lesson text. If content is uncertain, leave it out; do not narrate the uncertainty to the student.
