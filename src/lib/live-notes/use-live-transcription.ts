@@ -102,6 +102,10 @@ export function useLiveLectureTranscription(options: {
   const [status, setStatus] = useState<LiveTranscriptionStatus>("idle");
   const [partialText, setPartialText] = useState("");
   const [elapsedMs, setElapsedMs] = useState(initialElapsedMs);
+  /** Source currently feeding audio (null until the first start). */
+  const [activeSource, setActiveSource] = useState<LiveCaptureSource | null>(
+    null
+  );
 
   // Callbacks in refs so socket handlers never hold stale closures.
   const onSegmentRef = useRef(onSegment);
@@ -515,6 +519,7 @@ export function useLiveLectureTranscription(options: {
       }, KEEPALIVE_INTERVAL_MS) as unknown as number;
 
       setStatusBoth("recording");
+      setActiveSource(source);
       return true;
     },
     [
@@ -525,6 +530,113 @@ export function useLiveLectureTranscription(options: {
       stopRecorderAndStream,
       currentElapsedMs,
       flushSegments,
+    ]
+  );
+
+  /**
+   * Hot-swap the audio source mid-session (e.g. mic → tab when the lecture
+   * moves on screen, or tab → mic when it moves into the room). The new
+   * capture is acquired FIRST — if the user cancels the picker or shares a
+   * surface without audio, the old source keeps recording untouched. On
+   * success the elapsed clock, segment numbering, and notes all continue
+   * seamlessly; only the audio plumbing (stream + socket + recorder) is
+   * rebuilt, honoring the recorder/socket WebM-header pairing invariant.
+   */
+  const switchSource = useCallback(
+    async (source: LiveCaptureSource): Promise<boolean> => {
+      const st = statusRef.current;
+      if (st === "idle" || st === "connecting") return false; // use start()
+      const currentTrack = streamRef.current?.getAudioTracks()[0];
+      if (
+        source === lastSourceRef.current &&
+        currentTrack &&
+        currentTrack.readyState === "live"
+      ) {
+        return true; // already capturing from this source
+      }
+
+      let fresh: MediaStream;
+      try {
+        fresh = await acquireLectureAudioStream(source);
+      } catch (e) {
+        onErrorRef.current?.(
+          e instanceof Error && e.message
+            ? e.message
+            : "Could not switch the audio source."
+        );
+        return false;
+      }
+
+      // Bank the utterance captured under the old source before it goes away.
+      commitUtterance();
+
+      // Cancel any queued reconnect — it belongs to the old socket and would
+      // otherwise race the fresh connection below into a duplicate.
+      if (reconnectTimerRef.current != null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      reconnectAttemptRef.current = 0;
+
+      lastSourceRef.current = source;
+      setActiveSource(source);
+      const old = streamRef.current;
+      streamRef.current = fresh;
+      if (old) {
+        for (const t of old.getTracks()) {
+          try {
+            t.stop();
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      watchTrackEnded(fresh);
+
+      if (st === "paused") {
+        // Stay paused on the new source. The old recorder's stream is dead,
+        // so drop it — resume() will take its full-restart path and pair a
+        // fresh recorder with a fresh socket.
+        const rec = recorderRef.current;
+        recorderRef.current = null;
+        recorderSocketRef.current = null;
+        if (rec && rec.state !== "inactive") {
+          try {
+            rec.stop();
+          } catch {
+            /* ignore */
+          }
+        }
+        return true;
+      }
+
+      // Live: rebuild socket + recorder as a pair.
+      setStatusBoth("reconnecting");
+      try {
+        closeSocket();
+        const ws = await connectSocket();
+        socketRef.current = ws;
+        startRecorderForSocket(ws);
+        reconnectAttemptRef.current = 0;
+        setStatusBoth("recording");
+        return true;
+      } catch (e) {
+        setStatusBoth("error");
+        onErrorRef.current?.(
+          e instanceof Error && e.message
+            ? e.message
+            : "Switched the audio source but could not reconnect transcription. Press Resume to retry."
+        );
+        return false;
+      }
+    },
+    [
+      commitUtterance,
+      watchTrackEnded,
+      setStatusBoth,
+      closeSocket,
+      connectSocket,
+      startRecorderForSocket,
     ]
   );
 
@@ -711,10 +823,14 @@ export function useLiveLectureTranscription(options: {
     status,
     partialText,
     elapsedMs,
+    /** Source currently feeding audio (null before the first start). */
+    activeSource,
     start,
     pause,
     resume,
     stop,
+    /** Hot-swap the audio source mid-session without losing anything. */
+    switchSource,
     /** Force a flush now (used right before wrap-up). */
     flushNow: flushSegments,
   };

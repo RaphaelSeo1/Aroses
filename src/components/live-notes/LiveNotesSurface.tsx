@@ -183,10 +183,12 @@ export function LiveNotesSurface({
     status,
     partialText,
     elapsedMs,
+    activeSource,
     start,
     pause,
     resume,
     stop,
+    switchSource,
     flushNow,
   } = useLiveLectureTranscription({
     sessionId,
@@ -233,6 +235,29 @@ export function LiveNotesSurface({
     },
     [start]
   );
+
+  const [switching, setSwitching] = useState(false);
+  const handleSwitchSource = useCallback(
+    async (source: LiveCaptureSource) => {
+      if (switching) return;
+      setSwitching(true);
+      setError(null);
+      try {
+        await switchSource(source);
+      } finally {
+        setSwitching(false);
+      }
+    },
+    [switching, switchSource]
+  );
+
+  const sourceOptions: Array<{ id: LiveCaptureSource; label: string }> = [
+    { id: "tab", label: "Tab" },
+    ...(platform?.systemAudioSupported
+      ? [{ id: "system" as const, label: "System" }]
+      : []),
+    { id: "mic", label: "Mic" },
+  ];
 
   const handleFinish = useCallback(async () => {
     if (finishing) return;
@@ -322,6 +347,42 @@ export function LiveNotesSurface({
 
         {/* Controls */}
         <div className="flex items-center gap-2">
+          {(isLive || status === "paused" || (status === "error" && started)) &&
+          !finishing ? (
+            <div
+              className="inline-flex items-center overflow-hidden rounded-full border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"
+              role="group"
+              aria-label="Audio source"
+            >
+              {sourceOptions.map((opt) => {
+                const active = activeSource === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => void handleSwitchSource(opt.id)}
+                    disabled={switching || active}
+                    aria-pressed={active}
+                    title={
+                      opt.id === "tab"
+                        ? "Capture tab audio (lecture in another tab)"
+                        : opt.id === "system"
+                          ? "Capture system audio (lecture outside the browser)"
+                          : "Capture the room through your microphone"
+                    }
+                    className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      active
+                        ? "bg-rose-600 text-white"
+                        : "text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    }`}
+                  >
+                    {switching && !active ? "…" : opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
           {isLive ? (
             <button
               type="button"
