@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
-import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
+import { runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import { hasCourseEdit } from "@/lib/collaboration/api-guards";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -408,55 +408,17 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     console.warn("[process-pdf] could not save output_language preference", langPrefErr);
   }
 
-  const useChunkedPdfIngest = process.env.PDF_INGEST_SYNCHRONOUS !== "1";
-
-  if (useChunkedPdfIngest) {
-    // driveModules: the server carries the build end-to-end (phase 1 + all
-    // module batches + finalize) inside this function's `after()` window, so
-    // the course finishes even if the user closes the tab immediately after
-    // uploading. Client /expand polling remains as progress UI + a redundant
-    // driver (batch claims are atomic, duplicates no-op).
-    after(() => {
-      void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
-        console.error("[process-pdf] after()", jobId, e)
-      );
-    });
-    return NextResponse.json({ jobId }, { status: 202 });
-  }
-
-  await runPdfIngestJob(jobId).catch((e) =>
-    console.error("[process-pdf] monolith job phase1", jobId, e)
-  );
-
-  for (let step = 0; step < 24; step++) {
-    const r = await runPdfIngestExpandOne(jobId);
-    if (r.kind === "complete") {
-      return NextResponse.json({ materialId: r.materialId });
-    }
-    if (r.kind === "failed") {
-      return NextResponse.json({ error: r.message }, { status: 500 });
-    }
-  }
-
-  const { data: done } = await admin
-    .from("pdf_ingest_jobs")
-    .select("status, material_id, error_message")
-    .eq("id", jobId)
-    .maybeSingle();
-
-  if (done?.status === "complete" && done.material_id) {
-    return NextResponse.json({ materialId: done.material_id });
-  }
-
-  return NextResponse.json(
-    {
-      error:
-        typeof done?.error_message === "string" && done.error_message.trim()
-          ? done.error_message.trim()
-          : "Build failed. Check the server log and try again.",
-    },
-    { status: 500 }
-  );
+  // driveModules: the server carries the build end-to-end (phase 1 + all
+  // module batches + finalize) inside this function's `after()` window, so
+  // the course finishes even if the user closes the tab immediately after
+  // uploading. Client /expand polling remains as progress UI + a redundant
+  // driver (batch claims are atomic, duplicates no-op).
+  after(() => {
+    void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
+      console.error("[process-pdf] after()", jobId, e)
+    );
+  });
+  return NextResponse.json({ jobId }, { status: 202 });
 }
 
 export async function POST(request: Request) {

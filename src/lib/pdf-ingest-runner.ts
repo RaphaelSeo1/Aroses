@@ -2339,12 +2339,13 @@ export async function runPdfIngestContinueAfterTranscript(
   });
 }
 
+/**
+ * Figure / page-render extraction. OFF by default (whiteboard is text +
+ * tables only); set `PDF_INGEST_PAGE_RENDER=1` to enable the full figure
+ * pipeline (page renders + vision crops) instead of table-only vision.
+ */
 function isPdfPageRenderEnabled(): boolean {
-  // Figure / page-render extraction disabled — whiteboard is text + tables only.
-  return false;
-  const raw = process.env.PDF_INGEST_PAGE_RENDER?.trim();
-  if (raw === "0" || raw?.toLowerCase() === "false") return false;
-  return true;
+  return process.env.PDF_INGEST_PAGE_RENDER?.trim() === "1";
 }
 
 function collectUploadFileNames(input: {

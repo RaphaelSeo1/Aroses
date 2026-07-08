@@ -149,22 +149,14 @@ export async function POST(_request: Request, ctx: Params) {
     );
   }
 
-  const useChunkedPdfIngest =
-    process.env.VERCEL === "1" ||
-    process.env.NODE_ENV === "development" ||
-    process.env.PDF_INGEST_CHUNKED === "1";
-
-  if (useChunkedPdfIngest) {
-    after(() => {
-      void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
-        console.error("[process-pdf/retry] after()", jobId, e)
-      );
-    });
-  } else {
+  // Same scheduling as POST /api/process-pdf: chunked, server-driven build.
+  // (The old env-dependent monolith path diverged from the main route and is
+  // gone; retries now always behave like fresh uploads.)
+  after(() => {
     void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
-      console.error("[process-pdf/retry] sync", jobId, e)
+      console.error("[process-pdf/retry] after()", jobId, e)
     );
-  }
+  });
 
   return NextResponse.json({ ok: true as const, restartedAt });
 }
