@@ -485,10 +485,16 @@ export function LiveNotesSurface({
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <header className="flex flex-wrap items-center gap-3 border-b border-zinc-200 bg-white/85 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/85 sm:px-6">
         <Link
-          href={`/dashboard/courses/${session.courseId}`}
+          href="/notes"
           className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
-          ← {courseTitle || "Course"}
+          ← All notes
+        </Link>
+        <Link
+          href={`/dashboard/courses/${session.courseId}`}
+          className="hidden text-xs font-medium text-zinc-500 hover:text-violet-700 dark:text-zinc-500 dark:hover:text-violet-300 sm:inline"
+        >
+          {courseTitle || "Course"}
         </Link>
 
         <div className="min-w-0 flex-1">
