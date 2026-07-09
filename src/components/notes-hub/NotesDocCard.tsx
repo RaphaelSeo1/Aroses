@@ -1,15 +1,5 @@
 import Link from "next/link";
-
-export type NoteDocCardData = {
-  key: string;
-  href: string;
-  title: string;
-  subtitle?: string | null;
-  preview?: string | null;
-  dateLabel: string;
-  isLive?: boolean;
-  chip?: { label: string; tone: "live" | "paused" | "done" | "failed" };
-};
+import type { NoteDocCardData } from "@/lib/notes/hub-types";
 
 const CHIP_TONES: Record<string, string> = {
   live: "bg-rose-500 text-white",
@@ -18,13 +8,9 @@ const CHIP_TONES: Record<string, string> = {
   failed: "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
-/** Google Docs–style note thumbnail — preview pane + title footer. */
-export function NoteDocCard({ card }: { card: NoteDocCardData }) {
+function CardInner({ card }: { card: NoteDocCardData }) {
   return (
-    <Link
-      href={card.href}
-      className="group flex flex-col overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:border-zinc-700 dark:bg-zinc-950 dark:hover:border-violet-800"
-    >
+    <>
       <div className="relative aspect-[4/3] overflow-hidden border-b border-zinc-100 bg-[#fafafa] p-3 dark:border-zinc-800 dark:bg-zinc-900/60">
         {card.preview ? (
           <div className="pointer-events-none select-none space-y-1.5 opacity-90">
@@ -69,15 +55,94 @@ export function NoteDocCard({ card }: { card: NoteDocCardData }) {
           {card.dateLabel}
         </p>
       </div>
+    </>
+  );
+}
+
+const cardShell =
+  "group flex flex-col overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm transition dark:border-zinc-700 dark:bg-zinc-950";
+
+/** Google Docs–style note thumbnail — preview pane + title footer. */
+export function NoteDocCard({
+  card,
+  manageMode = false,
+  selected = false,
+  onToggleSelect,
+}: {
+  card: NoteDocCardData;
+  manageMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
+  if (manageMode && card.deletable !== false && onToggleSelect) {
+    return (
+      <button
+        type="button"
+        onClick={onToggleSelect}
+        className={`${cardShell} text-left hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:hover:border-violet-800 ${
+          selected
+            ? "border-violet-400 ring-2 ring-violet-400/40"
+            : "border-zinc-200/90"
+        }`}
+      >
+        <div className="relative">
+          {selected ? (
+            <span className="absolute left-2 top-2 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-violet-600 text-[10px] font-bold text-white">
+              ✓
+            </span>
+          ) : (
+            <span className="absolute left-2 top-2 z-10 h-5 w-5 rounded-full border-2 border-zinc-300 bg-white/90 dark:border-zinc-600 dark:bg-zinc-900/90" />
+          )}
+          <CardInner card={card} />
+        </div>
+      </button>
+    );
+  }
+
+  if (manageMode && card.deletable === false) {
+    return (
+      <div
+        className={`${cardShell} cursor-not-allowed opacity-60`}
+        title="End the live recording before deleting"
+      >
+        <CardInner card={card} />
+      </div>
+    );
+  }
+
+  return (
+    <Link
+      href={card.href}
+      className={`${cardShell} hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:hover:border-violet-800`}
+    >
+      <CardInner card={card} />
     </Link>
   );
 }
 
-export function NotesDocGrid({ cards }: { cards: NoteDocCardData[] }) {
+export function NotesDocGrid({
+  cards,
+  manageMode,
+  selectedKeys,
+  onToggleSelect,
+}: {
+  cards: NoteDocCardData[];
+  manageMode?: boolean;
+  selectedKeys?: Set<string>;
+  onToggleSelect?: (key: string) => void;
+}) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
       {cards.map((c) => (
-        <NoteDocCard key={c.key} card={c} />
+        <NoteDocCard
+          key={c.key}
+          card={c}
+          manageMode={manageMode}
+          selected={selectedKeys?.has(c.key)}
+          onToggleSelect={
+            onToggleSelect ? () => onToggleSelect(c.key) : undefined
+          }
+        />
       ))}
     </div>
   );

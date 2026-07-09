@@ -1,29 +1,11 @@
 import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
-import {
-  NotesDocGrid,
-  type NoteDocCardData,
-} from "@/components/notes-hub/NotesDocCard";
+import { NotesHubClient } from "@/components/notes-hub/NotesHubClient";
+import type { NoteDocCardData, NoteHubSection } from "@/lib/notes/hub-types";
 import { createClient } from "@/lib/supabase/server";
 
-/**
- * Notes hub — every place the user has taken notes, in one library:
- *
- *   - Live lectures  (live_lecture_sessions — including completed ones,
- *     which keep their notes + full transcript on the session page)
- *   - Tutor sessions (tutor_sessions.live_notes_*)
- *   - Course notes   (user_course_notes — mentored learning, per material)
- *   - Lesson notes   (user_lesson_notes — self-study highlights/notes)
- *
- * Cards link to the richest existing view for each source; tutor and
- * course notes open in the hub's own document view (/notes/tutor/[id],
- * /notes/material/[id]) since their original surfaces are transient.
- */
-
 export const dynamic = "force-dynamic";
-
-type CardItem = NoteDocCardData;
 
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -43,7 +25,6 @@ function preview(text: unknown, max = 180): string | null {
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
-/** "Lecture 3 - Enzymes.pdf" → "Lecture 3 - Enzymes" */
 function materialTitle(fileName: string | null | undefined): string {
   if (!fileName) return "Course material";
   return fileName.replace(/\.[a-z0-9]{2,5}$/i, "").trim() || fileName;
@@ -58,33 +39,43 @@ export default async function NotesHubPage() {
     redirect("/login?next=/notes");
   }
 
-  const [liveRes, tutorRes, courseNotesRes, lessonNotesRes] = await Promise.all([
-    supabase
-      .from("live_lecture_sessions")
-      .select("id, course_id, title, status, started_at, updated_at, notes_text")
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false })
-      .limit(60),
-    supabase
-      .from("tutor_sessions")
-      .select("id, title, topic, status, started_at, updated_at, live_notes_text")
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false })
-      .limit(100),
-    supabase
-      .from("user_course_notes")
-      .select("material_id, content_text, updated_at")
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false })
-      .limit(100),
-    supabase
-      .from("user_lesson_notes")
-      .select("material_id, note_body, updated_at")
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false })
-      .limit(300),
-  ]);
+  const [standaloneRes, liveRes, tutorRes, courseNotesRes, lessonNotesRes] =
+    await Promise.all([
+      supabase
+        .from("user_notes")
+        .select(
+          "id, title, content_text, updated_at, course_id, ingest_job_id"
+        )
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(60),
+      supabase
+        .from("live_lecture_sessions")
+        .select("id, course_id, title, status, started_at, updated_at, notes_text")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(60),
+      supabase
+        .from("tutor_sessions")
+        .select("id, title, topic, status, started_at, updated_at, live_notes_text")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(100),
+      supabase
+        .from("user_course_notes")
+        .select("material_id, content_text, updated_at")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(100),
+      supabase
+        .from("user_lesson_notes")
+        .select("material_id, note_body, updated_at")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(300),
+    ]);
 
+  const standaloneNotes = standaloneRes.data ?? [];
   const liveSessions = liveRes.data ?? [];
   const tutorSessions = (tutorRes.data ?? []).filter(
     (s) => typeof s.live_notes_text === "string" && s.live_notes_text.trim()
@@ -94,7 +85,6 @@ export default async function NotesHubPage() {
   );
   const lessonNotes = lessonNotesRes.data ?? [];
 
-  // Resolve material + course names in two batched lookups.
   const materialIds = Array.from(
     new Set(
       [...courseNotes, ...lessonNotes]
@@ -125,16 +115,31 @@ export default async function NotesHubPage() {
     (courses ?? []).map((c) => [c.id as string, c.title as string])
   );
 
-  const liveCards: CardItem[] = liveSessions.map((s) => {
+  const standaloneCards: NoteDocCardData[] = standaloneNotes.map((n) => ({
+    key: `standalone-${n.id}`,
+    href: `/notes/doc/${n.id}`,
+    title: (n.title as string) || "Untitled note",
+    subtitle: n.ingest_job_id ? "Course build started" : "My notes",
+    preview: preview(n.content_text),
+    dateLabel: formatDate(n.updated_at as string),
+    ref: { kind: "standalone", id: n.id as string },
+    deletable: true,
+    chip: n.ingest_job_id
+      ? { label: "Course", tone: "done" as const }
+      : undefined,
+  }));
+
+  const liveCards: NoteDocCardData[] = liveSessions.map((s) => {
     const status = s.status as string;
-    const chip: CardItem["chip"] =
+    const isActive = status === "recording" || status === "paused";
+    const chip =
       status === "recording"
-        ? { label: "Live", tone: "live" }
+        ? { label: "Live", tone: "live" as const }
         : status === "paused"
-          ? { label: "Paused", tone: "paused" }
+          ? { label: "Paused", tone: "paused" as const }
           : status === "failed"
-            ? { label: "Failed", tone: "failed" }
-            : { label: "Completed", tone: "done" };
+            ? { label: "Failed", tone: "failed" as const }
+            : { label: "Completed", tone: "done" as const };
     return {
       key: `live-${s.id}`,
       href: `/dashboard/courses/${s.course_id}/live-notes/${s.id}`,
@@ -142,12 +147,14 @@ export default async function NotesHubPage() {
       subtitle: courseTitleById.get(s.course_id as string) ?? null,
       preview: preview(s.notes_text),
       dateLabel: formatDate((s.started_at as string) ?? (s.updated_at as string)),
-      isLive: status === "recording" || status === "paused",
+      isLive: isActive,
       chip,
+      ref: { kind: "live", id: s.id as string },
+      deletable: !isActive,
     };
   });
 
-  const tutorCards: CardItem[] = tutorSessions.map((s) => ({
+  const tutorCards: NoteDocCardData[] = tutorSessions.map((s) => ({
     key: `tutor-${s.id}`,
     href: `/notes/tutor/${s.id}`,
     title: (s.title as string) || (s.topic as string) || "Tutor session",
@@ -155,9 +162,11 @@ export default async function NotesHubPage() {
       typeof s.topic === "string" && s.topic.trim() ? s.topic.trim() : null,
     preview: preview(s.live_notes_text),
     dateLabel: formatDate((s.started_at as string) ?? (s.updated_at as string)),
+    ref: { kind: "tutor", id: s.id as string },
+    deletable: true,
   }));
 
-  const courseNoteCards: CardItem[] = courseNotes.map((n) => {
+  const courseNoteCards: NoteDocCardData[] = courseNotes.map((n) => {
     const material = materialById.get(n.material_id as string);
     return {
       key: `course-${n.material_id}`,
@@ -168,10 +177,11 @@ export default async function NotesHubPage() {
         : null,
       preview: preview(n.content_text),
       dateLabel: formatDate(n.updated_at as string),
+      ref: { kind: "course", materialId: n.material_id as string },
+      deletable: true,
     };
   });
 
-  // Lesson notes are many tiny rows — group per material.
   const lessonGroups = new Map<
     string,
     { count: number; latest: string; snippets: string[] }
@@ -190,7 +200,7 @@ export default async function NotesHubPage() {
     }
     lessonGroups.set(id, g);
   }
-  const lessonCards: CardItem[] = Array.from(lessonGroups.entries()).map(
+  const lessonCards: NoteDocCardData[] = Array.from(lessonGroups.entries()).map(
     ([materialId, g]) => {
       const material = materialById.get(materialId);
       return {
@@ -206,15 +216,46 @@ export default async function NotesHubPage() {
         dateLabel: `${g.count} note${g.count === 1 ? "" : "s"}${
           formatDate(g.latest) ? ` · ${formatDate(g.latest)}` : ""
         }`,
+        ref: { kind: "lesson", materialId },
+        deletable: true,
       };
     }
   );
 
-  const empty =
-    liveCards.length === 0 &&
-    tutorCards.length === 0 &&
-    courseNoteCards.length === 0 &&
-    lessonCards.length === 0;
+  const sections: NoteHubSection[] = [
+    {
+      id: "standalone",
+      title: "My notes",
+      hint: "Notes you created here — keep as notes or build a course anytime.",
+      cards: standaloneCards,
+    },
+    {
+      id: "live",
+      title: "Live lectures",
+      hint: "Recorded lectures keep their notes and full transcript — even after the course is built.",
+      cards: liveCards,
+    },
+    {
+      id: "tutor",
+      title: "Tutor sessions",
+      hint: "Notes taken while studying one-on-one with Rose.",
+      cards: tutorCards,
+    },
+    {
+      id: "course",
+      title: "Course notes",
+      hint: "Your running notes from mentored learning, one document per material.",
+      cards: courseNoteCards,
+    },
+    {
+      id: "lesson",
+      title: "Lesson notes",
+      hint: "Quick notes and highlights captured while self-studying.",
+      cards: lessonCards,
+    },
+  ].filter((s) => s.cards.length > 0);
+
+  const empty = sections.length === 0;
 
   return (
     <>
@@ -228,69 +269,13 @@ export default async function NotesHubPage() {
             Notes
           </h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Everything you and Rose wrote down — live lectures, tutor
-            sessions, and course notes — all in one place.
+            Write notes, or browse everything from live lectures, tutor
+            sessions, and courses — build a course when you are ready.
           </p>
 
-          {empty ? (
-            <div className="mt-12 rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90">
-              <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-                No notes yet
-              </p>
-              <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                Notes you take during live lectures, tutor sessions, and
-                mentored learning will all show up here automatically.
-              </p>
-            </div>
-          ) : (
-            <div className="mt-10 space-y-12">
-              <NotesSection
-                title="Live lectures"
-                hint="Recorded lectures keep their notes and full transcript — even after the course is built."
-                cards={liveCards}
-              />
-              <NotesSection
-                title="Tutor sessions"
-                hint="Notes taken while studying one-on-one with Rose."
-                cards={tutorCards}
-              />
-              <NotesSection
-                title="Course notes"
-                hint="Your running notes from mentored learning, one document per material."
-                cards={courseNoteCards}
-              />
-              <NotesSection
-                title="Lesson notes"
-                hint="Quick notes and highlights captured while self-studying."
-                cards={lessonCards}
-              />
-            </div>
-          )}
+          <NotesHubClient sections={sections} empty={empty} />
         </div>
       </main>
     </>
-  );
-}
-
-function NotesSection({
-  title,
-  hint,
-  cards,
-}: {
-  title: string;
-  hint: string;
-  cards: CardItem[];
-}) {
-  if (cards.length === 0) return null;
-  return (
-    <section>
-      <header className="mb-4">
-        <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-          {title}
-        </h2>
-        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-500">{hint}</p>
-      </header>
-      <NotesDocGrid cards={cards} />
-    </section>
   );
 }
