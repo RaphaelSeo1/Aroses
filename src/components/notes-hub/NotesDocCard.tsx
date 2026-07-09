@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { useDraggable } from "@dnd-kit/core";
+import { CSS } from "@dnd-kit/utilities";
 import type { NoteDocCardData } from "@/lib/notes/hub-types";
+import { noteDragId } from "@/lib/notes/hub-types";
 
 const CHIP_TONES: Record<string, string> = {
   live: "bg-rose-500 text-white",
@@ -68,12 +71,59 @@ export function NoteDocCard({
   manageMode = false,
   selected = false,
   onToggleSelect,
+  draggableNotes = false,
 }: {
   card: NoteDocCardData;
   manageMode?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
+  draggableNotes?: boolean;
 }) {
+  const canDrag =
+    draggableNotes &&
+    !manageMode &&
+    card.ref?.kind === "standalone" &&
+    card.deletable !== false;
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging,
+  } = useDraggable({
+    id: noteDragId(card.key),
+    data: { type: "note", cardKey: card.key },
+    disabled: !canDrag,
+  });
+
+  const dragStyle = canDrag
+    ? {
+        transform: CSS.Translate.toString(transform),
+        opacity: isDragging ? 0.5 : undefined,
+        zIndex: isDragging ? 2 : undefined,
+      }
+    : undefined;
+
+  const dragHandle = canDrag ? (
+    <button
+      type="button"
+      {...listeners}
+      {...attributes}
+      className="absolute left-2 top-2 z-10 flex h-6 w-6 cursor-grab touch-none items-center justify-center rounded-md bg-white/90 text-zinc-400 shadow-sm ring-1 ring-zinc-200 hover:text-zinc-600 active:cursor-grabbing dark:bg-zinc-900/90 dark:ring-zinc-700"
+      aria-label="Drag to move note"
+      onClick={(e) => e.preventDefault()}
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <path
+          d="M8 6h8M8 12h8M8 18h8"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    </button>
+  ) : null;
   if (manageMode && card.deletable !== false && onToggleSelect) {
     return (
       <button
@@ -103,7 +153,7 @@ export function NoteDocCard({
     return (
       <div
         className={`${cardShell} cursor-not-allowed opacity-60`}
-        title="End the live recording before deleting"
+        title="This note cannot be deleted from here"
       >
         <CardInner card={card} />
       </div>
@@ -111,12 +161,15 @@ export function NoteDocCard({
   }
 
   return (
-    <Link
-      href={card.href}
-      className={`${cardShell} hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:hover:border-violet-800`}
-    >
-      <CardInner card={card} />
-    </Link>
+    <div ref={canDrag ? setNodeRef : undefined} style={dragStyle}>
+      <Link
+        href={card.href}
+        className={`${cardShell} hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:hover:border-violet-800`}
+      >
+        {dragHandle}
+        <CardInner card={card} />
+      </Link>
+    </div>
   );
 }
 
@@ -125,11 +178,13 @@ export function NotesDocGrid({
   manageMode,
   selectedKeys,
   onToggleSelect,
+  draggableNotes,
 }: {
   cards: NoteDocCardData[];
   manageMode?: boolean;
   selectedKeys?: Set<string>;
   onToggleSelect?: (key: string) => void;
+  draggableNotes?: boolean;
 }) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
@@ -142,6 +197,7 @@ export function NotesDocGrid({
           onToggleSelect={
             onToggleSelect ? () => onToggleSelect(c.key) : undefined
           }
+          draggableNotes={draggableNotes}
         />
       ))}
     </div>

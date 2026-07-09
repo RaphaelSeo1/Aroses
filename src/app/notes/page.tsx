@@ -3,6 +3,8 @@ import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { NotesHubClient } from "@/components/notes-hub/NotesHubClient";
 import type { NoteDocCardData, NoteHubSection } from "@/lib/notes/hub-types";
+import { customSectionId } from "@/lib/notes/hub-types";
+import { applySectionOrder } from "@/lib/notes/hub-layout";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -39,19 +41,27 @@ export default async function NotesHubPage() {
     redirect("/login?next=/notes");
   }
 
-  const [standaloneRes, liveRes, tutorRes, courseNotesRes, lessonNotesRes] =
+  const [standaloneRes, sectionsRes, liveRes, tutorRes, courseNotesRes] =
     await Promise.all([
       supabase
         .from("user_notes")
         .select(
-          "id, title, content_text, updated_at, course_id, ingest_job_id"
+          "id, title, content_text, updated_at, course_id, ingest_job_id, section_id"
         )
         .eq("user_id", user.id)
         .order("updated_at", { ascending: false })
         .limit(60),
       supabase
+        .from("user_note_sections")
+        .select("id, title, sort_order")
+        .eq("user_id", user.id)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true }),
+      supabase
         .from("live_lecture_sessions")
-        .select("id, course_id, title, status, started_at, updated_at, notes_text")
+        .select(
+          "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text"
+        )
         .eq("user_id", user.id)
         .order("updated_at", { ascending: false })
         .limit(60),
@@ -67,27 +77,32 @@ export default async function NotesHubPage() {
         .eq("user_id", user.id)
         .order("updated_at", { ascending: false })
         .limit(100),
-      supabase
-        .from("user_lesson_notes")
-        .select("material_id, note_body, updated_at")
-        .eq("user_id", user.id)
-        .order("updated_at", { ascending: false })
-        .limit(300),
     ]);
 
   const standaloneNotes = standaloneRes.data ?? [];
+  const userSections = sectionsRes.error ? [] : (sectionsRes.data ?? []);
   const liveSessions = liveRes.data ?? [];
+  const courseLiveSessions = liveSessions.filter(
+    (s) => !s.user_note_id && s.course_id
+  );
+  const activeNoteSessionByNoteId = new Map(
+    liveSessions
+      .filter(
+        (s) =>
+          s.user_note_id &&
+          (s.status === "recording" || s.status === "paused")
+      )
+      .map((s) => [s.user_note_id as string, s])
+  );
   const tutorSessions = (tutorRes.data ?? []).filter(
     (s) => typeof s.live_notes_text === "string" && s.live_notes_text.trim()
   );
   const courseNotes = (courseNotesRes.data ?? []).filter(
     (n) => typeof n.content_text === "string" && n.content_text.trim()
   );
-  const lessonNotes = lessonNotesRes.data ?? [];
-
   const materialIds = Array.from(
     new Set(
-      [...courseNotes, ...lessonNotes]
+      courseNotes
         .map((n) => n.material_id as string | null)
         .filter((id): id is string => Boolean(id))
     )
@@ -104,7 +119,7 @@ export default async function NotesHubPage() {
 
   const courseIds = Array.from(
     new Set([
-      ...liveSessions.map((s) => s.course_id as string),
+      ...courseLiveSessions.map((s) => s.course_id as string),
       ...(materials ?? []).map((m) => m.course_id as string),
     ])
   ).filter(Boolean);
@@ -115,21 +130,72 @@ export default async function NotesHubPage() {
     (courses ?? []).map((c) => [c.id as string, c.title as string])
   );
 
-  const standaloneCards: NoteDocCardData[] = standaloneNotes.map((n) => ({
-    key: `standalone-${n.id}`,
-    href: `/notes/doc/${n.id}`,
-    title: (n.title as string) || "Untitled note",
-    subtitle: n.ingest_job_id ? "Course build started" : "My notes",
-    preview: preview(n.content_text),
-    dateLabel: formatDate(n.updated_at as string),
-    ref: { kind: "standalone", id: n.id as string },
-    deletable: true,
-    chip: n.ingest_job_id
-      ? { label: "Course", tone: "done" as const }
-      : undefined,
+  const standaloneCards: NoteDocCardData[] = standaloneNotes
+    .filter((n) => !n.section_id)
+    .map((n) => {
+    const noteId = n.id as string;
+    const active = activeNoteSessionByNoteId.get(noteId);
+    const activeStatus = active?.status as string | undefined;
+    return {
+      key: `standalone-${noteId}`,
+      href: active
+        ? `/notes/doc/${noteId}/record/${active.id as string}`
+        : `/notes/doc/${noteId}`,
+      title: (n.title as string) || "Untitled note",
+      subtitle: n.ingest_job_id ? "Course build started" : "My notes",
+      preview: preview(n.content_text),
+      dateLabel: formatDate(n.updated_at as string),
+      ref: { kind: "standalone", id: noteId },
+      deletable: true,
+      isLive: activeStatus === "recording",
+      chip: activeStatus === "recording"
+        ? { label: "Live", tone: "live" as const }
+        : activeStatus === "paused"
+          ? { label: "Paused", tone: "paused" as const }
+          : n.ingest_job_id
+            ? { label: "Course", tone: "done" as const }
+            : undefined,
+    };
+  });
+
+  const customSectionCards = (sectionId: string): NoteDocCardData[] =>
+    standaloneNotes
+      .filter((n) => (n.section_id as string | null) === sectionId)
+      .map((n) => {
+        const noteId = n.id as string;
+        const active = activeNoteSessionByNoteId.get(noteId);
+        const activeStatus = active?.status as string | undefined;
+        return {
+          key: `standalone-${noteId}`,
+          href: active
+            ? `/notes/doc/${noteId}/record/${active.id as string}`
+            : `/notes/doc/${noteId}`,
+          title: (n.title as string) || "Untitled note",
+          subtitle: n.ingest_job_id ? "Course build started" : null,
+          preview: preview(n.content_text),
+          dateLabel: formatDate(n.updated_at as string),
+          ref: { kind: "standalone", id: noteId },
+          deletable: true,
+          isLive: activeStatus === "recording",
+          chip: activeStatus === "recording"
+            ? { label: "Live", tone: "live" as const }
+            : activeStatus === "paused"
+              ? { label: "Paused", tone: "paused" as const }
+              : n.ingest_job_id
+                ? { label: "Course", tone: "done" as const }
+                : undefined,
+        };
+      });
+
+  const customSections: NoteHubSection[] = userSections.map((s) => ({
+    id: customSectionId(s.id as string),
+    title: (s.title as string) || "New section",
+    hint: "Use Select → Move to add notes here, or create a new note in this section.",
+    cards: customSectionCards(s.id as string),
+    custom: true,
   }));
 
-  const liveCards: NoteDocCardData[] = liveSessions.map((s) => {
+  const liveCards: NoteDocCardData[] = courseLiveSessions.map((s) => {
     const status = s.status as string;
     const isActive = status === "recording" || status === "paused";
     const chip =
@@ -150,7 +216,7 @@ export default async function NotesHubPage() {
       isLive: isActive,
       chip,
       ref: { kind: "live", id: s.id as string },
-      deletable: !isActive,
+      deletable: true,
     };
   });
 
@@ -182,51 +248,14 @@ export default async function NotesHubPage() {
     };
   });
 
-  const lessonGroups = new Map<
-    string,
-    { count: number; latest: string; snippets: string[] }
-  >();
-  for (const n of lessonNotes) {
-    const id = n.material_id as string;
-    const g = lessonGroups.get(id) ?? {
-      count: 0,
-      latest: (n.updated_at as string) ?? "",
-      snippets: [],
-    };
-    g.count += 1;
-    if (g.snippets.length < 2) {
-      const p = preview(n.note_body, 90);
-      if (p) g.snippets.push(p);
-    }
-    lessonGroups.set(id, g);
-  }
-  const lessonCards: NoteDocCardData[] = Array.from(lessonGroups.entries()).map(
-    ([materialId, g]) => {
-      const material = materialById.get(materialId);
-      return {
-        key: `lesson-${materialId}`,
-        href: `/notes/lesson/${materialId}`,
-        title: materialTitle(material?.file_name),
-        subtitle: material
-          ? (courseTitleById.get(material.course_id) ?? null)
-          : null,
-        preview: g.snippets.join(" · ") || null,
-        dateLabel: `${g.count} note${g.count === 1 ? "" : "s"}${
-          formatDate(g.latest) ? ` · ${formatDate(g.latest)}` : ""
-        }`,
-        ref: { kind: "lesson", materialId },
-        deletable: true,
-      };
-    }
-  );
-
-  const sections: NoteHubSection[] = [
+  const sectionsUnordered: NoteHubSection[] = [
     {
       id: "standalone",
       title: "My notes",
       hint: "Notes you created here — keep as notes or build a course anytime.",
       cards: standaloneCards,
     },
+    ...customSections,
     {
       id: "live",
       title: "Live lectures",
@@ -245,15 +274,22 @@ export default async function NotesHubPage() {
       hint: "Your running notes from mentored learning, one document per material.",
       cards: courseNoteCards,
     },
-    {
-      id: "lesson",
-      title: "Lesson notes",
-      hint: "Highlights and short notes from self-study — grouped by material, one card per upload.",
-      cards: lessonCards,
-    },
-  ].filter((s) => s.cards.length > 0);
+  ];
 
-  const empty = sections.length === 0;
+  const { data: layoutRow, error: layoutError } = await supabase
+    .from("user_notes_hub_layout")
+    .select("section_order")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  const savedOrder =
+    !layoutError && Array.isArray(layoutRow?.section_order)
+      ? (layoutRow.section_order as string[])
+      : [];
+
+  const sections = applySectionOrder(sectionsUnordered, savedOrder);
+
+  const empty = sections.every((s) => s.cards.length === 0);
 
   return (
     <>

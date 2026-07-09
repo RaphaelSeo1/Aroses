@@ -2,7 +2,8 @@
  * The @@ line-marker streaming protocol between the note-generation model
  * and the client (see `src/lib/ai/live-lecture-notes.ts` for the prompt):
  *
- *   @@revise <sectionId>   zero or more, FIRST — replacement body follows
+ *   @@thought <text>       zero or more, FIRST — short user-visible narration
+ *   @@revise <sectionId>   zero or more — replacement body follows
  *   @@append               exactly once — new-notes body follows
  *   @@summary              exactly once, LAST — rolling summary follows
  *                          (accumulated here, never forwarded)
@@ -14,6 +15,7 @@
  */
 
 export type LiveNotesStreamEvent =
+  | { type: "thought"; message: string }
   | { type: "op"; op: "append" | "revise"; sectionId: string }
   | { type: "text"; delta: string }
   | { type: "summary"; summary: string };
@@ -57,6 +59,9 @@ export function createMarkerParser(
         }
       } else if (trimmed === "@@summary") {
         mode = "summary";
+      } else if (trimmed.startsWith("@@thought")) {
+        const message = trimmed.slice("@@thought".length).trim();
+        if (message) out.push({ type: "thought", message });
       }
       // Any other @@ line is protocol noise — drop it.
     } else if (isBody()) {

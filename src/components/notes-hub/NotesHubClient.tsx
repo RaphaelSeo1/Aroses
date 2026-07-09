@@ -1,10 +1,68 @@
 "use client";
 
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  DragOverlay,
+  type DragStartEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useRouter } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
-import { confirmDialog } from "@/components/AppDialogs";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { alertDialog, confirmDialog, promptDialog } from "@/components/AppDialogs";
 import { NotesDocGrid } from "@/components/notes-hub/NotesDocCard";
-import type { NoteDocCardData, NoteHubRef, NoteHubSection } from "@/lib/notes/hub-types";
+import {
+  NotesHubSidebar,
+  SectionMoreMenu,
+} from "@/components/notes-hub/NotesHubSidebar";
+import { reorderSectionsByIds } from "@/lib/notes/hub-layout";
+import {
+  customSectionId,
+  dropSectionToMoveTarget,
+  isCustomSection,
+  NOTE_DRAG_PREFIX,
+  parseCustomSectionId,
+  resolveDropSectionId,
+  resolveSectionSortTarget,
+  sectionAcceptsNoteDrop,
+  SECTION_DRAG_PREFIX,
+  type NoteHubRef,
+  type NoteHubSection,
+} from "@/lib/notes/hub-types";
+
+function defaultActiveSection(sections: NoteHubSection[]): string {
+  return sections.find((s) => s.cards.length > 0)?.id ?? sections[0]?.id ?? "standalone";
+}
+
+function sectionIdForCreate(activeSectionId: string): string | null {
+  const uuid = parseCustomSectionId(activeSectionId);
+  return uuid ?? null;
+}
+
+function applyMoveToSections(
+  sections: NoteHubSection[],
+  movedKeys: Set<string>,
+  targetSectionId: string | null
+): NoteHubSection[] {
+  const targetId =
+    targetSectionId === null ? "standalone" : customSectionId(targetSectionId);
+  const moving = sections.flatMap((s) =>
+    s.cards.filter((c) => movedKeys.has(c.key))
+  );
+
+  return sections.map((section) => {
+    const remaining = section.cards.filter((c) => !movedKeys.has(c.key));
+    if (section.id === targetId) {
+      return { ...section, cards: [...moving, ...remaining] };
+    }
+    return { ...section, cards: remaining };
+  });
+}
 
 export function NotesHubClient({
   sections: initialSections,
@@ -15,10 +73,34 @@ export function NotesHubClient({
 }) {
   const router = useRouter();
   const [sections, setSections] = useState(initialSections);
+  const [activeSectionId, setActiveSectionId] = useState(() =>
+    defaultActiveSection(initialSections)
+  );
   const [manageMode, setManageMode] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [creating, setCreating] = useState(false);
+  const [addingSection, setAddingSection] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [dndMounted, setDndMounted] = useState(false);
+  const [dragLabel, setDragLabel] = useState<string | null>(null);
+  const [dragKind, setDragKind] = useState<"note" | "section" | null>(null);
+  const dndContextId = useId();
+
+  useEffect(() => {
+    setDndMounted(true);
+  }, []);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const activeSection = useMemo(
+    () => sections.find((s) => s.id === activeSectionId) ?? sections[0],
+    [sections, activeSectionId]
+  );
 
   const allCards = useMemo(
     () => sections.flatMap((s) => s.cards),
@@ -29,6 +111,29 @@ export function NotesHubClient({
     () => allCards.filter((c) => c.deletable !== false && c.ref),
     [allCards]
   );
+
+  const movableSelected = useMemo(() => {
+    return allCards.filter(
+      (c) => selectedKeys.has(c.key) && c.ref?.kind === "standalone"
+    );
+  }, [allCards, selectedKeys]);
+
+  const moveTargets = useMemo(() => {
+    const targets: { id: string | null; label: string }[] = [
+      { id: null, label: "My notes" },
+    ];
+    for (const s of sections) {
+      if (isCustomSection(s)) {
+        targets.push({
+          id: parseCustomSectionId(s.id),
+          label: s.title,
+        });
+      }
+    }
+    return targets.filter((t): t is { id: string | null; label: string } =>
+      t.id === null ? true : Boolean(t.id)
+    );
+  }, [sections]);
 
   const toggleSelect = useCallback((key: string) => {
     setSelectedKeys((prev) => {
@@ -56,10 +161,13 @@ export function NotesHubClient({
     if (creating) return;
     setCreating(true);
     try {
+      const sectionId = sectionIdForCreate(activeSectionId);
       const res = await fetch("/api/notes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(
+          sectionId ? { sectionId } : {}
+        ),
       });
       const data = (await res.json().catch(() => ({}))) as {
         noteId?: string;
@@ -72,12 +180,287 @@ export function NotesHubClient({
     }
   };
 
+  const persistHubLayout = useCallback(async (orderedIds: string[]) => {
+    try {
+      await fetch("/api/notes/hub-layout", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order: orderedIds }),
+      });
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const addSection = async () => {
+    if (addingSection) return;
+    const title = await promptDialog({
+      title: "New section",
+      label: "Section name",
+      placeholder: "e.g. Midterm prep, Biology",
+      defaultValue: "",
+    });
+    if (!title?.trim()) return;
+
+    setAddingSection(true);
+    try {
+      const res = await fetch("/api/notes/sections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title.trim() }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        section?: { id: string; title: string };
+        error?: string;
+      };
+      if (!res.ok || !data.section) return;
+
+      const newSection: NoteHubSection = {
+        id: customSectionId(data.section.id),
+        title: data.section.title,
+        hint: "Use Move in Select mode to add notes here.",
+        cards: [],
+        custom: true,
+      };
+
+      setSections((prev) => {
+        const activeIdx = prev.findIndex((s) => s.id === activeSectionId);
+        const insertAt = activeIdx >= 0 ? activeIdx + 1 : prev.length;
+        const next = [
+          ...prev.slice(0, insertAt),
+          newSection,
+          ...prev.slice(insertAt),
+        ];
+        void persistHubLayout(next.map((s) => s.id));
+        return next;
+      });
+      setActiveSectionId(newSection.id);
+    } finally {
+      setAddingSection(false);
+    }
+  };
+
+  const renameSection = async (section: NoteHubSection) => {
+    const uuid = parseCustomSectionId(section.id);
+    if (!uuid) return;
+
+    const title = await promptDialog({
+      title: "Rename section",
+      label: "Section name",
+      defaultValue: section.title,
+    });
+    if (!title?.trim() || title.trim() === section.title) return;
+
+    const res = await fetch(`/api/notes/sections/${uuid}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim() }),
+    });
+    if (!res.ok) return;
+
+    setSections((prev) =>
+      prev.map((s) =>
+        s.id === section.id ? { ...s, title: title.trim() } : s
+      )
+    );
+  };
+
+  const deleteSection = async (section: NoteHubSection) => {
+    const uuid = parseCustomSectionId(section.id);
+    if (!uuid) return;
+
+    const ok = await confirmDialog({
+      title: `Delete “${section.title}”?`,
+      body:
+        section.cards.length > 0
+          ? "Notes in this section will move back to My notes. The notes themselves are not deleted."
+          : "This empty section will be removed.",
+      confirmLabel: "Delete section",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    const res = await fetch(`/api/notes/sections/${uuid}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      await alertDialog({
+        title: "Could not delete section",
+        body: "Make sure migration 082_user_note_sections.sql is applied in Supabase, then try again.",
+      });
+      return;
+    }
+
+    setSections((prev) => {
+      const target = prev.find((s) => s.id === section.id);
+      const movedCards = target?.cards ?? [];
+      const next = prev
+        .filter((s) => s.id !== section.id)
+        .map((s) =>
+          s.id === "standalone"
+            ? { ...s, cards: [...movedCards, ...s.cards] }
+            : s
+        );
+      void persistHubLayout(next.map((s) => s.id));
+      if (activeSectionId === section.id) {
+        setActiveSectionId("standalone");
+      }
+      return next;
+    });
+    router.refresh();
+  };
+
+  const moveCardsToSection = useCallback(
+    async (cardKeys: string[], targetSectionId: string | null) => {
+      if (cardKeys.length === 0) return;
+
+      const cards = allCards.filter((c) => cardKeys.includes(c.key));
+      const items: NoteHubRef[] = cards
+        .map((c) => c.ref)
+        .filter((r): r is NoteHubRef => r?.kind === "standalone");
+
+      if (items.length === 0) return;
+
+      setBusy(true);
+      try {
+        const res = await fetch("/api/notes/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "move",
+            items,
+            sectionId: targetSectionId,
+          }),
+        });
+        if (res.ok) {
+          const movedKeys = new Set(cardKeys);
+          setSections((prev) =>
+            applyMoveToSections(prev, movedKeys, targetSectionId)
+          );
+          if (targetSectionId) {
+            setActiveSectionId(customSectionId(targetSectionId));
+          } else {
+            setActiveSectionId("standalone");
+          }
+          router.refresh();
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [allCards, router]
+  );
+
+  const moveSelected = async (targetSectionId: string | null) => {
+    if (busy || movableSelected.length === 0) return;
+    await moveCardsToSection(
+      movableSelected.map((c) => c.key),
+      targetSectionId
+    );
+    clearSelection();
+  };
+
+  const reorderSections = async (orderedIds: string[]) => {
+    if (orderedIds.length < 2) return;
+
+    const previous = sections;
+    setSections(reorderSectionsByIds(sections, orderedIds));
+
+    try {
+      const res = await fetch("/api/notes/hub-layout", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order: orderedIds }),
+      });
+      if (!res.ok) {
+        setSections(previous);
+        await alertDialog({
+          title: "Could not reorder sections",
+          body: "Apply migration 083_user_notes_hub_layout.sql in Supabase, then try again.",
+        });
+        return;
+      }
+      router.refresh();
+    } catch {
+      setSections(previous);
+    }
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const id = String(event.active.id);
+    const activeType = event.active.data.current?.type as string | undefined;
+    if (activeType === "note" || id.startsWith(NOTE_DRAG_PREFIX)) {
+      setDragKind("note");
+      const cardKey = id.slice(NOTE_DRAG_PREFIX.length);
+      const card = allCards.find((c) => c.key === cardKey);
+      setDragLabel(card?.title ?? "Note");
+      return;
+    }
+    if (activeType === "section" || id.startsWith(SECTION_DRAG_PREFIX)) {
+      setDragKind("section");
+      const sectionId = id.slice(SECTION_DRAG_PREFIX.length);
+      const section = sections.find((s) => s.id === sectionId);
+      setDragLabel(section?.title ?? "Section");
+    }
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    setDragLabel(null);
+    setDragKind(null);
+    const { active, over } = event;
+    if (!over) return;
+
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    const activeType = active.data.current?.type as string | undefined;
+
+    if (activeType === "note" && activeId.startsWith(NOTE_DRAG_PREFIX)) {
+      const cardKey = activeId.slice(NOTE_DRAG_PREFIX.length);
+      const dropSectionId = resolveDropSectionId(overId);
+      if (!dropSectionId || !sectionAcceptsNoteDrop(dropSectionId)) return;
+      const target = dropSectionToMoveTarget(dropSectionId);
+      if (target === undefined) return;
+
+      const currentSection = sections.find((s) =>
+        s.cards.some((c) => c.key === cardKey)
+      );
+      const currentTarget =
+        currentSection?.id === "standalone"
+          ? null
+          : parseCustomSectionId(currentSection?.id ?? "");
+      if (currentTarget === target) return;
+
+      void moveCardsToSection([cardKey], target);
+      return;
+    }
+
+    if (activeType === "section" && activeId.startsWith(SECTION_DRAG_PREFIX)) {
+      const activeSectionKey = activeId.slice(SECTION_DRAG_PREFIX.length);
+      const overSectionKey = resolveSectionSortTarget(overId);
+      if (!overSectionKey) return;
+
+      const sectionIds = sections.map((s) => s.id);
+      const oldIndex = sectionIds.indexOf(activeSectionKey);
+      const newIndex = sectionIds.indexOf(overSectionKey);
+      if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+      void reorderSections(arrayMove(sectionIds, oldIndex, newIndex));
+    }
+  };
+
+  const handleDragCancel = () => {
+    setDragLabel(null);
+    setDragKind(null);
+  };
+
   const deleteSelected = async () => {
     if (busy || selectedKeys.size === 0) return;
+    const selected = allCards.filter((c) => selectedKeys.has(c.key));
+    const hasLive = selected.some((c) => c.ref?.kind === "live");
     const ok = await confirmDialog({
       title: `Delete ${selectedKeys.size} note${selectedKeys.size === 1 ? "" : "s"}?`,
-      body:
-        "This cannot be undone. Tutor sessions and live lectures are removed entirely; course and lesson notes are cleared.",
+      body: hasLive
+        ? "This cannot be undone. Live and paused recordings will be removed entirely — including their transcript and notes. Tutor sessions are deleted; course notes are cleared."
+        : "This cannot be undone. Tutor sessions and live lectures are removed entirely; course notes are cleared.",
       confirmLabel: "Delete",
       tone: "danger",
     });
@@ -97,29 +480,22 @@ export function NotesHubClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete", items }),
       });
-      const data = (await res.json().catch(() => ({}))) as {
-        deleted?: number;
-        skippedLive?: number;
-      };
       if (res.ok) {
         const removed = new Set(selectedKeys);
-        setSections((prev) =>
-          prev
-            .map((s) => ({
-              ...s,
-              cards: s.cards.filter((c) => !removed.has(c.key)),
-            }))
-            .filter((s) => s.cards.length > 0)
-        );
+        setSections((prev) => {
+          const next = prev.map((s) => ({
+            ...s,
+            cards: s.cards.filter((c) => !removed.has(c.key)),
+          }));
+          const stillHasActive = next.some(
+            (s) => s.id === activeSectionId && s.cards.length > 0
+          );
+          if (!stillHasActive) {
+            setActiveSectionId(defaultActiveSection(next));
+          }
+          return next;
+        });
         exitManage();
-        if ((data.skippedLive ?? 0) > 0) {
-          void confirmDialog({
-            title: "Some items were skipped",
-            body:
-              "Active live recordings cannot be deleted while still recording. End the session first.",
-            confirmLabel: "OK",
-          });
-        }
         router.refresh();
       }
     } finally {
@@ -127,68 +503,13 @@ export function NotesHubClient({
     }
   };
 
-  return (
-    <div>
-      <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
-        {manageMode ? (
-          <>
-            <button
-              type="button"
-              onClick={selectAll}
-              className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            >
-              Select all
-            </button>
-            <button
-              type="button"
-              onClick={clearSelection}
-              className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            >
-              Clear
-            </button>
-            <button
-              type="button"
-              onClick={() => void deleteSelected()}
-              disabled={selectedKeys.size === 0 || busy}
-              className="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
-            >
-              {busy
-                ? "Deleting…"
-                : `Delete${selectedKeys.size > 0 ? ` (${selectedKeys.size})` : ""}`}
-            </button>
-            <button
-              type="button"
-              onClick={exitManage}
-              className="rounded-full px-3 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-            >
-              Done
-            </button>
-          </>
-        ) : (
-          <>
-            {!empty && deletableCards.length > 0 ? (
-              <button
-                type="button"
-                onClick={() => setManageMode(true)}
-                className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
-              >
-                Select
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => void createNote()}
-              disabled={creating}
-              className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow transition hover:from-violet-700 hover:to-fuchsia-700 disabled:opacity-60"
-            >
-              {creating ? "Creating…" : "+ New note"}
-            </button>
-          </>
-        )}
-      </div>
+  const canCreateInSection =
+    activeSection?.id === "standalone" || isCustomSection(activeSection ?? { id: "" });
 
-      {empty ? (
-        <div className="mt-12 rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90">
+  const renderMainContent = (draggableNotes: boolean) => {
+    if (empty) {
+      return (
+        <div className="rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90">
           <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
             No notes yet
           </p>
@@ -205,26 +526,200 @@ export function NotesHubClient({
             {creating ? "Creating…" : "Create your first note"}
           </button>
         </div>
+      );
+    }
+
+    if (!activeSection) return null;
+
+    return (
+      <section>
+        <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+              {activeSection.title}
+            </h2>
+            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-500">
+              {activeSection.hint}
+            </p>
+          </div>
+          {isCustomSection(activeSection) ? (
+            <SectionMoreMenu
+              section={activeSection}
+              onRename={() => void renameSection(activeSection)}
+              onDelete={() => void deleteSection(activeSection)}
+            />
+          ) : null}
+        </header>
+
+        {activeSection.cards.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-zinc-200 bg-white/60 px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950/40">
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              Nothing in this section yet.
+            </p>
+            {canCreateInSection ? (
+              <button
+                type="button"
+                onClick={() => void createNote()}
+                disabled={creating}
+                className="mt-4 rounded-full bg-violet-600 px-5 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+              >
+                {creating ? "Creating…" : "+ New note"}
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <NotesDocGrid
+            cards={activeSection.cards}
+            manageMode={manageMode}
+            selectedKeys={selectedKeys}
+            onToggleSelect={toggleSelect}
+            draggableNotes={draggableNotes}
+          />
+        )}
+      </section>
+    );
+  };
+
+  const toolbar = (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {manageMode ? (
+        <>
+          {movableSelected.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-zinc-500">Move to</span>
+              {moveTargets.map((target) => (
+                <button
+                  key={target.id ?? "standalone"}
+                  type="button"
+                  onClick={() => void moveSelected(target.id)}
+                  disabled={busy}
+                  className="rounded-full border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                >
+                  {target.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={selectAll}
+            className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            onClick={() => void deleteSelected()}
+            disabled={selectedKeys.size === 0 || busy}
+            className="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+          >
+            {busy
+              ? "Deleting…"
+              : `Delete${selectedKeys.size > 0 ? ` (${selectedKeys.size})` : ""}`}
+          </button>
+          <button
+            type="button"
+            onClick={exitManage}
+            className="rounded-full px-3 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+          >
+            Done
+          </button>
+        </>
       ) : (
-        <div className="mt-8 space-y-12">
-          {sections.map((section) => (
-            <section key={section.id}>
-              <header className="mb-4">
-                <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                  {section.title}
-                </h2>
-                <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-500">
-                  {section.hint}
-                </p>
-              </header>
-              <NotesDocGrid
-                cards={section.cards}
+        <>
+          {!empty && deletableCards.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setManageMode(true)}
+              className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            >
+              Select
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void createNote()}
+            disabled={creating}
+            className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow transition hover:from-violet-700 hover:to-fuchsia-700 disabled:opacity-60"
+          >
+            {creating ? "Creating…" : "+ New note"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="mt-6 md:hidden">{toolbar}</div>
+
+      {dndMounted ? (
+        <DndContext
+          id={dndContextId}
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={handleDragCancel}
+        >
+          <div className="mt-6 flex flex-col gap-6 md:mt-8 md:flex-row md:gap-8">
+            <aside className="md:sticky md:top-20 md:self-start">
+              <NotesHubSidebar
+                sections={sections}
+                activeSectionId={activeSectionId}
+                onSectionSelect={setActiveSectionId}
                 manageMode={manageMode}
                 selectedKeys={selectedKeys}
                 onToggleSelect={toggleSelect}
+                onAddSection={() => void addSection()}
+                onRenameSection={(s) => void renameSection(s)}
+                onDeleteSection={(s) => void deleteSection(s)}
+                addingSection={addingSection}
+                draggableNotes
+                dragKind={dragKind}
               />
-            </section>
-          ))}
+            </aside>
+
+            <div className="min-w-0 flex-1">
+              <div className="mb-4 hidden md:block">{toolbar}</div>
+              {renderMainContent(true)}
+            </div>
+          </div>
+          <DragOverlay dropAnimation={null}>
+            {dragLabel ? (
+              <div className="rounded-lg bg-white px-3 py-2 text-xs font-medium shadow-lg ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-700">
+                {dragLabel}
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      ) : (
+        <div className="mt-6 flex flex-col gap-6 md:mt-8 md:flex-row md:gap-8">
+          <aside className="md:sticky md:top-20 md:self-start">
+            <NotesHubSidebar
+              sections={sections}
+              activeSectionId={activeSectionId}
+              onSectionSelect={setActiveSectionId}
+              manageMode={manageMode}
+              selectedKeys={selectedKeys}
+              onToggleSelect={toggleSelect}
+              onAddSection={() => void addSection()}
+              onRenameSection={(s) => void renameSection(s)}
+              onDeleteSection={(s) => void deleteSection(s)}
+              addingSection={addingSection}
+            />
+          </aside>
+          <div className="min-w-0 flex-1">
+            <div className="mb-4 hidden md:block">{toolbar}</div>
+            {renderMainContent(false)}
+          </div>
         </div>
       )}
     </div>

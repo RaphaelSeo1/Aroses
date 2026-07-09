@@ -254,6 +254,9 @@ export function NotesPanel({
   onEditorReady,
   pinToolbar = true,
   fillHeight = false,
+  /** Live Notes: pin-to-bottom scroll follow; user can scroll away freely. */
+  scrollFollowMode = false,
+  onDocTitleChange,
 }: {
   /**
    * Mentored Learning path — when set, the panel reads/writes
@@ -290,6 +293,10 @@ export function NotesPanel({
   pinToolbar?: boolean;
   /** Fill the parent height and scroll note content inside the panel. */
   fillHeight?: boolean;
+  /** Live Notes: only auto-scroll when the reader is pinned to the bottom. */
+  scrollFollowMode?: boolean;
+  /** When set, doc title is controlled by the parent (live sync with external chrome). */
+  onDocTitleChange?: (title: string) => void;
   /** Fired once the TipTap editor is mounted and the imperative handle is wired. */
   onEditorReady?: () => void;
 }) {
@@ -303,8 +310,19 @@ export function NotesPanel({
   const initialDocRef = useRef<unknown | null>(null);
   const notesHydratedRef = useRef(false);
   const docChromeDirtyRef = useRef(false);
+  const editorDirtyRef = useRef(false);
   const defaultTitle = courseTitle || lessonTitle || "Notes";
-  const [docTitle, setDocTitle] = useState(defaultTitle);
+  const [docTitleInternal, setDocTitleInternal] = useState(defaultTitle);
+  const docTitleControlled = Boolean(onDocTitleChange);
+  const docTitle = docTitleControlled ? lessonTitle : docTitleInternal;
+  const setDocTitle = useCallback(
+    (next: string) => {
+      docChromeDirtyRef.current = true;
+      if (onDocTitleChange) onDocTitleChange(next);
+      else setDocTitleInternal(next);
+    },
+    [onDocTitleChange]
+  );
   const [docEmoji, setDocEmoji] = useState(() =>
     pickDocEmoji(`${lessonTitle} ${courseTitle}`)
   );
@@ -318,6 +336,32 @@ export function NotesPanel({
   // Scrollable document-body wrapper — used by `preserveSelection` appends to
   // decide whether to follow new content (only when already near the bottom).
   const scrollBodyRef = useRef<HTMLDivElement | null>(null);
+  const scrollPinnedRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+
+  const isScrollPinned = useCallback(() => {
+    const el = scrollBodyRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }, []);
+
+  useEffect(() => {
+    if (!scrollFollowMode) return;
+    const el = scrollBodyRef.current;
+    if (!el) return;
+    scrollPinnedRef.current = isScrollPinned();
+    lastScrollTopRef.current = el.scrollTop;
+    const onScroll = () => {
+      if (el.scrollTop < lastScrollTopRef.current - 4) {
+        scrollPinnedRef.current = false;
+      } else if (isScrollPinned()) {
+        scrollPinnedRef.current = true;
+      }
+      lastScrollTopRef.current = el.scrollTop;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [scrollFollowMode, isScrollPinned]);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -353,6 +397,7 @@ export function NotesPanel({
       }),
     ],
     editorProps: {
+      handleScrollToSelection: scrollFollowMode ? () => true : undefined,
       attributes: {
         class:
           "tn-prose max-w-none focus:outline-none min-h-[6rem] caret-zinc-700",
@@ -432,6 +477,9 @@ export function NotesPanel({
     if (!editor || editor.isDestroyed) return;
     const writer = new StreamingNotesWriter(editor, {
       getScrollElement: () => scrollBodyRef.current,
+      shouldFollowContent: scrollFollowMode
+        ? () => scrollPinnedRef.current
+        : undefined,
     });
     streamWriterRef.current = writer;
     return () => {
@@ -440,7 +488,7 @@ export function NotesPanel({
         streamWriterRef.current = null;
       }
     };
-  }, [editor]);
+  }, [editor, scrollFollowMode]);
 
   // Imperative handle for the parent — auto-generate uses this to
   // append structured "Rose just covered X" blocks directly into the
@@ -705,10 +753,12 @@ export function NotesPanel({
           // through the transaction). Auto-scroll only when the reader was
           // already following along at the bottom.
           const scrollEl = scrollBodyRef.current;
-          const wasNearBottom = scrollEl
-            ? scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight <
-              160
-            : false;
+          const wasNearBottom = scrollFollowMode
+            ? scrollPinnedRef.current
+            : scrollEl
+              ? scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight <
+                160
+              : false;
           // Stamp provenance so wrap-up can tell AI blocks from student
           // writing; the tx meta stops the provenance tracker from treating
           // this append as a student edit.
@@ -856,10 +906,15 @@ export function NotesPanel({
   }, [editor, editorRef]);
 
   const editorReadyFiredRef = useRef(false);
+  const notesLoadedForRef = useRef<string | null>(null);
 
-  // Initial load — hydrate the editor with the saved doc once.
+  // Initial load — hydrate the editor with the saved doc once per endpoint.
   useEffect(() => {
+    if (!editor) return;
+    if (notesLoadedForRef.current === endpoint) return;
+    notesLoadedForRef.current = endpoint;
     editorReadyFiredRef.current = false;
+    const fallbackTitle = courseTitle || lessonTitle || "Notes";
     let cancelled = false;
     void (async () => {
       autoGenLog("loading saved notes from server", { endpoint });
@@ -873,6 +928,7 @@ export function NotesPanel({
         if (!res.ok) return;
         const body = (await res.json()) as {
           notes?: {
+            title?: string;
             contentJson: unknown;
             autoGenerate: boolean;
             updatedAt?: string;
@@ -885,10 +941,14 @@ export function NotesPanel({
         if (cancelled) return;
         const doc = body.notes?.contentJson;
         const attrs = readRoseDocAttrs(doc);
-        if (attrs.roseDocTitle?.trim()) {
-          setDocTitle(attrs.roseDocTitle.trim());
-        } else {
-          setDocTitle(defaultTitle);
+        const isStandaloneNote = endpoint.includes("/api/notes/");
+        const apiTitle =
+          typeof body.notes?.title === "string" ? body.notes.title.trim() : "";
+        const loadedTitle = isStandaloneNote
+          ? apiTitle || attrs.roseDocTitle?.trim() || fallbackTitle
+          : attrs.roseDocTitle?.trim() || fallbackTitle;
+        if (!docTitleControlled) {
+          setDocTitle(loadedTitle);
         }
         if (attrs.roseDocEmoji) {
           setDocEmoji(attrs.roseDocEmoji);
@@ -921,8 +981,16 @@ export function NotesPanel({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [defaultTitle, editor, endpoint]);
+  }, [
+    courseTitle,
+    docTitleControlled,
+    editor,
+    endpoint,
+    lessonTitle,
+    onAutoGenerateChange,
+    onEditorReady,
+    setDocTitle,
+  ]);
 
   useEffect(() => {
     if (!emojiPickerOpen) return;
@@ -955,6 +1023,7 @@ export function NotesPanel({
     const payload = buildSavePayload();
     if (!payload) return;
     setSaving("saving");
+    const isStandaloneNote = endpoint.includes("/api/notes/");
     const attempt = async (): Promise<boolean> => {
       try {
         const res = await fetch(endpoint, {
@@ -963,6 +1032,9 @@ export function NotesPanel({
           body: JSON.stringify({
             contentJson: payload.contentJson,
             contentText: payload.contentText,
+            ...(isStandaloneNote && docTitle.trim()
+              ? { title: docTitle.trim().slice(0, 200) }
+              : {}),
           }),
         });
         return res.ok;
@@ -977,6 +1049,7 @@ export function NotesPanel({
     }
     if (ok) {
       docChromeDirtyRef.current = false;
+      editorDirtyRef.current = false;
       const now = Date.now();
       setLastSavedAt(now);
       setSaving("saved");
@@ -986,7 +1059,40 @@ export function NotesPanel({
     } else {
       setSaving("error");
     }
-  }, [buildSavePayload, endpoint]);
+  }, [buildSavePayload, endpoint, docTitle]);
+
+  const flushPendingSaveKeepalive = useCallback(() => {
+    if (saveTimerRef.current != null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (titleSaveTimerRef.current != null) {
+      window.clearTimeout(titleSaveTimerRef.current);
+      titleSaveTimerRef.current = null;
+    }
+    if (!editorDirtyRef.current && !docChromeDirtyRef.current) return;
+    const payload = buildSavePayload();
+    if (!payload) return;
+    const isStandaloneNote = endpoint.includes("/api/notes/");
+    try {
+      void fetch(endpoint, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contentJson: payload.contentJson,
+          contentText: payload.contentText,
+          ...(isStandaloneNote && docTitle.trim()
+            ? { title: docTitle.trim().slice(0, 200) }
+            : {}),
+        }),
+        keepalive: true,
+      });
+      editorDirtyRef.current = false;
+      docChromeDirtyRef.current = false;
+    } catch {
+      /* ignore */
+    }
+  }, [buildSavePayload, endpoint, docTitle]);
 
   const persistDocChrome = useCallback(() => {
     void saveNow();
@@ -996,17 +1102,22 @@ export function NotesPanel({
   useEffect(() => {
     if (!editor) return;
     const handler = () => {
+      editorDirtyRef.current = true;
       if (saveTimerRef.current) {
         window.clearTimeout(saveTimerRef.current);
       }
       saveTimerRef.current = window.setTimeout(() => {
+        saveTimerRef.current = null;
         void saveNow();
       }, 1500);
     };
     editor.on("update", handler);
     return () => {
       editor.off("update", handler);
-      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      if (saveTimerRef.current != null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
     };
   }, [editor, saveNow]);
 
@@ -1027,25 +1138,20 @@ export function NotesPanel({
     };
   }, [docEmoji, docTitle, editor, saveNow]);
 
-  // Best-effort flush before navigation so title edits aren't lost on refresh.
+  // Flush pending edits before tab close or client-side navigation (unmount).
   useEffect(() => {
-    const flush = () => {
-      if (!docChromeDirtyRef.current) return;
-      const payload = buildSavePayload();
-      if (!payload) return;
-      void fetch(endpoint, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contentJson: payload.contentJson,
-          contentText: payload.contentText,
-        }),
-        keepalive: true,
-      });
+    const onHide = () => flushPendingSaveKeepalive();
+    window.addEventListener("pagehide", onHide);
+    const onVis = () => {
+      if (document.visibilityState === "hidden") onHide();
     };
-    window.addEventListener("pagehide", flush);
-    return () => window.removeEventListener("pagehide", flush);
-  }, [buildSavePayload, endpoint]);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onVis);
+      flushPendingSaveKeepalive();
+    };
+  }, [flushPendingSaveKeepalive]);
 
   // Auto-generate toggle: persist immediately via a payload-only PUT.
   const onToggleAutoGenerate = useCallback(
@@ -1639,9 +1745,14 @@ export function NotesPanel({
         /* Horizontal rule */
         .tn-prose hr {
           border: none;
-          margin: 1.6rem 0;
+          margin: 0.5rem 0;
           height: 1px;
           background: #e6e5e1;
+        }
+        .tn-prose hr + h1,
+        .tn-prose hr + h2,
+        .tn-prose hr + h3 {
+          margin-top: 0.65rem;
         }
 
         /* Highlight */

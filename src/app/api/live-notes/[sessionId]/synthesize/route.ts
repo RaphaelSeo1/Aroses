@@ -35,6 +35,7 @@ const MAX_SYNTHESIZE_CALLS = 200;
  * }
  *
  * Streams (text/event-stream):
+ *   event: thought data: { "message": string }
  *   event: op    data: { "op": "revise"|"append", "sectionId": string }
  *   event: text  data: { "delta": string }        // body of the active op
  *   event: done  data: { "appendSectionId": string }
@@ -163,7 +164,9 @@ export async function POST(request: Request, ctx: Params) {
           lectureTitle,
           userId: user.id,
         })) {
-          if (ev.type === "op") {
+          if (ev.type === "thought") {
+            send("thought", { message: ev.message });
+          } else if (ev.type === "op") {
             send("op", { op: ev.op, sectionId: ev.sectionId });
           } else if (ev.type === "text") {
             send("text", { delta: ev.delta });

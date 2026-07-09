@@ -27,13 +27,6 @@ function parseRef(raw: unknown): NoteHubRef | null {
   ) {
     return { kind: "course", materialId: o.materialId };
   }
-  if (
-    kind === "lesson" &&
-    typeof o.materialId === "string" &&
-    UUID_RE.test(o.materialId)
-  ) {
-    return { kind: "lesson", materialId: o.materialId };
-  }
   return null;
 }
 
@@ -60,16 +53,6 @@ async function deleteHubItem(
       return { ok: !error };
     }
     case "live": {
-      const { data: session } = await supabase
-        .from("live_lecture_sessions")
-        .select("status")
-        .eq("id", item.id)
-        .eq("user_id", userId)
-        .maybeSingle();
-      if (!session) return { ok: false, reason: "not_found" };
-      if (session.status === "recording" || session.status === "paused") {
-        return { ok: false, reason: "live_active" };
-      }
       const { error } = await supabase
         .from("live_lecture_sessions")
         .delete()
@@ -85,20 +68,12 @@ async function deleteHubItem(
         .eq("user_id", userId);
       return { ok: !error };
     }
-    case "lesson": {
-      const { error } = await supabase
-        .from("user_lesson_notes")
-        .delete()
-        .eq("material_id", item.materialId)
-        .eq("user_id", userId);
-      return { ok: !error };
-    }
     default:
       return { ok: false };
   }
 }
 
-/** POST /api/notes/bulk — delete selected notes from the hub. */
+/** POST /api/notes/bulk — delete or move selected notes from the hub. */
 export async function POST(request: Request) {
   const supabase = await createClient();
   const {
@@ -108,11 +83,68 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { action?: unknown; items?: unknown };
+  let body: { action?: unknown; items?: unknown; sectionId?: unknown };
   try {
     body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  if (body.action === "move") {
+    if (!Array.isArray(body.items) || body.items.length === 0) {
+      return NextResponse.json(
+        { error: "Select at least one note." },
+        { status: 400 }
+      );
+    }
+
+    const items = body.items
+      .map(parseRef)
+      .filter(
+        (r): r is Extract<NoteHubRef, { kind: "standalone" }> =>
+          r !== null && r.kind === "standalone"
+      )
+      .slice(0, MAX_BULK);
+
+    if (items.length === 0) {
+      return NextResponse.json(
+        { error: "Only standalone notes can be moved." },
+        { status: 400 }
+      );
+    }
+
+    let sectionId: string | null = null;
+    if (body.sectionId === null) {
+      sectionId = null;
+    } else if (typeof body.sectionId === "string" && body.sectionId.trim()) {
+      sectionId = body.sectionId.trim();
+      const { data: section } = await supabase
+        .from("user_note_sections")
+        .select("id")
+        .eq("id", sectionId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!section) {
+        return NextResponse.json({ error: "Section not found" }, { status: 404 });
+      }
+    } else if (body.sectionId !== undefined) {
+      return NextResponse.json({ error: "Invalid sectionId" }, { status: 400 });
+    }
+
+    let moved = 0;
+    for (const item of items) {
+      const { error } = await supabase
+        .from("user_notes")
+        .update({
+          section_id: sectionId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", item.id)
+        .eq("user_id", user.id);
+      if (!error) moved += 1;
+    }
+
+    return NextResponse.json({ moved, sectionId });
   }
 
   if (body.action !== "delete") {
@@ -135,12 +167,10 @@ export async function POST(request: Request) {
   }
 
   let deleted = 0;
-  let skippedLive = 0;
   for (const item of items) {
     const result = await deleteHubItem(supabase, user.id, item);
     if (result.ok) deleted += 1;
-    else if (result.reason === "live_active") skippedLive += 1;
   }
 
-  return NextResponse.json({ deleted, skippedLive });
+  return NextResponse.json({ deleted });
 }

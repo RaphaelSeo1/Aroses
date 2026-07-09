@@ -68,6 +68,16 @@ export async function POST(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
+  if (!session.course_id) {
+    return NextResponse.json(
+      {
+        error:
+          "This recording belongs to a standalone note. Use Stop recording instead of building a course here.",
+      },
+      { status: 409 }
+    );
+  }
+
   const courseId = session.course_id as string;
 
   if (session.status === "completed" && session.ingest_job_id) {

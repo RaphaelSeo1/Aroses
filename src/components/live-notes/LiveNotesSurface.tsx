@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { confirmDialog } from "@/components/AppDialogs";
 import {
   NotesPanel,
   type NotesPanelHandle,
@@ -16,6 +17,10 @@ import {
   type LiveCaptureSource,
   type LiveTranscriptSegment,
 } from "@/lib/live-notes/use-live-transcription";
+import {
+  LiveNotesAiActivity,
+  type AiActivityEntry,
+} from "@/components/live-notes/LiveNotesAiActivity";
 
 /**
  * Live Notes — full-page live lecture capture surface.
@@ -31,24 +36,24 @@ import {
 /**
  * Synthesis cadence. A 5s heartbeat plus every committed segment attempt a
  * synthesis; the char thresholds below decide whether one actually fires:
- *   - first section quickly (~300 chars ≈ 25s of speech — proof of life),
- *   - then whenever ~700 new chars (~45s of speech) have accumulated.
- * Calls self-throttle further because a synthesis holds `synthInFlight`
- * until its output has finished *typing out* (see TYPE_CPS below), so the
- * next call starts only after the previous one is visually done.
+ *   - first section quickly (~180 chars ≈ 15s of speech — proof of life),
+ *   - then whenever ~450 new chars (~30s of speech) have accumulated.
+ * The API gate (`synthInFlight`) opens as soon as the model stream ends;
+ * typing continues on a chained pump so the next slice can synthesize while
+ * the previous section is still animating into the editor.
  */
-const SYNTH_TARGET_CHARS = 700;
-const SYNTH_FIRST_SECTION_CHARS = 300;
-const SYNTH_MIN_CHARS = 300;
+const SYNTH_TARGET_CHARS = 450;
+const SYNTH_FIRST_SECTION_CHARS = 180;
+const SYNTH_MIN_CHARS = 180;
 const SYNTH_CHECK_INTERVAL_MS = 5 * 1000;
 
 /**
- * Visible typing pace for AI notes. Model tokens arrive in bursts; instead
- * of dumping them, a pump drains the stream into the editor at a steady
- * character rate so the student can watch the notes being written.
+ * Visible typing pace for AI notes. Speeds up automatically when the pump
+ * falls behind the model so notes never feel stuck.
  */
-const TYPE_CPS = 45;
-const TYPE_TICK_MS = 40;
+const TYPE_CPS = 90;
+const TYPE_CPS_CATCHUP = 200;
+const TYPE_TICK_MS = 30;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -60,7 +65,8 @@ type PumpItem =
 
 export type LiveNotesInitialSession = {
   id: string;
-  courseId: string;
+  courseId?: string | null;
+  userNoteId?: string | null;
   title: string;
   status: "recording" | "paused" | "completed" | "failed";
   durationSeconds: number;
@@ -112,13 +118,20 @@ export function LiveNotesSurface({
   session,
   courseTitle,
   initialSegments,
+  variant = "course",
 }: {
   session: LiveNotesInitialSession;
   courseTitle: string;
   initialSegments: LiveTranscriptSegment[];
+  /** Standalone notes from /notes/doc — save back to the note, no course build. */
+  variant?: "course" | "standalone";
 }) {
   const router = useRouter();
   const sessionId = session.id;
+  const isStandalone = variant === "standalone" || Boolean(session.userNoteId);
+  const noteDocHref = session.userNoteId
+    ? `/notes/doc/${session.userNoteId}`
+    : "/notes";
 
   const [segments, setSegments] = useState<LiveTranscriptSegment[]>(
     initialSegments
@@ -128,9 +141,13 @@ export function LiveNotesSurface({
   const [autoGenerate, setAutoGenerate] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const [finishing, setFinishing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [confirmFinish, setConfirmFinish] = useState(false);
   const [started, setStarted] = useState(false);
   const [aiWriting, setAiWriting] = useState(false);
+  const [aiLogOpen, setAiLogOpen] = useState(true);
+  const [aiActivity, setAiActivity] = useState<AiActivityEntry[]>([]);
+  const aiActivitySeqRef = useRef(0);
   // Detected after mount so the server-rendered HTML never depends on the
   // client platform (hydration-safe). Null = still detecting.
   const [platform, setPlatform] = useState<CapturePlatform | null>(null);
@@ -154,6 +171,33 @@ export function LiveNotesSurface({
    * self-revisions. Bounded to the revision window (+ slack).
    */
   const sectionExcerptsRef = useRef<Map<string, string>>(new Map());
+  /** Serializes typing pumps so writer ops never overlap. */
+  const pumpTailRef = useRef(Promise.resolve());
+  const pumpJobsRef = useRef(0);
+
+  const syncAiWritingUi = useCallback(() => {
+    const busy = synthInFlightRef.current || pumpJobsRef.current > 0;
+    setAiWriting(busy);
+    notesRef.current?.setStreamingIndicator(busy);
+  }, []);
+
+  const pushAiActivity = useCallback(
+    (kind: AiActivityEntry["kind"], message: string) => {
+      aiActivitySeqRef.current += 1;
+      setAiActivity((prev) =>
+        [
+          ...prev,
+          {
+            id: `ai-${aiActivitySeqRef.current}`,
+            at: Date.now(),
+            kind,
+            message,
+          },
+        ].slice(-40)
+      );
+    },
+    []
+  );
 
   const maybeSynthesize = useCallback(
     async (force: boolean) => {
@@ -175,7 +219,13 @@ export function LiveNotesSurface({
       synthInFlightRef.current = true;
       unsynthesizedRef.current = "";
       setAiWriting(true);
+      setAiLogOpen(true);
+      pushAiActivity(
+        "status",
+        "Reading the latest slice of the lecture…"
+      );
       notesRef.current?.setStreamingIndicator(true);
+      syncAiWritingUi();
 
       // Bounded self-revision context: recent fully-AI sections plus the raw
       // transcript excerpts underlying them. The NEWEST section is excluded —
@@ -199,13 +249,22 @@ export function LiveNotesSurface({
       let gotContent = false;
 
       // ── Typing pump ─────────────────────────────────────────────────────
-      // SSE events land in `queue`; this loop drains them into the editor at
-      // TYPE_CPS so the notes visibly type out character by character even
-      // when the model streams faster. `synthInFlight` stays true until the
-      // pump finishes, which naturally spaces out synthesis calls.
+      // SSE events land in `queue`; a chained pump drains them into the
+      // editor. Synthesis can start the next API call while a prior pump
+      // is still typing — only the pump itself is serialized on the writer.
       const queue: PumpItem[] = [];
       let queueClosed = false;
-      const charsPerTick = Math.max(1, Math.round((TYPE_CPS * TYPE_TICK_MS) / 1000));
+      const pendingPumpChars = () =>
+        queue.reduce(
+          (n, item) => (item.kind === "text" ? n + item.text.length : n),
+          0
+        );
+      const charsPerTick = () => {
+        const backlog = pendingPumpChars();
+        const cps =
+          backlog > 900 ? TYPE_CPS_CATCHUP : backlog > 400 ? 140 : TYPE_CPS;
+        return Math.max(1, Math.round((cps * TYPE_TICK_MS) / 1000));
+      };
       const runPump = async () => {
         let opValid = false;
         while (true) {
@@ -225,12 +284,11 @@ export function LiveNotesSurface({
             opValid = true;
           } else if (item.kind === "revise") {
             writer.finishOp();
-            // False when the section vanished or was student-edited since
-            // the request went out — the op's text is then discarded.
             opValid = await writer.beginRevision(item.sectionId);
           } else if (opValid && item.text) {
-            for (let i = 0; i < item.text.length; i += charsPerTick) {
-              writer.write(item.text.slice(i, i + charsPerTick));
+            const step = charsPerTick();
+            for (let i = 0; i < item.text.length; i += step) {
+              writer.write(item.text.slice(i, i + step));
               gotContent = true;
               await sleep(TYPE_TICK_MS);
             }
@@ -239,7 +297,33 @@ export function LiveNotesSurface({
         writer.finishOp();
       };
 
-      const pumpDone = runPump();
+      const schedulePump = () => {
+        pumpJobsRef.current += 1;
+        syncAiWritingUi();
+        pumpTailRef.current = pumpTailRef.current
+          .then(() => runPump())
+          .then(() => {
+            if (appendSectionId && gotContent) {
+              blockCountRef.current += 1;
+              excerpts.set(appendSectionId, pending.slice(0, 3_000));
+              pushAiActivity(
+                "status",
+                "Finished this batch — still listening for more…"
+              );
+              while (excerpts.size > 6) {
+                const oldest = excerpts.keys().next().value;
+                if (oldest === undefined) break;
+                excerpts.delete(oldest);
+              }
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            pumpJobsRef.current -= 1;
+            syncAiWritingUi();
+          });
+      };
+
       try {
         const res = await fetch(`/api/live-notes/${sessionId}/synthesize`, {
           method: "POST",
@@ -270,16 +354,25 @@ export function LiveNotesSurface({
         let buf = "";
 
         const handleEvent = (event: string, parsed: Record<string, unknown>) => {
-          if (event === "op") {
+          if (event === "thought") {
+            if (typeof parsed.message === "string" && parsed.message.trim()) {
+              pushAiActivity("thought", parsed.message.trim());
+            }
+          } else if (event === "op") {
             const sectionId =
               typeof parsed.sectionId === "string" ? parsed.sectionId : "";
             if (parsed.op === "append" && sectionId) {
+              pushAiActivity("append", "Adding new notes for what the lecturer just covered…");
               queue.push({
                 kind: "append",
                 sectionId,
-                dividerBefore: blockCountRef.current > 0,
+                dividerBefore: false,
               });
             } else if (parsed.op === "revise" && sectionId) {
+              pushAiActivity(
+                "revise",
+                "Something in an earlier note doesn't match — rewriting that section…"
+              );
               queue.push({ kind: "revise", sectionId });
             }
           } else if (event === "text") {
@@ -287,6 +380,12 @@ export function LiveNotesSurface({
               queue.push({ kind: "text", text: parsed.delta });
             }
           } else if (event === "error") {
+            pushAiActivity(
+              "error",
+              typeof parsed.message === "string"
+                ? parsed.message
+                : "Could not update notes for this slice."
+            );
             throw new Error(
               typeof parsed.message === "string"
                 ? parsed.message
@@ -314,30 +413,18 @@ export function LiveNotesSurface({
           }
         }
         queueClosed = true;
-        await pumpDone;
-
-        if (appendSectionId && gotContent) {
-          blockCountRef.current += 1;
-          excerpts.set(appendSectionId, pending.slice(0, 3_000));
-          // Keep only the excerpts the revision window can still reference.
-          while (excerpts.size > 6) {
-            const oldest = excerpts.keys().next().value;
-            if (oldest === undefined) break;
-            excerpts.delete(oldest);
-          }
-        }
       } catch {
         unsynthesizedRef.current =
           `${pending} ${unsynthesizedRef.current}`.trim();
+        pushAiActivity("error", "Note update failed — will retry on the next slice.");
       } finally {
         queueClosed = true;
-        await pumpDone.catch(() => {});
         synthInFlightRef.current = false;
-        setAiWriting(false);
-        notesRef.current?.setStreamingIndicator(false);
+        syncAiWritingUi();
+        schedulePump();
       }
     },
-    [sessionId]
+    [sessionId, pushAiActivity, syncAiWritingUi]
   );
 
   // Cadence heartbeat: attempt a synthesis every 5s. The char thresholds
@@ -445,11 +532,30 @@ export function LiveNotesSurface({
     setFinishing(true);
     setError(null);
     try {
-      // Final synthesis pass on whatever teaching is still buffered, so the
-      // notes doc covers the lecture tail too. Best-effort.
       await maybeSynthesize(true);
       await stop();
       await flushNow();
+
+      if (isStandalone) {
+        const res = await fetch(`/api/live-notes/${sessionId}/finish`, {
+          method: "POST",
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          redirect?: string;
+          error?: string;
+        };
+        if (!res.ok || !data.redirect) {
+          setError(
+            data.error ||
+              "Could not save your recording. Your notes are still in this session — try again."
+          );
+          setFinishing(false);
+          return;
+        }
+        router.push(data.redirect);
+        return;
+      }
+
       const res = await fetch(`/api/live-notes/${sessionId}/complete`, {
         method: "POST",
       });
@@ -470,9 +576,43 @@ export function LiveNotesSurface({
       setError("Could not finish the session. Check your connection and try again.");
       setFinishing(false);
     }
-  }, [finishing, maybeSynthesize, stop, flushNow, sessionId, router]);
+  }, [finishing, maybeSynthesize, stop, flushNow, sessionId, router, isStandalone]);
 
-  const alreadyCompleted = session.status === "completed" && session.ingestJobId;
+  const handleDelete = useCallback(async () => {
+    if (deleting || finishing) return;
+    const ok = await confirmDialog({
+      title: "Delete this live lecture?",
+      body:
+        "This cannot be undone. The recording, transcript, and notes for this session will be removed entirely.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      if (started && status !== "idle") {
+        await stop();
+      }
+      const res = await fetch(`/api/live-notes/${sessionId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(data.error || "Could not delete this session.");
+        setDeleting(false);
+        return;
+      }
+      router.push(isStandalone ? noteDocHref : "/notes");
+    } catch {
+      setError("Could not delete this session. Check your connection and try again.");
+      setDeleting(false);
+    }
+  }, [deleting, finishing, started, status, stop, sessionId, router, isStandalone, noteDocHref]);
+
+  const alreadyCompleted =
+    !isStandalone && session.status === "completed" && session.ingestJobId;
+  const standaloneDone = isStandalone && session.status === "completed";
   const isLive = status === "recording" || status === "reconnecting";
   const showStartOverlay =
     !alreadyCompleted &&
@@ -485,17 +625,19 @@ export function LiveNotesSurface({
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <header className="flex flex-wrap items-center gap-3 border-b border-zinc-200 bg-white/85 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/85 sm:px-6">
         <Link
-          href="/notes"
+          href={isStandalone ? noteDocHref : "/notes"}
           className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
-          ← All notes
+          {isStandalone ? "← Back to note" : "← All notes"}
         </Link>
-        <Link
-          href={`/dashboard/courses/${session.courseId}`}
-          className="hidden text-xs font-medium text-zinc-500 hover:text-violet-700 dark:text-zinc-500 dark:hover:text-violet-300 sm:inline"
-        >
-          {courseTitle || "Course"}
-        </Link>
+        {!isStandalone && session.courseId ? (
+          <Link
+            href={`/dashboard/courses/${session.courseId}`}
+            className="hidden text-xs font-medium text-zinc-500 hover:text-violet-700 dark:text-zinc-500 dark:hover:text-violet-300 sm:inline"
+          >
+            {courseTitle || "Course"}
+          </Link>
+        ) : null}
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
@@ -588,7 +730,7 @@ export function LiveNotesSurface({
             </button>
           ) : null}
 
-          {started || alreadyCompleted || segments.length > 0 ? (
+          {started || alreadyCompleted || standaloneDone || segments.length > 0 ? (
             confirmFinish ? (
               <span className="inline-flex items-center gap-1.5">
                 <button
@@ -597,7 +739,13 @@ export function LiveNotesSurface({
                   disabled={finishing}
                   className="rounded-full bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  {finishing ? "Building…" : "Confirm — build course"}
+                  {finishing
+                    ? isStandalone
+                      ? "Saving…"
+                      : "Building…"
+                    : isStandalone
+                      ? "Confirm — stop recording"
+                      : "Confirm — build course"}
                 </button>
                 <button
                   type="button"
@@ -611,21 +759,31 @@ export function LiveNotesSurface({
             ) : (
               <button
                 type="button"
-                onClick={() =>
-                  alreadyCompleted
-                    ? router.push(
-                        `/dashboard/courses/${session.courseId}/study/build?pdfJobs=${session.ingestJobId}`
-                      )
-                    : setConfirmFinish(true)
-                }
+                onClick={() => {
+                  if (alreadyCompleted && session.courseId) {
+                    router.push(
+                      `/dashboard/courses/${session.courseId}/study/build?pdfJobs=${session.ingestJobId}`
+                    );
+                  } else if (standaloneDone) {
+                    router.push(noteDocHref);
+                  } else {
+                    setConfirmFinish(true);
+                  }
+                }}
                 disabled={finishing}
                 className="rounded-full bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
               >
                 {alreadyCompleted
                   ? "View course build"
-                  : finishing
-                    ? "Building…"
-                    : "Finish & build course"}
+                  : standaloneDone
+                    ? "Back to note"
+                    : finishing
+                      ? isStandalone
+                        ? "Saving…"
+                        : "Building…"
+                      : isStandalone
+                        ? "Stop recording"
+                        : "Finish & build course"}
               </button>
             )
           ) : null}
@@ -637,6 +795,15 @@ export function LiveNotesSurface({
             aria-pressed={railOpen}
           >
             {railOpen ? "Hide transcript" : "Show transcript"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleDelete()}
+            disabled={deleting || finishing}
+            className="rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60 dark:border-rose-900/50 dark:bg-zinc-900 dark:text-rose-300 dark:hover:bg-rose-950/40"
+          >
+            {deleting ? "Deleting…" : "Delete"}
           </button>
         </div>
       </header>
@@ -656,7 +823,7 @@ export function LiveNotesSurface({
 
       {/* ── Body ───────────────────────────────────────────────────────── */}
       <div className="relative flex min-h-0 flex-1">
-        <main className="min-w-0 flex-1">
+        <main className="flex min-w-0 flex-1 flex-col">
           <NotesPanel
             notesEndpoint={`/api/live-notes/${sessionId}/notes`}
             lessonTitle={session.title}
@@ -668,7 +835,14 @@ export function LiveNotesSurface({
             editorRef={notesRef}
             fillHeight
             pinToolbar
-            className="h-full"
+            scrollFollowMode
+            className="min-h-0 flex-1"
+          />
+          <LiveNotesAiActivity
+            entries={aiActivity}
+            active={aiWriting}
+            open={aiLogOpen}
+            onOpenChange={setAiLogOpen}
           />
         </main>
 

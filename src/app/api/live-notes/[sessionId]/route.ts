@@ -16,6 +16,9 @@ type Params = { params: Promise<{ sessionId: string }> };
  *   Update mutable session fields while recording.
  *   Body: { status?: "recording" | "paused", title?, durationSeconds? }
  *   Completion goes through POST .../complete, never here.
+ *
+ * DELETE /api/live-notes/[sessionId]
+ *   Remove the session and transcript segments (any status).
  */
 export async function GET(_request: Request, ctx: Params) {
   const { sessionId } = await ctx.params;
@@ -138,4 +141,37 @@ export async function PATCH(request: Request, ctx: Params) {
   }
 
   return NextResponse.json({ ok: true, status: data.status });
+}
+
+/**
+ * DELETE /api/live-notes/[sessionId]
+ *   Remove a live lecture session and its transcript segments (cascade).
+ *   Allowed in any status — including active recording/paused sessions.
+ */
+export async function DELETE(_request: Request, ctx: Params) {
+  const { sessionId } = await ctx.params;
+  if (!isUuid(sessionId)) {
+    return NextResponse.json({ error: "Invalid session id" }, { status: 400 });
+  }
+
+  const supabase = await createRouteHandlerSupabase();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { error } = await supabase
+    .from("live_lecture_sessions")
+    .delete()
+    .eq("id", sessionId)
+    .eq("user_id", user.id);
+
+  if (error) {
+    console.error("[live-notes] delete session", error);
+    return NextResponse.json({ error: "Could not delete session." }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
 }

@@ -10,6 +10,8 @@ const en = {
   managedCoursesMany: "{count} courses you manage",
   createCourseCta: "+ Create course",
   startSomethingNew: "Start something new",
+  startSomethingNewDesc:
+    "Build a course from your materials, or jump into a live tutor session.",
   createACourse: "Create a course",
   createCourseCardDesc:
     "Upload your study material and I'll build a structured course you can work through lesson by lesson with Rose.",
@@ -34,6 +36,25 @@ const en = {
   sharedWithYou: "Shared with you",
   sharedWithYouDesc:
     "Courses others invited you to — your study progress stays private.",
+  libraryEyebrow: "Your library",
+  backToHome: "Back to home",
+  homeHubNavLabel: "Your workspace",
+  hubCoursesHint: "Private courses you manage — upload, quiz, and publish.",
+  hubStudyingHint: "Pick up where you left off on any course.",
+  hubSharedHint: "Courses others invited you to collaborate on.",
+  hubSharedEmpty: "Nothing shared with you yet",
+  hubSharedEmptyDesc:
+    "When someone invites you to a course, it will show up here.",
+  hubCreateCourseHint: "Upload material and build a structured course.",
+  hubTutorPastHint: "Browse and reopen past one-on-one sessions.",
+  hubExploreHint: "Discover community courses to study.",
+  homeLibraryTitle: "Everything in one place",
+  homeLibraryDesc:
+    "Open your notes, courses, and shared libraries — full lists live on their own pages.",
+  studyStreakTitle: "Study streak this week",
+  studyStreakHint: "Keep a small daily practice habit.",
+  streakDaysOne: "{count} day",
+  streakDaysMany: "{count} days",
 
   // ── Continue studying carousel ─────────────────────────────────────────
   forYou: "For you",
@@ -185,6 +206,8 @@ const ko: typeof en = {
   managedCoursesMany: "내가 관리하는 코스 {count}개",
   createCourseCta: "+ 코스 만들기",
   startSomethingNew: "새로 시작하기",
+  startSomethingNewDesc:
+    "자료로 코스를 만들거나, 라이브 튜터 세션에 바로 참여해 보세요.",
   createACourse: "코스 만들기",
   createCourseCardDesc:
     "학습 자료를 업로드하면 Rose와 함께 차근차근 진행할 수 있는 체계적인 코스를 만들어 드려요.",
@@ -209,6 +232,24 @@ const ko: typeof en = {
   sharedWithYou: "나에게 공유됨",
   sharedWithYouDesc:
     "다른 사람이 초대한 코스예요 — 내 학습 진행 상황은 비공개로 유지돼요.",
+  libraryEyebrow: "내 라이브러리",
+  backToHome: "홈으로",
+  homeHubNavLabel: "내 워크스페이스",
+  hubCoursesHint: "내가 관리하는 비공개 코스 — 업로드, 퀴즈, 공개 설정.",
+  hubStudyingHint: "학습하던 코스를 이어서 진행해요.",
+  hubSharedHint: "다른 사람이 초대한 협업 코스예요.",
+  hubSharedEmpty: "아직 공유받은 코스가 없어요",
+  hubSharedEmptyDesc: "누군가 코스에 초대하면 여기에 표시돼요.",
+  hubCreateCourseHint: "자료를 업로드하고 체계적인 코스를 만들어요.",
+  hubTutorPastHint: "지난 일대일 튜터 세션을 찾아보세요.",
+  hubExploreHint: "커뮤니티 코스를 찾아 학습해 보세요.",
+  homeLibraryTitle: "한곳에서 모두 열기",
+  homeLibraryDesc:
+    "노트, 코스, 공유 라이브러리 — 전체 목록은 각 페이지에서 볼 수 있어요.",
+  studyStreakTitle: "이번 주 학습 연속",
+  studyStreakHint: "매일 조금씩 꾸준히 학습해 보세요.",
+  streakDaysOne: "{count}일",
+  streakDaysMany: "{count}일",
 
   // ── 이어서 공부하기 캐러셀 ─────────────────────────────────────────────
   forYou: "추천",

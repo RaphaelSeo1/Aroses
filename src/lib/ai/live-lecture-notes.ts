@@ -12,13 +12,14 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
 /**
  * Live Notes synthesis — streaming, grounded, with bounded self-revision.
  *
- * Every ~700 chars of fresh transcript (~45s of speech; the client runs a
+ * Every ~450 chars of fresh transcript (~30s of speech; the client runs a
  * 5s cadence heartbeat), one Haiku call receives: the new slice, the
  * rolling summary, and the last-N AI note sections WITH the raw transcript
  * excerpts they were written from. The model streams a tiny
  * line-marker protocol (parsed incrementally — no waiting for the full
  * response):
  *
+ *   @@thought <text>       zero or more, FIRST — short user-visible narration
  *   @@revise <sectionId>   zero or more, FIRST — full replacement markdown
  *                          for a recent section the model got wrong or that
  *                          new lecture content recontextualizes
@@ -74,12 +75,17 @@ SELF-REVISION (bounded, rare):
 - Do not revise for style, wording, ordering, or completeness. A revision must preserve the section's correct content verbatim and change only what was wrong.
 - The transcript is ground truth. Only revise sections you were given. Most calls have ZERO @@revise operations; if nothing is factually wrong, emit none.
 
+NARRATION (optional — do not delay notes for this):
+- You MAY emit zero or one short @@thought line before @@revise/@@append when something non-obvious happened (a correction, skip, or topic shift). Keep it under 15 words.
+- Never emit more than one @@thought per call. If unsure, skip thoughts and go straight to @@append.
+
 WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the rolling summary): still emit @@append but put NOTHING after it. Never pad.
 
 OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
+@@thought <optional one short sentence — skip if unnecessary>
 @@revise <sectionId>
 <full replacement markdown for that section>
-(zero or more @@revise operations, always FIRST)
+(zero or more @@revise operations, after @@thought lines)
 @@append
 <markdown study notes for the new slice, or nothing>
 @@summary
@@ -114,7 +120,7 @@ export async function* streamLiveLectureNotes(input: {
   }
 
   const slice = input.newSegmentText.trim().slice(0, MAX_SEGMENT_INPUT_CHARS);
-  if (slice.length < 200) {
+  if (slice.length < 120) {
     yield { type: "summary", summary: input.rollingSummary };
     return;
   }

@@ -46,6 +46,16 @@ export async function GET(_req: Request, ctx: Params) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  const { data: activeSession } = await supabase
+    .from("live_lecture_sessions")
+    .select("id")
+    .eq("user_note_id", noteId)
+    .eq("user_id", user.id)
+    .in("status", ["recording", "paused"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
   return NextResponse.json({
     notes: {
       title: data.title,
@@ -55,6 +65,7 @@ export async function GET(_req: Request, ctx: Params) {
       updatedAt: data.updated_at,
       courseId: data.course_id,
       ingestJobId: data.ingest_job_id,
+      activeSessionId: activeSession?.id ?? null,
     },
   });
 }
@@ -132,14 +143,11 @@ export async function PATCH(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Invalid note id" }, { status: 400 });
   }
 
-  let body: { title?: unknown };
+  let body: { title?: unknown; sectionId?: unknown };
   try {
     body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-  if (typeof body.title !== "string" || !body.title.trim()) {
-    return NextResponse.json({ error: "title required" }, { status: 400 });
   }
 
   const supabase = await createClient();
@@ -150,12 +158,39 @@ export async function PATCH(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const patch: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (typeof body.title === "string" && body.title.trim()) {
+    patch.title = body.title.trim().slice(0, 200);
+  } else if (!("sectionId" in body)) {
+    return NextResponse.json({ error: "title required" }, { status: 400 });
+  }
+
+  if ("sectionId" in body) {
+    if (body.sectionId === null) {
+      patch.section_id = null;
+    } else if (typeof body.sectionId === "string" && body.sectionId.trim()) {
+      const sectionId = body.sectionId.trim();
+      const { data: section } = await supabase
+        .from("user_note_sections")
+        .select("id")
+        .eq("id", sectionId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!section) {
+        return NextResponse.json({ error: "Section not found" }, { status: 404 });
+      }
+      patch.section_id = sectionId;
+    } else {
+      return NextResponse.json({ error: "Invalid sectionId" }, { status: 400 });
+    }
+  }
+
   const { data, error } = await supabase
     .from("user_notes")
-    .update({
-      title: body.title.trim().slice(0, 200),
-      updated_at: new Date().toISOString(),
-    })
+    .update(patch)
     .eq("id", noteId)
     .eq("user_id", user.id)
     .select("title, updated_at")

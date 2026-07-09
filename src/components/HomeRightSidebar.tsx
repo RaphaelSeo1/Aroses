@@ -1,6 +1,7 @@
 "use client";
 
-import { HomeNotesEntryLink } from "@/components/HomeNotesEntryLink";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 
 function weekdayLabelsLast7(): { key: string; label: string }[] {
   const out: { key: string; label: string }[] = [];
@@ -24,31 +25,32 @@ function streakFromBuckets(last7: number[]): number {
 
 export function HomeRightSidebar({
   activityBuckets14,
-  viewNotesLabel,
-  viewNotesHint,
 }: {
   activityBuckets14: number[];
-  viewNotesLabel: string;
-  viewNotesHint: string;
 }) {
+  const t = useT();
   const days = weekdayLabelsLast7();
   const last7 = activityBuckets14.slice(-7);
   const streak = streakFromBuckets(last7);
+  const streakLabel =
+    streak === 1
+      ? tf(t.dashboard.streakDaysOne, { count: streak })
+      : tf(t.dashboard.streakDaysMany, { count: streak });
 
   return (
-    <aside className="space-y-5 lg:sticky lg:top-[5.5rem]">
+    <aside className="lg:sticky lg:top-[5.5rem]">
       <section className="overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/95 p-5 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-950/80 dark:ring-zinc-700/30">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              Study streak this week
+              {t.dashboard.studyStreakTitle}
             </p>
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Keep a small daily practice habit.
+              {t.dashboard.studyStreakHint}
             </p>
           </div>
           <span className="rounded-full bg-brand-blush/80 px-2.5 py-1 text-xs font-semibold text-brand-ink dark:bg-[#1e1616]/70 dark:text-brand-soft">
-            {streak} day{streak === 1 ? "" : "s"}
+            {streakLabel}
           </span>
         </div>
 
@@ -77,16 +79,7 @@ export function HomeRightSidebar({
             );
           })}
         </div>
-
-        <p className="mt-5 text-sm font-semibold text-brand-ink dark:text-brand-soft">
-          {streak}
-          <span className="ml-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            day streak — keep it going!
-          </span>
-        </p>
       </section>
-
-      <HomeNotesEntryLink label={viewNotesLabel} hint={viewNotesHint} />
     </aside>
   );
 }

@@ -31,14 +31,33 @@ export async function POST(request: Request) {
       ? (body as { title: string }).title.trim().slice(0, 200)
       : "Untitled note";
 
+  const rawSectionId = (body as { sectionId?: unknown }).sectionId;
+  let sectionId: string | null = null;
+  if (rawSectionId === null) {
+    sectionId = null;
+  } else if (typeof rawSectionId === "string" && rawSectionId.trim()) {
+    sectionId = rawSectionId.trim();
+  }
+
+  const insert: Record<string, unknown> = {
+    user_id: user.id,
+    title,
+    content_json: EMPTY_DOC,
+    content_text: "",
+  };
+  if (sectionId) {
+    const { data: section } = await supabase
+      .from("user_note_sections")
+      .select("id")
+      .eq("id", sectionId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (section) insert.section_id = sectionId;
+  }
+
   const { data, error } = await supabase
     .from("user_notes")
-    .insert({
-      user_id: user.id,
-      title,
-      content_json: EMPTY_DOC,
-      content_text: "",
-    })
+    .insert(insert)
     .select("id")
     .single();
 

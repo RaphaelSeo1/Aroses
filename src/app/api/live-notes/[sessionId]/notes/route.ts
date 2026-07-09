@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { syncLiveSessionToStandaloneNote } from "@/lib/live-notes/sync-standalone-note";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
@@ -109,7 +110,7 @@ export async function PUT(request: Request, ctx: Params) {
     })
     .eq("id", sessionId)
     .eq("user_id", user.id)
-    .select("notes_json, notes_text, updated_at")
+    .select("notes_json, notes_text, updated_at, user_note_id")
     .maybeSingle();
 
   if (error) {
@@ -118,6 +119,10 @@ export async function PUT(request: Request, ctx: Params) {
   }
   if (!data) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (data.user_note_id) {
+    await syncLiveSessionToStandaloneNote(supabase, sessionId, user.id);
   }
 
   return NextResponse.json({

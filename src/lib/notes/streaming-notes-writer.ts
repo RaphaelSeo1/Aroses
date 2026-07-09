@@ -102,11 +102,18 @@ export class StreamingNotesWriter {
   private scrollPending = false;
   private destroyed = false;
   private editor: Editor;
-  private opts: { getScrollElement?: () => HTMLElement | null };
+  private opts: {
+    getScrollElement?: () => HTMLElement | null;
+    /** When false, new content is written without moving the scroll position. */
+    shouldFollowContent?: () => boolean;
+  };
 
   constructor(
     editor: Editor,
-    opts: { getScrollElement?: () => HTMLElement | null } = {}
+    opts: {
+      getScrollElement?: () => HTMLElement | null;
+      shouldFollowContent?: () => boolean;
+    } = {}
   ) {
     this.editor = editor;
     this.opts = opts;
@@ -376,18 +383,9 @@ export class StreamingNotesWriter {
       return;
     }
     if (line.kind === "hr") {
-      this.flushPendingDivider();
-      const target = this.blockInsertionPos();
-      this.dispatchDoc((tr) => {
-        const hr = this.editor.schema.nodes.horizontalRule?.create({
-          provenance: "ai",
-          sectionId: op.sectionId,
-        });
-        if (hr) tr.insert(insertionPoint(tr, target), hr);
-      });
-      op.breakList = true;
-      op.wroteAnything = true;
-      this.maybeScroll();
+      // Section ## headings already separate live notes — skip markdown
+      // "---" lines so we don't get a rule plus huge vertical gaps.
+      op.pendingDivider = false;
       return;
     }
     const inline = parseInlineMarkdown(line.text.trim());
@@ -664,11 +662,14 @@ export class StreamingNotesWriter {
     }
   };
 
-  /** Follow new content only when the reader is already near the bottom. */
+  /** Follow new content only when the reader opted in (pinned to bottom). */
   private maybeScroll(): void {
+    if (this.opts.shouldFollowContent && !this.opts.shouldFollowContent()) {
+      return;
+    }
     const el = this.opts.getScrollElement?.();
     if (!el || this.scrollPending) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     if (!nearBottom) return;
     this.scrollPending = true;
     requestAnimationFrame(() => {

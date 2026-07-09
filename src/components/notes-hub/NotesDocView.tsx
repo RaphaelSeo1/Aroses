@@ -15,10 +15,13 @@ export function NotesDocView({
   notesEndpoint,
   title,
   subtitle,
+  onDocTitleChange,
 }: {
   notesEndpoint: string;
   title: string;
   subtitle: string;
+  /** Live-sync doc title edits to a parent header (standalone notes). */
+  onDocTitleChange?: (title: string) => void;
 }) {
   const [autoGenerate, setAutoGenerate] = useState(false);
 
@@ -34,6 +37,7 @@ export function NotesDocView({
         onAutoGenerateChange={setAutoGenerate}
         hideAutoGenerate
         fillHeight
+        onDocTitleChange={onDocTitleChange}
       />
     </div>
   );

@@ -58,7 +58,19 @@ function formatRelativeTime(
   return days === 1 ? d.yesterday : tf(d.daysAgo, { count: days });
 }
 
-export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
+export function ContinueStudyingCarousel({
+  entries,
+  hideViewAll = false,
+  viewAllHref = "/dashboard/profile?tab=progress",
+  maxItems,
+  className = "mt-10",
+}: {
+  entries: Entry[];
+  hideViewAll?: boolean;
+  viewAllHref?: string;
+  maxItems?: number;
+  className?: string;
+}) {
   const t = useT();
   const [items, setItems] = useState(entries);
   const { requestDismiss, dismissDialog, error } = useDismissStudyCourse({
@@ -73,8 +85,14 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
 
   if (items.length === 0) return null;
 
+  const visible =
+    typeof maxItems === "number" ? items.slice(0, maxItems) : items;
+  const showViewAll =
+    !hideViewAll &&
+    (typeof maxItems !== "number" || items.length > maxItems);
+
   return (
-    <section className="mt-10">
+    <section className={className}>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
@@ -84,12 +102,14 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
             {t.dashboard.continueStudying}
           </h2>
         </div>
-        <Link
-          href="/dashboard/profile?tab=progress"
-          className="text-sm font-semibold text-brand underline-offset-2 hover:underline dark:text-brand-soft"
-        >
-          {t.dashboard.viewAll} →
-        </Link>
+        {showViewAll ? (
+          <Link
+            href={viewAllHref}
+            className="text-sm font-semibold text-brand underline-offset-2 hover:underline dark:text-brand-soft"
+          >
+            {t.dashboard.viewAll} →
+          </Link>
+        ) : null}
       </div>
 
       {error ? (
@@ -100,7 +120,7 @@ export function ContinueStudyingCarousel({ entries }: { entries: Entry[] }) {
 
       <div className="mt-5 -mx-4 px-4 sm:-mx-6 sm:px-6">
         <div className="flex gap-4 overflow-x-auto pb-2 [-webkit-overflow-scrolling:touch] [scrollbar-gutter:stable] snap-x snap-mandatory">
-          {items.map((e) => {
+          {visible.map((e) => {
             const progressPct = pct(e.modulesCompleted, e.modulesTotal);
             const score =
               e.totalLast10 > 0 ? `${e.correctLast10}/${e.totalLast10}` : "—";
