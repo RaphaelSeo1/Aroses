@@ -205,9 +205,7 @@ export default async function NotesHubPage() {
       const material = materialById.get(materialId);
       return {
         key: `lesson-${materialId}`,
-        href: material
-          ? `/dashboard/courses/${material.course_id}/study`
-          : "/notes",
+        href: `/notes/lesson/${materialId}`,
         title: materialTitle(material?.file_name),
         subtitle: material
           ? (courseTitleById.get(material.course_id) ?? null)
@@ -250,7 +248,7 @@ export default async function NotesHubPage() {
     {
       id: "lesson",
       title: "Lesson notes",
-      hint: "Quick notes and highlights captured while self-studying.",
+      hint: "Highlights and short notes from self-study — grouped by material, one card per upload.",
       cards: lessonCards,
     },
   ].filter((s) => s.cards.length > 0);
