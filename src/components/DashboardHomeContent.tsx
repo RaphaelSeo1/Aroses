@@ -3,6 +3,7 @@ import { AppHeader } from "@/components/AppHeader";
 import type { DashboardCourse } from "@/components/CourseDashboardList";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { HomeHubEntryLink } from "@/components/HomeHubEntryLink";
+import { HomeRecordLectureCard } from "@/components/HomeRecordLectureCard";
 import { HomeResumeHero } from "@/components/HomeResumeHero";
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
 import { ReviewDueBanner } from "@/components/ReviewDueBanner";
@@ -174,41 +175,8 @@ export async function DashboardHomeContent({
                     </div>
                   </Link>
 
-                  {/* Live Notes — layout reserved; not linked yet */}
-                  <div
-                    className="relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/60 p-5 dark:border-zinc-700 dark:bg-zinc-900/40"
-                    aria-disabled
-                  >
-                    <div className="relative">
-                      <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-200/80 text-zinc-500 ring-1 ring-zinc-300/70 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-700">
-                        <svg
-                          viewBox="0 0 24 24"
-                          className="h-5 w-5"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          aria-hidden
-                        >
-                          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                          <line x1="12" x2="12" y1="19" y2="22" />
-                        </svg>
-                      </span>
-                      <h3 className="mt-3 text-base font-semibold text-zinc-700 dark:text-zinc-200">
-                        {t.dashboard.recordLectureTitle}
-                      </h3>
-                      <p className="mt-1.5 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
-                        {t.dashboard.recordLectureDesc}
-                      </p>
-                    </div>
-                    <div className="relative mt-4">
-                      <span className="inline-flex rounded-full border border-zinc-300 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-400">
-                        {t.dashboard.recordLectureComingSoon}
-                      </span>
-                    </div>
-                  </div>
+                  {/* Live Notes — create note + start capture */}
+                  <HomeRecordLectureCard />
                 </div>
               </section>
 

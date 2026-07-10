@@ -77,6 +77,8 @@ const en = {
   recordLectureDesc:
     "Capture a live class with tab, system, or mic audio — Rose writes notes as you go.",
   recordLectureComingSoon: "Coming soon",
+  recordLectureCta: "Start recording",
+  recordLectureStarting: "Starting…",
   libraryPreviewEmpty: "Nothing here yet",
   viewAllArrow: "View all →",
   recentNoteFallback: "Untitled note",
@@ -297,6 +299,8 @@ const ko: typeof en = {
   recordLectureDesc:
     "탭·시스템·마이크 오디오로 수업을 캡처하면 Rose가 실시간으로 노트를 작성해요.",
   recordLectureComingSoon: "곧 제공",
+  recordLectureCta: "녹음 시작",
+  recordLectureStarting: "시작하는 중…",
   libraryPreviewEmpty: "아직 없어요",
   viewAllArrow: "전체 보기 →",
   recentNoteFallback: "제목 없는 노트",
