@@ -110,10 +110,14 @@ export async function DashboardHomeContent({
                     className={[
                       "group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md",
                       primaryAction === "create"
-                        ? "border-rose-200 bg-gradient-to-br from-rose-50/60 via-white to-white hover:border-rose-300 dark:border-rose-800 dark:from-rose-950/30 dark:via-zinc-950 dark:to-zinc-950"
-                        : "border-zinc-200/90 bg-white/90 hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700",
+                        ? "border-rose-200 bg-gradient-to-br from-rose-50/80 via-white to-white hover:border-rose-300 dark:border-rose-800 dark:from-rose-950/30 dark:via-zinc-950 dark:to-zinc-950"
+                        : "border-zinc-200/90 bg-gradient-to-br from-rose-50/70 via-white to-white hover:border-rose-200 dark:border-zinc-800 dark:from-rose-950/25 dark:via-zinc-950 dark:to-zinc-950 dark:hover:border-rose-800",
                     ].join(" ")}
                   >
+                    <div
+                      className="pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-rose-200/50 blur-2xl transition group-hover:bg-rose-200/70 dark:bg-rose-900/30"
+                      aria-hidden
+                    />
                     <div className="relative">
                       <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100 text-rose-700 ring-1 ring-rose-200/70 dark:bg-rose-950/60 dark:text-rose-300 dark:ring-rose-900/50">
                         <svg
@@ -145,8 +149,12 @@ export async function DashboardHomeContent({
 
                   <Link
                     href="/tutor-session"
-                    className="group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-violet-50/70 via-white to-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:border-zinc-800 dark:from-violet-950/30 dark:via-zinc-950 dark:to-zinc-950 dark:hover:border-violet-800"
+                    className="group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-violet-50/80 via-white to-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:border-zinc-800 dark:from-violet-950/30 dark:via-zinc-950 dark:to-zinc-950 dark:hover:border-violet-800"
                   >
+                    <div
+                      className="pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-violet-200/50 blur-2xl transition group-hover:bg-violet-200/70 dark:bg-violet-900/30"
+                      aria-hidden
+                    />
                     <div className="relative">
                       <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-700 ring-1 ring-violet-200/70 dark:bg-violet-950/60 dark:text-violet-300 dark:ring-violet-900/50">
                         <svg
