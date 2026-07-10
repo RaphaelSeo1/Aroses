@@ -2,17 +2,13 @@ import Link from "next/link";
 import { AppHeader } from "@/components/AppHeader";
 import type { DashboardCourse } from "@/components/CourseDashboardList";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
-import { HomeLibraryPreviews } from "@/components/HomeLibraryPreviews";
+import { HomeHubEntryLink } from "@/components/HomeHubEntryLink";
 import { HomeResumeHero } from "@/components/HomeResumeHero";
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
 import { ReviewDueBanner } from "@/components/ReviewDueBanner";
 import { PendingCollaboratorInvites } from "@/components/PendingCollaboratorInvites";
 import { buildResumeCourseHref } from "@/lib/dashboard/resume-course-href";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
-import type {
-  HomeNotePreview,
-  HomeTutorSessionPreview,
-} from "@/lib/home-preview-data";
 import type { SharedCourse, StudyingCourse } from "@/lib/load-dashboard-courses";
 import { getT } from "@/lib/i18n/server";
 import type { SrsDueCounts } from "@/lib/srs-due";
@@ -23,8 +19,6 @@ export async function DashboardHomeContent({
   studyingCourses,
   sharedCourses = [],
   progress,
-  recentNotes = [],
-  recentTutorSessions = [],
   initialDueCounts = null,
   omitHeader = false,
 }: {
@@ -34,8 +28,6 @@ export async function DashboardHomeContent({
   studyingCourses: StudyingCourse[];
   sharedCourses?: SharedCourse[];
   progress: DashboardProgressPayload;
-  recentNotes?: HomeNotePreview[];
-  recentTutorSessions?: HomeTutorSessionPreview[];
   initialDueCounts?: SrsDueCounts | null;
   /** When true, only render main workspace (parent supplies `<AppHeader />`). */
   omitHeader?: boolean;
@@ -257,27 +249,56 @@ export async function DashboardHomeContent({
                     {t.dashboard.homeLibraryDesc}
                   </p>
                 </header>
-                <HomeLibraryPreviews
-                  continueEntries={continueEntries}
-                  ownedCourses={ownedCourses}
-                  recentNotes={recentNotes}
-                  recentTutorSessions={recentTutorSessions}
-                  sharedCount={sharedCourses.length}
-                  copy={{
-                    continueStudying: t.dashboard.continueStudying,
-                    yourCourses: t.dashboard.yourCourses,
-                    viewYourNotes: t.dashboard.viewYourNotes,
-                    pastTutorSessions: t.dashboard.pastTutorSessions,
-                    sharedWithYou: t.dashboard.sharedWithYou,
-                    browseExplore: t.dashboard.browseExplore,
-                    hubSharedHint: t.dashboard.hubSharedHint,
-                    hubExploreHint: t.dashboard.hubExploreHint,
-                    libraryPreviewEmpty: t.dashboard.libraryPreviewEmpty,
-                    viewAllArrow: t.dashboard.viewAllArrow,
-                    resumeCourseCta: t.dashboard.resumeCourseCta,
-                    resumeProgressModules: t.dashboard.resumeProgressModules,
-                  }}
-                />
+                <nav
+                  className="grid grid-cols-2 gap-3 lg:grid-cols-3"
+                  aria-label={t.dashboard.homeHubNavLabel}
+                >
+                  <HomeHubEntryLink
+                    href="/notes"
+                    variant="notes"
+                    layout="tile"
+                    label={t.dashboard.viewYourNotes}
+                    hint={t.dashboard.viewNotesHint}
+                  />
+                  <HomeHubEntryLink
+                    href="/library/courses"
+                    variant="courses"
+                    layout="tile"
+                    label={t.dashboard.yourCourses}
+                    hint={t.dashboard.hubCoursesHint}
+                    count={hasOwned ? ownedCourses.length : undefined}
+                  />
+                  <HomeHubEntryLink
+                    href="/library/continue"
+                    variant="studying"
+                    layout="tile"
+                    label={t.dashboard.continueStudying}
+                    hint={t.dashboard.hubStudyingHint}
+                    count={continueCount > 0 ? continueCount : undefined}
+                  />
+                  <HomeHubEntryLink
+                    href="/library/shared"
+                    variant="shared"
+                    layout="tile"
+                    label={t.dashboard.sharedWithYou}
+                    hint={t.dashboard.hubSharedHint}
+                    count={hasShared ? sharedCourses.length : undefined}
+                  />
+                  <HomeHubEntryLink
+                    href="/sessions"
+                    variant="sessions"
+                    layout="tile"
+                    label={t.dashboard.pastTutorSessions}
+                    hint={t.dashboard.hubTutorPastHint}
+                  />
+                  <HomeHubEntryLink
+                    href="/explore"
+                    variant="explore"
+                    layout="tile"
+                    label={t.dashboard.browseExplore}
+                    hint={t.dashboard.hubExploreHint}
+                  />
+                </nav>
               </section>
             </div>
 

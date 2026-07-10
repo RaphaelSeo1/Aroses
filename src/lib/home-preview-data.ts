@@ -1,23 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-/** Lightweight home-page previews — cheap limit queries only. */
-
-export type HomeNotePreview = {
-  id: string;
-  title: string;
-  updatedAt: string;
-};
-
-export type HomeTutorSessionPreview = {
-  id: string;
-  title: string;
-  updatedAt: string;
-};
+/** Lightweight home-page greeting data. */
 
 export type HomePreviewPayload = {
   displayName: string | null;
-  recentNotes: HomeNotePreview[];
-  recentTutorSessions: HomeTutorSessionPreview[];
 };
 
 function firstNameFrom(displayName: string | null, email: string): string {
@@ -42,54 +28,12 @@ export async function loadHomePreviews(
   supabase: SupabaseClient,
   userId: string
 ): Promise<HomePreviewPayload> {
-  const [profileRes, notesRes, sessionsRes] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("display_name")
-      .eq("id", userId)
-      .maybeSingle(),
-    supabase
-      .from("user_notes")
-      .select("id, title, updated_at")
-      .eq("user_id", userId)
-      .order("updated_at", { ascending: false })
-      .limit(2),
-    supabase
-      .from("tutor_sessions")
-      .select("id, title, updated_at, started_at")
-      .eq("user_id", userId)
-      .order("updated_at", { ascending: false })
-      .limit(1),
-  ]);
+  const { data } = await supabase
+    .from("profiles")
+    .select("display_name")
+    .eq("id", userId)
+    .maybeSingle();
 
-  const profile = profileRes.data as { display_name: string | null } | null;
-
-  const recentNotes: HomeNotePreview[] = (notesRes.data ?? []).map((n) => ({
-    id: n.id as string,
-    title:
-      typeof n.title === "string" && n.title.trim()
-        ? n.title.trim()
-        : "Untitled note",
-    updatedAt: (n.updated_at as string) ?? new Date().toISOString(),
-  }));
-
-  const recentTutorSessions: HomeTutorSessionPreview[] = (
-    sessionsRes.data ?? []
-  ).map((s) => ({
-    id: s.id as string,
-    title:
-      typeof s.title === "string" && s.title.trim()
-        ? s.title.trim()
-        : "Tutor session",
-    updatedAt:
-      (s.updated_at as string) ||
-      (s.started_at as string) ||
-      new Date().toISOString(),
-  }));
-
-  return {
-    displayName: profile?.display_name ?? null,
-    recentNotes,
-    recentTutorSessions,
-  };
+  const profile = data as { display_name: string | null } | null;
+  return { displayName: profile?.display_name ?? null };
 }
