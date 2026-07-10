@@ -60,10 +60,14 @@ export function HomeRecordLectureCard() {
       type="button"
       onClick={() => void start()}
       disabled={busy}
-      className="group relative flex h-full w-full flex-col justify-between overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-rose-50/50 via-white to-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-rose-200 hover:shadow-md disabled:opacity-70 dark:border-zinc-800 dark:from-rose-950/20 dark:via-zinc-950 dark:to-zinc-950 dark:hover:border-rose-800"
+      className="group relative flex h-full w-full flex-col justify-between overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-sky-50/80 via-white to-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-md disabled:opacity-70 dark:border-zinc-800 dark:from-sky-950/30 dark:via-zinc-950 dark:to-zinc-950 dark:hover:border-sky-800"
     >
+      <div
+        className="pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-sky-200/50 blur-2xl transition group-hover:bg-sky-200/70 dark:bg-sky-900/30"
+        aria-hidden
+      />
       <div className="relative">
-        <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100 text-rose-700 ring-1 ring-rose-200/70 dark:bg-rose-950/60 dark:text-rose-300 dark:ring-rose-900/50">
+        <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-sky-100 text-sky-700 ring-1 ring-sky-200/70 dark:bg-sky-950/60 dark:text-sky-300 dark:ring-sky-900/50">
           <svg
             viewBox="0 0 24 24"
             className="h-5 w-5"
@@ -89,7 +93,7 @@ export function HomeRecordLectureCard() {
           <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{error}</p>
         ) : null}
       </div>
-      <div className="relative mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-rose-700 transition group-hover:gap-2 dark:text-rose-300">
+      <div className="relative mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-sky-700 transition group-hover:gap-2 dark:text-sky-300">
         {busy ? t.dashboard.recordLectureStarting : t.dashboard.recordLectureCta}
         {!busy ? <span aria-hidden>→</span> : null}
       </div>
