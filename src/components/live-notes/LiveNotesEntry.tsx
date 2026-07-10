@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { confirmDialog } from "@/components/AppDialogs";
 
 export type LiveNotesActiveSession = {
   id: string;
@@ -28,6 +29,17 @@ export function LiveNotesEntry({
   const router = useRouter();
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [active, setActive] = useState(activeSessions);
+  const [past, setPast] = useState(pastSessions);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActive(activeSessions);
+  }, [activeSessions]);
+
+  useEffect(() => {
+    setPast(pastSessions);
+  }, [pastSessions]);
 
   const startSession = async () => {
     if (starting) return;
@@ -52,6 +64,44 @@ export function LiveNotesEntry({
     } catch {
       setError("Could not start a live session. Check your connection.");
       setStarting(false);
+    }
+  };
+
+  const deleteSession = async (
+    session: LiveNotesActiveSession,
+    kind: "active" | "past"
+  ) => {
+    if (deletingId) return;
+    const ok = await confirmDialog({
+      title: `Delete “${session.title}”?`,
+      body:
+        "This cannot be undone. The recording, transcript, and notes for this lecture will be removed.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    setDeletingId(session.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/live-notes/${session.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(data.error || "Could not delete this lecture.");
+        return;
+      }
+      if (kind === "active") {
+        setActive((prev) => prev.filter((s) => s.id !== session.id));
+      } else {
+        setPast((prev) => prev.filter((s) => s.id !== session.id));
+      }
+      router.refresh();
+    } catch {
+      setError("Could not delete this lecture. Check your connection.");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -80,42 +130,63 @@ export function LiveNotesEntry({
         </button>
       </div>
 
-      {activeSessions.length > 0 ? (
+      {active.length > 0 ? (
         <div className="mt-3 flex flex-wrap gap-2">
-          {activeSessions.map((s) => (
-            <Link
+          {active.map((s) => (
+            <div
               key={s.id}
-              href={`/dashboard/courses/${courseId}/live-notes/${s.id}`}
-              className="inline-flex items-center gap-1.5 rounded-full border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-800 hover:bg-rose-50 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200 dark:hover:bg-rose-950/60"
+              className="inline-flex max-w-full items-center gap-1 rounded-full border border-rose-300 bg-white py-1 pl-3 pr-1 text-xs font-medium text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200"
             >
-              ⏺ Resume: {s.title}
-            </Link>
+              <Link
+                href={`/dashboard/courses/${courseId}/live-notes/${s.id}`}
+                className="min-w-0 truncate hover:underline"
+              >
+                ⏺ Resume: {s.title}
+              </Link>
+              <button
+                type="button"
+                onClick={() => void deleteSession(s, "active")}
+                disabled={deletingId === s.id}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-rose-400 hover:bg-rose-100 hover:text-rose-700 disabled:opacity-50 dark:hover:bg-rose-900/50 dark:hover:text-rose-200"
+                aria-label={`Delete ${s.title}`}
+                title="Delete lecture"
+              >
+                ×
+              </button>
+            </div>
           ))}
         </div>
       ) : null}
 
-      {pastSessions.length > 0 ? (
+      {past.length > 0 ? (
         <div className="mt-3">
           <p className="text-[11px] font-medium uppercase tracking-wide text-rose-700/70 dark:text-rose-300/60">
             Past lectures — notes &amp; transcript
           </p>
           <div className="mt-1.5 flex flex-wrap gap-2">
-            {pastSessions.map((s) => (
-              <Link
+            {past.map((s) => (
+              <div
                 key={s.id}
-                href={`/dashboard/courses/${courseId}/live-notes/${s.id}`}
-                className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:border-rose-200 hover:bg-rose-50 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300 dark:hover:border-rose-800 dark:hover:bg-rose-950/40"
+                className="inline-flex max-w-full items-center gap-1 rounded-full border border-zinc-200 bg-white py-1 pl-3 pr-1 text-xs font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300"
               >
-                📄 {s.title}
-                {s.startedAt ? (
-                  <span className="text-zinc-400 dark:text-zinc-500">
-                    {new Date(s.startedAt).toLocaleDateString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </span>
-                ) : null}
-              </Link>
+                <Link
+                  href={`/dashboard/courses/${courseId}/live-notes/${s.id}`}
+                  className="min-w-0 truncate hover:border-rose-200 hover:text-rose-800 dark:hover:text-rose-200"
+                  title={s.title}
+                >
+                  📄 {s.title}
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void deleteSession(s, "past")}
+                  disabled={deletingId === s.id}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50 dark:hover:bg-rose-950/40 dark:hover:text-rose-300"
+                  aria-label={`Delete ${s.title}`}
+                  title="Delete lecture"
+                >
+                  ×
+                </button>
+              </div>
             ))}
           </div>
         </div>
