@@ -286,6 +286,13 @@ export function useLiveLectureTranscription(options: {
     }
   }, []);
 
+  const ensureElapsedTimer = useCallback(() => {
+    if (elapsedTimerRef.current != null) return;
+    elapsedTimerRef.current = window.setInterval(() => {
+      setElapsedMs(currentElapsedMs());
+    }, 1_000) as unknown as number;
+  }, [currentElapsedMs]);
+
   const closeSocket = useCallback(() => {
     const ws = socketRef.current;
     // Null the ref FIRST: the onclose handler treats a socket that is no
@@ -693,9 +700,8 @@ export function useLiveLectureTranscription(options: {
 
         // 4. Timers.
         runningSinceRef.current = Date.now();
-        elapsedTimerRef.current = window.setInterval(() => {
-          setElapsedMs(currentElapsedMs());
-        }, 1_000) as unknown as number;
+        ensureElapsedTimer();
+        setElapsedMs(currentElapsedMs());
         flushTimerRef.current = window.setInterval(() => {
           const stale =
             utteranceBufferRef.current.trim().length >= 80 &&
@@ -743,6 +749,7 @@ export function useLiveLectureTranscription(options: {
       startRecorderForSocket,
       currentElapsedMs,
       flushSegments,
+      ensureElapsedTimer,
     ]
   );
 
@@ -873,6 +880,7 @@ export function useLiveLectureTranscription(options: {
       bankedMsRef.current += Date.now() - runningSinceRef.current;
       runningSinceRef.current = null;
     }
+    setElapsedMs(currentElapsedMs());
     setStatusBoth("paused");
     void saveTranscriptNow();
     void fetch(`/api/live-notes/${sessionId}`, {
@@ -895,6 +903,8 @@ export function useLiveLectureTranscription(options: {
       if (runningSinceRef.current == null) {
         runningSinceRef.current = Date.now();
       }
+      ensureElapsedTimer();
+      setElapsedMs(currentElapsedMs());
       setStatusBoth("recording");
       void fetch(`/api/live-notes/${sessionId}`, {
         method: "PATCH",
@@ -977,6 +987,8 @@ export function useLiveLectureTranscription(options: {
     closeSocket,
     connectSocket,
     startRecorderForSocket,
+    ensureElapsedTimer,
+    currentElapsedMs,
   ]);
 
   /**

@@ -59,20 +59,25 @@ export function collectAiNoteSections(
 }
 
 /**
- * Replace each revised section's blocks with nodes parsed from the
- * replacement markdown (same sectionId, provenance "ai"). Returns a new
- * doc object; the input is not mutated.
+ * Replace revised sections and optionally remove absorbed section ids.
+ * Only fully-AI sections may be replaced or removed. Returns a new doc;
+ * the input is not mutated.
  */
 export function applyNoteRevisions(
   notesJson: unknown,
-  revisions: Array<{ sectionId: string; markdown: string }>
+  revisions: Array<{ sectionId: string; markdown: string }>,
+  removeSectionIds: string[] = []
 ): unknown {
   const doc = notesJson as PmDoc | null;
-  if (!doc || !Array.isArray(doc.content) || revisions.length === 0) {
+  if (!doc || !Array.isArray(doc.content)) {
+    return notesJson;
+  }
+  if (revisions.length === 0 && removeSectionIds.length === 0) {
     return notesJson;
   }
 
   let content = [...doc.content];
+
   for (const revision of revisions) {
     const indices: number[] = [];
     content.forEach((node, i) => {
@@ -81,7 +86,7 @@ export function applyNoteRevisions(
     if (indices.length === 0) continue;
     // Only fully-AI sections may be replaced (defense in depth — the
     // review call was already restricted to them).
-    if (indices.some((i) => !isAiOwned(content[i]))) continue;
+    if (indices.some((i) => !isAiOwned(content[i]!))) continue;
 
     const replacement = markdownToNoteNodes(revision.markdown, {
       sectionId: revision.sectionId,
@@ -91,7 +96,7 @@ export function applyNoteRevisions(
 
     // Rebuild around the first occurrence: replacement goes where the
     // section started; any other blocks of the section are dropped.
-    const first = indices[0];
+    const first = indices[0]!;
     const indexSet = new Set(indices);
     const rebuilt: NoteNodeJson[] = [];
     for (let i = 0; i < content.length; i++) {
@@ -100,9 +105,30 @@ export function applyNoteRevisions(
         continue;
       }
       if (indexSet.has(i)) continue;
-      rebuilt.push(content[i]);
+      rebuilt.push(content[i]!);
     }
     content = rebuilt;
+  }
+
+  if (removeSectionIds.length > 0) {
+    const remove = new Set(removeSectionIds);
+    // Never remove a section that still has a pending revision target, or
+    // that contains student-edited / non-AI blocks.
+    const blocked = new Set<string>();
+    for (const node of content) {
+      const sid = sectionIdOf(node);
+      if (!sid || !remove.has(sid)) continue;
+      if (!isAiOwned(node)) blocked.add(sid);
+    }
+    for (const r of revisions) remove.delete(r.sectionId);
+    for (const id of blocked) remove.delete(id);
+
+    if (remove.size > 0) {
+      content = content.filter((node) => {
+        const sid = sectionIdOf(node);
+        return !(sid && remove.has(sid));
+      });
+    }
   }
 
   return { ...doc, content };

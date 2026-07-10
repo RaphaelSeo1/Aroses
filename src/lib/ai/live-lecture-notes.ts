@@ -75,11 +75,19 @@ ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
-SELF-REVISION (bounded, rare):
-- Compare each RECENT NOTE SECTION against its transcript excerpt AND any on-screen content. Rewrite that WHOLE section with @@revise ONLY when it is factually wrong: a wrong number, an inverted relationship, a misattributed claim, or meaning the NEW transcript/screen proves incorrect.
-- @@revise is NEVER for adding new information. Everything new in the NEW TRANSCRIPT SLICE (and newly visible screen facts that belong with it) goes under @@append — even when it continues a recent section's topic. Do not merge new material into an old section.
-- Do not revise for style, wording, ordering, or completeness. A revision must preserve the section's correct content verbatim and change only what was wrong.
-- Prefer screen spellings/numbers when correcting STT errors. Most calls have ZERO @@revise operations; if nothing is factually wrong, emit none.
+SELF-REVISION & CONTINUATION (bounded):
+Before writing anything new, decide how the NEW TRANSCRIPT SLICE relates to YOUR RECENT NOTE SECTIONS (same concept, same worked example, remaining items of an enumeration a recent section started, or a near-duplicate of a recent heading by meaning — not only exact text).
+
+1. CONTINUES / COMPLETES a recent section → emit @@revise <sectionId> with the FULL rewritten section that folds prior content and the new material into one coherent, non-redundant section. Keep correct existing content; integrate new points; upgrade incomplete lists (drop stubs like "not yet completed"); do not invent facts. Then leave @@append empty (still emit the @@append marker with nothing after it).
+2. ONLY REPEATS already-captured material (no new facts) → emit no @@revise for content growth; leave @@append empty.
+3. GENUINELY NEW topic not already covered → put new notes under @@append with a fresh heading that does not reword a recent heading for the same topic.
+4. FACTUAL CORRECTION (wrong number, inverted relationship, misattributed claim, STT vs screen conflict) → still use @@revise on the affected recent section; prefer screen spellings/numbers when correcting STT errors.
+
+Rules:
+- Only sections listed in YOUR RECENT NOTE SECTIONS may be revised/extended. Never touch older/unshown sections.
+- At most ${MAX_REVISABLE_SECTIONS} @@revise operations per call.
+- Do not invent a differently-worded near-duplicate heading for a topic already covered — extend that section instead.
+- Do not revise purely for style or wording when nothing continues, completes, repeats, or is factually wrong.
 
 NARRATION (@@thought — user-visible, optional but valuable):
 - You MAY emit zero or one short @@thought line before @@revise/@@append. This is Rose speaking to the student in the activity log — not notes.
@@ -87,10 +95,10 @@ NARRATION (@@thought — user-visible, optional but valuable):
 - Prefer a thought when ANY of these are true:
   1. ON-SCREEN CONTENT is present and has something useful/noticeable (a slide title, table, equation, spelled term, diagram label, key number). Call it out briefly so they know you saw the screen — e.g. name the slide topic, the table, or the term you just locked in from the display.
   2. A clear topic shift, correction, worked example, or "this matters for the exam" moment.
-  3. You are about to @@revise because speech and screen disagreed (say you trusted the slide spelling/number).
+  3. You are extending/merging into a recent section, or correcting because speech and screen disagreed.
 - Skip @@thought for pure logistics, silence, or tiny filler with nothing new on screen or in speech.
 - Voice: warm, sharp TA energy — one concrete observation, not a status update. Vary wording every time; never reuse stock phrases like "Capturing notes", "Processing the lecture", "Updating notes", "Got it", or "Taking notes on…".
-- Do NOT start with "I" every time. Mix openers (Noticing… / Slide shows… / Locking in… / Catching… / From the board… / Hearing… / Pulling out…).
+- Do NOT start with "I" every time. Mix openers (Noticing… / Slide shows… / Locking in… / Catching… / From the board… / Hearing… / Pulling out… / Folding into…).
 - Keep under 18 words. No markdown. No quotes around the whole line. Never invent screen content that was not provided.
 - Never emit more than one @@thought per call.
 
@@ -102,7 +110,7 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 <full replacement markdown for that section>
 (zero or more @@revise operations, after @@thought lines)
 @@append
-<markdown study notes for the new slice, or nothing>
+<markdown study notes for a genuinely new topic, or nothing when the slice continued/completed/repeated a recent section>
 @@summary
 <updated rolling summary: compressed record of EVERYTHING covered so far (previous summary + this slice), max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown — re-compress aggressively, keep topic names and key terms, drop detail>`;
 
@@ -172,7 +180,7 @@ export async function* streamLiveLectureNotes(input: {
       ? `ROLLING SUMMARY OF THE LECTURE SO FAR:\n${summary}`
       : "ROLLING SUMMARY OF THE LECTURE SO FAR: (lecture just started)",
     headings.length > 0
-      ? `RECENT HEADINGS (do not repeat these):\n${headings.map((h) => `- ${h}`).join("\n")}`
+      ? `RECENT HEADINGS (do not invent near-duplicate headings for the same topic — extend that section via @@revise instead):\n${headings.map((h) => `- ${h}`).join("\n")}`
       : null,
     sectionsBlock
       ? `YOUR RECENT NOTE SECTIONS (the only sections you may @@revise):\n\n${sectionsBlock}`
@@ -236,16 +244,31 @@ const REVIEW_SYSTEM = `You are reviewing AI-generated live-lecture study notes a
 
 Priority: screen text is authoritative for spellings, symbols, numbers, and table cells; transcript is authoritative for spoken explanation and emphasis. On conflict, prefer screen for contested tokens/numbers.
 
-For each numbered note section, check every fact, number, relationship, and attribution against BOTH sources. Return a revision ONLY when a section materially misrepresents the lecture — wrong number, inverted relationship, misattributed claim, or content the lecturer never said/showed outside a "> (AI)" line. Do NOT rewrite for style, ordering, or wording preference. Most sections should need no revision.
+Do TWO jobs:
 
-Replacement sections use this markdown subset: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, "**bold**" key terms, "> (AI) " for AI-added context. ${voiceRules()}
+1) FACTUAL REVIEW — For each numbered note section, check every fact, number, relationship, and attribution against BOTH sources. Return a revision ONLY when a section materially misrepresents the lecture — wrong number, inverted relationship, misattributed claim, or content the lecturer never said/showed outside a "> (AI)" line. Prefer screen spellings/numbers when correcting STT errors.
+
+2) STRUCTURAL CONSOLIDATION — Detect duplicate or fragmented AI sections that cover the same topic, the same worked example, or pieces of one interrupted enumeration/list split across sections. Merge each group into ONE canonical section:
+   - Keep the EARLIEST section's sectionId (first in document order among the group).
+   - Fold unique grounded content from the absorbed sections into that kept section's markdown (no redundancy, no invented facts).
+   - List every absorbed sectionId in removeSectionIds (never list the kept id).
+   - If two sections are near-duplicates by meaning (reworded headings for the same topic), treat them as one group.
+
+Do NOT invent facts. Do NOT rewrite purely for style when nothing is wrong and nothing needs merging. Student-owned sections are not in the input — ignore anything not listed.
+
+Replacement / merged sections use this markdown subset: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, "**bold**" key terms, "> (AI) " for AI-added context. ${voiceRules()}
 
 Output ONLY valid JSON (no markdown fences):
-{ "revisions": [ { "sectionId": string, "markdown": string } ] }
-Return { "revisions": [] } when everything is grounded.`;
+{ "revisions": [ { "sectionId": string, "markdown": string } ], "removeSectionIds": [ string ] }
+Return { "revisions": [], "removeSectionIds": [] } when everything is grounded and already consolidated.`;
 
 const MAX_REVIEW_TRANSCRIPT_CHARS = 60_000;
 const MAX_REVIEW_SCREEN_CHARS = 20_000;
+
+export type LiveNotesReviewResult = {
+  revisions: Array<{ sectionId: string; markdown: string }>;
+  removeSectionIds: string[];
+};
 
 export async function reviewLiveLectureNotes(input: {
   sections: Array<{ sectionId: string; markdown: string }>;
@@ -254,7 +277,7 @@ export async function reviewLiveLectureNotes(input: {
   screenContent?: string;
   lectureTitle?: string;
   userId?: string;
-}): Promise<Array<{ sectionId: string; markdown: string }> | null> {
+}): Promise<LiveNotesReviewResult | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || input.sections.length === 0) return null;
 
@@ -269,12 +292,12 @@ export async function reviewLiveLectureNotes(input: {
   const screen = (input.screenContent ?? "").trim();
   const userPrompt = [
     input.lectureTitle ? `LECTURE: ${input.lectureTitle.slice(0, 200)}` : null,
-    `NOTE SECTIONS TO VERIFY:\n\n${sectionsBlock}`,
+    `NOTE SECTIONS TO VERIFY (document order — earliest first):\n\n${sectionsBlock}`,
     screen
       ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
       : null,
     `FULL LECTURE TRANSCRIPT:\n${input.transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
-    "\nReturn the JSON now.",
+    "\nReturn the JSON now. When merging, keep the earliest sectionId and list absorbed ids in removeSectionIds.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -283,7 +306,7 @@ export async function reviewLiveLectureNotes(input: {
   try {
     const msg = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 2_500,
+      max_tokens: 3_500,
       temperature: 0.2,
       system: REVIEW_SYSTEM,
       messages: [{ role: "user", content: userPrompt }],
@@ -303,19 +326,39 @@ export async function reviewLiveLectureNotes(input: {
       .replace(/^```\s*/i, "")
       .replace(/```\s*$/i, "")
       .trim();
-    const parsed = JSON.parse(raw) as { revisions?: unknown };
-    if (!Array.isArray(parsed.revisions)) return [];
-    return parsed.revisions
-      .filter(
-        (r): r is { sectionId: string; markdown: string } =>
-          !!r &&
-          typeof r === "object" &&
-          typeof (r as { sectionId?: unknown }).sectionId === "string" &&
-          allowed.has((r as { sectionId: string }).sectionId) &&
-          typeof (r as { markdown?: unknown }).markdown === "string" &&
-          ((r as { markdown: string }).markdown.trim().length > 0)
-      )
-      .slice(0, input.sections.length);
+    const parsed = JSON.parse(raw) as {
+      revisions?: unknown;
+      removeSectionIds?: unknown;
+    };
+
+    const revisions = Array.isArray(parsed.revisions)
+      ? parsed.revisions
+          .filter(
+            (r): r is { sectionId: string; markdown: string } =>
+              !!r &&
+              typeof r === "object" &&
+              typeof (r as { sectionId?: unknown }).sectionId === "string" &&
+              allowed.has((r as { sectionId: string }).sectionId) &&
+              typeof (r as { markdown?: unknown }).markdown === "string" &&
+              ((r as { markdown: string }).markdown.trim().length > 0)
+          )
+          .slice(0, input.sections.length)
+      : [];
+
+    const removeSectionIds = Array.isArray(parsed.removeSectionIds)
+      ? [
+          ...new Set(
+            parsed.removeSectionIds.filter(
+              (id): id is string =>
+                typeof id === "string" &&
+                allowed.has(id) &&
+                !revisions.some((r) => r.sectionId === id)
+            )
+          ),
+        ].slice(0, input.sections.length)
+      : [];
+
+    return { revisions, removeSectionIds };
   } catch (e) {
     console.error("[live-lecture-notes] wrap-up review", e);
     return null;

@@ -303,15 +303,12 @@ export function LiveNotesSurface({
       notesRef.current?.setStreamingIndicator(true);
       syncAiWritingUi();
 
-      // Bounded self-revision context: recent fully-AI sections plus the raw
-      // transcript excerpts underlying them. The NEWEST section is excluded —
-      // models love to "update" the section they just wrote by rewriting it
-      // wholesale, which reads as churn; new material must append instead. A
-      // section becomes correctable one call later. Student-edited sections
-      // are excluded by the writer (and re-checked on receipt).
+      // Bounded self-revision + continuation context: recent fully-AI
+      // sections including the newest (so a continuing slice can extend it).
+      // Cap at 4. Student-edited sections are excluded by the writer.
       const excerpts = sectionExcerptsRef.current;
       const allSections = writer.listRevisableSections(5);
-      const revisable = allSections.slice(0, -1).slice(-4).map((s) => ({
+      const revisable = allSections.slice(-4).map((s) => ({
         sectionId: s.sectionId,
         markdown: s.markdown,
         transcriptExcerpt: excerpts.get(s.sectionId),
@@ -323,11 +320,17 @@ export function LiveNotesSurface({
 
       let appendSectionId: string | null = null;
       let gotContent = false;
+      let pendingAppend: {
+        sectionId: string;
+        dividerBefore: boolean;
+      } | null = null;
 
       // ── Typing pump ─────────────────────────────────────────────────────
       // SSE events land in `queue`; a chained pump drains them into the
       // editor. Synthesis can start the next API call while a prior pump
       // is still typing — only the pump itself is serialized on the writer.
+      // Empty @@append (continuation folded into @@revise) must not create
+      // a section node or divider — beginAppend only when text arrives.
       const queue: PumpItem[] = [];
       let queueClosed = false;
       const pendingPumpChars = () =>
@@ -341,6 +344,24 @@ export function LiveNotesSurface({
           backlog > 900 ? TYPE_CPS_CATCHUP : backlog > 400 ? 140 : TYPE_CPS;
         return Math.max(1, Math.round((cps * TYPE_TICK_MS) / 1000));
       };
+      const ensureAppendStarted = () => {
+        if (!pendingAppend) return;
+        const hasScreen = Boolean(screenContextRef.current.trim());
+        pushAiActivity(
+          "append",
+          pickStatusLine(
+            hasScreen ? APPEND_WITH_SCREEN_LINES : APPEND_STATUS_LINES,
+            Date.now() + pendingAppend.sectionId.length
+          )
+        );
+        writer.finishOp();
+        writer.beginAppend({
+          sectionId: pendingAppend.sectionId,
+          dividerBefore: pendingAppend.dividerBefore,
+        });
+        appendSectionId = pendingAppend.sectionId;
+        pendingAppend = null;
+      };
       const runPump = async () => {
         let opValid = false;
         while (true) {
@@ -351,17 +372,19 @@ export function LiveNotesSurface({
             continue;
           }
           if (item.kind === "append") {
-            writer.finishOp();
-            writer.beginAppend({
+            // Defer beginAppend until the first text chunk — empty appends
+            // (merge-only calls) must leave the document untouched.
+            pendingAppend = {
               sectionId: item.sectionId,
               dividerBefore: item.dividerBefore,
-            });
-            appendSectionId = item.sectionId;
+            };
             opValid = true;
           } else if (item.kind === "revise") {
+            pendingAppend = null;
             writer.finishOp();
             opValid = await writer.beginRevision(item.sectionId);
           } else if (opValid && item.text) {
+            ensureAppendStarted();
             const step = charsPerTick();
             for (let i = 0; i < item.text.length; i += step) {
               writer.write(item.text.slice(i, i + step));
@@ -370,6 +393,7 @@ export function LiveNotesSurface({
             }
           }
         }
+        pendingAppend = null;
         writer.finishOp();
       };
 
@@ -439,14 +463,6 @@ export function LiveNotesSurface({
             const sectionId =
               typeof parsed.sectionId === "string" ? parsed.sectionId : "";
             if (parsed.op === "append" && sectionId) {
-              const hasScreen = Boolean(screenContextRef.current.trim());
-              pushAiActivity(
-                "append",
-                pickStatusLine(
-                  hasScreen ? APPEND_WITH_SCREEN_LINES : APPEND_STATUS_LINES,
-                  Date.now() + sectionId.length
-                )
-              );
               queue.push({
                 kind: "append",
                 sectionId,

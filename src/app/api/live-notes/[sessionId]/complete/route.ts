@@ -270,8 +270,15 @@ export async function POST(_request: Request, ctx: Params) {
         lectureTitle: title,
         userId: user.id,
       });
-      if (revisions && revisions.length > 0) {
-        notesJson = applyNoteRevisions(notesJson, revisions);
+      if (
+        revisions &&
+        (revisions.revisions.length > 0 || revisions.removeSectionIds.length > 0)
+      ) {
+        notesJson = applyNoteRevisions(
+          notesJson,
+          revisions.revisions,
+          revisions.removeSectionIds
+        );
         const { error: notesErr } = await supabase
           .from("live_lecture_sessions")
           .update({ notes_json: notesJson, updated_at: new Date().toISOString() })
