@@ -89,6 +89,23 @@ export async function checkVoiceAllowance(
   userId: string,
   opts?: { email?: string | null }
 ): Promise<VoiceAllowance> {
+  // Dev: skip subscription + usage RPCs so Live Notes / voice tutor start fast.
+  if (process.env.NODE_ENV === "development") {
+    const now = new Date();
+    const start = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0)
+    );
+    return {
+      allowed: true,
+      tier: "free",
+      capSeconds: Number.MAX_SAFE_INTEGER,
+      usedSeconds: 0,
+      remainingSeconds: Number.MAX_SAFE_INTEGER,
+      periodStart: start.toISOString(),
+      periodEnd: null,
+    };
+  }
+
   const sub = await getUserSubscription(userId);
   const capSeconds = voiceCapSeconds(sub.tier);
   const { start, end } = resolvePeriod(sub);

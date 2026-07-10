@@ -21,6 +21,9 @@ import {
   LiveNotesAiActivity,
   type AiActivityEntry,
 } from "@/components/live-notes/LiveNotesAiActivity";
+import { LecturePreviewPanel } from "@/components/live-notes/LecturePreviewPanel";
+import { ShareGuideModal } from "@/components/live-notes/ShareGuideModal";
+import { useScreenVision } from "@/lib/live-notes/use-screen-vision";
 
 /**
  * Live Notes — full-page live lecture capture surface.
@@ -140,13 +143,25 @@ export function LiveNotesSurface({
   const [voiceCapped, setVoiceCapped] = useState(false);
   const [autoGenerate, setAutoGenerate] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
+  const [railWidth, setRailWidth] = useState(300);
   const [finishing, setFinishing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmFinish, setConfirmFinish] = useState(false);
   const [started, setStarted] = useState(false);
   const [aiWriting, setAiWriting] = useState(false);
-  const [aiLogOpen, setAiLogOpen] = useState(true);
+  const [aiLogOpen, setAiLogOpen] = useState(false);
   const [aiActivity, setAiActivity] = useState<AiActivityEntry[]>([]);
+  const [previewCollapsed, setPreviewCollapsed] = useState(false);
+  const [mirrorWarning, setMirrorWarning] = useState(false);
+  const [tabVisible, setTabVisible] = useState(true);
+  const [shareGuideSource, setShareGuideSource] =
+    useState<LiveCaptureSource | null>(null);
+  const [shareGuideBusy, setShareGuideBusy] = useState(false);
+  const [liveTitle, setLiveTitle] = useState(session.title);
+  const liveTitleRef = useRef(liveTitle);
+  liveTitleRef.current = liveTitle;
+  const titleDirtyRef = useRef(false);
+  const titleSaveTimerRef = useRef<number | null>(null);
   const aiActivitySeqRef = useRef(0);
   // Detected after mount so the server-rendered HTML never depends on the
   // client platform (hydration-safe). Null = still detecting.
@@ -157,6 +172,30 @@ export function LiveNotesSurface({
 
   const notesRef = useRef<NotesPanelHandle | null>(null);
   const railScrollRef = useRef<HTMLDivElement | null>(null);
+  const railDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    origW: number;
+  } | null>(null);
+  const railWidthRef = useRef(railWidth);
+  railWidthRef.current = railWidth;
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("aroses.liveNotes.railWidth");
+      if (raw) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) {
+          setRailWidth(Math.min(520, Math.max(200, n)));
+        }
+      }
+      const openRaw = localStorage.getItem("aroses.liveNotes.railOpen");
+      if (openRaw === "0") setRailOpen(false);
+      if (openRaw === "1") setRailOpen(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const autoGenerateRef = useRef(autoGenerate);
   autoGenerateRef.current = autoGenerate;
@@ -174,6 +213,8 @@ export function LiveNotesSurface({
   /** Serializes typing pumps so writer ops never overlap. */
   const pumpTailRef = useRef(Promise.resolve());
   const pumpJobsRef = useRef(0);
+  /** Latest screen OCR context for synthesize (ref so cadence stays stable). */
+  const screenContextRef = useRef("");
 
   const syncAiWritingUi = useCallback(() => {
     const busy = synthInFlightRef.current || pumpJobsRef.current > 0;
@@ -219,7 +260,6 @@ export function LiveNotesSurface({
       synthInFlightRef.current = true;
       unsynthesizedRef.current = "";
       setAiWriting(true);
-      setAiLogOpen(true);
       pushAiActivity(
         "status",
         "Reading the latest slice of the lecture…"
@@ -332,6 +372,7 @@ export function LiveNotesSurface({
             newSegmentText: pending,
             recentHeadings,
             revisable,
+            screenContext: screenContextRef.current || undefined,
           }),
         });
         const contentType = res.headers.get("content-type") ?? "";
@@ -366,7 +407,8 @@ export function LiveNotesSurface({
               queue.push({
                 kind: "append",
                 sectionId,
-                dividerBefore: false,
+                // Horizontal rules between AI sections (same as tutor / immersive).
+                dividerBefore: blockCountRef.current > 0,
               });
             } else if (parsed.op === "revise" && sectionId) {
               pushAiActivity(
@@ -437,17 +479,27 @@ export function LiveNotesSurface({
     return () => window.clearInterval(t);
   }, [maybeSynthesize]);
 
+  useEffect(() => {
+    const sync = () => setTabVisible(document.visibilityState === "visible");
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
+
   // ── Capture hook ────────────────────────────────────────────────────────
   const {
     status,
     partialText,
     elapsedMs,
     activeSource,
+    mediaStream,
+    hasVideo,
     start,
     pause,
     resume,
     stop,
     switchSource,
+    prefetchToken,
     flushNow,
     transcriptSaveStatus,
     transcriptLastSavedAt,
@@ -477,6 +529,29 @@ export function LiveNotesSurface({
     },
   });
 
+  const elapsedMsRef = useRef(elapsedMs);
+  elapsedMsRef.current = elapsedMs;
+
+  const {
+    screenContextText,
+    visionCalls,
+    capped: visionCapped,
+    active: visionActive,
+  } = useScreenVision({
+    sessionId,
+    stream: mediaStream,
+    // Skip vision while preview is minimized or tab is backgrounded — big lag win.
+    enabled:
+      started &&
+      hasVideo &&
+      !previewCollapsed &&
+      tabVisible &&
+      (status === "recording" || status === "reconnecting"),
+    getElapsedMs: () => elapsedMsRef.current,
+    onMirrorDetected: () => setMirrorWarning(true),
+  });
+  screenContextRef.current = screenContextText;
+
   // Keep the transcript rail pinned to the newest line.
   useEffect(() => {
     const el = railScrollRef.current;
@@ -494,29 +569,160 @@ export function LiveNotesSurface({
     return () => window.removeEventListener("beforeunload", handler);
   }, [status]);
 
-  const handleStart = useCallback(
-    async (source: LiveCaptureSource) => {
-      setError(null);
+  const saveLiveTitle = useCallback(
+    async (next: string) => {
+      const trimmed = next.trim() || "Untitled lecture";
+      setLiveTitle(trimmed);
+      titleDirtyRef.current = false;
+      try {
+        await fetch(`/api/live-notes/${sessionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: trimmed }),
+        });
+      } catch {
+        /* ignore — next edit retries */
+      }
+    },
+    [sessionId]
+  );
+
+  const flushLiveTitleKeepalive = useCallback(() => {
+    if (titleSaveTimerRef.current != null) {
+      window.clearTimeout(titleSaveTimerRef.current);
+      titleSaveTimerRef.current = null;
+    }
+    if (!titleDirtyRef.current) return;
+    const trimmed = liveTitleRef.current.trim() || "Untitled lecture";
+    try {
+      void fetch(`/api/live-notes/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+        keepalive: true,
+      });
+      titleDirtyRef.current = false;
+    } catch {
+      /* ignore */
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!titleDirtyRef.current) return;
+    if (titleSaveTimerRef.current != null) {
+      window.clearTimeout(titleSaveTimerRef.current);
+    }
+    titleSaveTimerRef.current = window.setTimeout(() => {
+      titleSaveTimerRef.current = null;
+      void saveLiveTitle(liveTitleRef.current);
+    }, 600);
+    return () => {
+      if (titleSaveTimerRef.current != null) {
+        window.clearTimeout(titleSaveTimerRef.current);
+        titleSaveTimerRef.current = null;
+      }
+    };
+  }, [liveTitle, saveLiveTitle]);
+
+  useEffect(() => {
+    const onHide = () => flushLiveTitleKeepalive();
+    window.addEventListener("pagehide", onHide);
+    const onVis = () => {
+      if (document.visibilityState === "hidden") onHide();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onVis);
+      flushLiveTitleKeepalive();
+    };
+  }, [flushLiveTitleKeepalive]);
+
+  const handleDocTitleChange = useCallback((next: string) => {
+    titleDirtyRef.current = true;
+    setLiveTitle(next);
+  }, []);
+
+  useEffect(() => {
+    const trimmed = liveTitle.trim() || "Untitled lecture";
+    document.title = `${trimmed} · Live notes`;
+  }, [liveTitle]);
+
+  const handleStart = useCallback(async (source: LiveCaptureSource) => {
+    setError(null);
+    setShareGuideSource(source);
+    // Warm Deepgram while the user reads the guide / opens Chrome's picker.
+    prefetchToken();
+  }, [prefetchToken]);
+
+  const confirmShareGuide = useCallback(async () => {
+    if (!shareGuideSource || shareGuideBusy) return;
+    const source = shareGuideSource;
+    // Close the Aroses guide immediately — Chrome's picker is next, and we
+    // don't want "Opening…" to sit on top while Deepgram connects.
+    setShareGuideSource(null);
+    setShareGuideBusy(true);
+    setError(null);
+    prefetchToken();
+    try {
       const ok = await start(source);
       if (ok) setStarted(true);
-    },
-    [start]
-  );
+    } finally {
+      setShareGuideBusy(false);
+    }
+  }, [shareGuideSource, shareGuideBusy, start, prefetchToken]);
 
   const [switching, setSwitching] = useState(false);
   const handleSwitchSource = useCallback(
     async (source: LiveCaptureSource) => {
       if (switching) return;
-      setSwitching(true);
-      setError(null);
-      try {
-        await switchSource(source);
-      } finally {
-        setSwitching(false);
-      }
+      // Show the same Aroses guide before Chrome's picker on mid-session swaps.
+      setShareGuideSource(source);
+      prefetchToken();
     },
-    [switching, switchSource]
+    [switching, prefetchToken]
   );
+
+  const confirmSwitchFromGuide = useCallback(async () => {
+    if (!shareGuideSource || shareGuideBusy) return;
+    // First start uses start(); mid-session uses switchSource.
+    if (!started) {
+      await confirmShareGuide();
+      return;
+    }
+    const source = shareGuideSource;
+    setShareGuideSource(null);
+    setSwitching(true);
+    setShareGuideBusy(true);
+    setError(null);
+    prefetchToken();
+    try {
+      await switchSource(source);
+    } finally {
+      setSwitching(false);
+      setShareGuideBusy(false);
+    }
+  }, [
+    shareGuideSource,
+    shareGuideBusy,
+    started,
+    confirmShareGuide,
+    switchSource,
+    prefetchToken,
+  ]);
+
+  const handleStopSharing = useCallback(async () => {
+    setError(null);
+    await pause();
+    // Ending tracks dismisses Chrome's "Sharing … to this tab" bar as well.
+    mediaStream?.getTracks().forEach((t) => {
+      try {
+        t.stop();
+      } catch {
+        /* ignore */
+      }
+    });
+  }, [pause, mediaStream]);
 
   const sourceOptions: Array<{ id: LiveCaptureSource; label: string }> = [
     { id: "tab", label: "Tab" },
@@ -617,6 +823,7 @@ export function LiveNotesSurface({
   const showStartOverlay =
     !alreadyCompleted &&
     !started &&
+    !mediaStream &&
     (status === "idle" || status === "connecting") &&
     !finishing;
 
@@ -641,7 +848,7 @@ export function LiveNotesSurface({
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            {session.title}
+            {liveTitle.trim() || "Untitled lecture"}
           </p>
           <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
             Live notes
@@ -710,6 +917,16 @@ export function LiveNotesSurface({
                 );
               })}
             </div>
+          ) : null}
+
+          {hasVideo && mediaStream && previewCollapsed ? (
+            <button
+              type="button"
+              onClick={() => setPreviewCollapsed(false)}
+              className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300 dark:hover:bg-rose-950/60"
+            >
+              Show lecture
+            </button>
           ) : null}
 
           {isLive ? (
@@ -790,7 +1007,20 @@ export function LiveNotesSurface({
 
           <button
             type="button"
-            onClick={() => setRailOpen((v) => !v)}
+            onClick={() => {
+              setRailOpen((v) => {
+                const next = !v;
+                try {
+                  localStorage.setItem(
+                    "aroses.liveNotes.railOpen",
+                    next ? "1" : "0"
+                  );
+                } catch {
+                  /* ignore */
+                }
+                return next;
+              });
+            }}
             className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
             aria-pressed={railOpen}
           >
@@ -807,6 +1037,29 @@ export function LiveNotesSurface({
           </button>
         </div>
       </header>
+
+      {/* ── Aroses sharing status (Chrome’s bar still appears; this is ours) */}
+      {isLive &&
+      mediaStream &&
+      (activeSource === "tab" || activeSource === "system") ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-200/80 bg-rose-50/90 px-4 py-2 dark:border-rose-900/40 dark:bg-rose-950/50 sm:px-6">
+          <p className="text-sm text-rose-900 dark:text-rose-100">
+            <span className="font-semibold">Rose is capturing</span>
+            {activeSource === "tab"
+              ? " your lecture tab"
+              : " your screen"}
+            {" · "}
+            use Pause or Stop sharing when you’re done listening.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleStopSharing()}
+            className="shrink-0 rounded-full bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+          >
+            Stop sharing
+          </button>
+        </div>
+      ) : null}
 
       {/* ── Error / cap banners ────────────────────────────────────────── */}
       {voiceCapped ? (
@@ -826,7 +1079,7 @@ export function LiveNotesSurface({
         <main className="flex min-w-0 flex-1 flex-col">
           <NotesPanel
             notesEndpoint={`/api/live-notes/${sessionId}/notes`}
-            lessonTitle={session.title}
+            lessonTitle={liveTitle}
             courseTitle={courseTitle}
             suggestions={[]}
             onConsumeSuggestion={() => {}}
@@ -836,6 +1089,7 @@ export function LiveNotesSurface({
             fillHeight
             pinToolbar
             scrollFollowMode
+            onDocTitleChange={handleDocTitleChange}
             className="min-h-0 flex-1"
           />
           <LiveNotesAiActivity
@@ -844,32 +1098,115 @@ export function LiveNotesSurface({
             open={aiLogOpen}
             onOpenChange={setAiLogOpen}
           />
+          {visionActive || visionCalls > 0 ? (
+            <p className="border-t border-zinc-200 px-4 py-1.5 text-[10px] text-zinc-400 dark:border-zinc-800 dark:text-zinc-500">
+              Screen reads: {visionCalls}
+              {visionCapped ? " (cap reached — notes continue from audio)" : ""}
+              {visionActive && !visionCapped ? " · watching for slide changes" : ""}
+            </p>
+          ) : null}
         </main>
 
         {railOpen ? (
-          <aside className="flex w-72 shrink-0 flex-col border-l border-zinc-200 bg-white/70 dark:border-zinc-800 dark:bg-zinc-950/70 sm:w-80">
-            <div className="border-b border-zinc-200 px-4 py-2.5 dark:border-zinc-800">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-                Live transcript
-              </p>
-              <p
-                className={`mt-0.5 text-[10px] font-medium ${
-                  transcriptSaveStatus === "error"
-                    ? "text-rose-600 dark:text-rose-400"
-                    : transcriptSaveStatus === "saving" ||
-                        transcriptPendingCount > 0
-                      ? "text-amber-600 dark:text-amber-400"
-                      : "text-zinc-400 dark:text-zinc-500"
-                }`}
-                aria-live="polite"
+          <aside
+            className="relative flex shrink-0 flex-col border-l border-zinc-200 bg-white/70 dark:border-zinc-800 dark:bg-zinc-950/70"
+            style={{ width: railWidth }}
+          >
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize transcript"
+              title="Drag to resize"
+              className="absolute inset-y-0 -left-1 z-10 w-2 cursor-ew-resize hover:bg-rose-500/15"
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                railDragRef.current = {
+                  pointerId: e.pointerId,
+                  startX: e.clientX,
+                  origW: railWidthRef.current,
+                };
+              }}
+              onPointerMove={(e) => {
+                const d = railDragRef.current;
+                if (!d || d.pointerId !== e.pointerId) return;
+                // Dragging left grows the rail.
+                const next = Math.min(
+                  520,
+                  Math.max(200, d.origW - (e.clientX - d.startX))
+                );
+                setRailWidth(next);
+              }}
+              onPointerUp={(e) => {
+                const d = railDragRef.current;
+                if (!d || d.pointerId !== e.pointerId) return;
+                railDragRef.current = null;
+                try {
+                  localStorage.setItem(
+                    "aroses.liveNotes.railWidth",
+                    String(railWidthRef.current)
+                  );
+                } catch {
+                  /* ignore */
+                }
+                try {
+                  (e.currentTarget as HTMLElement).releasePointerCapture(
+                    e.pointerId
+                  );
+                } catch {
+                  /* ignore */
+                }
+              }}
+              onPointerCancel={(e) => {
+                railDragRef.current = null;
+                try {
+                  (e.currentTarget as HTMLElement).releasePointerCapture(
+                    e.pointerId
+                  );
+                } catch {
+                  /* ignore */
+                }
+              }}
+            />
+            <div className="flex items-start justify-between gap-2 border-b border-zinc-200 px-4 py-2.5 dark:border-zinc-800">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                  Live transcript
+                </p>
+                <p
+                  className={`mt-0.5 text-[10px] font-medium ${
+                    transcriptSaveStatus === "error"
+                      ? "text-rose-600 dark:text-rose-400"
+                      : transcriptSaveStatus === "saving" ||
+                          transcriptPendingCount > 0
+                        ? "text-amber-600 dark:text-amber-400"
+                        : "text-zinc-400 dark:text-zinc-500"
+                  }`}
+                  aria-live="polite"
+                >
+                  {transcriptSaveLabel(
+                    transcriptSaveStatus,
+                    transcriptLastSavedAt,
+                    transcriptPendingCount,
+                    segments.length
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setRailOpen(false);
+                  try {
+                    localStorage.setItem("aroses.liveNotes.railOpen", "0");
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                className="shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
               >
-                {transcriptSaveLabel(
-                  transcriptSaveStatus,
-                  transcriptLastSavedAt,
-                  transcriptPendingCount,
-                  segments.length
-                )}
-              </p>
+                Minimize
+              </button>
             </div>
             <div
               ref={railScrollRef}
@@ -901,6 +1238,21 @@ export function LiveNotesSurface({
           </aside>
         ) : null}
 
+        {/* Floating lecture preview — show as soon as the share is live */}
+        {hasVideo && mediaStream ? (
+          <LecturePreviewPanel
+            stream={mediaStream}
+            collapsed={previewCollapsed}
+            onCollapsedChange={setPreviewCollapsed}
+            mirrorWarning={mirrorWarning}
+            onDismissMirror={() => setMirrorWarning(false)}
+            onReshare={() => {
+              setMirrorWarning(false);
+              void handleSwitchSource(activeSource === "system" ? "system" : "tab");
+            }}
+          />
+        ) : null}
+
         {/* ── Start overlay ─────────────────────────────────────────────── */}
         {showStartOverlay ? (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/70 p-6 backdrop-blur-sm dark:bg-zinc-950/70">
@@ -909,12 +1261,13 @@ export function LiveNotesSurface({
                 ● Live notes
               </p>
               <h1 className="mt-2 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-                {session.title}
+                {liveTitle.trim() || "Untitled lecture"}
               </h1>
               <p className="mt-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
-                Rose listens to the lecture, builds running notes in real time,
-                and turns everything into a full course when you finish. Pick an
-                audio source to start.
+                Rose listens to the lecture, reads the shared screen when slides
+                change, builds running notes beside a live preview, and turns
+                everything into a full course when you finish. Pick a source to
+                start — share the <strong>lecture</strong> tab, not this Rose page.
               </p>
               <div className="mt-5 grid gap-2">
                 <button
@@ -926,8 +1279,8 @@ export function LiveNotesSurface({
                   Capture tab audio
                   <span className="mt-0.5 block text-xs font-normal text-rose-100">
                     YouTube, Zoom or Meet in the browser — pick the lecture tab
-                    under &quot;Chrome Tab&quot; and tick &quot;Also share tab
-                    audio&quot;.
+                    under &quot;Chrome Tab&quot; (not this Rose tab) and tick
+                    &quot;Also share tab audio&quot;.
                   </span>
                 </button>
                 {platform?.systemAudioSupported ? (
@@ -988,6 +1341,18 @@ export function LiveNotesSurface({
           </div>
         ) : null}
       </div>
+
+      {shareGuideSource ? (
+        <ShareGuideModal
+          source={shareGuideSource}
+          busy={shareGuideBusy}
+          onCancel={() => {
+            if (shareGuideBusy) return;
+            setShareGuideSource(null);
+          }}
+          onContinue={() => void confirmSwitchFromGuide()}
+        />
+      ) : null}
     </div>
   );
 }

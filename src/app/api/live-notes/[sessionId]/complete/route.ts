@@ -117,7 +117,46 @@ export async function POST(_request: Request, ctx: Params) {
     .map((s) => `[${formatTimestamp(s.at_ms ?? 0)}] ${String(s.text).trim()}`)
     .join("\n");
   // Same attribution shape the audio-upload extractor produces.
-  const transcript = `[from ${title} transcript]\n${body}`.slice(0, 500_000);
+  const transcriptOnly = `[from ${title} transcript]\n${body}`.slice(0, 500_000);
+
+  // Optional on-screen extracts (slide vision) — second factual source.
+  // Table may be missing until migration 084 is applied.
+  let screenContent = "";
+  try {
+    const { data: screenRows, error: screenErr } = await supabase
+      .from("live_lecture_screen_content")
+      .select("seq, at_ms, title, extracted_text, table_markdown")
+      .eq("session_id", sessionId)
+      .order("seq", { ascending: true })
+      .limit(200);
+    if (!screenErr && screenRows) {
+      const screenBlocks = screenRows
+        .map((r) => {
+          const stamp = formatTimestamp(r.at_ms ?? 0);
+          const head =
+            typeof r.title === "string" && r.title.trim()
+              ? `[${stamp}] ${r.title.trim()}`
+              : `[${stamp}]`;
+          const text = String(r.extracted_text ?? "").trim();
+          const table =
+            typeof r.table_markdown === "string" && r.table_markdown.trim()
+              ? `\n${r.table_markdown.trim()}`
+              : "";
+          return text || table ? `${head}\n${text}${table}` : null;
+        })
+        .filter((b): b is string => Boolean(b));
+      screenContent = screenBlocks.join("\n\n").slice(0, 100_000);
+    }
+  } catch {
+    /* migration not applied — transcript-only wrap-up */
+  }
+
+  // Combined ingest blob: screen first (spellings/numbers), then transcript.
+  const transcript = (
+    screenContent
+      ? `[from ${title} screen]\n${screenContent}\n\n${transcriptOnly}`
+      : transcriptOnly
+  ).slice(0, 500_000);
 
   // Mirrors the confirm-transcript minimum — below this, generation would
   // silently no-op, so reject with something actionable instead.
@@ -226,7 +265,8 @@ export async function POST(_request: Request, ctx: Params) {
     if (sections.length > 0) {
       const revisions = await reviewLiveLectureNotes({
         sections,
-        transcript,
+        transcript: transcriptOnly,
+        screenContent: screenContent || undefined,
         lectureTitle: title,
         userId: user.id,
       });

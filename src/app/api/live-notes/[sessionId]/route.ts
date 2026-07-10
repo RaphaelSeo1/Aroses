@@ -119,14 +119,26 @@ export async function PATCH(request: Request, ctx: Params) {
     );
   }
 
-  const { data, error } = await supabase
+  // Title-only renames are allowed on any non-deleted session (including
+  // completed). Status / duration changes stay limited to live sessions.
+  const titleOnly =
+    typeof patch.title === "string" &&
+    b.status === undefined &&
+    b.durationSeconds === undefined;
+
+  let query = supabase
     .from("live_lecture_sessions")
     .update(patch)
     .eq("id", sessionId)
-    .eq("user_id", user.id)
-    // Ended sessions are immutable through this route.
-    .in("status", ["recording", "paused"])
-    .select("id, status")
+    .eq("user_id", user.id);
+
+  if (!titleOnly) {
+    // Ended sessions are immutable for status / duration through this route.
+    query = query.in("status", ["recording", "paused"]);
+  }
+
+  const { data, error } = await query
+    .select("id, status, user_note_id, title")
     .maybeSingle();
 
   if (error) {
@@ -140,7 +152,23 @@ export async function PATCH(request: Request, ctx: Params) {
     );
   }
 
-  return NextResponse.json({ ok: true, status: data.status });
+  // Keep the linked standalone note title in sync when the lecture is renamed.
+  if (
+    typeof patch.title === "string" &&
+    typeof data.user_note_id === "string" &&
+    data.user_note_id
+  ) {
+    await supabase
+      .from("user_notes")
+      .update({
+        title: patch.title,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.user_note_id)
+      .eq("user_id", user.id);
+  }
+
+  return NextResponse.json({ ok: true, status: data.status, title: data.title });
 }
 
 /**

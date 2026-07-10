@@ -1,26 +1,22 @@
 "use client";
 
 /**
- * Live Notes capture layer — one audio-source abstraction for everything
- * downstream (Deepgram → notes → wrap-up), regardless of where the lecture
- * audio comes from:
+ * Live Notes capture layer — one MediaStream feeding three consumers:
  *
- *   1. "tab"    — getDisplayMedia, a specific browser tab + "Also share tab
- *                 audio". Primary path: YouTube, browser Zoom/Meet, any
- *                 in-browser lecture. Works on every desktop Chromium OS,
- *                 including macOS.
- *   2. "system" — getDisplayMedia, entire screen + system audio. For lectures
- *                 playing OUTSIDE the browser (e.g. the Zoom desktop app).
- *                 Chromium on Windows / ChromeOS only — macOS (and most
- *                 Linux) browsers cannot capture system audio at all.
- *   3. "mic"    — getUserMedia microphone, for in-person lectures. Slots into
- *                 the same abstraction: every source resolves to an
- *                 audio-only MediaStream, so the hook, Deepgram pipeline,
- *                 and wrap-up are identical for all three.
+ *   1. Audio track → Deepgram (MediaRecorder on an audio-only tee)
+ *   2. Video track → muted on-page lecture preview
+ *   3. Video track → frame sampler → slide vision (on transitions only)
+ *
+ * Sources:
+ *   1. "tab"    — getDisplayMedia, browser tab + "Also share tab audio"
+ *   2. "system" — getDisplayMedia, entire screen + system audio (Win/ChromeOS)
+ *   3. "mic"    — getUserMedia microphone (audio-only; vision/preview off)
  *
  * HARD RULE: never silently record video-without-audio. If the shared
  * surface has no audio track, the whole capture is stopped and an
  * explanatory, platform-aware error is thrown — session start is blocked.
+ *
+ * Video is optional: audio-only shares disable preview + vision cleanly.
  */
 
 export type LiveCaptureSource = "tab" | "system" | "mic";
@@ -39,6 +35,15 @@ export type CapturePlatform = {
    * checkbox in the screen picker.
    */
   systemAudioSupported: boolean;
+};
+
+export type SharedSurface = "monitor" | "window" | "browser" | "unknown";
+
+export type LectureCaptureResult = {
+  /** Full stream: audio always; video when the share includes it. */
+  stream: MediaStream;
+  hasVideo: boolean;
+  surface: SharedSurface;
 };
 
 export function detectCapturePlatform(): CapturePlatform {
@@ -68,14 +73,7 @@ export function detectCapturePlatform(): CapturePlatform {
 /** Thrown when capture is blocked; `message` is user-facing. */
 export class LectureCaptureError extends Error {}
 
-/**
- * What the user actually shared, read off the video track before teardown —
- * lets the no-audio error say exactly what to change instead of guessing.
- * Chrome reports "monitor" (entire screen), "window", or "browser" (a tab).
- */
-type SharedSurface = "monitor" | "window" | "browser" | "unknown";
-
-function sharedSurfaceOf(display: MediaStream): SharedSurface {
+export function sharedSurfaceOf(display: MediaStream): SharedSurface {
   const settings = display.getVideoTracks()[0]?.getSettings() as
     | (MediaTrackSettings & { displaySurface?: string })
     | undefined;
@@ -118,23 +116,23 @@ function noAudioMessage(
 }
 
 /**
- * Resolve a capture source to an audio-only MediaStream.
+ * Resolve a capture source to a MediaStream with audio (required) and
+ * optional video (kept for preview + slide vision).
  *
- * - Display captures request video too (Chrome's picker requires it) but the
- *   video track is stopped immediately — only audio leaves this function.
- * - Missing audio track ⇒ every acquired track is stopped and a
- *   `LectureCaptureError` with platform-specific guidance is thrown, so the
- *   caller can block session start instead of recording silence.
+ * Deepgram must receive an audio-only tee — use `audioOnlyStream(stream)`.
+ * Missing audio track ⇒ every acquired track is stopped and a
+ * `LectureCaptureError` with platform-specific guidance is thrown.
  */
-export async function acquireLectureAudioStream(
+export async function acquireLectureCaptureStream(
   source: LiveCaptureSource,
   platform: CapturePlatform = detectCapturePlatform()
-): Promise<MediaStream> {
+): Promise<LectureCaptureResult> {
   if (source === "mic") {
     try {
-      return await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
       });
+      return { stream, hasVideo: false, surface: "unknown" };
     } catch {
       throw new LectureCaptureError(
         "Could not access the microphone. Check the browser's mic permission for this site and try again."
@@ -197,14 +195,24 @@ export async function acquireLectureAudioStream(
     throw new LectureCaptureError(noAudioMessage(source, platform, shared));
   }
 
-  // Only the picker needs video; drop it so nothing visual is recorded.
-  for (const t of display.getVideoTracks()) {
-    try {
-      t.stop();
-    } catch {
-      /* ignore */
-    }
-  }
+  const videoTracks = display.getVideoTracks();
+  return {
+    stream: display,
+    hasVideo: videoTracks.length > 0 && videoTracks.some((t) => t.readyState === "live"),
+    surface: sharedSurfaceOf(display),
+  };
+}
 
-  return new MediaStream(audioTracks);
+/** @deprecated Use acquireLectureCaptureStream — kept as a thin alias. */
+export async function acquireLectureAudioStream(
+  source: LiveCaptureSource,
+  platform?: CapturePlatform
+): Promise<MediaStream> {
+  const result = await acquireLectureCaptureStream(source, platform);
+  return result.stream;
+}
+
+/** Audio-only tee of the same track objects (for MediaRecorder → Deepgram). */
+export function audioOnlyStream(stream: MediaStream): MediaStream {
+  return new MediaStream(stream.getAudioTracks());
 }

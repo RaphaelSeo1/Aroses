@@ -72,10 +72,15 @@ export async function POST(request: Request, ctx: Params) {
     newSegmentText?: unknown;
     recentHeadings?: unknown;
     revisable?: unknown;
+    screenContext?: unknown;
   };
   if (typeof b.newSegmentText !== "string" || !b.newSegmentText.trim()) {
     return NextResponse.json({ error: "newSegmentText required" }, { status: 400 });
   }
+  const screenContext =
+    typeof b.screenContext === "string"
+      ? b.screenContext.trim().slice(0, 4_000)
+      : "";
   const recentHeadings = Array.isArray(b.recentHeadings)
     ? b.recentHeadings
         .filter((h): h is string => typeof h === "string" && h.trim().length > 0)
@@ -163,6 +168,7 @@ export async function POST(request: Request, ctx: Params) {
           appendSectionId,
           lectureTitle,
           userId: user.id,
+          screenContext: screenContext || undefined,
         })) {
           if (ev.type === "thought") {
             send("thought", { message: ev.message });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type AiActivityEntry = {
   id: string;
@@ -8,6 +8,11 @@ export type AiActivityEntry = {
   kind: "thought" | "append" | "revise" | "status" | "error";
   message: string;
 };
+
+const HEIGHT_KEY = "aroses.liveNotes.aiLogHeight";
+const DEFAULT_H = 144;
+const MIN_H = 80;
+const MAX_H = 360;
 
 function kindLabel(kind: AiActivityEntry["kind"]): string {
   switch (kind) {
@@ -51,17 +56,92 @@ export function LiveNotesAiActivity({
   onOpenChange: (open: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startY: number;
+    origH: number;
+  } | null>(null);
+  const [height, setHeight] = useState(DEFAULT_H);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(HEIGHT_KEY);
+      if (raw) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) {
+          setHeight(Math.min(MAX_H, Math.max(MIN_H, n)));
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !open) return;
     el.scrollTop = el.scrollHeight;
-  }, [entries, open]);
+  }, [entries, open, height]);
 
   if (entries.length === 0 && !active) return null;
 
+  const onResizeDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    dragRef.current = {
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      origH: height,
+    };
+  };
+
+  const onResizeMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+    // Drag handle sits above the log — dragging up grows height.
+    const next = Math.min(
+      MAX_H,
+      Math.max(MIN_H, d.origH - (e.clientY - d.startY))
+    );
+    setHeight(next);
+  };
+
+  const onResizeUp = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    try {
+      localStorage.setItem(HEIGHT_KEY, String(height));
+    } catch {
+      /* ignore */
+    }
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
-    <div className="shrink-0 border-t border-zinc-200 bg-white/95 dark:border-zinc-800 dark:bg-zinc-950/95">
+    <div className="relative shrink-0 border-t border-zinc-200 bg-white/95 dark:border-zinc-800 dark:bg-zinc-950/95">
+      {open ? (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize Rose activity log"
+          title="Drag to resize"
+          className="absolute inset-x-0 -top-1 z-10 flex h-2 cursor-ns-resize items-center justify-center"
+          onPointerDown={onResizeDown}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeUp}
+          onPointerCancel={onResizeUp}
+        >
+          <span className="h-0.5 w-8 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+        </div>
+      ) : null}
+
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
@@ -82,14 +162,15 @@ export function LiveNotesAiActivity({
           </span>
         </span>
         <span className="shrink-0 text-[11px] font-medium text-zinc-400">
-          {open ? "Hide" : "Show"}
+          {open ? "Minimize" : "Expand"}
         </span>
       </button>
 
       {open ? (
         <div
           ref={scrollRef}
-          className="max-h-36 space-y-2 overflow-y-auto border-t border-zinc-100 px-4 py-3 dark:border-zinc-800 sm:px-5"
+          className="space-y-2 overflow-y-auto border-t border-zinc-100 px-4 py-3 dark:border-zinc-800 sm:px-5"
+          style={{ height }}
           aria-live="polite"
         >
           {entries.length === 0 ? (

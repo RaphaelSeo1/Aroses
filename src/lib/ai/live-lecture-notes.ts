@@ -50,30 +50,35 @@ const MAX_SECTION_EXCERPT_CHARS = 2_400;
 const NOTE_STYLE_RULES = `You write structured STUDY NOTES, not transcript cleanup:
 - Start a "## " heading whenever the lecturer moves to a new topic or concept (3–8 words, not their first sentence; never repeat a RECENT HEADING).
 - Bold key terms with **term** on first introduction only.
-- State definitions cleanly and precisely, even when the lecturer phrased them loosely — but only from what was said.
+- State definitions cleanly and precisely, even when the lecturer phrased them loosely — but only from what was said or shown.
 - When the lecturer works an example, capture it step-by-step as a numbered list ("1. ", "2. "), using exactly the numbers and steps they used.
 - When the lecturer signals importance ("this will be on the exam", "this is the key idea"), add one line: "**Why it matters:** ...".
 - Bullets ("- ", one "  - " nesting level for sub-points) for everything else. Concise, declarative prose optimized for understanding and recall — in-depth but digestible. No filler.
 - Administrative chatter (attendance, homework logistics, "can everyone see the screen") is NOT teaching content — skip it.
 
 GROUNDING (critical — overrides everything else on conflict):
-- Every fact, number, example, and claim must come from the transcript. No outside knowledge, no invented examples, no invented figures (doses, percentages, dates, totals).
-- If you add clarifying context the lecturer did NOT say (an analogy, a definition they skipped), it MUST be on its own line formatted exactly as:
+- You may receive TWO sources: NEW TRANSCRIPT SLICE (speech-to-text) and ON-SCREEN CONTENT (OCR/vision from the shared lecture display).
+- Screen text is AUTHORITATIVE for: spellings, symbols, drug/chemical names, numbers, units, table cells, equation symbols, and slide titles.
+- Transcript is AUTHORITATIVE for: spoken explanation, emphasis, worked examples walked verbally, and asides not visible on screen.
+- On conflict (e.g. STT mishear vs clear slide text), prefer the screen for the contested token/number; keep the transcript's explanatory framing.
+- If ON-SCREEN CONTENT is missing or empty, every fact must come from the transcript alone (legacy behavior).
+- No outside knowledge, no invented examples, no invented figures (doses, percentages, dates, totals).
+- If you add clarifying context the lecturer did NOT say or show (an analogy, a definition they skipped), it MUST be on its own line formatted exactly as:
   > (AI) <one or two sentences>
   Never blend added context into normal notes.
-- If a passage is garbled or ambiguous, omit it. Never guess.`;
+- If a passage is garbled or ambiguous in BOTH sources, omit it. Never guess.`;
 
-const SYSTEM = `You are a meticulous note-taker sitting in a live lecture. You receive: the NEWEST slice of the lecture transcript (raw speech-to-text), a rolling summary of everything covered before it, and YOUR RECENT NOTE SECTIONS with the raw transcript excerpts they were written from.
+const SYSTEM = `You are a meticulous note-taker sitting in a live lecture. You receive: the NEWEST slice of the lecture transcript (raw speech-to-text), optional ON-SCREEN CONTENT extracted from the shared display, a rolling summary of everything covered before it, and YOUR RECENT NOTE SECTIONS with the raw transcript excerpts they were written from.
 
 ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
 SELF-REVISION (bounded, rare):
-- Compare each RECENT NOTE SECTION against its transcript excerpt. Rewrite that WHOLE section with @@revise ONLY when it is factually wrong: a wrong number, an inverted relationship, a misattributed claim, or meaning the NEW transcript slice proves incorrect.
-- @@revise is NEVER for adding new information. Everything the lecturer says in the NEW TRANSCRIPT SLICE goes under @@append — even when it continues, elaborates on, or gives more examples for a recent section's topic. Do not merge new material into an old section.
+- Compare each RECENT NOTE SECTION against its transcript excerpt AND any on-screen content. Rewrite that WHOLE section with @@revise ONLY when it is factually wrong: a wrong number, an inverted relationship, a misattributed claim, or meaning the NEW transcript/screen proves incorrect.
+- @@revise is NEVER for adding new information. Everything new in the NEW TRANSCRIPT SLICE (and newly visible screen facts that belong with it) goes under @@append — even when it continues a recent section's topic. Do not merge new material into an old section.
 - Do not revise for style, wording, ordering, or completeness. A revision must preserve the section's correct content verbatim and change only what was wrong.
-- The transcript is ground truth. Only revise sections you were given. Most calls have ZERO @@revise operations; if nothing is factually wrong, emit none.
+- Prefer screen spellings/numbers when correcting STT errors. Most calls have ZERO @@revise operations; if nothing is factually wrong, emit none.
 
 NARRATION (optional — do not delay notes for this):
 - You MAY emit zero or one short @@thought line before @@revise/@@append when something non-obvious happened (a correction, skip, or topic shift). Keep it under 15 words.
@@ -112,6 +117,8 @@ export async function* streamLiveLectureNotes(input: {
   appendSectionId: string;
   lectureTitle?: string;
   userId?: string;
+  /** Recent on-screen extracts (slide OCR) — authoritative for spellings/numbers. */
+  screenContext?: string;
 }): AsyncGenerator<LiveNotesStreamEvent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -131,6 +138,7 @@ export async function* streamLiveLectureNotes(input: {
     .filter(Boolean)
     .slice(-5);
   const revisable = input.revisable.slice(-MAX_REVISABLE_SECTIONS);
+  const screenContext = (input.screenContext ?? "").trim().slice(0, 4_000);
 
   const sectionsBlock = revisable
     .map((s) => {
@@ -140,7 +148,7 @@ export async function* streamLiveLectureNotes(input: {
       ];
       if (s.transcriptExcerpt?.trim()) {
         parts.push(
-          `[TRANSCRIPT EXCERPT this section was written from — ground truth:]`,
+          `[TRANSCRIPT EXCERPT this section was written from:]`,
           s.transcriptExcerpt.trim().slice(0, MAX_SECTION_EXCERPT_CHARS)
         );
       }
@@ -159,6 +167,9 @@ export async function* streamLiveLectureNotes(input: {
     sectionsBlock
       ? `YOUR RECENT NOTE SECTIONS (the only sections you may @@revise):\n\n${sectionsBlock}`
       : "YOUR RECENT NOTE SECTIONS: (none yet — no @@revise operations possible)",
+    screenContext
+      ? `ON-SCREEN CONTENT (authoritative for spellings, symbols, numbers, tables, slide titles):\n${screenContext}`
+      : null,
     `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
     "\nEmit the protocol now, starting with the first marker.",
   ]
@@ -211,9 +222,11 @@ export async function* streamLiveLectureNotes(input: {
 
 // ── Wrap-up consistency review (once, on Finish) ─────────────────────────────
 
-const REVIEW_SYSTEM = `You are reviewing AI-generated live-lecture study notes against the full lecture transcript before they are archived. The transcript is ground truth.
+const REVIEW_SYSTEM = `You are reviewing AI-generated live-lecture study notes against the full lecture transcript AND optional on-screen extracts before they are archived.
 
-For each numbered note section, check every fact, number, relationship, and attribution against the transcript. Return a revision ONLY when a section materially misrepresents the lecture — wrong number, inverted relationship, misattributed claim, or content the lecturer never said outside a "> (AI)" line. Do NOT rewrite for style, ordering, or wording preference. Most sections should need no revision.
+Priority: screen text is authoritative for spellings, symbols, numbers, and table cells; transcript is authoritative for spoken explanation and emphasis. On conflict, prefer screen for contested tokens/numbers.
+
+For each numbered note section, check every fact, number, relationship, and attribution against BOTH sources. Return a revision ONLY when a section materially misrepresents the lecture — wrong number, inverted relationship, misattributed claim, or content the lecturer never said/showed outside a "> (AI)" line. Do NOT rewrite for style, ordering, or wording preference. Most sections should need no revision.
 
 Replacement sections use this markdown subset: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, "**bold**" key terms, "> (AI) " for AI-added context. ${voiceRules()}
 
@@ -222,10 +235,13 @@ Output ONLY valid JSON (no markdown fences):
 Return { "revisions": [] } when everything is grounded.`;
 
 const MAX_REVIEW_TRANSCRIPT_CHARS = 60_000;
+const MAX_REVIEW_SCREEN_CHARS = 20_000;
 
 export async function reviewLiveLectureNotes(input: {
   sections: Array<{ sectionId: string; markdown: string }>;
   transcript: string;
+  /** Optional concatenated on-screen extracts. */
+  screenContent?: string;
   lectureTitle?: string;
   userId?: string;
 }): Promise<Array<{ sectionId: string; markdown: string }> | null> {
@@ -240,10 +256,14 @@ export async function reviewLiveLectureNotes(input: {
     )
     .join("\n\n");
 
+  const screen = (input.screenContent ?? "").trim();
   const userPrompt = [
     input.lectureTitle ? `LECTURE: ${input.lectureTitle.slice(0, 200)}` : null,
     `NOTE SECTIONS TO VERIFY:\n\n${sectionsBlock}`,
-    `FULL LECTURE TRANSCRIPT (ground truth):\n${input.transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
+    screen
+      ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
+      : null,
+    `FULL LECTURE TRANSCRIPT:\n${input.transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
     "\nReturn the JSON now.",
   ]
     .filter(Boolean)

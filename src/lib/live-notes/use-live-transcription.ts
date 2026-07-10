@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  acquireLectureAudioStream,
+  acquireLectureCaptureStream,
+  audioOnlyStream,
   LectureCaptureError,
   type LiveCaptureSource,
+  type SharedSurface,
 } from "@/lib/live-notes/capture";
 
 export type { LiveCaptureSource } from "@/lib/live-notes/capture";
@@ -51,9 +53,11 @@ export type TranscriptSaveStatus = "idle" | "saving" | "saved" | "error";
 const FLUSH_INTERVAL_MS = 5_000;
 const KEEPALIVE_INTERVAL_MS = 5_000;
 const RECORDER_TIMESLICE_MS = 250;
-const SOCKET_OPEN_TIMEOUT_MS = 8_000;
+const SOCKET_OPEN_TIMEOUT_MS = 12_000;
 /** Lecture endpointing: shorter than the tutor's Pause slider default. */
 const ENDPOINTING_MS = 1_500;
+/** Prefetched JWT is only useful briefly (Deepgram grant TTL is short). */
+const TOKEN_PREFETCH_MAX_AGE_MS = 90_000;
 const RECONNECT_DELAYS_MS = [1_000, 3_000, 8_000];
 /** Commit a segment mid-utterance if the lecturer never pauses. */
 const MAX_UTTERANCE_CHARS = 1_200;
@@ -122,6 +126,19 @@ export function useLiveLectureTranscription(options: {
   const [activeSource, setActiveSource] = useState<LiveCaptureSource | null>(
     null
   );
+  /** Full capture stream (audio ± video) for preview + vision consumers. */
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
+  const [hasVideo, setHasVideo] = useState(false);
+  const [sharedSurface, setSharedSurface] = useState<SharedSurface | null>(
+    null
+  );
+
+  /** Prefetch while the share picker is open so connect isn't blocked on grant. */
+  const prefetchedTokenRef = useRef<{
+    accessToken: string;
+    fetchedAt: number;
+  } | null>(null);
+  const prefetchInFlightRef = useRef<Promise<string | null> | null>(null);
 
   // Callbacks in refs so socket handlers never hold stale closures.
   const onSegmentRef = useRef(onSegment);
@@ -303,6 +320,9 @@ export function useLiveLectureTranscription(options: {
     }
     const stream = streamRef.current;
     streamRef.current = null;
+    setMediaStream(null);
+    setHasVideo(false);
+    setSharedSurface(null);
     if (stream) {
       for (const track of stream.getTracks()) {
         try {
@@ -317,26 +337,69 @@ export function useLiveLectureTranscription(options: {
   /**
    * Pause when the user ends the share from the browser's own UI (Chrome's
    * "Stop sharing" bar) or the mic device disappears. Resume re-acquires.
+   * Video-only end disables preview/vision but keeps transcription going.
    */
   const watchTrackEnded = useCallback((stream: MediaStream) => {
-    const track = stream.getAudioTracks()[0];
-    if (!track) return;
-    track.addEventListener("ended", () => {
-      if (streamRef.current !== stream) return; // superseded stream
-      if (statusRef.current === "idle") return;
-      onErrorRef.current?.(
-        lastSourceRef.current === "mic"
-          ? "The microphone stopped. Press Resume to reconnect it, or Finish to build the course."
-          : "Audio sharing ended. Press Resume to pick the lecture source again, or Finish to build the course with what was captured."
-      );
-      void pauseRef.current?.();
-    });
+    const audio = stream.getAudioTracks()[0];
+    if (audio) {
+      audio.addEventListener("ended", () => {
+        if (streamRef.current !== stream) return; // superseded stream
+        if (statusRef.current === "idle") return;
+        onErrorRef.current?.(
+          lastSourceRef.current === "mic"
+            ? "The microphone stopped. Press Resume to reconnect it, or Finish to build the course."
+            : "Audio sharing ended. Press Resume to pick the lecture source again, or Finish to build the course with what was captured."
+        );
+        void pauseRef.current?.();
+      });
+    }
+    for (const video of stream.getVideoTracks()) {
+      video.addEventListener("ended", () => {
+        if (streamRef.current !== stream) return;
+        setHasVideo(false);
+      });
+    }
   }, []);
 
-  const connectSocket = useCallback(async (): Promise<WebSocket> => {
-    const tokenRes = await fetch(`/api/live-notes/${sessionId}/deepgram-token`, {
-      method: "POST",
-    });
+  const fetchDeepgramAccessToken = useCallback(async (): Promise<string> => {
+    const cached = prefetchedTokenRef.current;
+    if (
+      cached &&
+      Date.now() - cached.fetchedAt < TOKEN_PREFETCH_MAX_AGE_MS
+    ) {
+      prefetchedTokenRef.current = null;
+      return cached.accessToken;
+    }
+
+    if (prefetchInFlightRef.current) {
+      const fromPrefetch = await prefetchInFlightRef.current;
+      prefetchInFlightRef.current = null;
+      if (fromPrefetch) {
+        prefetchedTokenRef.current = null;
+        return fromPrefetch;
+      }
+    }
+
+    const tokenController = new AbortController();
+    const tokenTimer = window.setTimeout(() => tokenController.abort(), 12_000);
+    let tokenRes: Response;
+    try {
+      tokenRes = await fetch(`/api/live-notes/${sessionId}/deepgram-token`, {
+        method: "POST",
+        signal: tokenController.signal,
+      });
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        throw new Error(
+          "Timed out waiting for the transcription service. Check your connection and try again."
+        );
+      }
+      throw e instanceof Error
+        ? e
+        : new Error("Could not reach the transcription service.");
+    } finally {
+      window.clearTimeout(tokenTimer);
+    }
     const tokenBody = (await tokenRes.json().catch(() => ({}))) as {
       accessToken?: string;
       error?: string;
@@ -344,15 +407,64 @@ export function useLiveLectureTranscription(options: {
     };
     if (tokenRes.status === 402) {
       onCappedRef.current?.();
-      throw new Error(
-        tokenBody.error || "Monthly voice allowance reached."
-      );
+      throw new Error(tokenBody.error || "Monthly voice allowance reached.");
     }
     if (!tokenRes.ok || typeof tokenBody.accessToken !== "string") {
       throw new Error(
-        tokenBody.error || `Deepgram token failed with status ${tokenRes.status}.`
+        tokenBody.error ||
+          `Deepgram token failed with status ${tokenRes.status}.`
       );
     }
+    return tokenBody.accessToken;
+  }, [sessionId]);
+
+  /**
+   * Warm the Deepgram JWT while Chrome's share picker is open so connect
+   * after Share isn't blocked on a slow /auth/grant.
+   */
+  const prefetchToken = useCallback(() => {
+    if (prefetchedTokenRef.current) {
+      const age = Date.now() - prefetchedTokenRef.current.fetchedAt;
+      if (age < TOKEN_PREFETCH_MAX_AGE_MS) return;
+    }
+    if (prefetchInFlightRef.current) return;
+    prefetchInFlightRef.current = (async () => {
+      try {
+        const tokenController = new AbortController();
+        const tokenTimer = window.setTimeout(
+          () => tokenController.abort(),
+          12_000
+        );
+        let tokenRes: Response;
+        try {
+          tokenRes = await fetch(`/api/live-notes/${sessionId}/deepgram-token`, {
+            method: "POST",
+            signal: tokenController.signal,
+          });
+        } finally {
+          window.clearTimeout(tokenTimer);
+        }
+        const tokenBody = (await tokenRes.json().catch(() => ({}))) as {
+          accessToken?: string;
+        };
+        if (!tokenRes.ok || typeof tokenBody.accessToken !== "string") {
+          return null;
+        }
+        prefetchedTokenRef.current = {
+          accessToken: tokenBody.accessToken,
+          fetchedAt: Date.now(),
+        };
+        return tokenBody.accessToken;
+      } catch {
+        return null;
+      } finally {
+        prefetchInFlightRef.current = null;
+      }
+    })();
+  }, [sessionId]);
+
+  const connectSocket = useCallback(async (): Promise<WebSocket> => {
+    const accessToken = await fetchDeepgramAccessToken();
 
     const qs = new URLSearchParams({
       model: "nova-3",
@@ -364,7 +476,7 @@ export function useLiveLectureTranscription(options: {
     });
     const ws = new WebSocket(
       `wss://api.deepgram.com/v1/listen?${qs.toString()}`,
-      ["bearer", tokenBody.accessToken]
+      ["bearer", accessToken]
     );
 
     await new Promise<void>((resolve, reject) => {
@@ -438,7 +550,7 @@ export function useLiveLectureTranscription(options: {
     };
 
     return ws;
-  }, [sessionId, commitUtterance]);
+  }, [fetchDeepgramAccessToken, commitUtterance]);
 
   /**
    * (Re)create the MediaRecorder for a FRESH socket. The WebM container
@@ -457,12 +569,24 @@ export function useLiveLectureTranscription(options: {
       }
     }
     const stream = streamRef.current;
-    if (!stream) return;
+    if (!stream) {
+      throw new Error("No capture stream available for transcription.");
+    }
+    // Deepgram must receive audio-only — never mux the video track.
+    const audioStream = audioOnlyStream(stream);
+    if (audioStream.getAudioTracks().length === 0) {
+      throw new Error("No audio track available for transcription.");
+    }
     const mimeType = pickMimeType();
-    const recorder = new MediaRecorder(
-      stream,
-      mimeType ? { mimeType } : undefined
-    );
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(
+        audioStream,
+        mimeType ? { mimeType } : undefined
+      );
+    } catch {
+      recorder = new MediaRecorder(audioStream);
+    }
     recorderRef.current = recorder;
     recorderSocketRef.current = ws;
     recorder.ondataavailable = (ev) => {
@@ -470,7 +594,20 @@ export function useLiveLectureTranscription(options: {
         ws.send(ev.data);
       }
     };
-    recorder.start(RECORDER_TIMESLICE_MS);
+    recorder.onerror = () => {
+      onErrorRef.current?.(
+        "Audio recording failed. Press Resume to reconnect, or Finish to save what you have."
+      );
+    };
+    try {
+      recorder.start(RECORDER_TIMESLICE_MS);
+    } catch (e) {
+      recorderRef.current = null;
+      recorderSocketRef.current = null;
+      throw e instanceof Error
+        ? e
+        : new Error("Could not start audio recording for transcription.");
+    }
   }, []);
 
   /** Defined via ref to avoid a circular useCallback dependency with connectSocket. */
@@ -516,12 +653,19 @@ export function useLiveLectureTranscription(options: {
       lastSourceRef.current = source;
       setStatusBoth("connecting");
 
-      // 1. Capture — tab / system / mic all resolve to an audio-only stream;
-      //    missing audio (e.g. tab shared without "Also share tab audio")
-      //    throws with platform-specific guidance and blocks the start.
+      // Warm Deepgram while the user is in Chrome's share picker.
+      prefetchToken();
+
+      // 1. Capture — one stream for Deepgram + preview + vision.
+      //    Missing audio throws and blocks start; video is optional.
       let stream: MediaStream;
+      let captureHasVideo = false;
+      let captureSurface: SharedSurface = "unknown";
       try {
-        stream = await acquireLectureAudioStream(source);
+        const capture = await acquireLectureCaptureStream(source);
+        stream = capture.stream;
+        captureHasVideo = capture.hasVideo;
+        captureSurface = capture.surface;
       } catch (e) {
         setStatusBoth("idle");
         onErrorRef.current?.(
@@ -533,67 +677,70 @@ export function useLiveLectureTranscription(options: {
       }
       streamRef.current = stream;
       watchTrackEnded(stream);
-
-      // 2. Socket.
-      let ws: WebSocket;
-      try {
-        ws = await connectSocket();
-      } catch (e) {
-        stopRecorderAndStream();
-        setStatusBoth("idle");
-        onErrorRef.current?.(
-          e instanceof Error ? e.message : "Live transcription failed to start."
-        );
-        return false;
-      }
-      socketRef.current = ws;
-
-      // 3. Recorder (paired to this socket).
-      startRecorderForSocket(ws);
-
-      // 4. Timers.
-      runningSinceRef.current = Date.now();
-      elapsedTimerRef.current = window.setInterval(() => {
-        setElapsedMs(currentElapsedMs());
-      }, 1_000) as unknown as number;
-      flushTimerRef.current = window.setInterval(() => {
-        // Safety net: bank speech that never got a speech_final, then flush
-        // anything still sitting in the pending buffer.
-        const stale =
-          utteranceBufferRef.current.trim().length >= 80 &&
-          Date.now() - lastTranscriptAtRef.current > STALE_UTTERANCE_MS;
-        if (stale) {
-          commitUtteranceRef.current();
-        }
-        void flushSegments();
-      }, FLUSH_INTERVAL_MS) as unknown as number;
-      keepAliveTimerRef.current = window.setInterval(() => {
-        // Deepgram drops sockets after ~10s without audio. While paused the
-        // recorder sends nothing, so keep the connection warm explicitly.
-        const s = socketRef.current;
-        if (
-          statusRef.current === "paused" &&
-          s &&
-          s.readyState === WebSocket.OPEN
-        ) {
-          try {
-            s.send(JSON.stringify({ type: "KeepAlive" }));
-          } catch {
-            /* ignore */
-          }
-        }
-      }, KEEPALIVE_INTERVAL_MS) as unknown as number;
-
-      setStatusBoth("recording");
+      // Show the lecture preview immediately — don't wait on Deepgram.
+      setHasVideo(captureHasVideo);
+      setSharedSurface(captureSurface);
+      setMediaStream(stream);
       setActiveSource(source);
-      return true;
+
+      try {
+        // 2. Socket (uses prefetched token when available).
+        const ws = await connectSocket();
+        socketRef.current = ws;
+
+        // 3. Recorder (paired to this socket).
+        startRecorderForSocket(ws);
+
+        // 4. Timers.
+        runningSinceRef.current = Date.now();
+        elapsedTimerRef.current = window.setInterval(() => {
+          setElapsedMs(currentElapsedMs());
+        }, 1_000) as unknown as number;
+        flushTimerRef.current = window.setInterval(() => {
+          const stale =
+            utteranceBufferRef.current.trim().length >= 80 &&
+            Date.now() - lastTranscriptAtRef.current > STALE_UTTERANCE_MS;
+          if (stale) {
+            commitUtteranceRef.current();
+          }
+          void flushSegments();
+        }, FLUSH_INTERVAL_MS) as unknown as number;
+        keepAliveTimerRef.current = window.setInterval(() => {
+          const s = socketRef.current;
+          if (
+            statusRef.current === "paused" &&
+            s &&
+            s.readyState === WebSocket.OPEN
+          ) {
+            try {
+              s.send(JSON.stringify({ type: "KeepAlive" }));
+            } catch {
+              /* ignore */
+            }
+          }
+        }, KEEPALIVE_INTERVAL_MS) as unknown as number;
+
+        setStatusBoth("recording");
+        return true;
+      } catch (e) {
+        // Keep the shared screen / preview alive so the user doesn't have to
+        // re-pick a tab — they can retry transcription with Resume.
+        setStatusBoth("error");
+        onErrorRef.current?.(
+          e instanceof Error
+            ? `${e.message} Preview is still up — press Resume to retry transcription.`
+            : "Live transcription failed to start. Press Resume to retry."
+        );
+        // Capture succeeded — treat as started so the UI keeps the preview.
+        return true;
+      }
     },
     [
       setStatusBoth,
+      prefetchToken,
       watchTrackEnded,
       connectSocket,
       startRecorderForSocket,
-      stopRecorderAndStream,
       currentElapsedMs,
       flushSegments,
     ]
@@ -623,7 +770,10 @@ export function useLiveLectureTranscription(options: {
 
       let fresh: MediaStream;
       try {
-        fresh = await acquireLectureAudioStream(source);
+        const capture = await acquireLectureCaptureStream(source);
+        fresh = capture.stream;
+        setHasVideo(capture.hasVideo);
+        setSharedSurface(capture.surface);
       } catch (e) {
         onErrorRef.current?.(
           e instanceof Error && e.message
@@ -648,6 +798,7 @@ export function useLiveLectureTranscription(options: {
       setActiveSource(source);
       const old = streamRef.current;
       streamRef.current = fresh;
+      setMediaStream(fresh);
       if (old) {
         for (const t of old.getTracks()) {
           try {
@@ -789,9 +940,13 @@ export function useLiveLectureTranscription(options: {
     setStatusBoth("reconnecting");
     try {
       if (!track || track.readyState !== "live") {
-        const fresh = await acquireLectureAudioStream(lastSourceRef.current);
+        const capture = await acquireLectureCaptureStream(lastSourceRef.current);
+        const fresh = capture.stream;
+        setHasVideo(capture.hasVideo);
+        setSharedSurface(capture.surface);
         const old = streamRef.current;
         streamRef.current = fresh;
+        setMediaStream(fresh);
         if (old) {
           for (const t of old.getTracks()) {
             try {
@@ -901,12 +1056,18 @@ export function useLiveLectureTranscription(options: {
     transcriptPendingCount,
     /** Source currently feeding audio (null before the first start). */
     activeSource,
+    /** Full MediaStream for preview + vision (same capture as Deepgram). */
+    mediaStream,
+    hasVideo,
+    sharedSurface,
     start,
     pause,
     resume,
     stop,
     /** Hot-swap the audio source mid-session without losing anything. */
     switchSource,
+    /** Warm Deepgram JWT while the share picker is open. */
+    prefetchToken,
     /** Bank in-flight speech and flush now (finish, tab hide, manual). */
     flushNow: saveTranscriptNow,
   };

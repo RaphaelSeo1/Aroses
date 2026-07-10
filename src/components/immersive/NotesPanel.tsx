@@ -1584,7 +1584,7 @@ export function NotesPanel({
           font-feature-settings: "ss01", "cv11";
         }
         .tn-prose > * + * {
-          margin-top: 1.05rem;
+          margin-top: 0.85rem;
         }
         .tn-prose h1,
         .tn-prose h2,
@@ -1593,23 +1593,38 @@ export function NotesPanel({
           color: #1a1a1c;
           line-height: 1.25;
         }
+        /* Headings must beat the universal sibling rule or section titles look cramped. */
         .tn-prose h1 {
           font-size: 30px;
           font-weight: 700;
-          margin-top: 2.25rem;
-          margin-bottom: 0.5rem;
+          margin-top: 2.25rem !important;
+          margin-bottom: 0.45rem !important;
         }
         .tn-prose h2 {
           font-size: 24px;
           font-weight: 700;
-          margin-top: 2rem;
-          margin-bottom: 0.4rem;
+          margin-top: 1.75rem !important;
+          margin-bottom: 0.35rem !important;
         }
         .tn-prose h3 {
           font-size: 19px;
           font-weight: 600;
-          margin-top: 1.5rem;
-          margin-bottom: 0.3rem;
+          margin-top: 1.35rem !important;
+          margin-bottom: 0.25rem !important;
+        }
+        .tn-prose > :first-child {
+          margin-top: 0 !important;
+        }
+        .tn-prose h1 + p,
+        .tn-prose h2 + p,
+        .tn-prose h3 + p,
+        .tn-prose h1 + ul,
+        .tn-prose h2 + ul,
+        .tn-prose h3 + ul,
+        .tn-prose h1 + ol,
+        .tn-prose h2 + ol,
+        .tn-prose h3 + ol {
+          margin-top: 0.35rem !important;
         }
         .tn-prose p {
           margin: 0;
@@ -1742,17 +1757,18 @@ export function NotesPanel({
           font-style: normal;
         }
 
-        /* Horizontal rule */
+        /* Horizontal rule — section boundaries between AI note blocks */
         .tn-prose hr {
           border: none;
-          margin: 0.5rem 0;
-          height: 1px;
-          background: #e6e5e1;
+          margin: 1.35rem 0 0.85rem;
+          height: 0;
+          border-top: 1px solid #d4d3cf;
+          background: transparent;
         }
         .tn-prose hr + h1,
         .tn-prose hr + h2,
         .tn-prose hr + h3 {
-          margin-top: 0.65rem;
+          margin-top: 0.85rem !important;
         }
 
         /* Highlight */
