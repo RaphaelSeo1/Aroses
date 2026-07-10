@@ -16,10 +16,10 @@ const MAX_H = 360;
 
 function kindLabel(kind: AiActivityEntry["kind"]): string {
   switch (kind) {
-    case "thought":
-      return "Thinking";
+            case "thought":
+      return "Noticing";
     case "append":
-      return "Adding notes";
+      return "Writing";
     case "revise":
       return "Correcting";
     case "error":

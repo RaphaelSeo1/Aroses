@@ -48,6 +48,42 @@ import { useScreenVision } from "@/lib/live-notes/use-screen-vision";
 const SYNTH_TARGET_CHARS = 450;
 const SYNTH_FIRST_SECTION_CHARS = 180;
 const SYNTH_MIN_CHARS = 180;
+
+const APPEND_STATUS_LINES = [
+  "Folding that last stretch into your notes…",
+  "Pinning down what was just explained…",
+  "Turning that into something you can study later…",
+  "Catching the new beat before it slips…",
+  "Sketching the next section from what was said…",
+];
+
+const APPEND_WITH_SCREEN_LINES = [
+  "Matching the talk to what’s on the slide…",
+  "Pulling the useful bits off the display into notes…",
+  "Slide + speech — locking both into this section…",
+  "Using the screen to nail the spellings and numbers…",
+  "Noticing something useful on-screen — weaving it in…",
+];
+
+const REVISE_STATUS_LINES = [
+  "Earlier line didn’t hold up — fixing that section…",
+  "Caught a mismatch — rewriting the shaky part…",
+  "Updating a prior note so it matches what was just said…",
+  "Tightening an older section after a correction…",
+];
+
+const REVISE_WITH_SCREEN_LINES = [
+  "Slide spelling beats the transcript here — correcting…",
+  "Screen had the clearer number — fixing the earlier note…",
+  "Display and speech disagreed — trusting the slide…",
+  "Updating a prior section with what the board just showed…",
+];
+
+function pickStatusLine(pool: string[], salt: number): string {
+  if (pool.length === 0) return "";
+  const idx = Math.abs(salt) % pool.length;
+  return pool[idx] ?? pool[0]!;
+}
 const SYNTH_CHECK_INTERVAL_MS = 5 * 1000;
 
 /**
@@ -403,7 +439,14 @@ export function LiveNotesSurface({
             const sectionId =
               typeof parsed.sectionId === "string" ? parsed.sectionId : "";
             if (parsed.op === "append" && sectionId) {
-              pushAiActivity("append", "Adding new notes for what the lecturer just covered…");
+              const hasScreen = Boolean(screenContextRef.current.trim());
+              pushAiActivity(
+                "append",
+                pickStatusLine(
+                  hasScreen ? APPEND_WITH_SCREEN_LINES : APPEND_STATUS_LINES,
+                  Date.now() + sectionId.length
+                )
+              );
               queue.push({
                 kind: "append",
                 sectionId,
@@ -411,9 +454,13 @@ export function LiveNotesSurface({
                 dividerBefore: blockCountRef.current > 0,
               });
             } else if (parsed.op === "revise" && sectionId) {
+              const hasScreen = Boolean(screenContextRef.current.trim());
               pushAiActivity(
                 "revise",
-                "Something in an earlier note doesn't match — rewriting that section…"
+                pickStatusLine(
+                  hasScreen ? REVISE_WITH_SCREEN_LINES : REVISE_STATUS_LINES,
+                  Date.now() + sectionId.length * 3
+                )
               );
               queue.push({ kind: "revise", sectionId });
             }

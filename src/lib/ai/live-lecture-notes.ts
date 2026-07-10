@@ -20,6 +20,7 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
  * response):
  *
  *   @@thought <text>       zero or more, FIRST — short user-visible narration
+ *                          (specific to this slice; may call out on-screen finds)
  *   @@revise <sectionId>   zero or more, FIRST — full replacement markdown
  *                          for a recent section the model got wrong or that
  *                          new lecture content recontextualizes
@@ -80,9 +81,18 @@ SELF-REVISION (bounded, rare):
 - Do not revise for style, wording, ordering, or completeness. A revision must preserve the section's correct content verbatim and change only what was wrong.
 - Prefer screen spellings/numbers when correcting STT errors. Most calls have ZERO @@revise operations; if nothing is factually wrong, emit none.
 
-NARRATION (optional — do not delay notes for this):
-- You MAY emit zero or one short @@thought line before @@revise/@@append when something non-obvious happened (a correction, skip, or topic shift). Keep it under 15 words.
-- Never emit more than one @@thought per call. If unsure, skip thoughts and go straight to @@append.
+NARRATION (@@thought — user-visible, optional but valuable):
+- You MAY emit zero or one short @@thought line before @@revise/@@append. This is Rose speaking to the student in the activity log — not notes.
+- Goal: make the student feel you are actually listening AND watching the lecture. Be specific to THIS slice.
+- Prefer a thought when ANY of these are true:
+  1. ON-SCREEN CONTENT is present and has something useful/noticeable (a slide title, table, equation, spelled term, diagram label, key number). Call it out briefly so they know you saw the screen — e.g. name the slide topic, the table, or the term you just locked in from the display.
+  2. A clear topic shift, correction, worked example, or "this matters for the exam" moment.
+  3. You are about to @@revise because speech and screen disagreed (say you trusted the slide spelling/number).
+- Skip @@thought for pure logistics, silence, or tiny filler with nothing new on screen or in speech.
+- Voice: warm, sharp TA energy — one concrete observation, not a status update. Vary wording every time; never reuse stock phrases like "Capturing notes", "Processing the lecture", "Updating notes", "Got it", or "Taking notes on…".
+- Do NOT start with "I" every time. Mix openers (Noticing… / Slide shows… / Locking in… / Catching… / From the board… / Hearing… / Pulling out…).
+- Keep under 18 words. No markdown. No quotes around the whole line. Never invent screen content that was not provided.
+- Never emit more than one @@thought per call.
 
 WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the rolling summary): still emit @@append but put NOTHING after it. Never pad.
 
@@ -168,10 +178,10 @@ export async function* streamLiveLectureNotes(input: {
       ? `YOUR RECENT NOTE SECTIONS (the only sections you may @@revise):\n\n${sectionsBlock}`
       : "YOUR RECENT NOTE SECTIONS: (none yet — no @@revise operations possible)",
     screenContext
-      ? `ON-SCREEN CONTENT (authoritative for spellings, symbols, numbers, tables, slide titles):\n${screenContext}`
+      ? `ON-SCREEN CONTENT (authoritative for spellings, symbols, numbers, tables, slide titles — if useful, mention something specific from this in @@thought so the student knows you saw the display):\n${screenContext}`
       : null,
     `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
-    "\nEmit the protocol now, starting with the first marker.",
+    "\nEmit the protocol now, starting with the first marker. If you include @@thought, make it specific to this slice — never a generic status line.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -180,7 +190,7 @@ export async function* streamLiveLectureNotes(input: {
   const stream = anthropic.messages.stream({
     model: MODEL,
     max_tokens: 4_000,
-    temperature: 0.3,
+    temperature: 0.45,
     system: SYSTEM,
     messages: [{ role: "user", content: userPrompt }],
   });
