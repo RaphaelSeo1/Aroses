@@ -5,6 +5,11 @@ import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { NotesDocView } from "@/components/notes-hub/NotesDocView";
 import { createClient } from "@/lib/supabase/server";
 
+const EMPTY_DOC = {
+  type: "doc",
+  content: [{ type: "paragraph" }],
+};
+
 /**
  * Notes-hub view of a tutor session's live notes. The active session
  * surface disappears once the session ends (it redirects to the recap,
@@ -25,7 +30,9 @@ export default async function TutorNotesPage(props: {
 
   const { data: session } = await supabase
     .from("tutor_sessions")
-    .select("id, title, topic, status, started_at")
+    .select(
+      "id, title, topic, status, started_at, live_notes_json, updated_at"
+    )
     .eq("id", sessionId)
     .eq("user_id", user.id)
     .maybeSingle();
@@ -73,6 +80,8 @@ export default async function TutorNotesPage(props: {
             notesEndpoint={`/api/tutor-session/${sessionId}/notes`}
             title={title}
             subtitle="Tutor session notes"
+            initialContentJson={session.live_notes_json ?? EMPTY_DOC}
+            initialUpdatedAt={(session.updated_at as string) ?? null}
           />
         </div>
       </main>

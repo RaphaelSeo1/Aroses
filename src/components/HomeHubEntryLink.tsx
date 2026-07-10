@@ -13,7 +13,16 @@ export type HomeHubEntryVariant =
 
 const variantStyles: Record<
   HomeHubEntryVariant,
-  { icon: ReactNode; iconWrap: string; hoverBorder: string; arrowHover: string }
+  {
+    icon: ReactNode;
+    iconWrap: string;
+    hoverBorder: string;
+    arrowHover: string;
+    cardBg: string;
+    cornerGlow: string;
+    /** Soft outer glow on a status-style dot next to the count. */
+    countDot: string;
+  }
 > = {
   notes: {
     iconWrap:
@@ -21,6 +30,12 @@ const variantStyles: Record<
     hoverBorder: "hover:border-violet-200 dark:hover:border-violet-800",
     arrowHover:
       "group-hover:text-violet-600 dark:group-hover:text-violet-400",
+    cardBg:
+      "bg-gradient-to-br from-violet-50/80 via-white to-white dark:from-violet-950/30 dark:via-zinc-950 dark:to-zinc-950",
+    cornerGlow:
+      "bg-violet-200/50 group-hover:bg-violet-200/70 dark:bg-violet-900/30",
+    countDot:
+      "bg-violet-500 shadow-[0_0_0_3px_rgba(139,92,246,0.22)] dark:bg-violet-400 dark:shadow-[0_0_0_3px_rgba(139,92,246,0.28)]",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -43,6 +58,12 @@ const variantStyles: Record<
       "bg-rose-100 text-rose-700 ring-rose-200/70 dark:bg-rose-950/60 dark:text-rose-300 dark:ring-rose-900/50",
     hoverBorder: "hover:border-rose-200 dark:hover:border-rose-800",
     arrowHover: "group-hover:text-rose-600 dark:group-hover:text-rose-300",
+    cardBg:
+      "bg-gradient-to-br from-rose-50/80 via-white to-white dark:from-rose-950/30 dark:via-zinc-950 dark:to-zinc-950",
+    cornerGlow:
+      "bg-rose-200/50 group-hover:bg-rose-200/70 dark:bg-rose-900/30",
+    countDot:
+      "bg-rose-500 shadow-[0_0_0_3px_rgba(244,63,94,0.22)] dark:bg-rose-400 dark:shadow-[0_0_0_3px_rgba(244,63,94,0.28)]",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -65,6 +86,12 @@ const variantStyles: Record<
     hoverBorder: "hover:border-emerald-200 dark:hover:border-emerald-800",
     arrowHover:
       "group-hover:text-emerald-600 dark:group-hover:text-emerald-400",
+    cardBg:
+      "bg-gradient-to-br from-emerald-50/80 via-white to-white dark:from-emerald-950/30 dark:via-zinc-950 dark:to-zinc-950",
+    cornerGlow:
+      "bg-emerald-200/50 group-hover:bg-emerald-200/70 dark:bg-emerald-900/30",
+    countDot:
+      "bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.22)] dark:bg-emerald-400 dark:shadow-[0_0_0_3px_rgba(16,185,129,0.28)]",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -87,6 +114,12 @@ const variantStyles: Record<
     hoverBorder: "hover:border-indigo-200 dark:hover:border-indigo-800",
     arrowHover:
       "group-hover:text-indigo-600 dark:group-hover:text-indigo-400",
+    cardBg:
+      "bg-gradient-to-br from-indigo-50/80 via-white to-white dark:from-indigo-950/30 dark:via-zinc-950 dark:to-zinc-950",
+    cornerGlow:
+      "bg-indigo-200/50 group-hover:bg-indigo-200/70 dark:bg-indigo-900/30",
+    countDot:
+      "bg-indigo-500 shadow-[0_0_0_3px_rgba(99,102,241,0.22)] dark:bg-indigo-400 dark:shadow-[0_0_0_3px_rgba(99,102,241,0.28)]",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -110,6 +143,12 @@ const variantStyles: Record<
       "bg-rose-100 text-rose-700 ring-rose-200/70 dark:bg-rose-950/60 dark:text-rose-300 dark:ring-rose-900/50",
     hoverBorder: "hover:border-rose-200 dark:hover:border-rose-800",
     arrowHover: "group-hover:text-rose-600 dark:group-hover:text-rose-300",
+    cardBg:
+      "bg-gradient-to-br from-rose-50/80 via-white to-white dark:from-rose-950/30 dark:via-zinc-950 dark:to-zinc-950",
+    cornerGlow:
+      "bg-rose-200/50 group-hover:bg-rose-200/70 dark:bg-rose-900/30",
+    countDot:
+      "bg-rose-500 shadow-[0_0_0_3px_rgba(244,63,94,0.22)] dark:bg-rose-400 dark:shadow-[0_0_0_3px_rgba(244,63,94,0.28)]",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -132,6 +171,12 @@ const variantStyles: Record<
     hoverBorder: "hover:border-violet-200 dark:hover:border-violet-800",
     arrowHover:
       "group-hover:text-violet-600 dark:group-hover:text-violet-400",
+    cardBg:
+      "bg-gradient-to-br from-violet-50/80 via-white to-white dark:from-violet-950/30 dark:via-zinc-950 dark:to-zinc-950",
+    cornerGlow:
+      "bg-violet-200/50 group-hover:bg-violet-200/70 dark:bg-violet-900/30",
+    countDot:
+      "bg-violet-500 shadow-[0_0_0_3px_rgba(139,92,246,0.22)] dark:bg-violet-400 dark:shadow-[0_0_0_3px_rgba(139,92,246,0.28)]",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -143,7 +188,7 @@ const variantStyles: Record<
         strokeLinejoin="round"
         aria-hidden
       >
-        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
       </svg>
     ),
   },
@@ -153,6 +198,12 @@ const variantStyles: Record<
     hoverBorder: "hover:border-fuchsia-200 dark:hover:border-fuchsia-800",
     arrowHover:
       "group-hover:text-fuchsia-600 dark:group-hover:text-fuchsia-400",
+    cardBg:
+      "bg-gradient-to-br from-fuchsia-50/80 via-white to-white dark:from-fuchsia-950/30 dark:via-zinc-950 dark:to-zinc-950",
+    cornerGlow:
+      "bg-fuchsia-200/50 group-hover:bg-fuchsia-200/70 dark:bg-fuchsia-900/30",
+    countDot:
+      "bg-fuchsia-500 shadow-[0_0_0_3px_rgba(217,70,239,0.22)] dark:bg-fuchsia-400 dark:shadow-[0_0_0_3px_rgba(217,70,239,0.28)]",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -174,6 +225,12 @@ const variantStyles: Record<
       "bg-sky-100 text-sky-700 ring-sky-200/70 dark:bg-sky-950/60 dark:text-sky-300 dark:ring-sky-900/50",
     hoverBorder: "hover:border-sky-200 dark:hover:border-sky-800",
     arrowHover: "group-hover:text-sky-600 dark:group-hover:text-sky-400",
+    cardBg:
+      "bg-gradient-to-br from-sky-50/80 via-white to-white dark:from-sky-950/30 dark:via-zinc-950 dark:to-zinc-950",
+    cornerGlow:
+      "bg-sky-200/50 group-hover:bg-sky-200/70 dark:bg-sky-900/30",
+    countDot:
+      "bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.22)] dark:bg-sky-400 dark:shadow-[0_0_0_3px_rgba(14,165,233,0.28)]",
     icon: (
       <svg
         viewBox="0 0 24 24"
@@ -191,6 +248,31 @@ const variantStyles: Record<
     ),
   },
 };
+
+function CountPill({
+  count,
+  dotClass,
+  size = "sm",
+}: {
+  count: number;
+  dotClass: string;
+  size?: "sm" | "md";
+}) {
+  return (
+    <span
+      className={[
+        "inline-flex items-center gap-1.5 rounded-full border border-zinc-200/90 bg-white font-semibold tabular-nums text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200",
+        size === "md" ? "px-2.5 py-0.5 text-xs" : "px-2 py-0.5 text-[11px]",
+      ].join(" ")}
+    >
+      <span
+        className={["h-1.5 w-1.5 shrink-0 rounded-full", dotClass].join(" ")}
+        aria-hidden
+      />
+      {count}
+    </span>
+  );
+}
 
 /** Minimal home-screen entry link — icon, label, hint, optional count badge. */
 export function HomeHubEntryLink({
@@ -218,11 +300,19 @@ export function HomeHubEntryLink({
       <Link
         href={href}
         className={[
-          "group flex h-full min-h-[8.25rem] flex-col rounded-xl border border-zinc-200/90 bg-white/95 p-4 shadow-sm ring-1 ring-white/50 transition hover:-translate-y-0.5 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950/80 dark:ring-zinc-700/30",
+          "group relative flex h-full min-h-[8.25rem] flex-col overflow-hidden rounded-xl border border-zinc-200/90 p-4 shadow-sm ring-1 ring-white/50 transition hover:-translate-y-0.5 hover:shadow-md dark:border-zinc-800 dark:ring-zinc-700/30",
+          styles.cardBg,
           styles.hoverBorder,
         ].join(" ")}
       >
-        <div className="flex items-start justify-between gap-2">
+        <div
+          className={[
+            "pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full blur-2xl transition",
+            styles.cornerGlow,
+          ].join(" ")}
+          aria-hidden
+        />
+        <div className="relative flex items-start justify-between gap-2">
           <span
             className={[
               "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ring-1",
@@ -241,15 +331,13 @@ export function HomeHubEntryLink({
             →
           </span>
         </div>
-        <div className="mt-3 flex min-h-0 flex-1 flex-col">
+        <div className="relative mt-3 flex min-h-0 flex-1 flex-col">
           <div className="flex items-center gap-2">
             <p className="text-sm font-semibold leading-snug text-zinc-900 dark:text-zinc-50">
               {label}
             </p>
             {typeof count === "number" && count > 0 ? (
-              <span className="rounded-md bg-zinc-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                {count}
-              </span>
+              <CountPill count={count} dotClass={styles.countDot} />
             ) : null}
           </div>
           <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
@@ -264,12 +352,25 @@ export function HomeHubEntryLink({
     <Link
       href={href}
       className={[
-        "group block overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/95 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md transition hover:-translate-y-0.5 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950/80 dark:ring-zinc-700/30",
+        "group relative block overflow-hidden rounded-3xl border border-zinc-200/90 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md transition hover:-translate-y-0.5 hover:shadow-md dark:border-zinc-800 dark:ring-zinc-700/30",
+        styles.cardBg,
         isLg ? "p-5" : "p-4",
         styles.hoverBorder,
       ].join(" ")}
     >
-      <div className={["flex items-center", isLg ? "gap-4" : "gap-3"].join(" ")}>
+      <div
+        className={[
+          "pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full blur-2xl transition",
+          styles.cornerGlow,
+        ].join(" ")}
+        aria-hidden
+      />
+      <div
+        className={[
+          "relative flex items-center",
+          isLg ? "gap-4" : "gap-3",
+        ].join(" ")}
+      >
         <span
           className={[
             "inline-flex shrink-0 items-center justify-center rounded-xl ring-1",
@@ -290,14 +391,11 @@ export function HomeHubEntryLink({
               {label}
             </p>
             {typeof count === "number" && count > 0 ? (
-              <span
-                className={[
-                  "rounded-full bg-zinc-100 font-semibold tabular-nums text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
-                  isLg ? "px-2.5 py-0.5 text-xs" : "px-2 py-0.5 text-[11px]",
-                ].join(" ")}
-              >
-                {count}
-              </span>
+              <CountPill
+                count={count}
+                dotClass={styles.countDot}
+                size={isLg ? "md" : "sm"}
+              />
             ) : null}
           </div>
           <p

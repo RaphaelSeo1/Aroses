@@ -402,6 +402,7 @@ export function CoursePlayer({
           lastModuleId: activeModuleId,
           lastMode: "free",
           lastScrollPosition: Math.round(window.scrollY),
+          bumpInteracted: false,
         });
       }, 2000);
     };

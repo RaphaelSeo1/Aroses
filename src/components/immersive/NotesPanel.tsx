@@ -16,6 +16,7 @@ import { Callout } from "./notes/Callout";
 import { AI_APPEND_META, Provenance } from "./notes/Provenance";
 import { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
 import { promptDialog } from "@/components/AppDialogs";
+import { EmojiPickerButton } from "@/components/EmojiPickerButton";
 import {
   readRoseAppendedChunkIds,
   readRoseDocAttrs,
@@ -182,33 +183,6 @@ function pickDocEmoji(title: string): string {
   return "📝";
 }
 
-const EMOJI_PICKS = [
-  "📝",
-  "📖",
-  "📚",
-  "✏️",
-  "💡",
-  "🧠",
-  "🧬",
-  "🧪",
-  "⚛️",
-  "📐",
-  "💻",
-  "🎨",
-  "🎵",
-  "🌍",
-  "🪐",
-  "❤️",
-  "🏛️",
-  "⚖️",
-  "💰",
-  "🗣️",
-  "✨",
-  "🔥",
-  "⭐",
-  "🎯",
-] as const;
-
 function formatRelativeTime(ms: number): string {
   const diff = Date.now() - ms;
   if (diff < 0 || diff < 4 * 1000) return "just now";
@@ -257,6 +231,8 @@ export function NotesPanel({
   /** Live Notes: pin-to-bottom scroll follow; user can scroll away freely. */
   scrollFollowMode = false,
   onDocTitleChange,
+  initialContentJson,
+  initialUpdatedAt = null,
 }: {
   /**
    * Mentored Learning path — when set, the panel reads/writes
@@ -299,16 +275,26 @@ export function NotesPanel({
   onDocTitleChange?: (title: string) => void;
   /** Fired once the TipTap editor is mounted and the imperative handle is wired. */
   onEditorReady?: () => void;
+  /** Server-provided TipTap JSON — seeds the editor and skips the blank flash. */
+  initialContentJson?: unknown;
+  initialUpdatedAt?: string | null;
 }) {
   const endpoint = notesEndpoint ?? `/api/mentored/notes/${materialId}`;
   const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "error">(
     "idle"
   );
-  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(() => {
+    if (!initialUpdatedAt) return null;
+    const t = Date.parse(initialUpdatedAt);
+    return Number.isNaN(t) ? null : t;
+  });
   const saveTimerRef = useRef<number | null>(null);
   const titleSaveTimerRef = useRef<number | null>(null);
-  const initialDocRef = useRef<unknown | null>(null);
-  const notesHydratedRef = useRef(false);
+  const initialDocRef = useRef<unknown | null>(initialContentJson ?? null);
+  const notesHydratedRef = useRef(Boolean(initialContentJson));
+  const [notesHydrated, setNotesHydrated] = useState(
+    Boolean(initialContentJson)
+  );
   const docChromeDirtyRef = useRef(false);
   const editorDirtyRef = useRef(false);
   const defaultTitle = courseTitle || lessonTitle || "Notes";
@@ -323,11 +309,13 @@ export function NotesPanel({
     },
     [onDocTitleChange]
   );
-  const [docEmoji, setDocEmoji] = useState(() =>
-    pickDocEmoji(`${lessonTitle} ${courseTitle}`)
-  );
-  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
-  const emojiPickerRef = useRef<HTMLDivElement | null>(null);
+  const [docEmoji, setDocEmoji] = useState(() => {
+    if (initialContentJson) {
+      const attrs = readRoseDocAttrs(initialContentJson);
+      if (attrs.roseDocEmoji) return attrs.roseDocEmoji;
+    }
+    return pickDocEmoji(`${lessonTitle} ${courseTitle}`);
+  });
 
   // Live handle to the editor so the (synchronously-defined) key handler can
   // reach commands without a use-before-define on `editor`.
@@ -462,7 +450,7 @@ export function NotesPanel({
         return false;
       },
     },
-    content: undefined,
+    content: (initialContentJson as object | undefined) ?? undefined,
   });
   editorInstanceRef.current = editor;
 
@@ -906,11 +894,24 @@ export function NotesPanel({
   }, [editor, editorRef]);
 
   const editorReadyFiredRef = useRef(false);
-  const notesLoadedForRef = useRef<string | null>(null);
+  const notesLoadedForRef = useRef<string | null>(
+    initialContentJson ? endpoint : null
+  );
+
+  // When content was server-seeded, mark ready once the editor mounts.
+  useEffect(() => {
+    if (!editor || !initialContentJson) return;
+    if (editorReadyFiredRef.current) return;
+    editorReadyFiredRef.current = true;
+    notesHydratedRef.current = true;
+    setNotesHydrated(true);
+    onEditorReady?.();
+  }, [editor, initialContentJson, onEditorReady]);
 
   // Initial load — hydrate the editor with the saved doc once per endpoint.
   useEffect(() => {
     if (!editor) return;
+    if (initialContentJson) return;
     if (notesLoadedForRef.current === endpoint) return;
     notesLoadedForRef.current = endpoint;
     editorReadyFiredRef.current = false;
@@ -972,10 +973,15 @@ export function NotesPanel({
           editorReadyFiredRef.current = true;
           autoGenLog("notes panel ready — firing onEditorReady");
           notesHydratedRef.current = true;
+          setNotesHydrated(true);
           onEditorReady?.();
         }
       } catch (e) {
         autoGenLogError("load failed", e, { endpoint });
+        if (!cancelled) {
+          notesHydratedRef.current = true;
+          setNotesHydrated(true);
+        }
       }
     })();
     return () => {
@@ -986,22 +992,12 @@ export function NotesPanel({
     docTitleControlled,
     editor,
     endpoint,
+    initialContentJson,
     lessonTitle,
     onAutoGenerateChange,
     onEditorReady,
     setDocTitle,
   ]);
-
-  useEffect(() => {
-    if (!emojiPickerOpen) return;
-    const onPointer = (e: MouseEvent) => {
-      if (!emojiPickerRef.current?.contains(e.target as Node)) {
-        setEmojiPickerOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", onPointer);
-    return () => window.removeEventListener("mousedown", onPointer);
-  }, [emojiPickerOpen]);
 
   const buildSavePayload = useCallback((): {
     contentJson: unknown;
@@ -1352,37 +1348,15 @@ export function NotesPanel({
               so a user-typed first H1 becomes the de-facto title
               and can be edited / deleted like any other block. */}
           <header className="mb-6">
-            <div className="relative mb-3" ref={emojiPickerRef}>
-              <button
-                type="button"
-                onClick={() => setEmojiPickerOpen((o) => !o)}
-                className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-zinc-200/80 bg-white text-3xl leading-none shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50"
-                aria-label="Choose document emoji"
-                title="Choose emoji"
-              >
-                {docEmoji}
-              </button>
-              {emojiPickerOpen ? (
-                <div className="absolute left-0 top-full z-20 mt-2 grid w-[min(16rem,calc(100vw-3rem))] grid-cols-6 gap-1 rounded-2xl border border-zinc-200 bg-white p-2 shadow-xl">
-                  {EMOJI_PICKS.map((emoji) => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => {
-                        setDocEmoji(emoji);
-                        docChromeDirtyRef.current = true;
-                        setEmojiPickerOpen(false);
-                        persistDocChrome();
-                      }}
-                      className={`flex h-9 w-9 items-center justify-center rounded-lg text-xl hover:bg-zinc-100 ${
-                        emoji === docEmoji ? "bg-zinc-100 ring-1 ring-zinc-300" : ""
-                      }`}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
+            <div className="mb-3">
+              <EmojiPickerButton
+                value={docEmoji}
+                ariaLabel="Choose document emoji"
+                onChange={(emoji) => {
+                  docChromeDirtyRef.current = true;
+                  setDocEmoji(emoji);
+                }}
+              />
             </div>
             <input
               type="text"
@@ -1508,12 +1482,28 @@ export function NotesPanel({
               </BubbleBtn>
             </BubbleMenu>
           ) : null}
-          <EditorContent editor={editor} />
+          {editor ? (
+            <EditorContent editor={editor} />
+          ) : initialContentJson ? (
+            <div
+              className="tn-prose max-w-none min-h-[6rem] whitespace-pre-wrap text-zinc-700"
+              aria-busy="true"
+            >
+              {docToPlainText(initialContentJson) || "\u00a0"}
+            </div>
+          ) : (
+            <div className="min-h-[6rem] animate-pulse space-y-2" aria-busy="true">
+              <div className="h-3 w-2/3 rounded bg-zinc-100" />
+              <div className="h-3 w-full rounded bg-zinc-100" />
+              <div className="h-3 w-[90%] rounded bg-zinc-100" />
+              <div className="h-3 w-[80%] rounded bg-zinc-100" />
+            </div>
+          )}
         </div>
       </div>
 
       {/* Slash / auto-generate hint — pinned to panel bottom (not mid-page). */}
-      {editor && editor.isEmpty ? (
+      {editor && notesHydrated && editor.isEmpty ? (
         <div className="shrink-0 border-t border-zinc-100 bg-zinc-50/40 px-5 py-3 xl:px-7">
           <p className="select-none text-[12px] text-zinc-400">
             Press{" "}

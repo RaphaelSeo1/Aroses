@@ -12,6 +12,9 @@ import type {
  *   Returns the full session record (including transcript + uploads).
  *   Used by the active-session client + recap view.
  *
+ * PATCH  /api/tutor-session/[sessionId]
+ *   Body: { title?: string } — rename the session.
+ *
  * DELETE /api/tutor-session/[sessionId]
  *   Hard-deletes the session row. ON DELETE CASCADE on the uploads
  *   table + storage policy clean up child rows / files.
@@ -89,6 +92,47 @@ export async function GET(_req: Request, ctx: Params) {
   };
 
   return NextResponse.json({ session: record });
+}
+
+export async function PATCH(request: Request, ctx: Params) {
+  const { sessionId } = await ctx.params;
+  if (!UUID_RE.test(sessionId)) {
+    return NextResponse.json({ error: "Invalid session id" }, { status: 400 });
+  }
+
+  let body: { title?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  if (typeof body.title !== "string" || !body.title.trim()) {
+    return NextResponse.json({ error: "title required" }, { status: 400 });
+  }
+
+  const title = body.title.trim().slice(0, 200);
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  }
+
+  const { data, error } = await supabase
+    .from("tutor_sessions")
+    .update({ title, updated_at: new Date().toISOString() })
+    .eq("id", sessionId)
+    .eq("user_id", user.id)
+    .select("id, title")
+    .maybeSingle();
+
+  if (error || !data) {
+    return NextResponse.json({ error: "Update failed" }, { status: 404 });
+  }
+
+  return NextResponse.json({ ok: true, title: data.title });
 }
 
 export async function DELETE(_req: Request, ctx: Params) {

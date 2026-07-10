@@ -3,8 +3,9 @@ import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { NotesHubClient } from "@/components/notes-hub/NotesHubClient";
 import type { NoteDocCardData, NoteHubSection } from "@/lib/notes/hub-types";
-import { customSectionId } from "@/lib/notes/hub-types";
+import { customSectionId, isCustomSection } from "@/lib/notes/hub-types";
 import { applySectionOrder } from "@/lib/notes/hub-layout";
+import { buildNoteSearchText } from "@/lib/notes/note-search";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -53,7 +54,7 @@ export default async function NotesHubPage() {
         .limit(60),
       supabase
         .from("user_note_sections")
-        .select("id, title, sort_order")
+        .select("id, title, sort_order, emoji")
         .eq("user_id", user.id)
         .order("sort_order", { ascending: true })
         .order("created_at", { ascending: true }),
@@ -80,7 +81,26 @@ export default async function NotesHubPage() {
     ]);
 
   const standaloneNotes = standaloneRes.data ?? [];
-  const userSections = sectionsRes.error ? [] : (sectionsRes.data ?? []);
+  type SectionRow = {
+    id: string;
+    title: string;
+    sort_order: number;
+    emoji?: string | null;
+  };
+  let userSections: SectionRow[] = [];
+  if (sectionsRes.error) {
+    if (/emoji/i.test(sectionsRes.error.message ?? "")) {
+      const fallback = await supabase
+        .from("user_note_sections")
+        .select("id, title, sort_order")
+        .eq("user_id", user.id)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true });
+      userSections = (fallback.data ?? []) as SectionRow[];
+    }
+  } else {
+    userSections = (sectionsRes.data ?? []) as SectionRow[];
+  }
   const liveSessions = liveRes.data ?? [];
   const courseLiveSessions = liveSessions.filter(
     (s) => !s.user_note_id && s.course_id
@@ -130,20 +150,40 @@ export default async function NotesHubPage() {
     (courses ?? []).map((c) => [c.id as string, c.title as string])
   );
 
-  const standaloneCards: NoteDocCardData[] = standaloneNotes
-    .filter((n) => !n.section_id)
-    .map((n) => {
+  const sectionTitleById = new Map(
+    userSections.map((s) => [
+      s.id as string,
+      ((s.title as string) || "New section").trim() || "New section",
+    ])
+  );
+
+  const toStandaloneCard = (
+    n: (typeof standaloneNotes)[number],
+    subtitleOverride?: string | null
+  ): NoteDocCardData => {
     const noteId = n.id as string;
     const active = activeNoteSessionByNoteId.get(noteId);
     const activeStatus = active?.status as string | undefined;
+    const folderTitle = n.section_id
+      ? sectionTitleById.get(n.section_id as string) ?? null
+      : null;
     return {
       key: `standalone-${noteId}`,
       href: active
         ? `/notes/doc/${noteId}/record/${active.id as string}`
         : `/notes/doc/${noteId}`,
       title: (n.title as string) || "Untitled note",
-      subtitle: n.ingest_job_id ? "Course build started" : "My notes",
+      subtitle:
+        subtitleOverride !== undefined
+          ? subtitleOverride
+          : n.ingest_job_id
+            ? "Course build started"
+            : folderTitle,
       preview: preview(n.content_text),
+      searchText: buildNoteSearchText(
+        (n.title as string) || "Untitled note",
+        n.content_text
+      ),
       dateLabel: formatDate(n.updated_at as string),
       ref: { kind: "standalone", id: noteId },
       deletable: true,
@@ -156,36 +196,12 @@ export default async function NotesHubPage() {
             ? { label: "Course", tone: "done" as const }
             : undefined,
     };
-  });
+  };
 
   const customSectionCards = (sectionId: string): NoteDocCardData[] =>
     standaloneNotes
       .filter((n) => (n.section_id as string | null) === sectionId)
-      .map((n) => {
-        const noteId = n.id as string;
-        const active = activeNoteSessionByNoteId.get(noteId);
-        const activeStatus = active?.status as string | undefined;
-        return {
-          key: `standalone-${noteId}`,
-          href: active
-            ? `/notes/doc/${noteId}/record/${active.id as string}`
-            : `/notes/doc/${noteId}`,
-          title: (n.title as string) || "Untitled note",
-          subtitle: n.ingest_job_id ? "Course build started" : null,
-          preview: preview(n.content_text),
-          dateLabel: formatDate(n.updated_at as string),
-          ref: { kind: "standalone", id: noteId },
-          deletable: true,
-          isLive: activeStatus === "recording",
-          chip: activeStatus === "recording"
-            ? { label: "Live", tone: "live" as const }
-            : activeStatus === "paused"
-              ? { label: "Paused", tone: "paused" as const }
-              : n.ingest_job_id
-                ? { label: "Course", tone: "done" as const }
-                : undefined,
-        };
-      });
+      .map((n) => toStandaloneCard(n, n.ingest_job_id ? "Course build started" : null));
 
   const customSections: NoteHubSection[] = userSections.map((s) => ({
     id: customSectionId(s.id as string),
@@ -193,7 +209,23 @@ export default async function NotesHubPage() {
     hint: "Use Select → Move to add notes here, or create a new note in this section.",
     cards: customSectionCards(s.id as string),
     custom: true,
+    emoji:
+      typeof (s as { emoji?: string | null }).emoji === "string" &&
+      (s as { emoji: string }).emoji.trim()
+        ? (s as { emoji: string }).emoji.trim()
+        : null,
   }));
+
+  const dedupeCards = (cards: NoteDocCardData[]): NoteDocCardData[] => {
+    const seen = new Set<string>();
+    const out: NoteDocCardData[] = [];
+    for (const card of cards) {
+      if (seen.has(card.key)) continue;
+      seen.add(card.key);
+      out.push(card);
+    }
+    return out;
+  };
 
   const liveCards: NoteDocCardData[] = courseLiveSessions.map((s) => {
     const status = s.status as string;
@@ -212,6 +244,10 @@ export default async function NotesHubPage() {
       title: (s.title as string) || "Live lecture",
       subtitle: courseTitleById.get(s.course_id as string) ?? null,
       preview: preview(s.notes_text),
+      searchText: buildNoteSearchText(
+        (s.title as string) || "Live lecture",
+        s.notes_text
+      ),
       dateLabel: formatDate((s.started_at as string) ?? (s.updated_at as string)),
       isLive: isActive,
       chip,
@@ -220,40 +256,54 @@ export default async function NotesHubPage() {
     };
   });
 
-  const tutorCards: NoteDocCardData[] = tutorSessions.map((s) => ({
-    key: `tutor-${s.id}`,
-    href: `/notes/tutor/${s.id}`,
-    title: (s.title as string) || (s.topic as string) || "Tutor session",
-    subtitle:
-      typeof s.topic === "string" && s.topic.trim() ? s.topic.trim() : null,
-    preview: preview(s.live_notes_text),
-    dateLabel: formatDate((s.started_at as string) ?? (s.updated_at as string)),
-    ref: { kind: "tutor", id: s.id as string },
-    deletable: true,
-  }));
+  const tutorCards: NoteDocCardData[] = tutorSessions.map((s) => {
+    const title =
+      (s.title as string) || (s.topic as string) || "Tutor session";
+    return {
+      key: `tutor-${s.id}`,
+      href: `/notes/tutor/${s.id}`,
+      title,
+      subtitle:
+        typeof s.topic === "string" && s.topic.trim() ? s.topic.trim() : null,
+      preview: preview(s.live_notes_text),
+      searchText: buildNoteSearchText(title, s.live_notes_text),
+      dateLabel: formatDate((s.started_at as string) ?? (s.updated_at as string)),
+      ref: { kind: "tutor", id: s.id as string },
+      deletable: true,
+    };
+  });
 
   const courseNoteCards: NoteDocCardData[] = courseNotes.map((n) => {
     const material = materialById.get(n.material_id as string);
+    const title = materialTitle(material?.file_name);
     return {
       key: `course-${n.material_id}`,
       href: `/notes/material/${n.material_id}`,
-      title: materialTitle(material?.file_name),
+      title,
       subtitle: material
         ? (courseTitleById.get(material.course_id) ?? null)
         : null,
       preview: preview(n.content_text),
+      searchText: buildNoteSearchText(title, n.content_text),
       dateLabel: formatDate(n.updated_at as string),
       ref: { kind: "course", materialId: n.material_id as string },
       deletable: true,
     };
   });
 
+  const myNotesCards = dedupeCards([
+    ...standaloneNotes.map((n) => toStandaloneCard(n)),
+    ...liveCards,
+    ...tutorCards,
+    ...courseNoteCards,
+  ]);
+
   const sectionsUnordered: NoteHubSection[] = [
     {
       id: "standalone",
       title: "My notes",
-      hint: "Notes you created here — keep as notes or build a course anytime.",
-      cards: standaloneCards,
+      hint: "Everything in one place — folders, live lectures, tutor sessions, and course notes.",
+      cards: myNotesCards,
     },
     ...customSections,
     {
@@ -278,16 +328,42 @@ export default async function NotesHubPage() {
 
   const { data: layoutRow, error: layoutError } = await supabase
     .from("user_notes_hub_layout")
-    .select("section_order")
+    .select("section_order, section_emojis")
     .eq("user_id", user.id)
     .maybeSingle();
 
-  const savedOrder =
-    !layoutError && Array.isArray(layoutRow?.section_order)
-      ? (layoutRow.section_order as string[])
-      : [];
+  let savedOrder: string[] = [];
+  let savedEmojis: Record<string, string> = {};
 
-  const sections = applySectionOrder(sectionsUnordered, savedOrder);
+  if (layoutError && /section_emojis/i.test(layoutError.message ?? "")) {
+    const fallback = await supabase
+      .from("user_notes_hub_layout")
+      .select("section_order")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!fallback.error && Array.isArray(fallback.data?.section_order)) {
+      savedOrder = fallback.data.section_order as string[];
+    }
+  } else if (!layoutError) {
+    if (Array.isArray(layoutRow?.section_order)) {
+      savedOrder = layoutRow.section_order as string[];
+    }
+    if (
+      layoutRow?.section_emojis &&
+      typeof layoutRow.section_emojis === "object" &&
+      !Array.isArray(layoutRow.section_emojis)
+    ) {
+      savedEmojis = layoutRow.section_emojis as Record<string, string>;
+    }
+  }
+
+  const sections = applySectionOrder(sectionsUnordered, savedOrder).map(
+    (section) => {
+      if (isCustomSection(section)) return section;
+      const emoji = savedEmojis[section.id]?.trim();
+      return emoji ? { ...section, emoji } : section;
+    }
+  );
 
   const empty = sections.every((s) => s.cards.length === 0);
 

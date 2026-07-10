@@ -5,6 +5,11 @@ import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { NotesDocView } from "@/components/notes-hub/NotesDocView";
 import { createClient } from "@/lib/supabase/server";
 
+const EMPTY_DOC = {
+  type: "doc",
+  content: [{ type: "paragraph" }],
+};
+
 /**
  * Notes-hub view of the mentored-learning notes doc for one course
  * material — the same document NotesPanel edits inside the immersive
@@ -30,16 +35,24 @@ export default async function MaterialNotesPage(props: {
     .maybeSingle();
   if (!material) notFound();
 
-  const { data: course } = await supabase
-    .from("courses")
-    .select("id, title")
-    .eq("id", material.course_id as string)
-    .maybeSingle();
+  const [courseRes, notesRes] = await Promise.all([
+    supabase
+      .from("courses")
+      .select("id, title")
+      .eq("id", material.course_id as string)
+      .maybeSingle(),
+    supabase
+      .from("user_course_notes")
+      .select("content_json, updated_at")
+      .eq("material_id", materialId)
+      .eq("user_id", user.id)
+      .maybeSingle(),
+  ]);
 
   const title =
     (material.file_name as string)?.replace(/\.[a-z0-9]{2,5}$/i, "").trim() ||
     "Course notes";
-  const courseTitle = (course?.title as string) || "Course";
+  const courseTitle = (courseRes.data?.title as string) || "Course";
 
   return (
     <>
@@ -72,6 +85,8 @@ export default async function MaterialNotesPage(props: {
             notesEndpoint={`/api/mentored/notes/${materialId}`}
             title={title}
             subtitle={courseTitle}
+            initialContentJson={notesRes.data?.content_json ?? EMPTY_DOC}
+            initialUpdatedAt={(notesRes.data?.updated_at as string) ?? null}
           />
         </div>
       </main>

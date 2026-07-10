@@ -73,10 +73,11 @@ export async function upsertCourseProgress(
   patch: CourseProgressPatch
 ): Promise<CourseProgressRecord | null> {
   const now = new Date().toISOString();
+  const bumpInteracted = patch.bumpInteracted !== false;
 
   const { data: existing } = await supabase
     .from("user_course_progress")
-    .select("completed_lesson_keys")
+    .select("completed_lesson_keys, last_interacted_at")
     .eq("user_id", userId)
     .eq("course_id", courseId)
     .maybeSingle();
@@ -98,9 +99,12 @@ export async function upsertCourseProgress(
   const row: Record<string, unknown> = {
     user_id: userId,
     course_id: courseId,
-    last_interacted_at: now,
     updated_at: now,
   };
+  // Always set on first insert (NOT NULL); otherwise only when bumping.
+  if (bumpInteracted || !existing) {
+    row.last_interacted_at = now;
+  }
 
   if (typeof patch.materialId === "string") row.material_id = patch.materialId;
   if (typeof patch.lastModuleId === "number") {

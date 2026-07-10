@@ -9,6 +9,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { EmojiPickerButton } from "@/components/EmojiPickerButton";
 import { sectionAcceptsNoteDrop as sectionAcceptsNoteDropFn } from "@/lib/notes/hub-layout";
 import {
   isCustomSection,
@@ -65,6 +66,31 @@ export function SectionMoreMenu({
   onDelete: () => void;
   align?: "left" | "right";
 }) {
+  return (
+    <ItemMoreMenu
+      ariaLabel={`Options for ${section.title}`}
+      align={align}
+      items={[
+        { label: "Rename", onSelect: onRename },
+        { label: "Delete section", onSelect: onDelete, tone: "danger" },
+      ]}
+    />
+  );
+}
+
+function ItemMoreMenu({
+  ariaLabel,
+  items,
+  align = "right",
+}: {
+  ariaLabel: string;
+  items: Array<{
+    label: string;
+    onSelect: () => void;
+    tone?: "danger";
+  }>;
+  align?: "left" | "right";
+}) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -86,7 +112,7 @@ export function SectionMoreMenu({
           setOpen((v) => !v);
         }}
         className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-black/5 hover:text-zinc-600 dark:hover:bg-white/5 dark:hover:text-zinc-300"
-        aria-label={`Options for ${section.title}`}
+        aria-label={ariaLabel}
         aria-expanded={open}
       >
         <MoreIcon />
@@ -97,46 +123,89 @@ export function SectionMoreMenu({
             align === "right" ? "right-0" : "left-0"
           }`}
         >
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpen(false);
-              onRename();
-            }}
-            className="flex w-full px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-800"
-          >
-            Rename
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setOpen(false);
-              onDelete();
-            }}
-            className="flex w-full px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
-          >
-            Delete section
-          </button>
+          {items.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                item.onSelect();
+              }}
+              className={`flex w-full px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
+                item.tone === "danger"
+                  ? "text-rose-600 dark:text-rose-400 dark:hover:bg-rose-950/40"
+                  : "text-zinc-700 dark:text-zinc-200"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       ) : null}
     </div>
   );
 }
 
+function noteCanRename(card: NoteDocCardData): boolean {
+  const kind = card.ref?.kind;
+  return kind === "standalone" || kind === "live" || kind === "tutor";
+}
+
+export function NoteActionsMenu({
+  card,
+  onRename,
+  onDelete,
+  align = "right",
+}: {
+  card: NoteDocCardData;
+  onRename?: (card: NoteDocCardData) => void;
+  onDelete?: (card: NoteDocCardData) => void;
+  align?: "left" | "right";
+}) {
+  if (card.deletable === false) return null;
+  const items = [
+    ...(onRename && noteCanRename(card)
+      ? [{ label: "Rename", onSelect: () => onRename(card) }]
+      : []),
+    ...(onDelete
+      ? [
+          {
+            label: "Delete",
+            onSelect: () => onDelete(card),
+            tone: "danger" as const,
+          },
+        ]
+      : []),
+  ];
+  if (items.length === 0) return null;
+  return (
+    <ItemMoreMenu
+      ariaLabel={`Options for ${card.title}`}
+      align={align}
+      items={items}
+    />
+  );
+}
+
 function NoteListItem({
   card,
+  sectionId,
   manageMode,
   selected,
   onToggleSelect,
   draggableNotes,
+  onRenameNote,
+  onDeleteNote,
 }: {
   card: NoteDocCardData;
+  sectionId: string;
   manageMode: boolean;
   selected: boolean;
   onToggleSelect?: () => void;
   draggableNotes?: boolean;
+  onRenameNote?: (card: NoteDocCardData) => void;
+  onDeleteNote?: (card: NoteDocCardData) => void;
 }) {
   const canDrag =
     draggableNotes &&
@@ -148,20 +217,24 @@ function NoteListItem({
     attributes,
     listeners,
     setNodeRef,
-    transform,
     isDragging,
   } = useDraggable({
-    id: noteDragId(card.key),
+    id: noteDragId(card.key, sectionId),
     data: { type: "note", cardKey: card.key },
     disabled: !canDrag,
   });
 
-  const style = canDrag
-    ? {
-        transform: CSS.Translate.toString(transform),
-        opacity: isDragging ? 0.45 : undefined,
-      }
-    : undefined;
+  // Keep the row in place — DragOverlay shows the floating chip.
+  const style = canDrag && isDragging ? { opacity: 0.4 } : undefined;
+
+  const moreMenu =
+    !manageMode ? (
+      <NoteActionsMenu
+        card={card}
+        onRename={onRenameNote}
+        onDelete={onDeleteNote}
+      />
+    ) : null;
 
   const titleBlock = (
     <>
@@ -207,7 +280,7 @@ function NoteListItem({
 
   if (canDrag) {
     return (
-      <div ref={setNodeRef} style={style} className="flex items-center gap-1">
+      <div ref={setNodeRef} style={style} className="group flex items-center gap-0.5">
         <span
           {...listeners}
           {...attributes}
@@ -218,21 +291,25 @@ function NoteListItem({
         </span>
         <Link
           href={card.href}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg py-2 pr-2.5 transition hover:bg-zinc-100 dark:hover:bg-zinc-800/80"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg py-2 pr-1 transition hover:bg-zinc-100 dark:hover:bg-zinc-800/80"
         >
           {titleBlock}
         </Link>
+        {moreMenu}
       </div>
     );
   }
 
   return (
-    <Link
-      href={card.href}
-      className="flex items-center gap-2 rounded-lg px-2.5 py-2 transition hover:bg-zinc-100 dark:hover:bg-zinc-800/80"
-    >
-      {titleBlock}
-    </Link>
+    <div className="group flex items-center gap-0.5">
+      <Link
+        href={card.href}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-2 transition hover:bg-zinc-100 dark:hover:bg-zinc-800/80"
+      >
+        {titleBlock}
+      </Link>
+      {moreMenu}
+    </div>
   );
 }
 
@@ -246,6 +323,9 @@ function SortableSectionRow({
   onToggleExpanded,
   onRenameSection,
   onDeleteSection,
+  onChangeSectionEmoji,
+  onRenameNote,
+  onDeleteNote,
   manageMode,
   selectedKeys,
   onToggleSelect,
@@ -262,6 +342,9 @@ function SortableSectionRow({
   onToggleExpanded: (id: string) => void;
   onRenameSection?: (section: NoteHubSection) => void;
   onDeleteSection?: (section: NoteHubSection) => void;
+  onChangeSectionEmoji?: (section: NoteHubSection, emoji: string) => void;
+  onRenameNote?: (card: NoteDocCardData) => void;
+  onDeleteNote?: (card: NoteDocCardData) => void;
   manageMode?: boolean;
   selectedKeys?: Set<string>;
   onToggleSelect?: (key: string) => void;
@@ -271,6 +354,8 @@ function SortableSectionRow({
 }) {
   const acceptsNotes = sectionAcceptsNoteDropFn(section);
   const custom = isCustomSection(section);
+  // My notes is an all-notes view — listing every note in the sidebar would get huge.
+  const showNoteList = section.id !== "standalone";
 
   const {
     attributes,
@@ -332,18 +417,34 @@ function SortableSectionRow({
             type="button"
             onClick={() => {
               onSectionSelect(section.id);
-              if (!isOpen) onToggleExpanded(section.id);
+              if (showNoteList && !isOpen) onToggleExpanded(section.id);
             }}
             className={`flex min-w-0 flex-1 items-center gap-2 rounded-xl px-1 py-2 text-left text-sm ${
               isActive
                 ? "font-semibold text-violet-900 dark:text-violet-200"
                 : "font-medium text-zinc-700 dark:text-zinc-300"
             }`}
-            aria-expanded={isOpen}
+            aria-expanded={showNoteList ? isOpen : undefined}
           >
-            <span className="text-base leading-none" aria-hidden>
-              {meta.icon}
-            </span>
+            {onChangeSectionEmoji ? (
+              <span
+                className="shrink-0"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <EmojiPickerButton
+                  value={meta.icon}
+                  size="sm"
+                  ariaLabel={`Choose emoji for ${section.title}`}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-base leading-none transition hover:bg-black/5 dark:hover:bg-white/5"
+                  onChange={(emoji) => onChangeSectionEmoji(section, emoji)}
+                />
+              </span>
+            ) : (
+              <span className="text-base leading-none" aria-hidden>
+                {meta.icon}
+              </span>
+            )}
             <span className="min-w-0 flex-1 truncate">{section.title}</span>
             <span
               className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
@@ -364,31 +465,35 @@ function SortableSectionRow({
             />
           ) : null}
 
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleExpanded(section.id);
-            }}
-            className={`mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-400 transition hover:bg-black/5 hover:text-zinc-600 dark:hover:bg-white/5 dark:hover:text-zinc-300 ${
-              isOpen ? "rotate-180" : ""
-            }`}
-            aria-label={isOpen ? "Collapse section" : "Expand section"}
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
-              <path
-                d="M3 4.5L6 7.5L9 4.5"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
+          {showNoteList ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleExpanded(section.id);
+              }}
+              className={`mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-400 transition hover:bg-black/5 hover:text-zinc-600 dark:hover:bg-white/5 dark:hover:text-zinc-300 ${
+                isOpen ? "rotate-180" : ""
+              }`}
+              aria-label={isOpen ? "Collapse section" : "Expand section"}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                <path
+                  d="M3 4.5L6 7.5L9 4.5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          ) : (
+            <span className="mr-1 w-7 shrink-0" aria-hidden />
+          )}
         </div>
       </div>
 
-      {isOpen ? (
+      {showNoteList && isOpen ? (
         <ul className="mb-2 ml-2 mt-0.5 space-y-0.5 border-l border-zinc-200 pl-2 dark:border-zinc-800">
           {count === 0 ? (
             <li className="px-2.5 py-2 text-xs italic text-zinc-400 dark:text-zinc-600">
@@ -399,12 +504,15 @@ function SortableSectionRow({
               <li key={card.key}>
                 <NoteListItem
                   card={card}
+                  sectionId={section.id}
                   manageMode={Boolean(manageMode)}
                   selected={selectedKeys?.has(card.key) ?? false}
                   onToggleSelect={
                     onToggleSelect ? () => onToggleSelect(card.key) : undefined
                   }
                   draggableNotes={draggableNotes}
+                  onRenameNote={onRenameNote}
+                  onDeleteNote={onDeleteNote}
                 />
               </li>
             ))
@@ -425,6 +533,9 @@ export function NotesHubSidebar({
   onAddSection,
   onRenameSection,
   onDeleteSection,
+  onChangeSectionEmoji,
+  onRenameNote,
+  onDeleteNote,
   addingSection,
   draggableNotes,
   dragKind,
@@ -438,6 +549,9 @@ export function NotesHubSidebar({
   onAddSection?: () => void;
   onRenameSection?: (section: NoteHubSection) => void;
   onDeleteSection?: (section: NoteHubSection) => void;
+  onChangeSectionEmoji?: (section: NoteHubSection, emoji: string) => void;
+  onRenameNote?: (card: NoteDocCardData) => void;
+  onDeleteNote?: (card: NoteDocCardData) => void;
   addingSection?: boolean;
   draggableNotes?: boolean;
   dragKind?: "note" | "section" | null;
@@ -445,12 +559,17 @@ export function NotesHubSidebar({
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     const active = sections.find((s) => s.id === activeSectionId);
-    if (active) initial.add(active.id);
-    else if (sections[0]) initial.add(sections[0].id);
+    // Don't expand My notes — it lists every note and gets too long.
+    if (active && active.id !== "standalone") initial.add(active.id);
+    else {
+      const firstExpandable = sections.find((s) => s.id !== "standalone");
+      if (firstExpandable) initial.add(firstExpandable.id);
+    }
     return initial;
   });
 
   useEffect(() => {
+    if (activeSectionId === "standalone") return;
     setExpanded((prev) => {
       if (prev.has(activeSectionId)) return prev;
       const next = new Set(prev);
@@ -488,12 +607,22 @@ export function NotesHubSidebar({
       <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
         <ul className="space-y-1">
           {sections.map((section) => {
+            const defaults = SECTION_META[section.id];
             const meta = isCustomSection(section)
-              ? CUSTOM_SECTION_META
-              : (SECTION_META[section.id] ?? {
-                  icon: "📄",
-                  emptyLabel: "Nothing here",
-                });
+              ? {
+                  icon:
+                    typeof section.emoji === "string" && section.emoji.trim()
+                      ? section.emoji.trim()
+                      : CUSTOM_SECTION_META.icon,
+                  emptyLabel: CUSTOM_SECTION_META.emptyLabel,
+                }
+              : {
+                  icon:
+                    typeof section.emoji === "string" && section.emoji.trim()
+                      ? section.emoji.trim()
+                      : (defaults?.icon ?? "📄"),
+                  emptyLabel: defaults?.emptyLabel ?? "Nothing here",
+                };
             return (
               <SortableSectionRow
                 key={section.id}
@@ -506,6 +635,9 @@ export function NotesHubSidebar({
                 onToggleExpanded={toggleExpanded}
                 onRenameSection={onRenameSection}
                 onDeleteSection={onDeleteSection}
+                onChangeSectionEmoji={onChangeSectionEmoji}
+                onRenameNote={onRenameNote}
+                onDeleteNote={onDeleteNote}
                 manageMode={manageMode}
                 selectedKeys={selectedKeys}
                 onToggleSelect={onToggleSelect}

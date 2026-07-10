@@ -12,6 +12,8 @@ export type NoteHubSection = {
   cards: NoteDocCardData[];
   /** User-created folder for standalone notes. */
   custom?: boolean;
+  /** Section emoji icon (custom folders + optional built-in overrides). */
+  emoji?: string | null;
 };
 
 export const CUSTOM_SECTION_PREFIX = "custom:" as const;
@@ -34,8 +36,17 @@ export const NOTE_DRAG_PREFIX = "note:";
 export const SECTION_DRAG_PREFIX = "section:";
 export const DROP_PREFIX = "drop:";
 
-export function noteDragId(key: string) {
-  return `${NOTE_DRAG_PREFIX}${key}`;
+/** Unique drag id per list location so the same note can appear in My notes + a folder. */
+export function noteDragId(key: string, scope = "main") {
+  return `${NOTE_DRAG_PREFIX}${scope}::${key}`;
+}
+
+export function parseNoteDragCardKey(dragId: string): string | null {
+  if (!dragId.startsWith(NOTE_DRAG_PREFIX)) return null;
+  const rest = dragId.slice(NOTE_DRAG_PREFIX.length);
+  const sep = rest.indexOf("::");
+  if (sep >= 0) return rest.slice(sep + 2) || null;
+  return rest || null;
 }
 
 export function sectionDragId(sectionId: string) {
@@ -83,6 +94,8 @@ export type NoteDocCardData = {
   title: string;
   subtitle?: string | null;
   preview?: string | null;
+  /** Full-ish plain text for keyword search (not shown in the card UI). */
+  searchText?: string;
   dateLabel: string;
   isLive?: boolean;
   chip?: { label: string; tone: "live" | "paused" | "done" | "failed" };

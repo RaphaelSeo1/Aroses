@@ -13,11 +13,17 @@ import { NotesDocView } from "@/components/notes-hub/NotesDocView";
 export function StandaloneNoteEditor({
   noteId,
   initialTitle,
+  initialContentJson,
+  initialUpdatedAt = null,
+  initialActiveSessionId = null,
   courseId,
   ingestJobId,
 }: {
   noteId: string;
   initialTitle: string;
+  initialContentJson?: unknown;
+  initialUpdatedAt?: string | null;
+  initialActiveSessionId?: string | null;
   courseId: string | null;
   ingestJobId: string | null;
 }) {
@@ -30,16 +36,19 @@ export function StandaloneNoteEditor({
   const [building, setBuilding] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(
+    initialActiveSessionId
+  );
 
   const loadActiveSession = useCallback(async () => {
+    if (initialActiveSessionId) return;
     const res = await fetch(`/api/notes/${noteId}`);
     if (!res.ok) return;
     const data = (await res.json()) as {
       notes?: { activeSessionId?: string | null };
     };
     setActiveSessionId(data.notes?.activeSessionId ?? null);
-  }, [noteId]);
+  }, [initialActiveSessionId, noteId]);
 
   useEffect(() => {
     void loadActiveSession();
@@ -277,6 +286,8 @@ export function StandaloneNoteEditor({
         notesEndpoint={`/api/notes/${noteId}`}
         title={title}
         subtitle="My notes"
+        initialContentJson={initialContentJson}
+        initialUpdatedAt={initialUpdatedAt}
         onDocTitleChange={handleDocTitleChange}
       />
     </div>

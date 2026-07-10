@@ -8,8 +8,9 @@ import { HomeResumeHero } from "@/components/HomeResumeHero";
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
 import { ReviewDueBanner } from "@/components/ReviewDueBanner";
 import { PendingCollaboratorInvites } from "@/components/PendingCollaboratorInvites";
-import { buildResumeCourseHref } from "@/lib/dashboard/resume-course-href";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
+import type { HomeActivityPreview } from "@/lib/home-preview-data";
+import { resolveHomeResumeTarget } from "@/lib/home-resume-target";
 import type { SharedCourse, StudyingCourse } from "@/lib/load-dashboard-courses";
 import { getT } from "@/lib/i18n/server";
 import type { SrsDueCounts } from "@/lib/srs-due";
@@ -20,6 +21,7 @@ export async function DashboardHomeContent({
   studyingCourses,
   sharedCourses = [],
   progress,
+  recentActivity = [],
   initialDueCounts = null,
   omitHeader = false,
 }: {
@@ -29,6 +31,7 @@ export async function DashboardHomeContent({
   studyingCourses: StudyingCourse[];
   sharedCourses?: SharedCourse[];
   progress: DashboardProgressPayload;
+  recentActivity?: HomeActivityPreview[];
   initialDueCounts?: SrsDueCounts | null;
   /** When true, only render main workspace (parent supplies `<AppHeader />`). */
   omitHeader?: boolean;
@@ -38,31 +41,26 @@ export async function DashboardHomeContent({
   const hasShared = sharedCourses.length > 0;
   const continueEntries = progress.recentPractice ?? [];
   const continueCount = continueEntries.length;
-  const resumeEntry = continueEntries[0] ?? null;
+  const resumeTarget = resolveHomeResumeTarget({
+    recentPractice: continueEntries,
+    recentActivity,
+  });
   const isStudyingSomething =
-    studyingCourses.length > 0 || continueCount > 0;
+    studyingCourses.length > 0 ||
+    continueCount > 0 ||
+    recentActivity.length > 0;
   const empty = !hasOwned && !hasShared && !isStudyingSomething;
   const reviewDueTotal = initialDueCounts?.total ?? 0;
 
-  // One primary CTA: cards due → review; mid-course → resume; else create.
+  // One primary CTA: cards due → review; mid-activity → resume; else create.
   const primaryAction: "review" | "resume" | "create" =
     reviewDueTotal > 0
       ? "review"
-      : resumeEntry
+      : resumeTarget
         ? "resume"
         : "create";
 
-  const resumeHref = resumeEntry
-    ? buildResumeCourseHref({
-        courseId: resumeEntry.courseId,
-        lastUsedMode: resumeEntry.lastUsedMode,
-        isExploreLearner: resumeEntry.isExploreLearner,
-        materialId: resumeEntry.materialId,
-        moduleId: resumeEntry.resumeModuleId,
-        lessonIndex: resumeEntry.resumeLessonIndex,
-        scrollPosition: resumeEntry.resumeScrollPosition,
-      })
-    : null;
+  const resumeHref = resumeTarget?.href ?? null;
 
   return (
     <>
@@ -80,13 +78,21 @@ export async function DashboardHomeContent({
               />
               <HomeResumeHero
                 greetingName={greetingName}
-                resumeEntry={resumeEntry}
+                resumeTarget={resumeTarget}
                 primaryAction={primaryAction}
                 reviewDueTotal={reviewDueTotal}
                 copy={{
                   welcomeBack: t.dashboard.welcomeBack,
                   welcomeBackGeneric: t.dashboard.welcomeBackGeneric,
                   resumeCourseCta: t.dashboard.resumeCourseCta,
+                  resumeNoteCta: t.dashboard.resumeNoteCta,
+                  resumeTutorCta: t.dashboard.resumeTutorCta,
+                  resumeTutorRecapCta: t.dashboard.resumeTutorRecapCta,
+                  resumeLiveCta: t.dashboard.resumeLiveCta,
+                  resumeNoteHint: t.dashboard.resumeNoteHint,
+                  resumeTutorHint: t.dashboard.resumeTutorHint,
+                  resumeTutorRecapHint: t.dashboard.resumeTutorRecapHint,
+                  resumeLiveHint: t.dashboard.resumeLiveHint,
                   resumeProgressModules: t.dashboard.resumeProgressModules,
                   resumeProgressPercent: t.dashboard.resumeProgressPercent,
                   heroCreatePitchTitle: t.dashboard.heroCreatePitchTitle,
@@ -282,7 +288,7 @@ export async function DashboardHomeContent({
               <HomeRightSidebar
                 activityBuckets14={progress.activityBuckets}
                 reviewDueTotal={reviewDueTotal}
-                resumeTitle={resumeEntry?.title ?? null}
+                resumeTitle={resumeTarget?.title ?? null}
                 resumeHref={resumeHref}
               />
             </div>

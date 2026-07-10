@@ -55,6 +55,7 @@ async function HomeContent() {
       studyingCourses={studying}
       sharedCourses={sharedWithMe}
       progress={progress}
+      recentActivity={previews.recentActivity}
       initialDueCounts={dueCounts}
     />
   );

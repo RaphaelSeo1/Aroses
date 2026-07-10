@@ -26,4 +26,9 @@ export type CourseProgressPatch = {
   completedLessonKeys?: string[];
   /** Append these keys without duplicating. */
   appendCompletedLessonKeys?: string[];
+  /**
+   * When false, persist position/mode without refreshing last_interacted_at
+   * (e.g. scroll-only saves). Defaults to true.
+   */
+  bumpInteracted?: boolean;
 };

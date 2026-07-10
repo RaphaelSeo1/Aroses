@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { useDraggable } from "@dnd-kit/core";
-import { CSS } from "@dnd-kit/utilities";
+import { NoteActionsMenu } from "@/components/notes-hub/NotesHubSidebar";
 import type { NoteDocCardData } from "@/lib/notes/hub-types";
 import { noteDragId } from "@/lib/notes/hub-types";
 
@@ -14,9 +14,9 @@ const CHIP_TONES: Record<string, string> = {
 function CardInner({ card }: { card: NoteDocCardData }) {
   return (
     <>
-      <div className="relative aspect-[4/3] overflow-hidden border-b border-zinc-100 bg-[#fafafa] p-3 dark:border-zinc-800 dark:bg-zinc-900/60">
+      <div className="relative aspect-[4/3] w-full shrink-0 overflow-hidden border-b border-zinc-100 bg-[#fafafa] p-3 dark:border-zinc-800 dark:bg-zinc-900/60">
         {card.preview ? (
-          <div className="pointer-events-none select-none space-y-1.5 opacity-90">
+          <div className="pointer-events-none absolute inset-3 select-none space-y-1.5 overflow-hidden opacity-90">
             <div className="h-1.5 w-2/3 rounded-sm bg-zinc-300/80 dark:bg-zinc-600/60" />
             <div className="h-1 w-full rounded-sm bg-zinc-200/90 dark:bg-zinc-700/50" />
             <div className="h-1 w-[92%] rounded-sm bg-zinc-200/90 dark:bg-zinc-700/50" />
@@ -45,17 +45,15 @@ function CardInner({ card }: { card: NoteDocCardData }) {
         ) : null}
       </div>
 
-      <div className="flex min-h-[3.5rem] flex-col justify-center gap-0.5 px-2.5 py-2.5">
-        <p className="line-clamp-2 text-[11px] font-semibold leading-snug text-zinc-800 dark:text-zinc-100">
+      <div className="flex shrink-0 flex-col gap-0.5 px-2.5 py-2 pr-9">
+        <p className="truncate text-[11px] font-semibold leading-snug text-zinc-800 dark:text-zinc-100">
           {card.title}
         </p>
-        {card.subtitle ? (
-          <p className="truncate text-[10px] text-zinc-500 dark:text-zinc-500">
-            {card.subtitle}
-          </p>
-        ) : null}
-        <p className="text-[10px] text-zinc-400 dark:text-zinc-600">
-          {card.dateLabel}
+        <p className="truncate text-[10px] leading-4 text-zinc-500 dark:text-zinc-500">
+          {card.subtitle || "\u00a0"}
+        </p>
+        <p className="truncate text-[10px] leading-4 text-zinc-400 dark:text-zinc-600">
+          {card.dateLabel || "\u00a0"}
         </p>
       </div>
     </>
@@ -63,7 +61,7 @@ function CardInner({ card }: { card: NoteDocCardData }) {
 }
 
 const cardShell =
-  "group flex flex-col overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm transition dark:border-zinc-700 dark:bg-zinc-950";
+  "group flex h-full flex-col overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm transition dark:border-zinc-700 dark:bg-zinc-950";
 
 /** Google Docs–style note thumbnail — preview pane + title footer. */
 export function NoteDocCard({
@@ -72,12 +70,16 @@ export function NoteDocCard({
   selected = false,
   onToggleSelect,
   draggableNotes = false,
+  onRenameNote,
+  onDeleteNote,
 }: {
   card: NoteDocCardData;
   manageMode?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
   draggableNotes?: boolean;
+  onRenameNote?: (card: NoteDocCardData) => void;
+  onDeleteNote?: (card: NoteDocCardData) => void;
 }) {
   const canDrag =
     draggableNotes &&
@@ -89,21 +91,15 @@ export function NoteDocCard({
     attributes,
     listeners,
     setNodeRef,
-    transform,
     isDragging,
   } = useDraggable({
-    id: noteDragId(card.key),
+    id: noteDragId(card.key, "grid"),
     data: { type: "note", cardKey: card.key },
     disabled: !canDrag,
   });
 
-  const dragStyle = canDrag
-    ? {
-        transform: CSS.Translate.toString(transform),
-        opacity: isDragging ? 0.5 : undefined,
-        zIndex: isDragging ? 2 : undefined,
-      }
-    : undefined;
+  // Keep the card in place — DragOverlay shows the floating chip.
+  const dragStyle = canDrag && isDragging ? { opacity: 0.45 } : undefined;
 
   const dragHandle = canDrag ? (
     <button
@@ -135,7 +131,7 @@ export function NoteDocCard({
             : "border-zinc-200/90"
         }`}
       >
-        <div className="relative">
+        <div className="relative flex h-full flex-col">
           {selected ? (
             <span className="absolute left-2 top-2 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-violet-600 text-[10px] font-bold text-white">
               ✓
@@ -161,7 +157,11 @@ export function NoteDocCard({
   }
 
   return (
-    <div ref={canDrag ? setNodeRef : undefined} style={dragStyle}>
+    <div
+      ref={canDrag ? setNodeRef : undefined}
+      style={dragStyle}
+      className="group relative h-full"
+    >
       <Link
         href={card.href}
         className={`${cardShell} hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:hover:border-violet-800`}
@@ -169,6 +169,19 @@ export function NoteDocCard({
         {dragHandle}
         <CardInner card={card} />
       </Link>
+      {!manageMode && (onRenameNote || onDeleteNote) ? (
+        <div
+          className="absolute bottom-2 right-1 z-10 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+          onClick={(e) => e.preventDefault()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <NoteActionsMenu
+            card={card}
+            onRename={onRenameNote}
+            onDelete={onDeleteNote}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -179,15 +192,19 @@ export function NotesDocGrid({
   selectedKeys,
   onToggleSelect,
   draggableNotes,
+  onRenameNote,
+  onDeleteNote,
 }: {
   cards: NoteDocCardData[];
   manageMode?: boolean;
   selectedKeys?: Set<string>;
   onToggleSelect?: (key: string) => void;
   draggableNotes?: boolean;
+  onRenameNote?: (card: NoteDocCardData) => void;
+  onDeleteNote?: (card: NoteDocCardData) => void;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+    <div className="grid grid-cols-2 items-stretch gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
       {cards.map((c) => (
         <NoteDocCard
           key={c.key}
@@ -198,6 +215,8 @@ export function NotesDocGrid({
             onToggleSelect ? () => onToggleSelect(c.key) : undefined
           }
           draggableNotes={draggableNotes}
+          onRenameNote={onRenameNote}
+          onDeleteNote={onDeleteNote}
         />
       ))}
     </div>

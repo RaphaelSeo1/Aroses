@@ -21,19 +21,23 @@ import {
   SectionMoreMenu,
 } from "@/components/notes-hub/NotesHubSidebar";
 import { reorderSectionsByIds } from "@/lib/notes/hub-layout";
+import { searchNoteCards } from "@/lib/notes/note-search";
 import {
   customSectionId,
   dropSectionToMoveTarget,
   isCustomSection,
   NOTE_DRAG_PREFIX,
   parseCustomSectionId,
+  parseNoteDragCardKey,
   resolveDropSectionId,
   resolveSectionSortTarget,
   sectionAcceptsNoteDrop,
   SECTION_DRAG_PREFIX,
+  type NoteDocCardData,
   type NoteHubRef,
   type NoteHubSection,
 } from "@/lib/notes/hub-types";
+import Link from "next/link";
 
 function defaultActiveSection(sections: NoteHubSection[]): string {
   return sections.find((s) => s.cards.length > 0)?.id ?? sections[0]?.id ?? "standalone";
@@ -51,16 +55,34 @@ function applyMoveToSections(
 ): NoteHubSection[] {
   const targetId =
     targetSectionId === null ? "standalone" : customSectionId(targetSectionId);
-  const moving = sections.flatMap((s) =>
-    s.cards.filter((c) => movedKeys.has(c.key))
-  );
+
+  const moving: NoteHubSection["cards"] = [];
+  const seen = new Set<string>();
+  for (const section of sections) {
+    for (const card of section.cards) {
+      if (!movedKeys.has(card.key) || seen.has(card.key)) continue;
+      moving.push(card);
+      seen.add(card.key);
+    }
+  }
 
   return sections.map((section) => {
-    const remaining = section.cards.filter((c) => !movedKeys.has(c.key));
-    if (section.id === targetId) {
-      return { ...section, cards: [...moving, ...remaining] };
+    // My notes is an all-notes view — keep moved cards there.
+    if (section.id === "standalone") {
+      const byKey = new Map(section.cards.map((c) => [c.key, c]));
+      for (const card of moving) byKey.set(card.key, card);
+      return { ...section, cards: Array.from(byKey.values()) };
     }
-    return { ...section, cards: remaining };
+
+    if (isCustomSection(section)) {
+      const remaining = section.cards.filter((c) => !movedKeys.has(c.key));
+      if (section.id === targetId) {
+        return { ...section, cards: [...moving, ...remaining] };
+      }
+      return { ...section, cards: remaining };
+    }
+
+    return section;
   });
 }
 
@@ -84,6 +106,7 @@ export function NotesHubClient({
   const [dndMounted, setDndMounted] = useState(false);
   const [dragLabel, setDragLabel] = useState<string | null>(null);
   const [dragKind, setDragKind] = useState<"note" | "section" | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const dndContextId = useId();
 
   useEffect(() => {
@@ -102,10 +125,41 @@ export function NotesHubClient({
     [sections, activeSectionId]
   );
 
-  const allCards = useMemo(
-    () => sections.flatMap((s) => s.cards),
-    [sections]
+  const allCards = useMemo(() => {
+    const seen = new Set<string>();
+    const out: NoteHubSection["cards"] = [];
+    for (const section of sections) {
+      for (const card of section.cards) {
+        if (seen.has(card.key)) continue;
+        seen.add(card.key);
+        out.push(card);
+      }
+    }
+    return out;
+  }, [sections]);
+
+  const searchableItems = useMemo(() => {
+    const byKey = new Map<
+      string,
+      { card: NoteHubSection["cards"][number]; sectionTitle: string }
+    >();
+    for (const section of sections) {
+      for (const card of section.cards) {
+        const existing = byKey.get(card.key);
+        if (!existing || section.id !== "standalone") {
+          byKey.set(card.key, { card, sectionTitle: section.title });
+        }
+      }
+    }
+    return Array.from(byKey.values());
+  }, [sections]);
+
+  const searchHits = useMemo(
+    () => searchNoteCards(searchableItems, searchQuery),
+    [searchableItems, searchQuery]
   );
+
+  const isSearching = searchQuery.trim().length > 0;
 
   const deletableCards = useMemo(
     () => allCards.filter((c) => c.deletable !== false && c.ref),
@@ -265,6 +319,58 @@ export function NotesHubClient({
     );
   };
 
+  const changeSectionEmoji = async (section: NoteHubSection, emoji: string) => {
+    const next = emoji.trim().slice(0, 16);
+    if (!next || next === section.emoji) return;
+    const previous = section.emoji ?? null;
+
+    setSections((prev) =>
+      prev.map((s) => (s.id === section.id ? { ...s, emoji: next } : s))
+    );
+
+    const uuid = parseCustomSectionId(section.id);
+    if (uuid) {
+      const res = await fetch(`/api/notes/sections/${uuid}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emoji: next }),
+      });
+      if (!res.ok) {
+        setSections((prev) =>
+          prev.map((s) =>
+            s.id === section.id ? { ...s, emoji: previous } : s
+          )
+        );
+        await alertDialog({
+          title: "Couldn’t update emoji",
+          body:
+            "Apply migration 086_user_note_sections_emoji.sql in Supabase, then try again.",
+        });
+      }
+      return;
+    }
+
+    const res = await fetch("/api/notes/hub-layout", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        emojiUpdate: { id: section.id, emoji: next },
+      }),
+    });
+    if (!res.ok) {
+      setSections((prev) =>
+        prev.map((s) =>
+          s.id === section.id ? { ...s, emoji: previous } : s
+        )
+      );
+      await alertDialog({
+        title: "Couldn’t update emoji",
+        body:
+          "Apply migration 087_user_notes_hub_layout_emojis.sql in Supabase, then try again.",
+      });
+    }
+  };
+
   const deleteSection = async (section: NoteHubSection) => {
     const uuid = parseCustomSectionId(section.id);
     if (!uuid) return;
@@ -292,15 +398,8 @@ export function NotesHubClient({
     }
 
     setSections((prev) => {
-      const target = prev.find((s) => s.id === section.id);
-      const movedCards = target?.cards ?? [];
-      const next = prev
-        .filter((s) => s.id !== section.id)
-        .map((s) =>
-          s.id === "standalone"
-            ? { ...s, cards: [...movedCards, ...s.cards] }
-            : s
-        );
+      const next = prev.filter((s) => s.id !== section.id);
+      // My notes already lists every note — no need to re-add folder cards.
       void persistHubLayout(next.map((s) => s.id));
       if (activeSectionId === section.id) {
         setActiveSectionId("standalone");
@@ -391,8 +490,12 @@ export function NotesHubClient({
     const activeType = event.active.data.current?.type as string | undefined;
     if (activeType === "note" || id.startsWith(NOTE_DRAG_PREFIX)) {
       setDragKind("note");
-      const cardKey = id.slice(NOTE_DRAG_PREFIX.length);
-      const card = allCards.find((c) => c.key === cardKey);
+      const cardKey =
+        (event.active.data.current?.cardKey as string | undefined) ??
+        parseNoteDragCardKey(id);
+      const card = cardKey
+        ? allCards.find((c) => c.key === cardKey)
+        : undefined;
       setDragLabel(card?.title ?? "Note");
       return;
     }
@@ -415,19 +518,24 @@ export function NotesHubClient({
     const activeType = active.data.current?.type as string | undefined;
 
     if (activeType === "note" && activeId.startsWith(NOTE_DRAG_PREFIX)) {
-      const cardKey = activeId.slice(NOTE_DRAG_PREFIX.length);
+      const cardKey =
+        (active.data.current?.cardKey as string | undefined) ??
+        parseNoteDragCardKey(activeId);
+      if (!cardKey) return;
+
       const dropSectionId = resolveDropSectionId(overId);
       if (!dropSectionId || !sectionAcceptsNoteDrop(dropSectionId)) return;
       const target = dropSectionToMoveTarget(dropSectionId);
       if (target === undefined) return;
 
-      const currentSection = sections.find((s) =>
-        s.cards.some((c) => c.key === cardKey)
+      // Home folder is the custom section that owns the note (not My notes).
+      const homeSection = sections.find(
+        (s) =>
+          isCustomSection(s) && s.cards.some((c) => c.key === cardKey)
       );
-      const currentTarget =
-        currentSection?.id === "standalone"
-          ? null
-          : parseCustomSectionId(currentSection?.id ?? "");
+      const currentTarget = homeSection
+        ? parseCustomSectionId(homeSection.id)
+        : null;
       if (currentTarget === target) return;
 
       void moveCardsToSection([cardKey], target);
@@ -503,6 +611,94 @@ export function NotesHubClient({
     }
   };
 
+  const renameNote = async (card: NoteDocCardData) => {
+    const ref = card.ref;
+    if (!ref || ref.kind === "course") return;
+
+    const title = await promptDialog({
+      title: "Rename note",
+      label: "Title",
+      defaultValue: card.title,
+    });
+    if (!title?.trim() || title.trim() === card.title) return;
+    const next = title.trim().slice(0, 200);
+
+    let url: string | null = null;
+    if (ref.kind === "standalone") url = `/api/notes/${ref.id}`;
+    else if (ref.kind === "live") url = `/api/live-notes/${ref.id}`;
+    else if (ref.kind === "tutor") url = `/api/tutor-session/${ref.id}`;
+    if (!url) return;
+
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: next }),
+    });
+    if (!res.ok) {
+      await alertDialog({
+        title: "Couldn’t rename",
+        body: "Something went wrong. Try again.",
+      });
+      return;
+    }
+
+    setSections((prev) =>
+      prev.map((s) => ({
+        ...s,
+        cards: s.cards.map((c) =>
+          c.key === card.key ? { ...c, title: next } : c
+        ),
+      }))
+    );
+    router.refresh();
+  };
+
+  const deleteNote = async (card: NoteDocCardData) => {
+    if (busy || !card.ref || card.deletable === false) return;
+    const isLive = card.ref.kind === "live";
+    const ok = await confirmDialog({
+      title: `Delete “${card.title}”?`,
+      body: isLive
+        ? "This cannot be undone. The recording, transcript, and notes will be removed."
+        : "This cannot be undone.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (!ok) return;
+
+    setBusy(true);
+    try {
+      const res = await fetch("/api/notes/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", items: [card.ref] }),
+      });
+      if (!res.ok) {
+        await alertDialog({
+          title: "Couldn’t delete",
+          body: "Something went wrong. Try again.",
+        });
+        return;
+      }
+      setSections((prev) => {
+        const next = prev.map((s) => ({
+          ...s,
+          cards: s.cards.filter((c) => c.key !== card.key),
+        }));
+        const stillHasActive = next.some(
+          (s) => s.id === activeSectionId && s.cards.length > 0
+        );
+        if (!stillHasActive) {
+          setActiveSectionId(defaultActiveSection(next));
+        }
+        return next;
+      });
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const canCreateInSection =
     activeSection?.id === "standalone" || isCustomSection(activeSection ?? { id: "" });
 
@@ -526,6 +722,59 @@ export function NotesHubClient({
             {creating ? "Creating…" : "Create your first note"}
           </button>
         </div>
+      );
+    }
+
+    if (isSearching) {
+      return (
+        <section>
+          <header className="mb-4">
+            <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+              Search results
+            </h2>
+            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-500">
+              {searchHits.length === 0
+                ? `No notes match “${searchQuery.trim()}”`
+                : `${searchHits.length} note${searchHits.length === 1 ? "" : "s"} matching “${searchQuery.trim()}”`}
+            </p>
+          </header>
+          {searchHits.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-zinc-200 bg-white/60 px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950/40">
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                Try another word, or clear search to browse by section.
+              </p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-zinc-100 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-sm dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-950">
+              {searchHits.map((hit) => (
+                <li key={hit.card.key}>
+                  <Link
+                    href={hit.card.href}
+                    className="block px-4 py-3.5 transition hover:bg-zinc-50 dark:hover:bg-zinc-900/60"
+                  >
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                      <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                        {hit.card.title}
+                      </p>
+                      <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
+                        {hit.card.dateLabel}
+                      </p>
+                    </div>
+                    <p className="mt-0.5 text-[11px] font-medium text-violet-700 dark:text-violet-300">
+                      {hit.sectionTitle}
+                      {hit.card.subtitle ? ` · ${hit.card.subtitle}` : ""}
+                    </p>
+                    {hit.snippet ? (
+                      <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+                        {hit.snippet}
+                      </p>
+                    ) : null}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       );
     }
 
@@ -574,6 +823,8 @@ export function NotesHubClient({
             selectedKeys={selectedKeys}
             onToggleSelect={toggleSelect}
             draggableNotes={draggableNotes}
+            onRenameNote={(c) => void renameNote(c)}
+            onDeleteNote={(c) => void deleteNote(c)}
           />
         )}
       </section>
@@ -658,7 +909,50 @@ export function NotesHubClient({
 
   return (
     <div>
-      <div className="mt-6 md:hidden">{toolbar}</div>
+      {!empty ? (
+        <div className="relative mt-6">
+          <label htmlFor="notes-search" className="sr-only">
+            Search notes
+          </label>
+          <span
+            className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400"
+            aria-hidden
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+          </span>
+          <input
+            id="notes-search"
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search notes…"
+            className="w-full rounded-2xl border border-zinc-200/90 bg-white py-2.5 pl-10 pr-10 text-sm text-zinc-900 shadow-sm placeholder:text-zinc-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-200 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-violet-700 dark:focus:ring-violet-900/40"
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full px-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+              aria-label="Clear search"
+            >
+              ✕
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="mt-4 md:hidden">{toolbar}</div>
 
       {dndMounted ? (
         <DndContext
@@ -681,6 +975,11 @@ export function NotesHubClient({
                 onAddSection={() => void addSection()}
                 onRenameSection={(s) => void renameSection(s)}
                 onDeleteSection={(s) => void deleteSection(s)}
+                onChangeSectionEmoji={(s, emoji) =>
+                  void changeSectionEmoji(s, emoji)
+                }
+                onRenameNote={(c) => void renameNote(c)}
+                onDeleteNote={(c) => void deleteNote(c)}
                 addingSection={addingSection}
                 draggableNotes
                 dragKind={dragKind}
@@ -713,6 +1012,11 @@ export function NotesHubClient({
               onAddSection={() => void addSection()}
               onRenameSection={(s) => void renameSection(s)}
               onDeleteSection={(s) => void deleteSection(s)}
+              onChangeSectionEmoji={(s, emoji) =>
+                void changeSectionEmoji(s, emoji)
+              }
+              onRenameNote={(c) => void renameNote(c)}
+              onDeleteNote={(c) => void deleteNote(c)}
               addingSection={addingSection}
             />
           </aside>

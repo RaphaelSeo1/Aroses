@@ -1,30 +1,28 @@
 import Link from "next/link";
-import { buildResumeCourseHref } from "@/lib/dashboard/resume-course-href";
-import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
+import type { HomeResumeTarget } from "@/lib/home-resume-target";
 import { tf } from "@/lib/i18n/format";
 
-type Practice = DashboardProgressPayload["recentPractice"][number];
-
-function progressPercent(entry: Practice): number | null {
-  if (entry.modulesTotal <= 0) return null;
+function progressPercent(target: Extract<HomeResumeTarget, { kind: "course" }>): number | null {
+  if (target.modulesTotal <= 0) return null;
   return Math.min(
     100,
-    Math.round((entry.modulesCompleted / entry.modulesTotal) * 100)
+    Math.round((target.modulesCompleted / target.modulesTotal) * 100)
   );
 }
 
 /**
- * Stateful home hero: resume the last-studied course, or create-course pitch.
+ * Stateful home hero: resume whatever you were last on (course / note / tutor / live),
+ * or create-course pitch when there's nothing to dive back into.
  */
 export function HomeResumeHero({
   greetingName,
-  resumeEntry,
+  resumeTarget,
   primaryAction,
   reviewDueTotal,
   copy,
 }: {
   greetingName: string;
-  resumeEntry: Practice | null;
+  resumeTarget: HomeResumeTarget | null;
   /** Which CTA is the page's single primary action. */
   primaryAction: "resume" | "review" | "create";
   reviewDueTotal: number;
@@ -32,6 +30,14 @@ export function HomeResumeHero({
     welcomeBack: string;
     welcomeBackGeneric: string;
     resumeCourseCta: string;
+    resumeNoteCta: string;
+    resumeTutorCta: string;
+    resumeTutorRecapCta: string;
+    resumeLiveCta: string;
+    resumeNoteHint: string;
+    resumeTutorHint: string;
+    resumeTutorRecapHint: string;
+    resumeLiveHint: string;
     resumeProgressModules: string;
     resumeProgressPercent: string;
     heroCreatePitchTitle: string;
@@ -46,7 +52,7 @@ export function HomeResumeHero({
     ? tf(copy.welcomeBack, { name: greetingName })
     : copy.welcomeBackGeneric;
 
-  if (!resumeEntry) {
+  if (!resumeTarget) {
     return (
       <div className="relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/75 p-6 shadow-xl shadow-zinc-900/[0.06] ring-1 ring-white/60 backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-950/75 dark:shadow-black/30 dark:ring-zinc-600/40 sm:p-8">
         <div
@@ -76,30 +82,41 @@ export function HomeResumeHero({
     );
   }
 
-  const href = buildResumeCourseHref({
-    courseId: resumeEntry.courseId,
-    lastUsedMode: resumeEntry.lastUsedMode,
-    isExploreLearner: resumeEntry.isExploreLearner,
-    materialId: resumeEntry.materialId,
-    moduleId: resumeEntry.resumeModuleId,
-    lessonIndex: resumeEntry.resumeLessonIndex,
-    scrollPosition: resumeEntry.resumeScrollPosition,
-  });
-  const pct = progressPercent(resumeEntry);
-  const modulesLabel =
-    resumeEntry.modulesTotal > 0
-      ? tf(copy.resumeProgressModules, {
-          done: resumeEntry.modulesCompleted,
-          total: resumeEntry.modulesTotal,
-        })
-      : null;
-  const percentLabel =
-    pct != null
-      ? tf(copy.resumeProgressPercent, { percent: pct })
-      : null;
-
   const resumeIsPrimary = primaryAction === "resume";
   const reviewIsPrimary = primaryAction === "review";
+
+  let ctaLabel = copy.resumeCourseCta;
+  let meta: string | null = null;
+  let pct: number | null = null;
+
+  if (resumeTarget.kind === "course") {
+    pct = progressPercent(resumeTarget);
+    const modulesLabel =
+      resumeTarget.modulesTotal > 0
+        ? tf(copy.resumeProgressModules, {
+            done: resumeTarget.modulesCompleted,
+            total: resumeTarget.modulesTotal,
+          })
+        : null;
+    const percentLabel =
+      pct != null
+        ? tf(copy.resumeProgressPercent, { percent: pct })
+        : null;
+    meta = [modulesLabel, percentLabel].filter(Boolean).join(" · ") || null;
+  } else if (resumeTarget.kind === "note") {
+    ctaLabel = copy.resumeNoteCta;
+    meta = copy.resumeNoteHint;
+  } else if (resumeTarget.kind === "live") {
+    ctaLabel = copy.resumeLiveCta;
+    meta = copy.resumeLiveHint;
+  } else {
+    ctaLabel = resumeTarget.live
+      ? copy.resumeTutorCta
+      : copy.resumeTutorRecapCta;
+    meta = resumeTarget.live
+      ? copy.resumeTutorHint
+      : copy.resumeTutorRecapHint;
+  }
 
   return (
     <div className="relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/75 p-6 shadow-xl shadow-zinc-900/[0.06] ring-1 ring-white/60 backdrop-blur-md dark:border-zinc-700/80 dark:bg-zinc-950/75 dark:shadow-black/30 dark:ring-zinc-600/40 sm:p-8">
@@ -112,21 +129,11 @@ export function HomeResumeHero({
           {greeting}
         </p>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-3xl">
-          {resumeEntry.title}
+          {resumeTarget.title}
         </h1>
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-zinc-600 dark:text-zinc-400">
-          {modulesLabel ? <span>{modulesLabel}</span> : null}
-          {percentLabel ? (
-            <>
-              {modulesLabel ? (
-                <span className="text-zinc-300 dark:text-zinc-600" aria-hidden>
-                  ·
-                </span>
-              ) : null}
-              <span>{percentLabel}</span>
-            </>
-          ) : null}
-        </div>
+        {meta ? (
+          <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">{meta}</p>
+        ) : null}
         {pct != null ? (
           <div className="mt-4 h-2 max-w-md overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
             <div
@@ -138,14 +145,14 @@ export function HomeResumeHero({
 
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <Link
-            href={href}
+            href={resumeTarget.href}
             className={
               resumeIsPrimary
                 ? "inline-flex items-center justify-center rounded-full bg-brand px-7 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/30 ring-2 ring-white/20 transition hover:bg-brand-hover dark:ring-white/10 dark:hover:bg-brand-soft"
                 : "inline-flex items-center justify-center rounded-full border border-zinc-300 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
             }
           >
-            {copy.resumeCourseCta}
+            {ctaLabel}
           </Link>
           {reviewDueTotal > 0 ? (
             <Link

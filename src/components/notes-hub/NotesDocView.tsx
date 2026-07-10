@@ -15,11 +15,16 @@ export function NotesDocView({
   notesEndpoint,
   title,
   subtitle,
+  initialContentJson,
+  initialUpdatedAt,
   onDocTitleChange,
 }: {
   notesEndpoint: string;
   title: string;
   subtitle: string;
+  /** Server-loaded TipTap doc — avoids blank flash before client fetch. */
+  initialContentJson?: unknown;
+  initialUpdatedAt?: string | null;
   /** Live-sync doc title edits to a parent header (standalone notes). */
   onDocTitleChange?: (title: string) => void;
 }) {
@@ -37,6 +42,8 @@ export function NotesDocView({
         onAutoGenerateChange={setAutoGenerate}
         hideAutoGenerate
         fillHeight
+        initialContentJson={initialContentJson}
+        initialUpdatedAt={initialUpdatedAt}
         onDocTitleChange={onDocTitleChange}
       />
     </div>
