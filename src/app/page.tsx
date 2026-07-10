@@ -5,7 +5,12 @@ import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { MainRouteSkeleton } from "@/components/MainRouteSkeleton";
 import { loadDashboardCourseLists } from "@/lib/load-dashboard-courses";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
+import {
+  homeGreetingName,
+  loadHomePreviews,
+} from "@/lib/home-preview-data";
 import { profileNeedsOnboarding } from "@/lib/onboarding-gate";
+import { fetchSrsDueCountsForUser } from "@/lib/srs-due-counts-server";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import { redirect } from "next/navigation";
 
@@ -33,19 +38,26 @@ async function HomeContent() {
     redirect("/onboarding");
   }
 
-  const [{ owned, studying, sharedWithMe }, progress] = await Promise.all([
-    loadDashboardCourseLists(supabase, user.id),
-    loadDashboardProgress(supabase, user.id),
-  ]);
+  const [{ owned, studying, sharedWithMe }, progress, previews, dueCounts] =
+    await Promise.all([
+      loadDashboardCourseLists(supabase, user.id),
+      loadDashboardProgress(supabase, user.id),
+      loadHomePreviews(supabase, user.id),
+      fetchSrsDueCountsForUser(supabase, user.id),
+    ]);
+
   return (
     <DashboardHomeContent
       omitHeader
-      userEmail={user.email}
+      greetingName={homeGreetingName(previews.displayName, user.email)}
       viewerUserId={user.id}
       ownedCourses={owned}
       studyingCourses={studying}
       sharedCourses={sharedWithMe}
       progress={progress}
+      recentNotes={previews.recentNotes}
+      recentTutorSessions={previews.recentTutorSessions}
+      initialDueCounts={dueCounts}
     />
   );
 }

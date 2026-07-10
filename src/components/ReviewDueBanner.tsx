@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
-import { useSrsDueCounts } from "@/lib/srs-due";
+import { useSrsDueCounts, type SrsDueCounts } from "@/lib/srs-due";
 
 /**
  * Slim "X cards due for review today" banner shown on the dashboard home
@@ -20,9 +20,18 @@ function todayStamp(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export function ReviewDueBanner() {
+export function ReviewDueBanner({
+  initialDueCounts = null,
+  demoteCta = false,
+}: {
+  initialDueCounts?: SrsDueCounts | null;
+  /** When true, review is not the page primary — use quieter CTA styling. */
+  demoteCta?: boolean;
+}) {
   const t = useT();
-  const { counts } = useSrsDueCounts(undefined);
+  const { counts } = useSrsDueCounts(undefined, {
+    initialCounts: initialDueCounts,
+  });
   const [dismissedToday, setDismissedToday] = useState(false);
 
   useEffect(() => {
@@ -83,7 +92,11 @@ export function ReviewDueBanner() {
       <div className="flex shrink-0 items-center gap-2">
         <Link
           href="/dashboard/review"
-          className="inline-flex items-center justify-center rounded-full bg-brand px-4 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover"
+          className={
+            demoteCta
+              ? "inline-flex items-center justify-center rounded-full border border-brand/30 bg-white/80 px-4 py-1.5 text-xs font-semibold text-brand-ink hover:bg-white dark:border-brand/40 dark:bg-zinc-950/60 dark:text-brand-soft"
+              : "inline-flex items-center justify-center rounded-full bg-brand px-4 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover"
+          }
         >
           {t.review.openReview}
         </Link>
