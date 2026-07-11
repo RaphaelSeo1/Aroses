@@ -10,6 +10,7 @@ import {
   TUTOR_NOTES_JSON_SHAPE,
   TUTOR_NOTES_QUALITY_RULES,
 } from "@/lib/ai/tutor-notes-quality";
+import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
 
 const MODEL =
   process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
@@ -218,11 +219,30 @@ Output ONLY valid JSON (no markdown fences):
   "sections": Array<${TUTOR_NOTES_JSON_SHAPE}>
 }`;
 
+/**
+ * Layer the student's per-session note request directly under the quality
+ * rules — above the section-structure / JSON-shape instructions, so the
+ * AutoGenerateBlock schema is untouched. Tutor honors the instruction
+ * coarsely: it can shift which schema fields get populated (e.g. more
+ * examples, thinner vocabulary) but cannot invent new field types.
+ * Empty instruction ⇒ base system, byte-for-byte.
+ */
+function tutorSystem(base: string, noteInstruction: string | undefined): string {
+  const modifier = buildNoteInstructionModifier(noteInstruction);
+  if (!modifier) return base;
+  return base.replace(
+    TUTOR_NOTES_QUALITY_RULES,
+    `${TUTOR_NOTES_QUALITY_RULES}${modifier}`
+  );
+}
+
 export async function synthesizeTutorNotes(input: {
   roseReply: string;
   studentUtterance?: string;
   sessionTopic?: string;
   modeTag?: string | null;
+  /** Per-session free-text style request. Empty/missing ⇒ base system unchanged. */
+  noteInstruction?: string;
 }): Promise<AutoGenerateBlock | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
@@ -254,7 +274,7 @@ export async function synthesizeTutorNotes(input: {
       model: MODEL,
       max_tokens: 2048,
       temperature: 0.35,
-      system: SYNTHESIS_SYSTEM,
+      system: tutorSystem(SYNTHESIS_SYSTEM, input.noteInstruction),
       messages: [{ role: "user", content: userPrompt }],
     });
 
@@ -288,6 +308,8 @@ export async function synthesizeTutorNotesFromTranscript(input: {
   sessionTopic?: string;
   modeTag?: string | null;
   referenceSummary?: string;
+  /** Per-session free-text style request. Empty/missing ⇒ base system unchanged. */
+  noteInstruction?: string;
 }): Promise<AutoGenerateBlock[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return [];
@@ -316,7 +338,7 @@ export async function synthesizeTutorNotesFromTranscript(input: {
       model: MODEL,
       max_tokens: 6000,
       temperature: 0.35,
-      system: BACKFILL_SYSTEM,
+      system: tutorSystem(BACKFILL_SYSTEM, input.noteInstruction),
       messages: [{ role: "user", content: userPrompt }],
     });
 

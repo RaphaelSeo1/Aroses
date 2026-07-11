@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { confirmDialog } from "@/components/AppDialogs";
+import { confirmDialog, promptDialog } from "@/components/AppDialogs";
+import { useT } from "@/lib/i18n/LocaleProvider";
 import {
   NotesPanel,
   type NotesPanelHandle,
@@ -107,6 +108,7 @@ export function TutorSessionRunner({
   initial: TutorSessionRecord;
 }) {
   const router = useRouter();
+  const locale = useT();
 
   // ----- conversation state -----
   const [messages, setMessages] = useState<LocalMessage[]>(() =>
@@ -277,6 +279,41 @@ export function TutorSessionRunner({
   const notesAppendedTurnRef = useRef<Set<string>>(new Set());
   const notesSynthesisInFlightRef = useRef(false);
 
+  // Per-session note-style instruction — edited inline in the NotesPanel
+  // header, debounced-saved to the session row, and sent with synthesize
+  // calls so an edit applies to the very next generated block.
+  const [noteInstruction, setNoteInstruction] = useState(
+    initial.noteInstruction ?? ""
+  );
+  const noteInstructionRef = useRef(noteInstruction);
+  const noteInstructionSaveTimerRef = useRef<number | null>(null);
+  const handleNoteInstructionChange = useCallback(
+    (value: string) => {
+      setNoteInstruction(value);
+      noteInstructionRef.current = value;
+      if (noteInstructionSaveTimerRef.current !== null) {
+        window.clearTimeout(noteInstructionSaveTimerRef.current);
+      }
+      noteInstructionSaveTimerRef.current = window.setTimeout(() => {
+        noteInstructionSaveTimerRef.current = null;
+        void fetch(`/api/tutor-session/${initial.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ noteInstruction: value }),
+        }).catch(() => {});
+      }, 600);
+    },
+    [initial.id]
+  );
+  useEffect(
+    () => () => {
+      if (noteInstructionSaveTimerRef.current !== null) {
+        window.clearTimeout(noteInstructionSaveTimerRef.current);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     autoGenerateNotesRef.current = autoGenerateNotes;
   }, [autoGenerateNotes]);
@@ -334,7 +371,12 @@ export function TutorSessionRunner({
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ roseReply, studentUtterance }),
+            body: JSON.stringify({
+              roseReply,
+              studentUtterance,
+              // Always a string — "" clears an instruction in-flight.
+              noteInstruction: noteInstructionRef.current,
+            }),
           }
         );
         if (!res.ok) {
@@ -398,7 +440,10 @@ export function TutorSessionRunner({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ backfill: true }),
+          body: JSON.stringify({
+            backfill: true,
+            noteInstruction: noteInstructionRef.current,
+          }),
         }
       );
       if (!res.ok) {
@@ -1083,6 +1128,67 @@ export function TutorSessionRunner({
     [initial.id, submitTurn, uploading]
   );
 
+  const handleUploadLink = useCallback(async () => {
+    if (uploading) return;
+    const raw = await promptDialog({
+      title: locale.tutor.addLinkTitle,
+      label: locale.tutor.addLinkLabel,
+      placeholder: locale.tutor.addLinkPlaceholder,
+      confirmLabel: locale.tutor.addLinkConfirm,
+    });
+    if (!raw?.trim()) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("links", raw.trim());
+      const res = await fetch(`/api/tutor-session/${initial.id}/upload`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        const errBody = (await res
+          .json()
+          .catch(() => ({ error: "Couldn't add that link." }))) as {
+          error?: string;
+        };
+        throw new Error(errBody.error ?? "Couldn't add that link.");
+      }
+      const body = (await res.json()) as {
+        uploads: TutorSessionUpload[];
+        failed: string[];
+      };
+      setUploads((prev) => [...prev, ...body.uploads]);
+      if (body.failed.length > 0) {
+        const failMsg: LocalMessage = {
+          id: `sys-fail-${Date.now()}`,
+          role: "assistant",
+          content: `(I had trouble with that link: ${body.failed.join(
+            ", "
+          )} — try another page or upload a file instead.)`,
+        };
+        setMessages((prev) => [...prev, failMsg]);
+      }
+      if (body.uploads.length > 0) {
+        const names = body.uploads.map((u) => u.fileName).join(", ");
+        const trigger = `[The student just attached a link: ${names}. Look at it briefly and react in one or two sentences — acknowledge what you see, ask what they want to do with it.]`;
+        void submitTurn(trigger, { system: true });
+      }
+    } catch (e) {
+      console.error("[TutorSessionRunner handleUploadLink]", e);
+      const errMsg: LocalMessage = {
+        id: `sys-err-${Date.now()}`,
+        role: "assistant",
+        content:
+          e instanceof Error
+            ? `(${e.message})`
+            : "(Couldn't add that link — try again in a sec.)",
+      };
+      setMessages((prev) => [...prev, errMsg]);
+    } finally {
+      setUploading(false);
+    }
+  }, [initial.id, locale.tutor, submitTurn, uploading]);
+
   // ----- "+ Add to notes" — synthesize structured notes from Rose's reply -----
   const addMessageToNotes = useCallback(
     async (msg: LocalMessage) => {
@@ -1754,6 +1860,28 @@ export function TutorSessionRunner({
                   </svg>
                 )}
               </button>
+              <button
+                type="button"
+                onClick={() => void handleUploadLink()}
+                disabled={uploading || submitting}
+                aria-label={locale.tutor.attachLink}
+                title={locale.tutor.attachLink}
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50 disabled:opacity-50"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-5 w-5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                </svg>
+              </button>
               <textarea
                 value={composer}
                 onChange={(e) => setComposer(e.target.value.slice(0, 4000))}
@@ -1808,6 +1936,8 @@ export function TutorSessionRunner({
               autoGenerateBackfillOnlyWhenEmpty
               onEditorReady={() => setNotesEditorReady(true)}
               editorRef={notesPanelRef}
+              noteInstruction={noteInstruction}
+              onNoteInstructionChange={handleNoteInstructionChange}
               className="h-full min-h-0"
             />
           </div>
@@ -2006,8 +2136,8 @@ function MaterialsDrawer({
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {uploads.length === 0 ? (
             <p className="text-sm text-zinc-500">
-              No materials attached. Drop a file from the paperclip
-              button below the conversation to give Rose more context.
+              No materials attached. Use the paperclip or link button
+              below the conversation to give Rose more context.
             </p>
           ) : (
             <ul className="space-y-3">
@@ -2022,12 +2152,24 @@ function MaterialsDrawer({
                         ? "📄"
                         : u.fileKind === "image"
                           ? "🖼️"
-                          : "📝"}
+                          : u.fileKind === "link"
+                            ? "🔗"
+                            : "📝"}
                     </span>
                     <p className="truncate text-sm font-semibold text-zinc-900">
                       {u.fileName}
                     </p>
                   </div>
+                  {u.sourceUrl ? (
+                    <a
+                      href={u.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 block truncate text-[11px] text-violet-700 hover:underline"
+                    >
+                      {u.sourceUrl}
+                    </a>
+                  ) : null}
                   {u.summary ? (
                     <p className="mt-1.5 text-xs leading-relaxed text-zinc-600">
                       {u.summary}

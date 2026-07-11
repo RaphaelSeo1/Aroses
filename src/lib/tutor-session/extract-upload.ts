@@ -8,6 +8,7 @@ import {
   summarizeImageUpload,
   summarizePdfUpload,
 } from "@/lib/ai/tutor-session";
+import { fetchReferenceUrl } from "@/lib/fetch-reference-url";
 
 import {
   TUTOR_SESSION_MAX_FILES,
@@ -17,6 +18,11 @@ import {
 export type TutorExtractResult = {
   extractedContent: string;
   summary: string;
+};
+
+export type TutorLinkExtractResult = TutorExtractResult & {
+  fileName: string;
+  sourceUrl: string;
 };
 
 function imageMediaType(
@@ -90,6 +96,27 @@ export async function extractTutorSessionUpload(input: {
       })
     : `(${input.fileName})`;
   return { extractedContent, summary };
+}
+
+/**
+ * Fetch a URL and summarize it as tutor-session reference context.
+ */
+export async function extractTutorSessionLink(
+  rawUrl: string
+): Promise<TutorLinkExtractResult> {
+  const fetched = await fetchReferenceUrl(rawUrl);
+  const extractedContent = fetched.text.slice(0, 30_000);
+  const displayName = fetched.title || fetched.hostname;
+  const summary = await summarizePdfUpload({
+    fileName: displayName,
+    extractedText: extractedContent,
+  });
+  return {
+    extractedContent,
+    summary,
+    fileName: displayName.slice(0, 200),
+    sourceUrl: fetched.url,
+  };
 }
 
 export function validateTutorSessionBatch(files: File[]): string | null {

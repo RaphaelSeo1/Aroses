@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { TutorSessionUpload } from "@/types/tutor-session";
-import { extractTutorSessionUpload } from "@/lib/tutor-session/extract-upload";
+import {
+  extractTutorSessionLink,
+  extractTutorSessionUpload,
+} from "@/lib/tutor-session/extract-upload";
 import {
   TUTOR_SESSION_MAX_FILES,
   TUTOR_SESSION_MAX_TOTAL_BYTES,
@@ -18,6 +21,7 @@ import { detectIngestFormat } from "@/lib/study-ingest/formats";
  *
  * Accepts multipart form-data:
  *   files: File | File[]  (up to 20, ≤12 MB each)
+ *   links: string | string[]  (optional URL reference materials)
  *
  * Returns: { uploads: TutorSessionUpload[], referenceSummary }
  *
@@ -77,12 +81,20 @@ export async function POST(request: Request, ctx: Params) {
   const fileEntries = form
     .getAll("files")
     .filter((f): f is File => f instanceof File);
-  if (fileEntries.length === 0) {
-    return NextResponse.json({ error: "No files." }, { status: 400 });
-  }
-  if (fileEntries.length > MAX_FILES) {
+  const linkEntries = form
+    .getAll("links")
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter((v) => v.length > 0);
+
+  if (fileEntries.length === 0 && linkEntries.length === 0) {
     return NextResponse.json(
-      { error: `At most ${MAX_FILES} files at a time.` },
+      { error: "No files or links." },
+      { status: 400 }
+    );
+  }
+  if (fileEntries.length + linkEntries.length > MAX_FILES) {
+    return NextResponse.json(
+      { error: `At most ${MAX_FILES} materials at a time.` },
       { status: 400 }
     );
   }
@@ -182,6 +194,89 @@ export async function POST(request: Request, ctx: Params) {
       sizeBytes: uploadRow.size_bytes,
       summary: uploadRow.summary,
       createdAt: uploadRow.created_at,
+    });
+  }
+
+  for (const link of linkEntries) {
+    let extracted;
+    try {
+      extracted = await extractTutorSessionLink(link);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "fetch failed";
+      console.error("[tutor-session upload link]", e);
+      failedFiles.push(`${link} (${msg})`);
+      continue;
+    }
+
+    const storagePath = `${user.id}/${sessionId}/${Date.now()}-link.txt`;
+    const { error: storageError } = await supabase.storage
+      .from("tutor-session-uploads")
+      .upload(
+        storagePath,
+        Buffer.from(
+          `Source: ${extracted.sourceUrl}\n\n${extracted.extractedContent}`,
+          "utf8"
+        ),
+        { contentType: "text/plain", upsert: false }
+      );
+    if (storageError) {
+      console.error("[tutor-session upload link storage]", storageError);
+      failedFiles.push(link);
+      continue;
+    }
+
+    const linkInsert: Record<string, unknown> = {
+      session_id: sessionId,
+      user_id: user.id,
+      file_name: extracted.fileName,
+      file_kind: "link",
+      mime_type: "text/uri-list",
+      size_bytes: Buffer.byteLength(extracted.extractedContent, "utf8"),
+      storage_path: storagePath,
+      source_url: extracted.sourceUrl,
+      extracted_content: extracted.extractedContent,
+      summary: extracted.summary,
+    };
+
+    let { data: uploadRow, error: insertError } = await supabase
+      .from("tutor_session_uploads")
+      .insert(linkInsert as never)
+      .select(
+        "id, file_name, file_kind, mime_type, size_bytes, summary, created_at, source_url"
+      )
+      .single();
+
+    if (insertError) {
+      delete linkInsert.source_url;
+      ({ data: uploadRow, error: insertError } = await supabase
+        .from("tutor_session_uploads")
+        .insert(linkInsert as never)
+        .select(
+          "id, file_name, file_kind, mime_type, size_bytes, summary, created_at"
+        )
+        .single());
+    }
+
+    if (insertError || !uploadRow) {
+      console.error("[tutor-session upload link insert]", insertError);
+      failedFiles.push(link);
+      continue;
+    }
+
+    newSummaries.push(`[link: ${extracted.sourceUrl}] ${extracted.summary}`);
+    insertedUploads.push({
+      id: uploadRow.id,
+      fileName: uploadRow.file_name,
+      fileKind: "link",
+      mimeType: uploadRow.mime_type,
+      sizeBytes: uploadRow.size_bytes,
+      summary: uploadRow.summary,
+      createdAt: uploadRow.created_at,
+      sourceUrl:
+        "source_url" in uploadRow
+          ? ((uploadRow as { source_url?: string }).source_url ??
+            extracted.sourceUrl)
+          : extracted.sourceUrl,
     });
   }
 

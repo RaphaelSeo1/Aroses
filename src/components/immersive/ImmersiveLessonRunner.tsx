@@ -327,6 +327,41 @@ export function ImmersiveLessonRunner({
   }, []);
   const showDockedNotes = useMinWidth(1280);
 
+  // Per-course note-style instruction — edited inline in the NotesPanel
+  // header, debounced-saved to the onboarding row, and sent with the
+  // generate-stream call so an edit applies to the very next chunk's notes.
+  const [noteInstruction, setNoteInstruction] = useState(
+    onboarding.noteInstruction ?? ""
+  );
+  const noteInstructionRef = useRef(noteInstruction);
+  const noteInstructionSaveTimerRef = useRef<number | null>(null);
+  const handleNoteInstructionChange = useCallback(
+    (value: string) => {
+      setNoteInstruction(value);
+      noteInstructionRef.current = value;
+      if (noteInstructionSaveTimerRef.current !== null) {
+        window.clearTimeout(noteInstructionSaveTimerRef.current);
+      }
+      noteInstructionSaveTimerRef.current = window.setTimeout(() => {
+        noteInstructionSaveTimerRef.current = null;
+        void fetch(`/api/mentored/onboarding/${materialId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ noteInstruction: value }),
+        }).catch(() => {});
+      }, 600);
+    },
+    [materialId]
+  );
+  useEffect(
+    () => () => {
+      if (noteInstructionSaveTimerRef.current !== null) {
+        window.clearTimeout(noteInstructionSaveTimerRef.current);
+      }
+    },
+    []
+  );
+
   // When the student toggles auto-generate OFF→ON we clear the
   // "already appended for chunk X" guard so the current chunk gets
   // re-emitted. Without this, deleting an auto-generated block and
@@ -1073,6 +1108,8 @@ export function ImmersiveLessonRunner({
                 lessonExcerpt,
                 courseKeyTerms: lessonKeyTerms,
                 roseSpoken: roseSpoken || undefined,
+                // Always a string — "" clears an instruction in-flight.
+                noteInstruction: noteInstructionRef.current,
               }),
               signal: ac.signal,
             }
@@ -2945,6 +2982,8 @@ export function ImmersiveLessonRunner({
             onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
             onEditorReady={onNotesEditorReady}
             editorRef={notesPanelRef}
+            noteInstruction={noteInstruction}
+            onNoteInstructionChange={handleNoteInstructionChange}
             fillHeight
             pinToolbar
             className="h-full w-full"
@@ -3007,6 +3046,8 @@ export function ImmersiveLessonRunner({
                     onAutoGenerateUserToggle={handleAutoGenerateUserToggle}
                     onEditorReady={onNotesEditorReady}
                     editorRef={notesPanelRef}
+                    noteInstruction={noteInstruction}
+                    onNoteInstructionChange={handleNoteInstructionChange}
                     className="h-full"
                   />
             </div>

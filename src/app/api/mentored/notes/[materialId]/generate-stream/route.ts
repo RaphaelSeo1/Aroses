@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import { streamMentoredNotes } from "@/lib/ai/generate-mentored-notes";
+import { clampNoteInstruction } from "@/lib/ai/note-instruction";
+import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import type { KeyTerm } from "@/types/course";
 import type { MentoredLessonChunk } from "@/types/mentored";
 
@@ -58,6 +60,7 @@ export async function POST(request: Request, ctx: Params) {
     lessonExcerpt?: unknown;
     courseKeyTerms?: unknown;
     roseSpoken?: unknown;
+    noteInstruction?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -104,6 +107,18 @@ export async function POST(request: Request, ctx: Params) {
     ? (body.courseKeyTerms as KeyTerm[])
     : undefined;
 
+  // Per-course note style request — the caller's onboarding row is the source
+  // of truth, a body string is an in-flight override (clamped either way).
+  const noteInstruction =
+    typeof body.noteInstruction === "string"
+      ? clampNoteInstruction(body.noteInstruction)
+      : clampNoteInstruction(
+          await loadNoteInstruction(supabase, "user_course_onboarding", {
+            user_id: user.id,
+            material_id: materialId,
+          })
+        );
+
   console.log("AUTO-GENERATE: API generate-stream start", {
     materialId,
     chunkId: body.chunk.id,
@@ -130,6 +145,7 @@ export async function POST(request: Request, ctx: Params) {
           lessonExcerpt,
           courseKeyTerms,
           roseSpoken,
+          noteInstruction: noteInstruction || undefined,
         })) {
           if (evt.type === "text") {
             send("text", { delta: evt.delta });

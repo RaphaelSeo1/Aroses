@@ -3,6 +3,7 @@ import {
   LiveNotesSurface,
   type LiveNotesInitialSession,
 } from "@/components/live-notes/LiveNotesSurface";
+import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
 
@@ -71,6 +72,12 @@ export default async function LiveNotesSessionPage({ params }: Props) {
       initialSegments.length > 0
         ? initialSegments[initialSegments.length - 1].seq
         : -1,
+    // Separate graceful read: a missing column (pre-migration) resolves to "".
+    noteInstruction: await loadNoteInstruction(
+      supabase,
+      "live_lecture_sessions",
+      { id: sessionId, user_id: user.id }
+    ),
   };
 
   return (

@@ -13,6 +13,7 @@ import {
   fetchStudyMaterialsOutlineRowsForPublicExplore,
 } from "@/lib/supabase/fetch-explore-study-material";
 import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
+import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { loadExploreStudyCourse } from "@/lib/marketplace/explore-study-guard";
 import { createClient } from "@/lib/supabase/server";
 import { parseCoursePayload } from "@/lib/ai/course-payload";
@@ -210,6 +211,12 @@ export default async function ExploreLearnPage({
           typeof onboardingRow.personalization === "object"
             ? (onboardingRow.personalization as MentoredPersonalization)
             : {},
+        // Separate graceful read: missing column (pre-migration) resolves "".
+        noteInstruction: await loadNoteInstruction(
+          supabase,
+          "user_course_onboarding",
+          { user_id: user.id, material_id: materialId }
+        ),
         completedAt: (onboardingRow.completed_at as string | null) ?? null,
         createdAt: onboardingRow.created_at as string,
         updatedAt: onboardingRow.updated_at as string,

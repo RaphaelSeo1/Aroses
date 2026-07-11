@@ -3,6 +3,8 @@ import {
   synthesizeTutorNotes,
   synthesizeTutorNotesFromTranscript,
 } from "@/lib/ai/synthesize-tutor-notes";
+import { clampNoteInstruction } from "@/lib/ai/note-instruction";
+import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { createClient } from "@/lib/supabase/server";
 import type { TutorSessionMessage } from "@/types/tutor-session";
 
@@ -28,6 +30,7 @@ export async function POST(request: Request, ctx: Params) {
     backfill?: unknown;
     roseReply?: unknown;
     studentUtterance?: unknown;
+    noteInstruction?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -61,6 +64,18 @@ export async function POST(request: Request, ctx: Params) {
   const modeTag = (sessionRow.mode_tag as string | null) ?? null;
   const sessionTopic = sessionRow.topic ?? "";
 
+  // Per-session note style request — DB is source of truth, body string is an
+  // in-flight override (clamped server-side either way).
+  const noteInstruction =
+    typeof body.noteInstruction === "string"
+      ? clampNoteInstruction(body.noteInstruction)
+      : clampNoteInstruction(
+          await loadNoteInstruction(supabase, "tutor_sessions", {
+            id: sessionId,
+            user_id: user.id,
+          })
+        );
+
   if (body.backfill === true) {
     const transcript: TutorSessionMessage[] = Array.isArray(
       sessionRow.conversation_transcript
@@ -78,6 +93,7 @@ export async function POST(request: Request, ctx: Params) {
       sessionTopic,
       modeTag,
       referenceSummary: sessionRow.reference_summary ?? "",
+      noteInstruction: noteInstruction || undefined,
     });
 
     if (blocks.length === 0) {
@@ -112,6 +128,7 @@ export async function POST(request: Request, ctx: Params) {
     studentUtterance,
     sessionTopic,
     modeTag,
+    noteInstruction: noteInstruction || undefined,
   });
 
   if (!block) {

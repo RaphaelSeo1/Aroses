@@ -16,6 +16,13 @@ const en = {
   exitBody: "Your progress is saved.",
   stay: "Stay",
   leave: "Leave",
+  noteStyleButton: "Note style",
+  noteStyleTitle: "How should these notes be written?",
+  noteStylePlaceholder:
+    "Tell the AI how you want these notes — e.g. 'more worked examples, skip long definitions, keep it short'. Leave blank for the default.",
+  noteStyleHint:
+    "Applies to this session only and can only shape style and emphasis — never facts or format.",
+  noteStyleDone: "Done",
 };
 
 const ko: typeof en = {
@@ -36,6 +43,13 @@ const ko: typeof en = {
   exitBody: "진행 상황은 저장돼요.",
   stay: "계속",
   leave: "나가기",
+  noteStyleButton: "노트 스타일",
+  noteStyleTitle: "노트를 어떻게 써드릴까요?",
+  noteStylePlaceholder:
+    "AI가 이 노트를 어떻게 쓰면 좋을지 알려주세요 — 예: '예제 풀이 많이, 긴 정의는 생략, 짧게'. 비워두면 기본 방식으로 작성돼요.",
+  noteStyleHint:
+    "이 세션에만 적용되고, 스타일과 강조만 바꿀 수 있어요 — 사실이나 형식은 바뀌지 않아요.",
+  noteStyleDone: "완료",
 };
 
 export const immersive = { en, ko };

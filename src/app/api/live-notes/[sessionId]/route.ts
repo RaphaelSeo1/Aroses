@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { clampNoteInstruction } from "@/lib/ai/note-instruction";
+import { isNoteInstructionColumnError } from "@/lib/load-note-instruction";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
@@ -14,7 +16,8 @@ type Params = { params: Promise<{ sessionId: string }> };
  *
  * PATCH /api/live-notes/[sessionId]
  *   Update mutable session fields while recording.
- *   Body: { status?: "recording" | "paused", title?, durationSeconds? }
+ *   Body: { status?: "recording" | "paused", title?, durationSeconds?,
+ *           noteInstruction? }
  *   Completion goes through POST .../complete, never here.
  *
  * DELETE /api/live-notes/[sessionId]
@@ -95,6 +98,7 @@ export async function PATCH(request: Request, ctx: Params) {
     status?: unknown;
     title?: unknown;
     durationSeconds?: unknown;
+    noteInstruction?: unknown;
   };
 
   const patch: Record<string, unknown> = {
@@ -118,28 +122,40 @@ export async function PATCH(request: Request, ctx: Params) {
       Math.round(b.durationSeconds)
     );
   }
-
-  // Title-only renames are allowed on any non-deleted session (including
-  // completed). Status / duration changes stay limited to live sessions.
-  const titleOnly =
-    typeof patch.title === "string" &&
-    b.status === undefined &&
-    b.durationSeconds === undefined;
-
-  let query = supabase
-    .from("live_lecture_sessions")
-    .update(patch)
-    .eq("id", sessionId)
-    .eq("user_id", user.id);
-
-  if (!titleOnly) {
-    // Ended sessions are immutable for status / duration through this route.
-    query = query.in("status", ["recording", "paused"]);
+  if (typeof b.noteInstruction === "string") {
+    patch.note_instruction = clampNoteInstruction(b.noteInstruction);
   }
 
-  const { data, error } = await query
-    .select("id, status, user_note_id, title")
-    .maybeSingle();
+  // Metadata-only edits (title rename, note instruction) are allowed on any
+  // non-deleted session (including completed). Status / duration changes
+  // stay limited to live sessions.
+  const metaOnly = b.status === undefined && b.durationSeconds === undefined;
+
+  const runUpdate = async (fields: Record<string, unknown>) => {
+    let query = supabase
+      .from("live_lecture_sessions")
+      .update(fields)
+      .eq("id", sessionId)
+      .eq("user_id", user.id);
+    if (!metaOnly) {
+      // Ended sessions are immutable for status / duration through this route.
+      query = query.in("status", ["recording", "paused"]);
+    }
+    return query.select("id, status, user_note_id, title").maybeSingle();
+  };
+
+  let { data, error } = await runUpdate(patch);
+
+  // Graceful pre-migration fallback: drop note_instruction and retry so a
+  // missing column never breaks title/status/duration saves.
+  if (
+    error &&
+    "note_instruction" in patch &&
+    isNoteInstructionColumnError(error.message)
+  ) {
+    const { note_instruction: _ni, ...rest } = patch;
+    ({ data, error } = await runUpdate(rest));
+  }
 
   if (error) {
     console.error("[live-notes] patch session", error);

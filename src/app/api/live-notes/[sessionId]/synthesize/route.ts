@@ -5,6 +5,8 @@ import {
   streamLiveLectureNotes,
   type RevisableSection,
 } from "@/lib/ai/live-lecture-notes";
+import { clampNoteInstruction } from "@/lib/ai/note-instruction";
+import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
@@ -73,6 +75,7 @@ export async function POST(request: Request, ctx: Params) {
     recentHeadings?: unknown;
     revisable?: unknown;
     screenContext?: unknown;
+    noteInstruction?: unknown;
   };
   if (typeof b.newSegmentText !== "string" || !b.newSegmentText.trim()) {
     return NextResponse.json({ error: "newSegmentText required" }, { status: 400 });
@@ -145,6 +148,19 @@ export async function POST(request: Request, ctx: Params) {
   const lectureTitle =
     typeof session.title === "string" ? session.title : undefined;
 
+  // Per-session note style request. The DB row is the source of truth; a
+  // string in the body is an in-flight override so an edit applies to the
+  // very next slice without waiting for the debounced save.
+  const noteInstruction =
+    typeof b.noteInstruction === "string"
+      ? clampNoteInstruction(b.noteInstruction)
+      : clampNoteInstruction(
+          await loadNoteInstruction(supabase, "live_lecture_sessions", {
+            id: sessionId,
+            user_id: user.id,
+          })
+        );
+
   const encoder = new TextEncoder();
   const sseLine = (event: string, data: unknown): string =>
     `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -169,6 +185,7 @@ export async function POST(request: Request, ctx: Params) {
           lectureTitle,
           userId: user.id,
           screenContext: screenContext || undefined,
+          noteInstruction: noteInstruction || undefined,
         })) {
           if (ev.type === "thought") {
             send("thought", { message: ev.message });

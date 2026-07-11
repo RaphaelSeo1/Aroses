@@ -92,6 +92,11 @@ export type MentoredOnboardingRecord = {
   pathChoice: PathChoice;
   interactionMode: InteractionMode;
   personalization: MentoredPersonalization;
+  /**
+   * Per-course "tell the AI how to write these notes" free text
+   * (style/emphasis only). Optional so pre-migration rows degrade to "".
+   */
+  noteInstruction?: string;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -105,6 +110,7 @@ export type MentoredOnboardingPatch = Partial<{
   pathChoice: PathChoice;
   interactionMode: InteractionMode;
   personalization: MentoredPersonalization;
+  noteInstruction: string;
   completedAt: string | null;
 }>;
 

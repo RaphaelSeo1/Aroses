@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { clampNoteInstruction } from "@/lib/ai/note-instruction";
+import { isNoteInstructionColumnError } from "@/lib/load-note-instruction";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import type {
@@ -38,6 +40,7 @@ function normalize(row: {
   path_choice: string;
   interaction_mode: string;
   personalization?: unknown;
+  note_instruction?: unknown;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
@@ -58,6 +61,9 @@ function normalize(row: {
       row.personalization && typeof row.personalization === "object"
         ? (row.personalization as MentoredPersonalization)
         : {},
+    // Missing column (migration 089 not applied) degrades to "".
+    noteInstruction:
+      typeof row.note_instruction === "string" ? row.note_instruction : "",
     completedAt: row.completed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -66,6 +72,24 @@ function normalize(row: {
 
 const SELECT_COLS =
   "id, user_id, material_id, goals, knowledge_level, level_quiz, path_choice, interaction_mode, personalization, completed_at, created_at, updated_at";
+
+/**
+ * Fetch the onboarding row with `note_instruction`, degrading to the base
+ * column set when migration 089 hasn't been applied yet — a missing column
+ * must never break onboarding loads/saves.
+ */
+async function selectRow(
+  query: (cols: string) => PromiseLike<{
+    data: unknown;
+    error: { message: string } | null;
+  }>
+): Promise<{ data: unknown; error: { message: string } | null }> {
+  const first = await query(`${SELECT_COLS}, note_instruction`);
+  if (first.error && isNoteInstructionColumnError(first.error.message)) {
+    return query(SELECT_COLS);
+  }
+  return first;
+}
 
 export async function GET(_request: Request, ctx: Params) {
   const { materialId } = await ctx.params;
@@ -86,12 +110,14 @@ export async function GET(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
-  const { data, error } = await supabase
-    .from("user_course_onboarding")
-    .select(SELECT_COLS)
-    .eq("user_id", user.id)
-    .eq("material_id", materialId)
-    .maybeSingle();
+  const { data, error } = await selectRow((cols) =>
+    supabase
+      .from("user_course_onboarding")
+      .select(cols)
+      .eq("user_id", user.id)
+      .eq("material_id", materialId)
+      .maybeSingle()
+  );
 
   if (error) {
     console.error("[mentored/onboarding GET]", error);
@@ -184,15 +210,34 @@ export async function POST(request: Request, ctx: Params) {
     }
     update.personalization = safe;
   }
+  if (typeof body.noteInstruction === "string") {
+    update.note_instruction = clampNoteInstruction(body.noteInstruction);
+  }
   if (body.completedAt !== undefined) {
     update.completed_at = body.completedAt;
   }
 
-  const { data, error } = await supabase
-    .from("user_course_onboarding")
-    .upsert(update, { onConflict: "user_id,material_id" })
-    .select(SELECT_COLS)
-    .maybeSingle();
+  const runUpsert = (fields: Record<string, unknown>) =>
+    selectRow((cols) =>
+      supabase
+        .from("user_course_onboarding")
+        .upsert(fields, { onConflict: "user_id,material_id" })
+        .select(cols)
+        .maybeSingle()
+    );
+
+  let { data, error } = await runUpsert(update);
+
+  // Graceful pre-migration fallback: drop note_instruction and retry so a
+  // missing column never breaks the rest of the onboarding save.
+  if (
+    error &&
+    "note_instruction" in update &&
+    isNoteInstructionColumnError(error.message)
+  ) {
+    const { note_instruction: _ni, ...rest } = update;
+    ({ data, error } = await runUpsert(rest));
+  }
 
   if (error || !data) {
     console.error("[mentored/onboarding POST]", error);

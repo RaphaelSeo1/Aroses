@@ -45,7 +45,7 @@ export default async function TutorSessionActivePage({ params }: Params) {
   const uploads: TutorSessionUpload[] = (uploadRows ?? []).map((u) => ({
     id: u.id,
     fileName: u.file_name,
-    fileKind: u.file_kind as "pdf" | "image" | "text",
+    fileKind: u.file_kind as TutorSessionUpload["fileKind"],
     mimeType: u.mime_type,
     sizeBytes: u.size_bytes,
     summary: u.summary,
@@ -68,6 +68,11 @@ export default async function TutorSessionActivePage({ params }: Params) {
     recapMarkdown: sessionRow.recap_markdown,
     recapGeneratedAt: sessionRow.recap_generated_at,
     recapStatus: sessionRow.recap_status,
+    // Pre-migration rows won't have the column on the `*` select.
+    noteInstruction:
+      typeof sessionRow.note_instruction === "string"
+        ? sessionRow.note_instruction
+        : "",
     createdAt: sessionRow.created_at,
     updatedAt: sessionRow.updated_at,
     uploads,

@@ -30,6 +30,8 @@ import {
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import type { Dictionary } from "@/locales";
+import { promptDialog } from "@/components/AppDialogs";
+import { normalizeReferenceUrl } from "@/lib/normalize-reference-url";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -127,6 +129,7 @@ export function CourseUploadForm({
   const dragDepthRef = useRef(0);
 
   const [files, setFiles] = useState<File[]>([]);
+  const [links, setLinks] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -700,8 +703,8 @@ export function CourseUploadForm({
       setError(t.dashboard.errSelectSection);
       return;
     }
-    if (files.length === 0) {
-      setError(t.dashboard.errChooseFile);
+    if (files.length === 0 && links.length === 0) {
+      setError(t.dashboard.errChooseFileOrLink);
       return;
     }
 
@@ -729,9 +732,11 @@ export function CourseUploadForm({
     setLoading(true);
     setBuildProgress({
       line:
-        files.length > 1
-          ? tf(t.dashboard.uploadingFiles, { count: files.length })
-          : tf(t.dashboard.uploadingFile, { name: files[0].name }),
+        files.length > 0
+          ? files.length > 1
+            ? tf(t.dashboard.uploadingFiles, { count: files.length })
+            : tf(t.dashboard.uploadingFile, { name: files[0]!.name })
+          : t.dashboard.fetchingLink,
       bar: "indeterminate",
     });
 
@@ -750,6 +755,85 @@ export function CourseUploadForm({
       }
 
       const userId = user.id;
+
+      type StartOutcome = {
+        group: { name: string };
+        jobId?: string;
+        materialId?: string;
+        error?: string;
+      };
+      const startOutcomes: StartOutcome[] = [];
+
+      // ---- link materials (each URL → its own transcript-review job) ----
+      for (const link of links) {
+        try {
+          setBuildProgress({
+            line: t.dashboard.fetchingLink,
+            bar: "indeterminate",
+          });
+          const res = await fetch("/api/process-url", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              courseId,
+              examGroupId,
+              url: link,
+              studyContext: studyGoal.trim() || undefined,
+              outputLanguage,
+            }),
+          });
+          const raw = await res.text();
+          if (!res.ok) {
+            let msg = t.dashboard.errNetworkStartingBuild;
+            try {
+              const parsed = JSON.parse(raw) as { error?: string };
+              if (parsed.error) msg = parsed.error;
+            } catch {
+              /* keep default */
+            }
+            startOutcomes.push({ group: { name: link }, error: msg });
+            continue;
+          }
+          const body = JSON.parse(raw) as { jobId?: string; title?: string };
+          startOutcomes.push({
+            group: { name: body.title || link },
+            jobId: typeof body.jobId === "string" ? body.jobId : undefined,
+          });
+        } catch {
+          startOutcomes.push({
+            group: { name: link },
+            error: t.dashboard.errNetworkStartingBuild,
+          });
+        }
+      }
+
+      if (files.length === 0) {
+        const jobIds = startOutcomes
+          .map((o) => o.jobId)
+          .filter((id): id is string => Boolean(id));
+        const failure = startOutcomes.find((o) => o.error);
+        if (failure && jobIds.length === 0) {
+          setError(`${failure.group.name}: ${failure.error}`);
+          setLoading(false);
+          setBuildProgress(null);
+          return;
+        }
+        setBuildProgress(null);
+        setLinks([]);
+        if (jobIds.length > 0) {
+          const qs = new URLSearchParams();
+          qs.set("pdfJobs", jobIds.join(","));
+          qs.set("section", examGroupId);
+          router.push(
+            `/dashboard/courses/${courseId}/study/build?${qs.toString()}`
+          );
+          setLoading(false);
+          return;
+        }
+        setError(t.dashboard.errInvalidServerResponse);
+        setLoading(false);
+        return;
+      }
 
       // Validate + resolve a storage path for every file first (fail fast on an
       // unsupported format before we start uploading anything).
@@ -868,13 +952,6 @@ export function CourseUploadForm({
       // 1,2,3" showing as 1,2,3 even though the actual builds run in parallel
       // in the background (each POST returns 202 quickly after creating the
       // job; the heavy build happens after the response).
-      type StartOutcome = {
-        group: { name: string };
-        jobId?: string;
-        materialId?: string;
-        error?: string;
-      };
-      const startOutcomes: StartOutcome[] = [];
       for (let orderIndex = 0; orderIndex < buildGroups.length; orderIndex++) {
         const g = buildGroups[orderIndex]!;
         try {
@@ -938,6 +1015,7 @@ export function CourseUploadForm({
 
       setBuildProgress(null);
       setFiles([]);
+      setLinks([]);
 
       if (jobIds.length > 0) {
         const qs = new URLSearchParams();
@@ -1170,6 +1248,61 @@ export function CourseUploadForm({
             {t.dashboard.limitsLabel} {INGEST_SIZE_HINT}
           </span>
         </button>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={async () => {
+              if (loading) return;
+              const raw = await promptDialog({
+                title: t.dashboard.addLinkTitle,
+                label: t.dashboard.addLinkLabel,
+                placeholder: t.dashboard.addLinkPlaceholder,
+                confirmLabel: t.dashboard.addLinkConfirm,
+              });
+              if (!raw?.trim()) return;
+              const normalized = normalizeReferenceUrl(raw);
+              if (!normalized) {
+                setError(t.dashboard.errChooseFileOrLink);
+                return;
+              }
+              setError(null);
+              setLinks((prev) =>
+                prev.includes(normalized) ? prev : [...prev, normalized]
+              );
+            }}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            <span aria-hidden>🔗</span>
+            {t.dashboard.pasteLink}
+          </button>
+        </div>
+
+        {links.length > 0 ? (
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {links.map((link, i) => (
+              <li
+                key={`link-${link}`}
+                className="inline-flex max-w-full items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+              >
+                <span aria-hidden>🔗</span>
+                <span className="truncate font-medium">{link}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLinks((prev) => prev.filter((_, idx) => idx !== i))
+                  }
+                  aria-label={tf(t.dashboard.removeLinkAria, { name: link })}
+                  className="text-zinc-400 hover:text-rose-600"
+                  disabled={loading}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
 
         {files.length > 0 && (
           <div className="mt-3 space-y-3">
@@ -1483,7 +1616,7 @@ export function CourseUploadForm({
 
       <button
         type="submit"
-        disabled={loading || files.length === 0}
+        disabled={loading || (files.length === 0 && links.length === 0)}
         className="inline-flex items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/20 hover:bg-brand-hover disabled:opacity-60 dark:bg-brand dark:hover:bg-brand-soft"
       >
         {loading

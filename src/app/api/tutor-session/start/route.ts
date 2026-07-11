@@ -4,6 +4,7 @@ import {
   generateSessionTitle,
 } from "@/lib/ai/tutor-session";
 import {
+  extractTutorSessionLink,
   extractTutorSessionUpload,
 } from "@/lib/tutor-session/extract-upload";
 import {
@@ -22,11 +23,12 @@ import type {
  * POST /api/tutor-session/start
  *
  * Creates a new tutor session. Accepts MULTIPART form data so the
- * student can optionally attach reference files (PDFs, images) at
- * session start. Body fields:
+ * student can optionally attach reference files (PDFs, images) or
+ * links at session start. Body fields:
  *   - topic?:   string (the free-text topic the student typed)
  *   - modeTag?: TutorSessionModeTag (one of the chip values)
  *   - files?:   multiple File entries under the `files` key
+ *   - links?:   multiple URL strings under the `links` key
  *
  * Pipeline:
  *   1. Auth.
@@ -84,9 +86,13 @@ export async function POST(request: Request) {
   const modeTag = isModeTag(modeRaw) ? modeRaw : null;
 
   const fileEntries = form.getAll("files").filter((f): f is File => f instanceof File);
-  if (fileEntries.length > MAX_FILES) {
+  const linkEntries = form
+    .getAll("links")
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter((v) => v.length > 0);
+  if (fileEntries.length + linkEntries.length > MAX_FILES) {
     return NextResponse.json(
-      { error: `At most ${MAX_FILES} files at a time.` },
+      { error: `At most ${MAX_FILES} materials at a time.` },
       { status: 400 }
     );
   }
@@ -207,6 +213,85 @@ export async function POST(request: Request) {
     }
   }
 
+  for (const link of linkEntries) {
+    let extracted;
+    try {
+      extracted = await extractTutorSessionLink(link);
+    } catch (e) {
+      console.error("[tutor-session/start link]", e);
+      continue;
+    }
+
+    const storagePath = `${user.id}/${sessionRow.id}/${Date.now()}-link.txt`;
+    const { error: storageError } = await supabase.storage
+      .from("tutor-session-uploads")
+      .upload(
+        storagePath,
+        Buffer.from(
+          `Source: ${extracted.sourceUrl}\n\n${extracted.extractedContent}`,
+          "utf8"
+        ),
+        { contentType: "text/plain", upsert: false }
+      );
+    if (storageError) {
+      console.error("[tutor-session/start link storage]", storageError);
+      continue;
+    }
+
+    const linkInsert: Record<string, unknown> = {
+      session_id: sessionRow.id,
+      user_id: user.id,
+      file_name: extracted.fileName,
+      file_kind: "link",
+      mime_type: "text/uri-list",
+      size_bytes: Buffer.byteLength(extracted.extractedContent, "utf8"),
+      storage_path: storagePath,
+      source_url: extracted.sourceUrl,
+      extracted_content: extracted.extractedContent,
+      summary: extracted.summary,
+    };
+
+    let { data: uploadRow, error: linkInsertErr } = await supabase
+      .from("tutor_session_uploads")
+      .insert(linkInsert as never)
+      .select(
+        "id, file_name, file_kind, mime_type, size_bytes, summary, created_at, source_url"
+      )
+      .single();
+
+    if (linkInsertErr) {
+      // Pre-migration DBs may lack source_url — retry without it.
+      delete linkInsert.source_url;
+      ({ data: uploadRow, error: linkInsertErr } = await supabase
+        .from("tutor_session_uploads")
+        .insert(linkInsert as never)
+        .select(
+          "id, file_name, file_kind, mime_type, size_bytes, summary, created_at"
+        )
+        .single());
+    }
+
+    if (uploadRow) {
+      uploadSummaries.push(
+        `[link: ${extracted.sourceUrl}] ${extracted.summary}`
+      );
+      insertedUploads.push({
+        id: uploadRow.id,
+        fileName: uploadRow.file_name,
+        fileKind: "link",
+        mimeType: uploadRow.mime_type,
+        sizeBytes: uploadRow.size_bytes,
+        summary: uploadRow.summary,
+        createdAt: uploadRow.created_at,
+        sourceUrl:
+          "source_url" in uploadRow
+            ? ((uploadRow as { source_url?: string }).source_url ??
+              extracted.sourceUrl)
+            : extracted.sourceUrl,
+      });
+    }
+  }
+
   // 3. Roll the per-file summaries into a single reference_summary
   //    blob. Cap at ~6k chars to keep system prompts reasonable.
   const referenceSummary = uploadSummaries.join("\n\n").slice(0, 6000);
@@ -254,6 +339,7 @@ export async function POST(request: Request) {
     recapMarkdown: null,
     recapGeneratedAt: null,
     recapStatus: "idle",
+    noteInstruction: "",
     createdAt: sessionRow.created_at,
     updatedAt: sessionRow.updated_at,
     uploads: insertedUploads,

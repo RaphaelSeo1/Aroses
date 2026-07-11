@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { TutorSessionModeTag } from "@/types/tutor-session";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
+import { promptDialog } from "@/components/AppDialogs";
 import { detectIngestFormat, INGEST_ACCEPT_ATTRIBUTE } from "@/lib/study-ingest/formats";
 import {
   TUTOR_SESSION_MAX_FILES,
@@ -14,9 +15,10 @@ import {
 /**
  * Start screen for Tutor Sessions.
  *
- * Three optional inputs:
+ * Optional inputs:
  *   - Free-text topic ("walk me through SN2 mechanisms")
  *   - Reference file uploads (PDF / images / text)
+ *   - Reference links (fetched + summarized server-side)
  *   - Mode-tag chip (exam_prep / homework_help / concept_review /
  *     quiz_me / exploring)
  *
@@ -80,6 +82,7 @@ export function TutorSessionStartScreen() {
   const [topic, setTopic] = useState("");
   const [modeTag, setModeTag] = useState<TutorSessionModeTag | null>(null);
   const [files, setFiles] = useState<File[]>([]);
+  const [links, setLinks] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   // 1-second-incrementing status messages while the server is
@@ -245,14 +248,40 @@ export function TutorSessionStartScreen() {
     setFiles((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
+  const removeLink = useCallback((idx: number) => {
+    setLinks((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  const addLink = useCallback(async () => {
+    if (submitting) return;
+    const raw = await promptDialog({
+      title: t.tutor.addLinkTitle,
+      label: t.tutor.addLinkLabel,
+      placeholder: t.tutor.addLinkPlaceholder,
+      confirmLabel: t.tutor.addLinkConfirm,
+    });
+    if (!raw?.trim()) return;
+    const value = raw.trim();
+    setError(null);
+    setLinks((prev) => {
+      if (files.length + prev.length >= TUTOR_SESSION_MAX_FILES) {
+        setError(tf(t.tutor.errMaxFiles, { count: TUTOR_SESSION_MAX_FILES }));
+        return prev;
+      }
+      if (prev.includes(value)) return prev;
+      return [...prev, value];
+    });
+  }, [files.length, submitting, t.tutor]);
+
   const submit = useCallback(
     async (opts?: { skip?: boolean }) => {
       if (submitting) return;
       setSubmitting(true);
       setError(null);
+      const hasMaterials = files.length > 0 || links.length > 0;
       const noteCycle = [
-        files.length > 0 ? t.tutor.progressReading : t.tutor.progressSpinning,
-        files.length > 0 ? t.tutor.progressSkim : t.tutor.progressAlmostReady,
+        hasMaterials ? t.tutor.progressReading : t.tutor.progressSpinning,
+        hasMaterials ? t.tutor.progressSkim : t.tutor.progressAlmostReady,
         t.tutor.progressPuttingRoom,
       ];
       setProgressNote(noteCycle[0]);
@@ -267,6 +296,7 @@ export function TutorSessionStartScreen() {
           if (topic.trim()) form.set("topic", topic.trim());
           if (modeTag) form.set("modeTag", modeTag);
           for (const f of files) form.append("files", f);
+          for (const link of links) form.append("links", link);
         }
         const res = await fetch("/api/tutor-session/start", {
           method: "POST",
@@ -290,7 +320,7 @@ export function TutorSessionStartScreen() {
         window.clearInterval(interval);
       }
     },
-    [files, modeTag, router, submitting, topic, t.tutor]
+    [files, links, modeTag, router, submitting, topic, t.tutor]
   );
 
   return (
@@ -385,11 +415,20 @@ export function TutorSessionStartScreen() {
               <span aria-hidden>📎</span>
               {t.tutor.attachMaterial}
             </button>
+            <button
+              type="button"
+              onClick={() => void addLink()}
+              disabled={submitting}
+              className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white/90 px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            >
+              <span aria-hidden>🔗</span>
+              {t.tutor.attachLink}
+            </button>
             <span className="text-[11px] text-zinc-500 dark:text-zinc-500">
               {t.tutor.attachHint}
             </span>
           </div>
-          {files.length > 0 ? (
+          {files.length > 0 || links.length > 0 ? (
             <ul className="mt-3 flex flex-wrap gap-2">
               {files.map((f, i) => (
                 <li
@@ -404,6 +443,23 @@ export function TutorSessionStartScreen() {
                     type="button"
                     onClick={() => removeFile(i)}
                     aria-label={tf(t.tutor.removeFileAria, { name: f.name })}
+                    className="text-zinc-400 hover:text-rose-600"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+              {links.map((link, i) => (
+                <li
+                  key={`link-${link}-${i}`}
+                  className="inline-flex max-w-full items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-[11px] text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                >
+                  <span aria-hidden>🔗</span>
+                  <span className="truncate font-medium">{link}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeLink(i)}
+                    aria-label={tf(t.tutor.removeLinkAria, { name: link })}
                     className="text-zinc-400 hover:text-rose-600"
                   >
                     ×

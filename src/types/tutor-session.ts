@@ -31,11 +31,13 @@ export type TutorSessionMessage = {
 export type TutorSessionUpload = {
   id: string;
   fileName: string;
-  fileKind: "pdf" | "image" | "text";
+  fileKind: "pdf" | "image" | "text" | "link";
   mimeType: string | null;
   sizeBytes: number | null;
   summary: string;
   createdAt: string;
+  /** Present when the material was added as a URL. */
+  sourceUrl?: string | null;
 };
 
 export type TutorSessionRecord = {
@@ -54,6 +56,11 @@ export type TutorSessionRecord = {
   recapMarkdown: string | null;
   recapGeneratedAt: string | null;
   recapStatus: TutorSessionRecapStatus;
+  /**
+   * Per-session "tell the AI how to write these notes" free text
+   * (style/emphasis only). Optional so pre-migration rows degrade to "".
+   */
+  noteInstruction?: string;
   createdAt: string;
   updatedAt: string;
   /** Optional joined uploads. Set on detail fetches, omitted on list. */

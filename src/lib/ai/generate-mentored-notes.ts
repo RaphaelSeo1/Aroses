@@ -7,6 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { KeyTerm } from "@/types/course";
 import type { MentoredLessonChunk } from "@/types/mentored";
+import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
 
 const MODEL =
   process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
@@ -21,6 +22,8 @@ export type MentoredNotesInput = {
   courseKeyTerms?: KeyTerm[];
   /** Optional transcript of what Rose has already said for this chunk. */
   roseSpoken?: string;
+  /** Per-session free-text style request. Empty/missing ⇒ base SYSTEM unchanged. */
+  noteInstruction?: string;
 };
 
 const SYSTEM = `You write excellent study notes for a student learning from a live tutoring session.
@@ -34,6 +37,17 @@ Guidelines:
 - Be substantive and specific to THIS topic — no generic study-skills fluff.
 - Do NOT mention Rose, the session, note-taking, or that you are an AI. Only domain content.
 - Do NOT wrap output in code fences. Return notes only.`;
+
+/**
+ * Layer the student's per-session note request under the base guidelines
+ * (structure still emerges organically; grounding and no-code-fences rules
+ * above always win). Empty instruction ⇒ base SYSTEM, byte-for-byte.
+ */
+function mentoredSystem(noteInstruction: string | undefined): string {
+  const modifier = buildNoteInstructionModifier(noteInstruction);
+  if (!modifier) return SYSTEM;
+  return `${SYSTEM}\n${modifier}`;
+}
 
 function buildUserPrompt(input: MentoredNotesInput): string {
   const {
@@ -96,7 +110,7 @@ export async function* streamMentoredNotes(
     model: MODEL,
     max_tokens: 1200,
     temperature: 0.4,
-    system: SYSTEM,
+    system: mentoredSystem(input.noteInstruction),
     messages: [{ role: "user", content: buildUserPrompt(input) }],
   });
 

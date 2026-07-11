@@ -6,6 +6,7 @@ import {
   createMarkerParser,
   type LiveNotesStreamEvent,
 } from "@/lib/live-notes/marker-protocol";
+import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
 
 export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
 
@@ -118,6 +119,18 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 @@summary
 <updated rolling summary: compressed record of EVERYTHING covered so far (previous summary + this slice), max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown — re-compress aggressively, keep topic names and key terms, drop detail>`;
 
+/**
+ * Layer the student's per-session note request directly under the base style
+ * rules (still above grounding/marker sections, which always win). Empty
+ * instruction ⇒ the exact base SYSTEM, byte-for-byte. REVIEW_SYSTEM is
+ * intentionally never modified — the wrap-up review is factual/structural.
+ */
+function liveNotesSystem(noteInstruction: string | undefined): string {
+  const modifier = buildNoteInstructionModifier(noteInstruction);
+  if (!modifier) return SYSTEM;
+  return SYSTEM.replace(NOTE_STYLE_RULES, `${NOTE_STYLE_RULES}${modifier}`);
+}
+
 export type RevisableSection = {
   sectionId: string;
   markdown: string;
@@ -141,6 +154,8 @@ export async function* streamLiveLectureNotes(input: {
   userId?: string;
   /** Recent on-screen extracts (slide OCR) — authoritative for spellings/numbers. */
   screenContext?: string;
+  /** Per-session free-text style request. Empty/missing ⇒ base SYSTEM unchanged. */
+  noteInstruction?: string;
 }): AsyncGenerator<LiveNotesStreamEvent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -205,7 +220,7 @@ export async function* streamLiveLectureNotes(input: {
     model: MODEL,
     max_tokens: 4_000,
     temperature: 0.35,
-    system: SYSTEM,
+    system: liveNotesSystem(input.noteInstruction),
     messages: [{ role: "user", content: userPrompt }],
   });
 
