@@ -79,7 +79,7 @@ export async function POST(request: Request, ctx: Params) {
   }
   const screenContext =
     typeof b.screenContext === "string"
-      ? b.screenContext.trim().slice(0, 4_000)
+      ? b.screenContext.trim().slice(0, 1_800)
       : "";
   const recentHeadings = Array.isArray(b.recentHeadings)
     ? b.recentHeadings

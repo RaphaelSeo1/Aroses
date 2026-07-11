@@ -37,17 +37,15 @@ import { useScreenVision } from "@/lib/live-notes/use-screen-vision";
  */
 
 /**
- * Synthesis cadence. A 5s heartbeat plus every committed segment attempt a
+ * Synthesis cadence. A short heartbeat plus every committed segment attempt a
  * synthesis; the char thresholds below decide whether one actually fires:
- *   - first section quickly (~180 chars ≈ 15s of speech — proof of life),
- *   - then whenever ~450 new chars (~30s of speech) have accumulated.
- * The API gate (`synthInFlight`) opens as soon as the model stream ends;
- * typing continues on a chained pump so the next slice can synthesize while
- * the previous section is still animating into the editor.
+ *   - first section quickly (~100 chars — proof of life),
+ *   - then whenever ~240 new chars (~15–20s of speech) have accumulated.
+ * Smaller batches = more fluid notes and less pressure to rewrite big chunks.
  */
-const SYNTH_TARGET_CHARS = 450;
-const SYNTH_FIRST_SECTION_CHARS = 180;
-const SYNTH_MIN_CHARS = 180;
+const SYNTH_TARGET_CHARS = 240;
+const SYNTH_FIRST_SECTION_CHARS = 100;
+const SYNTH_MIN_CHARS = 100;
 
 const APPEND_STATUS_LINES = [
   "Folding that last stretch into your notes…",
@@ -84,7 +82,7 @@ function pickStatusLine(pool: string[], salt: number): string {
   const idx = Math.abs(salt) % pool.length;
   return pool[idx] ?? pool[0]!;
 }
-const SYNTH_CHECK_INTERVAL_MS = 5 * 1000;
+const SYNTH_CHECK_INTERVAL_MS = 3 * 1000;
 
 /**
  * Visible typing pace for AI notes. Speeds up automatically when the pump
@@ -303,12 +301,13 @@ export function LiveNotesSurface({
       notesRef.current?.setStreamingIndicator(true);
       syncAiWritingUi();
 
-      // Bounded self-revision + continuation context: recent fully-AI
-      // sections including the newest (so a continuing slice can extend it).
-      // Cap at 4. Student-edited sections are excluded by the writer.
+      // Revisable = older fully-AI sections only (exclude the newest).
+      // Revising the section we just wrote causes delete+retype churn every
+      // batch. Continuations append; wrap-up consolidation merges fragments.
+      // Cap at 3. Student-edited sections are excluded by the writer.
       const excerpts = sectionExcerptsRef.current;
       const allSections = writer.listRevisableSections(5);
-      const revisable = allSections.slice(-4).map((s) => ({
+      const revisable = allSections.slice(0, -1).slice(-3).map((s) => ({
         sectionId: s.sectionId,
         markdown: s.markdown,
         transcriptExcerpt: excerpts.get(s.sectionId),

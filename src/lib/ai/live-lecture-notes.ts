@@ -21,9 +21,8 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
  *
  *   @@thought <text>       zero or more, FIRST — short user-visible narration
  *                          (specific to this slice; may call out on-screen finds)
- *   @@revise <sectionId>   zero or more, FIRST — full replacement markdown
- *                          for a recent section the model got wrong or that
- *                          new lecture content recontextualizes
+ *   @@revise <sectionId>   rare — full replacement ONLY for factual errors
+ *                          in a recent section (not for continuations)
  *   @@append               exactly once — new notes for the new slice
  *                          (nothing after it when the slice has no teaching)
  *   @@summary              exactly once, LAST — updated rolling summary
@@ -75,31 +74,28 @@ ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
-SELF-REVISION & CONTINUATION (bounded):
-Before writing anything new, decide how the NEW TRANSCRIPT SLICE relates to YOUR RECENT NOTE SECTIONS (same concept, same worked example, remaining items of an enumeration a recent section started, or a near-duplicate of a recent heading by meaning — not only exact text).
+SELF-REVISION (rare — do not rewrite notes every call):
+Default to @@append for new teaching content. Do NOT rewrite an existing section just because the topic continues, a new slide appeared, or the screen text refreshed.
 
-1. CONTINUES / COMPLETES a recent section → emit @@revise <sectionId> with the FULL rewritten section that folds prior content and the new material into one coherent, non-redundant section. Keep correct existing content; integrate new points; upgrade incomplete lists (drop stubs like "not yet completed"); do not invent facts. Then leave @@append empty (still emit the @@append marker with nothing after it).
-2. ONLY REPEATS already-captured material (no new facts) → emit no @@revise for content growth; leave @@append empty.
-3. GENUINELY NEW topic not already covered → put new notes under @@append with a fresh heading that does not reword a recent heading for the same topic.
-4. FACTUAL CORRECTION (wrong number, inverted relationship, misattributed claim, STT vs screen conflict) → still use @@revise on the affected recent section; prefer screen spellings/numbers when correcting STT errors.
+Use @@revise <sectionId> ONLY when a listed recent section is factually wrong (wrong number, inverted relationship, misattributed claim, or clear STT vs screen conflict on a token/number). Prefer screen spellings/numbers for those corrections. At most one @@revise per call unless two independent factual errors are clear.
 
-Rules:
-- Only sections listed in YOUR RECENT NOTE SECTIONS may be revised/extended. Never touch older/unshown sections.
-- At most ${MAX_REVISABLE_SECTIONS} @@revise operations per call.
-- Do not invent a differently-worded near-duplicate heading for a topic already covered — extend that section instead.
-- Do not revise purely for style or wording when nothing continues, completes, repeats, or is factually wrong.
+Do NOT use @@revise to:
+- continue or "complete" a topic (append the new points instead),
+- merge or tidy style/wording,
+- react to a new slide when the prior section is still factually fine,
+- rewrite a section you could leave alone.
+
+When the slice continues the same topic as a recent heading: @@append with a more specific heading for the new facet (or ### under a clear new angle) — do not invent a near-duplicate H2 for the exact same topic, and do not revise the old section just to fold new bullets in. Wrap-up consolidation will merge fragments later if needed.
+
+When the slice only repeats already-captured material: leave @@append empty (still emit the marker).
+
+Only sections in YOUR RECENT NOTE SECTIONS may be revised. Never touch older/unshown sections.
 
 NARRATION (@@thought — user-visible, optional but valuable):
 - You MAY emit zero or one short @@thought line before @@revise/@@append. This is Rose speaking to the student in the activity log — not notes.
-- Goal: make the student feel you are actually listening AND watching the lecture. Be specific to THIS slice.
-- Prefer a thought when ANY of these are true:
-  1. ON-SCREEN CONTENT is present and has something useful/noticeable (a slide title, table, equation, spelled term, diagram label, key number). Call it out briefly so they know you saw the screen — e.g. name the slide topic, the table, or the term you just locked in from the display.
-  2. A clear topic shift, correction, worked example, or "this matters for the exam" moment.
-  3. You are extending/merging into a recent section, or correcting because speech and screen disagreed.
-- Skip @@thought for pure logistics, silence, or tiny filler with nothing new on screen or in speech.
-- Voice: warm, sharp TA energy — one concrete observation, not a status update. Vary wording every time; never reuse stock phrases like "Capturing notes", "Processing the lecture", "Updating notes", "Got it", or "Taking notes on…".
-- Do NOT start with "I" every time. Mix openers (Noticing… / Slide shows… / Locking in… / Catching… / From the board… / Hearing… / Pulling out… / Folding into…).
-- Keep under 18 words. No markdown. No quotes around the whole line. Never invent screen content that was not provided.
+- Prefer a thought when ON-SCREEN CONTENT has something useful, or there is a clear topic shift / correction / worked example.
+- Skip @@thought for logistics, silence, or tiny filler.
+- Voice: warm, specific, varied — under 18 words. Never invent screen content that was not provided.
 - Never emit more than one @@thought per call.
 
 WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the rolling summary): still emit @@append but put NOTHING after it. Never pad.
@@ -107,10 +103,10 @@ WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the ro
 OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
 @@thought <optional one short sentence — skip if unnecessary>
 @@revise <sectionId>
-<full replacement markdown for that section>
-(zero or more @@revise operations, after @@thought lines)
+<full replacement markdown for that section — ONLY for factual correction>
+(zero or more @@revise operations, after @@thought lines; usually none)
 @@append
-<markdown study notes for a genuinely new topic, or nothing when the slice continued/completed/repeated a recent section>
+<markdown study notes for new teaching in this slice, or nothing>
 @@summary
 <updated rolling summary: compressed record of EVERYTHING covered so far (previous summary + this slice), max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown — re-compress aggressively, keep topic names and key terms, drop detail>`;
 
@@ -145,7 +141,8 @@ export async function* streamLiveLectureNotes(input: {
   }
 
   const slice = input.newSegmentText.trim().slice(0, MAX_SEGMENT_INPUT_CHARS);
-  if (slice.length < 120) {
+  // Lower floor so smaller, more frequent batches still synthesize.
+  if (slice.length < 80) {
     yield { type: "summary", summary: input.rollingSummary };
     return;
   }
@@ -156,7 +153,8 @@ export async function* streamLiveLectureNotes(input: {
     .filter(Boolean)
     .slice(-5);
   const revisable = input.revisable.slice(-MAX_REVISABLE_SECTIONS);
-  const screenContext = (input.screenContext ?? "").trim().slice(0, 4_000);
+  // Keep screen context tight — large dumps encourage unnecessary rewrites.
+  const screenContext = (input.screenContext ?? "").trim().slice(0, 1_800);
 
   const sectionsBlock = revisable
     .map((s) => {
@@ -180,16 +178,16 @@ export async function* streamLiveLectureNotes(input: {
       ? `ROLLING SUMMARY OF THE LECTURE SO FAR:\n${summary}`
       : "ROLLING SUMMARY OF THE LECTURE SO FAR: (lecture just started)",
     headings.length > 0
-      ? `RECENT HEADINGS (do not invent near-duplicate headings for the same topic — extend that section via @@revise instead):\n${headings.map((h) => `- ${h}`).join("\n")}`
+      ? `RECENT HEADINGS (avoid near-duplicate H2s for the same topic — append a more specific facet heading instead of revising the old section):\n${headings.map((h) => `- ${h}`).join("\n")}`
       : null,
     sectionsBlock
       ? `YOUR RECENT NOTE SECTIONS (the only sections you may @@revise):\n\n${sectionsBlock}`
       : "YOUR RECENT NOTE SECTIONS: (none yet — no @@revise operations possible)",
     screenContext
-      ? `ON-SCREEN CONTENT (authoritative for spellings, symbols, numbers, tables, slide titles — if useful, mention something specific from this in @@thought so the student knows you saw the display):\n${screenContext}`
+      ? `ON-SCREEN CONTENT (authoritative for spellings/symbols/numbers/tables — use for grounding; do NOT revise prior notes merely because the screen changed):\n${screenContext}`
       : null,
     `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
-    "\nEmit the protocol now, starting with the first marker. If you include @@thought, make it specific to this slice — never a generic status line.",
+    "\nEmit the protocol now. Prefer @@append. Use @@revise only for a clear factual error in a listed section.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -198,7 +196,7 @@ export async function* streamLiveLectureNotes(input: {
   const stream = anthropic.messages.stream({
     model: MODEL,
     max_tokens: 4_000,
-    temperature: 0.45,
+    temperature: 0.35,
     system: SYSTEM,
     messages: [{ role: "user", content: userPrompt }],
   });

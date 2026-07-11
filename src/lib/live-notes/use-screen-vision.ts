@@ -13,7 +13,7 @@ export type ScreenContentSlice = {
 
 const SAMPLE_INTERVAL_MS = 4_000;
 const CONFIRM_DELAY_MS = 500;
-const MAX_RING = 6;
+const MAX_RING = 3;
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -202,6 +202,7 @@ export function useScreenVision(options: {
   }, [enabled, stream, sessionId, uploadFrame]);
 
   const screenContextText = slices
+    .slice(-2)
     .map((s) => {
       const m = Math.floor(s.atMs / 60_000);
       const sec = Math.floor((s.atMs % 60_000) / 1000);
@@ -211,7 +212,7 @@ export function useScreenVision(options: {
         : `[${stamp}]\n${s.flatText}`;
     })
     .join("\n\n")
-    .slice(-4_000);
+    .slice(-1_800);
 
   return {
     slices,
