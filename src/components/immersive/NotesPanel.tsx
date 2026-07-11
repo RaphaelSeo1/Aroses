@@ -296,26 +296,8 @@ export function NotesPanel({
   const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "error">(
     "idle"
   );
-  // Inline "tell the AI how to write these notes" popover.
+  // Collapsed by default; expand to edit. Empty stays the default style.
   const [noteStyleOpen, setNoteStyleOpen] = useState(false);
-  const noteStyleRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!noteStyleOpen) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (!noteStyleRef.current?.contains(e.target as Node)) {
-        setNoteStyleOpen(false);
-      }
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setNoteStyleOpen(false);
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [noteStyleOpen]);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(() => {
     if (!initialUpdatedAt) return null;
     const t = Date.parse(initialUpdatedAt);
@@ -1319,110 +1301,102 @@ export function NotesPanel({
     <aside
       className={`tn-panel relative flex flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-[0_20px_50px_-25px_rgba(60,60,90,0.18)] backdrop-blur-md ${fillHeight ? "h-full min-h-0" : ""} ${className ?? ""}`}
     >
-      {/* Compact status bar — out of the way but always visible.
-          Extra horizontal padding at xl so on the 50/50 desktop
-          layout the "Edited just now" stamp and the Auto-generate
-          toggle don't sit pinned against the panel edges. */}
+      {/* Sticky chrome: save status + (optional) note-style instruction box. */}
       <div
-        className={`${pinToolbar ? "sticky top-0 z-10" : ""} flex shrink-0 items-center justify-between gap-3 border-b border-zinc-100 bg-white/95 px-5 py-2.5 backdrop-blur-sm xl:px-7`}
+        className={`${pinToolbar ? "sticky top-0 z-10" : ""} shrink-0 border-b border-zinc-100 bg-white/95 backdrop-blur-sm`}
       >
-        <span
-          className={`flex items-center gap-1.5 text-[11px] font-medium transition-opacity ${
-            saving === "error"
-              ? "text-rose-600"
-              : saving === "saving"
-                ? "text-zinc-400"
-                : "text-zinc-500"
-          }`}
-          aria-live="polite"
-        >
+        <div className="flex items-center justify-between gap-3 px-5 py-2.5 xl:px-7">
           <span
-            aria-hidden
-            className={`h-1.5 w-1.5 rounded-full ${
+            className={`flex items-center gap-1.5 text-[11px] font-medium transition-opacity ${
               saving === "error"
-                ? "bg-rose-500"
+                ? "text-rose-600"
                 : saving === "saving"
-                  ? "bg-zinc-300 animate-pulse"
-                  : saving === "saved"
-                    ? "bg-emerald-500"
-                    : "bg-zinc-300"
+                  ? "text-zinc-400"
+                  : "text-zinc-500"
             }`}
-          />
-          {streamingNotes ? "Rose is writing notes…" : savedLabel}
-        </span>
-        <div className="flex items-center gap-3">
-          {onNoteInstructionChange ? (
-            <div ref={noteStyleRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setNoteStyleOpen((v) => !v)}
-                aria-expanded={noteStyleOpen}
-                className={`flex cursor-pointer items-center gap-1 text-[11px] font-medium transition-colors ${
-                  noteInstruction.trim()
-                    ? "text-indigo-600 hover:text-indigo-700"
-                    : "text-zinc-500 hover:text-zinc-700"
-                }`}
-                title={t.immersive.noteStyleTitle}
-              >
-                ✎ {t.immersive.noteStyleButton}
-                {noteInstruction.trim() ? (
-                  <span
-                    aria-hidden
-                    className="h-1.5 w-1.5 rounded-full bg-indigo-500"
-                  />
-                ) : null}
-              </button>
-              {noteStyleOpen ? (
-                <div className="absolute right-0 top-full z-20 mt-2 w-72 rounded-2xl border border-zinc-200 bg-white p-3 shadow-[0_18px_40px_-18px_rgba(60,60,90,0.35)]">
-                  <p className="mb-2 text-[12px] font-semibold text-zinc-700">
-                    {t.immersive.noteStyleTitle}
-                  </p>
-                  <textarea
-                    value={noteInstruction}
-                    onChange={(e) =>
-                      onNoteInstructionChange(
-                        e.target.value.slice(0, NOTE_INSTRUCTION_MAX)
-                      )
-                    }
-                    maxLength={NOTE_INSTRUCTION_MAX}
-                    rows={4}
-                    autoFocus
-                    placeholder={t.immersive.noteStylePlaceholder}
-                    className="w-full resize-none rounded-xl border border-zinc-200 bg-zinc-50/60 px-2.5 py-2 text-[12px] leading-relaxed text-zinc-800 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none"
-                  />
-                  <div className="mt-1.5 flex items-start justify-between gap-3">
-                    <p className="text-[10.5px] leading-snug text-zinc-400">
-                      {t.immersive.noteStyleHint}
-                    </p>
-                    <span className="shrink-0 text-[10.5px] tabular-nums text-zinc-400">
-                      {noteInstruction.length}/{NOTE_INSTRUCTION_MAX}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => setNoteStyleOpen(false)}
-                      className="cursor-pointer rounded-lg bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-zinc-700"
-                    >
-                      {t.immersive.noteStyleDone}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {hideAutoGenerate ? null : (
-            <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700">
-              <input
-                type="checkbox"
-                className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-700"
-                checked={autoGenerate}
-                onChange={(e) => void onToggleAutoGenerate(e.target.checked)}
-              />
-              ✨ Auto-generate
-            </label>
-          )}
+            aria-live="polite"
+          >
+            <span
+              aria-hidden
+              className={`h-1.5 w-1.5 rounded-full ${
+                saving === "error"
+                  ? "bg-rose-500"
+                  : saving === "saving"
+                    ? "bg-zinc-300 animate-pulse"
+                    : saving === "saved"
+                      ? "bg-emerald-500"
+                      : "bg-zinc-300"
+              }`}
+            />
+            {streamingNotes ? "Rose is writing notes…" : savedLabel}
+          </span>
+          <div className="flex items-center gap-3">
+            {hideAutoGenerate ? null : (
+              <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-700"
+                  checked={autoGenerate}
+                  onChange={(e) => void onToggleAutoGenerate(e.target.checked)}
+                />
+                ✨ Auto-generate
+              </label>
+            )}
+          </div>
         </div>
+
+        {onNoteInstructionChange ? (
+          <div className="border-t border-zinc-100 bg-zinc-50/90 px-5 py-2.5 xl:px-7">
+            <button
+              type="button"
+              onClick={() => setNoteStyleOpen((v) => !v)}
+              aria-expanded={noteStyleOpen}
+              className="flex w-full cursor-pointer items-center justify-between gap-2 text-left"
+            >
+              <span className="flex min-w-0 items-center gap-1.5 text-[12px] font-medium text-zinc-700">
+                <span aria-hidden>✎</span>
+                {t.immersive.noteStyleButton}
+                {noteInstruction.trim() ? (
+                  <span className="truncate font-normal text-zinc-500">
+                    — {noteInstruction.trim()}
+                  </span>
+                ) : (
+                  <span className="truncate font-normal text-zinc-400">
+                    — {t.immersive.noteStyleTitle}
+                  </span>
+                )}
+              </span>
+              <span className="shrink-0 text-[11px] text-zinc-400">
+                {noteStyleOpen ? "▴" : "▾"}
+              </span>
+            </button>
+            {noteStyleOpen ? (
+              <div className="mt-2">
+                <textarea
+                  value={noteInstruction}
+                  onChange={(e) =>
+                    onNoteInstructionChange(
+                      e.target.value.slice(0, NOTE_INSTRUCTION_MAX)
+                    )
+                  }
+                  maxLength={NOTE_INSTRUCTION_MAX}
+                  rows={3}
+                  autoFocus
+                  placeholder={t.immersive.noteStylePlaceholder}
+                  className="w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-[12px] leading-relaxed text-zinc-800 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none"
+                />
+                <div className="mt-1 flex items-center justify-between gap-3">
+                  <p className="text-[10.5px] leading-snug text-zinc-400">
+                    {t.immersive.noteStyleHint}
+                  </p>
+                  <span className="shrink-0 text-[10.5px] tabular-nums text-zinc-400">
+                    {noteInstruction.length}/{NOTE_INSTRUCTION_MAX}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {/* Document body — generous padding, max-width centered. */}
