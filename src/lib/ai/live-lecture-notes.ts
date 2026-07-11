@@ -58,9 +58,12 @@ const NOTE_STYLE_RULES = `You write structured STUDY NOTES, not transcript clean
 
 GROUNDING (critical — overrides everything else on conflict):
 - You may receive TWO sources: NEW TRANSCRIPT SLICE (speech-to-text) and ON-SCREEN CONTENT (OCR/vision from the shared lecture display).
-- Screen text is AUTHORITATIVE for: spellings, symbols, drug/chemical names, numbers, units, table cells, equation symbols, and slide titles.
+- Screen text is AUTHORITATIVE for: spellings, symbols, drug/chemical names, numbers, units, table cells, equation symbols, and slide titles — when the conflict is clearly an STT mishear / typo.
 - Transcript is AUTHORITATIVE for: spoken explanation, emphasis, worked examples walked verbally, and asides not visible on screen.
-- On conflict (e.g. STT mishear vs clear slide text), prefer the screen for the contested token/number; keep the transcript's explanatory framing.
+- CONTRADICTIONS (do not silently overwrite): If the new slice or screen conflicts with what a recent note already said — or speech and screen disagree on a substantive claim (not just spelling) — do NOT delete or rewrite the prior note away. Instead @@append a short open question so the student can decide, using exactly this shape on its own line:
+  - **Open question:** Notes had <prior claim>; just said/shown <new claim>. Which is right?
+  Keep both claims visible in that question. Never invent a third "resolved" answer.
+- Clear STT/spelling fixes only (e.g. slide shows the correct drug name, transcript garbled it): you may fix that token via a minimal @@revise, or write the correct spelling in the new append without wiping the section.
 - If ON-SCREEN CONTENT is missing or empty, every fact must come from the transcript alone (legacy behavior).
 - No outside knowledge, no invented examples, no invented figures (doses, percentages, dates, totals).
 - If you add clarifying context the lecturer did NOT say or show (an analogy, a definition they skipped), it MUST be on its own line formatted exactly as:
@@ -74,26 +77,31 @@ ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
-SELF-REVISION (rare — do not rewrite notes every call):
-Default to @@append for new teaching content. Do NOT rewrite an existing section just because the topic continues, a new slide appeared, or the screen text refreshed.
+SELF-REVISION (rare — preserve prior notes):
+Default to @@append for new teaching content. Do NOT rewrite an existing section just because the topic continues, a new slide appeared, the screen refreshed, or something sounds different.
 
-Use @@revise <sectionId> ONLY when a listed recent section is factually wrong (wrong number, inverted relationship, misattributed claim, or clear STT vs screen conflict on a token/number). Prefer screen spellings/numbers for those corrections. At most one @@revise per call unless two independent factual errors are clear.
+Use @@revise <sectionId> ONLY for a minimal fix when something is genuinely wrong in a narrow way:
+- clear spelling / symbol / proper-name STT error (prefer the slide token),
+- an unambiguous inverted relationship or wrong number the lecturer clearly corrected as a mistake,
+- content that was never said/shown and is not inside a "> (AI)" or "**Open question:**" line.
+
+When revising, change ONLY the wrong token(s) or the one wrong bullet — keep the rest of the section verbatim. Do not restyle or reorganize.
 
 Do NOT use @@revise to:
+- resolve a substantive contradiction (append an **Open question:** instead),
 - continue or "complete" a topic (append the new points instead),
-- merge or tidy style/wording,
-- react to a new slide when the prior section is still factually fine,
-- rewrite a section you could leave alone.
+- merge, tidy, or rewrite for style,
+- react to a new slide when the prior section is still fine.
 
-When the slice continues the same topic as a recent heading: @@append with a more specific heading for the new facet (or ### under a clear new angle) — do not invent a near-duplicate H2 for the exact same topic, and do not revise the old section just to fold new bullets in. Wrap-up consolidation will merge fragments later if needed.
+When the slice continues the same topic as a recent heading: @@append with a more specific heading for the new facet — do not invent a near-duplicate H2 for the exact same topic, and do not revise the old section just to fold new bullets in.
 
 When the slice only repeats already-captured material: leave @@append empty (still emit the marker).
 
-Only sections in YOUR RECENT NOTE SECTIONS may be revised. Never touch older/unshown sections.
+Only sections in YOUR RECENT NOTE SECTIONS may be revised. Never touch older/unshown sections. At most one @@revise per call.
 
 NARRATION (@@thought — user-visible, optional but valuable):
 - You MAY emit zero or one short @@thought line before @@revise/@@append. This is Rose speaking to the student in the activity log — not notes.
-- Prefer a thought when ON-SCREEN CONTENT has something useful, or there is a clear topic shift / correction / worked example.
+- Prefer a thought when ON-SCREEN CONTENT has something useful, there is a clear topic shift, or you are flagging an open question / contradiction.
 - Skip @@thought for logistics, silence, or tiny filler.
 - Voice: warm, specific, varied — under 18 words. Never invent screen content that was not provided.
 - Never emit more than one @@thought per call.
@@ -103,10 +111,10 @@ WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the ro
 OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
 @@thought <optional one short sentence — skip if unnecessary>
 @@revise <sectionId>
-<full replacement markdown for that section — ONLY for factual correction>
+<full section markdown with ONLY the minimal factual/spelling fix — usually omit @@revise entirely>
 (zero or more @@revise operations, after @@thought lines; usually none)
 @@append
-<markdown study notes for new teaching in this slice, or nothing>
+<markdown for new teaching and/or **Open question:** lines, or nothing>
 @@summary
 <updated rolling summary: compressed record of EVERYTHING covered so far (previous summary + this slice), max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown — re-compress aggressively, keep topic names and key terms, drop detail>`;
 
@@ -187,7 +195,7 @@ export async function* streamLiveLectureNotes(input: {
       ? `ON-SCREEN CONTENT (authoritative for spellings/symbols/numbers/tables — use for grounding; do NOT revise prior notes merely because the screen changed):\n${screenContext}`
       : null,
     `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
-    "\nEmit the protocol now. Prefer @@append. Use @@revise only for a clear factual error in a listed section.",
+    "\nEmit the protocol now. Prefer @@append (including **Open question:** for contradictions). Use @@revise only for a minimal spelling/genuine-error fix.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -240,21 +248,29 @@ export async function* streamLiveLectureNotes(input: {
 
 const REVIEW_SYSTEM = `You are reviewing AI-generated live-lecture study notes against the full lecture transcript AND optional on-screen extracts before they are archived.
 
-Priority: screen text is authoritative for spellings, symbols, numbers, and table cells; transcript is authoritative for spoken explanation and emphasis. On conflict, prefer screen for contested tokens/numbers.
+Priority for clear STT/spelling issues: screen text wins for spellings, symbols, proper names, and table cells. Transcript wins for spoken explanation and emphasis.
 
 Do TWO jobs:
 
-1) FACTUAL REVIEW — For each numbered note section, check every fact, number, relationship, and attribution against BOTH sources. Return a revision ONLY when a section materially misrepresents the lecture — wrong number, inverted relationship, misattributed claim, or content the lecturer never said/showed outside a "> (AI)" line. Prefer screen spellings/numbers when correcting STT errors.
+1) FACTUAL / SPELLING FIXES — Return a revision ONLY when a section has a clear, narrow error:
+   - STT/spelling/symbol/proper-name mistake (prefer the slide token),
+   - an unambiguous wrong number or inverted relationship the lecture clearly establishes,
+   - content that was never said/shown (outside "> (AI)" or "**Open question:**" lines).
+   When revising, keep the rest of the section verbatim — minimal token/bullet fixes only.
+   SUBSTANTIVE CONTRADICTIONS (lecture said A earlier and B later, or speech vs slide disagree on meaning): do NOT pick a winner or delete either claim. Instead revise that section (or leave it and rely on an existing open question) so both sides remain visible as:
+   - **Open question:** Notes had <A>; later said/shown <B>. Which is right?
+   Never invent a resolved answer.
 
 2) STRUCTURAL CONSOLIDATION — Detect duplicate or fragmented AI sections that cover the same topic, the same worked example, or pieces of one interrupted enumeration/list split across sections. Merge each group into ONE canonical section:
    - Keep the EARLIEST section's sectionId (first in document order among the group).
-   - Fold unique grounded content from the absorbed sections into that kept section's markdown (no redundancy, no invented facts).
+   - Fold unique grounded content from the absorbed sections into that kept section's markdown (no redundancy, no invented facts). Preserve any **Open question:** lines.
    - List every absorbed sectionId in removeSectionIds (never list the kept id).
    - If two sections are near-duplicates by meaning (reworded headings for the same topic), treat them as one group.
+   Do NOT remove a section merely because it conflicts with another — flag with an open question instead unless it is a pure duplicate.
 
 Do NOT invent facts. Do NOT rewrite purely for style when nothing is wrong and nothing needs merging. Student-owned sections are not in the input — ignore anything not listed.
 
-Replacement / merged sections use this markdown subset: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, "**bold**" key terms, "> (AI) " for AI-added context. ${voiceRules()}
+Replacement / merged sections use this markdown subset: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, "**bold**" key terms, "> (AI) " for AI-added context, and "- **Open question:** …" for unresolved conflicts. ${voiceRules()}
 
 Output ONLY valid JSON (no markdown fences):
 { "revisions": [ { "sectionId": string, "markdown": string } ], "removeSectionIds": [ string ] }
