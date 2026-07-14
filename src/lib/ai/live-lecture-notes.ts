@@ -78,25 +78,14 @@ ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
-SELF-REVISION (rare — preserve prior notes):
-Default to @@append for new teaching content. Do NOT rewrite an existing section just because the topic continues, a new slide appeared, the screen refreshed, or something sounds different.
+SELF-REVISION / CONTINUATION (preserve prior notes — avoid fragmented duplicates):
+Before writing, check whether the NEW TRANSCRIPT SLICE continues, completes, or repeats a topic already in YOUR RECENT NOTE SECTIONS (same concept, same worked example, or the remaining items of an enumeration a recent section started — match by meaning, not only exact heading text).
 
-Use @@revise <sectionId> ONLY for a minimal fix when something is genuinely wrong in a narrow way:
-- clear spelling / symbol / proper-name STT error (prefer the slide token),
-- an unambiguous inverted relationship or wrong number the lecturer clearly corrected as a mistake,
-- content that was never said/shown and is not inside a "> (AI)" or "**Open question:**" line.
-
-When revising, change ONLY the wrong token(s) or the one wrong bullet — keep the rest of the section verbatim. Do not restyle or reorganize.
-
-Do NOT use @@revise to:
-- resolve a substantive contradiction (append an **Open question:** instead),
-- continue or "complete" a topic (append the new points instead),
-- merge, tidy, or rewrite for style,
-- react to a new slide when the prior section is still fine.
-
-When the slice continues the same topic as a recent heading: @@append with a more specific heading for the new facet — do not invent a near-duplicate H2 for the exact same topic, and do not revise the old section just to fold new bullets in.
-
-When the slice only repeats already-captured material: leave @@append empty (still emit the marker).
+- If it CONTINUES or COMPLETES a recent section → emit @@revise <sectionId> with the FULL rewritten section that folds prior content + new material into one coherent, non-redundant section (keep correct existing content, integrate new points, finish incomplete lists, drop "not yet completed" stubs). Leave @@append empty.
+- If it INTRODUCES a genuinely new topic → @@append under a new heading. Prefer a more specific facet heading over a near-duplicate H2 for the same topic.
+- If it only REPEATS already-captured material → leave @@append empty (still emit the marker).
+- For a narrow factual/spelling fix only (STT error, wrong number the lecturer clearly corrected, invented content outside "> (AI)" / "**Open question:**"): @@revise with the full section, changing only what is wrong.
+- Substantive contradictions: do NOT pick a winner — @@append an **Open question:** line instead.
 
 Only sections in YOUR RECENT NOTE SECTIONS may be revised. Never touch older/unshown sections. At most one @@revise per call.
 
@@ -112,10 +101,10 @@ WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the ro
 OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
 @@thought <optional one short sentence — skip if unnecessary>
 @@revise <sectionId>
-<full section markdown with ONLY the minimal factual/spelling fix — usually omit @@revise entirely>
-(zero or more @@revise operations, after @@thought lines; usually none)
+<full rewritten section markdown when continuing/completing/fixing a recent section — usually omit @@revise entirely>
+(at most one @@revise, after @@thought; omit the marker when unused)
 @@append
-<markdown for new teaching and/or **Open question:** lines, or nothing>
+<markdown for genuinely new teaching and/or **Open question:** lines, or nothing when the slice was folded into @@revise or was a repeat>
 @@summary
 <updated rolling summary: compressed record of EVERYTHING covered so far (previous summary + this slice), max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown — re-compress aggressively, keep topic names and key terms, drop detail>`;
 

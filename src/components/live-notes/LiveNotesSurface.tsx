@@ -338,13 +338,13 @@ export function LiveNotesSurface({
       notesRef.current?.setStreamingIndicator(true);
       syncAiWritingUi();
 
-      // Revisable = older fully-AI sections only (exclude the newest).
-      // Revising the section we just wrote causes delete+retype churn every
-      // batch. Continuations append; wrap-up consolidation merges fragments.
-      // Cap at 3. Student-edited sections are excluded by the writer.
+      // Revisable = last few fully-AI sections INCLUDING the newest, so a
+      // continuing topic can @@revise/extend the section just written instead
+      // of spawning a half-baked duplicate. Cap at 3. Student-edited sections
+      // are excluded by the writer.
       const excerpts = sectionExcerptsRef.current;
       const allSections = writer.listRevisableSections(5);
-      const revisable = allSections.slice(0, -1).slice(-3).map((s) => ({
+      const revisable = allSections.slice(-3).map((s) => ({
         sectionId: s.sectionId,
         markdown: s.markdown,
         transcriptExcerpt: excerpts.get(s.sectionId),
@@ -419,6 +419,10 @@ export function LiveNotesSurface({
             pendingAppend = null;
             writer.finishOp();
             opValid = await writer.beginRevision(item.sectionId);
+            // Failed revise (missing/student-edited id): drop only that
+            // revise body's text; the next @@append must still be allowed.
+          } else if (item.kind === "text" && !opValid) {
+            // Orphan text with no active op — ignore (stale revise body).
           } else if (opValid && item.text) {
             ensureAppendStarted();
             const step = charsPerTick();

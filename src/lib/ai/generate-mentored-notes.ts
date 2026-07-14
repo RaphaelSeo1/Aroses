@@ -32,9 +32,10 @@ Your job: produce specific, in-depth notes about what is being taught — the ki
 
 Guidelines:
 - Write from the student's perspective. Be concrete: explain what things are, how they work, why they matter, and how ideas connect.
-- Use markdown naturally (headings, bullets, bold) only when it helps clarity. Let structure emerge organically — do NOT force rigid sections like "Key Terms:" or "Summary:" unless that genuinely fits the material.
+- Use this markdown subset only: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, and "**bold**" for key terms. Do NOT use single-asterisk *italic* or other markup — unclosed markers show up as raw asterisks.
+- Let structure emerge organically — do NOT force rigid sections like "Key Terms:" or "Summary:" unless that genuinely fits the material.
 - Include examples, formulas, or worked steps when the source material includes them.
-- Be substantive and specific to THIS topic — no generic study-skills fluff.
+- Be substantive and specific to THIS topic — no generic study-skills fluff. Finish every list and explanation you start; do not leave stub lines.
 - Do NOT mention Rose, the session, note-taking, or that you are an AI. Only domain content.
 - Do NOT wrap output in code fences. Return notes only.`;
 
@@ -108,7 +109,7 @@ export async function* streamMentoredNotes(
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
   const stream = anthropic.messages.stream({
     model: MODEL,
-    max_tokens: 1200,
+    max_tokens: 3_000,
     temperature: 0.4,
     system: mentoredSystem(input.noteInstruction),
     messages: [{ role: "user", content: buildUserPrompt(input) }],

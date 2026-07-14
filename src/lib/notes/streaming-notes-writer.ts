@@ -14,6 +14,7 @@ import {
   mightBecomeNotePrefix,
   noteNodesToMarkdown,
   parseInlineMarkdown,
+  sanitizeIncompleteInlineMarkdown,
   type NoteInlineJson,
   type NoteLineKind,
   type NoteNodeJson,
@@ -102,6 +103,15 @@ export class StreamingNotesWriter {
   private scrollPending = false;
   private destroyed = false;
   private editor: Editor;
+  /**
+   * Snapshot of a section about to be revised. If the revision streams
+   * nothing (or only an empty placeholder), we restore this so students
+   * never lose a finished section to a truncated/failed revise.
+   */
+  private revisionBackup: {
+    sectionId: string;
+    nodes: NoteNodeJson[];
+  } | null = null;
   private opts: {
     getScrollElement?: () => HTMLElement | null;
     /** When false, new content is written without moving the scroll position. */
@@ -179,9 +189,10 @@ export class StreamingNotesWriter {
 
   /**
    * Start a visible revision of an existing section: fade/strike the old
-   * blocks (~350ms), delete them, and point the stream at a placeholder so
-   * the replacement types into the same spot. Returns false when the
-   * section doesn't exist or was student-edited (edits are final).
+   * blocks (~350ms), snapshot + delete them, and point the stream at a
+   * placeholder so the replacement types into the same spot. If the
+   * revision streams nothing useful, `finishOp` restores the snapshot.
+   * Returns false when the section doesn't exist or was student-edited.
    */
   async beginRevision(sectionId: string): Promise<boolean> {
     if (this.destroyed || this.editor.isDestroyed) return false;
@@ -209,6 +220,10 @@ export class StreamingNotesWriter {
       this.dispatchDeco({ clear: [sectionId] });
       return false;
     }
+    this.revisionBackup = {
+      sectionId,
+      nodes: fresh.map((b) => b.node.toJSON() as NoteNodeJson),
+    };
     const firstPos = fresh[0].pos;
     this.dispatchDoc((tr) => {
       for (let i = fresh.length - 1; i >= 0; i--) {
@@ -250,19 +265,12 @@ export class StreamingNotesWriter {
     if (op.mode === "text") this.finalizeLine();
 
     if (op.kind === "revision") {
-      if (op.pendingPlaceholder) {
-        // Nothing streamed — drop the empty placeholder rather than leaving
-        // a stray blank paragraph where the section used to be.
-        const blocks = this.sectionBlocks(op.sectionId);
-        const empty = blocks.find(
-          (b) => b.node.type.name === "paragraph" && b.node.content.size === 0
-        );
-        if (empty && blocks.length === 1) {
-          this.dispatchDoc((tr) =>
-            tr.delete(empty.pos, empty.pos + empty.node.nodeSize)
-          );
-        }
+      // Empty / placeholder-only revision → restore the pre-revise snapshot
+      // so a truncated or aborted revise never wipes a finished section.
+      if (op.pendingPlaceholder || !op.wroteAnything) {
+        this.restoreRevisionBackup(op.sectionId);
       } else {
+        this.revisionBackup = null;
         const id = op.sectionId;
         this.dispatchDeco({ set: { [id]: "rose-note-revised" } });
         window.setTimeout(() => {
@@ -273,6 +281,92 @@ export class StreamingNotesWriter {
       }
     }
     this.op = null;
+  }
+
+  /** Put a failed/empty revision's prior content back into the document. */
+  private restoreRevisionBackup(sectionId: string): void {
+    const backup = this.revisionBackup;
+    this.revisionBackup = null;
+    if (this.destroyed || this.editor.isDestroyed) return;
+
+    const current = this.sectionBlocks(sectionId);
+    const insertPos =
+      current.length > 0 ? current[0]!.pos : this.editor.state.doc.content.size;
+
+    this.dispatchDoc((tr) => {
+      for (let i = current.length - 1; i >= 0; i--) {
+        tr.delete(current[i]!.pos, current[i]!.pos + current[i]!.node.nodeSize);
+      }
+      if (backup && backup.sectionId === sectionId && backup.nodes.length > 0) {
+        const nodes = backup.nodes
+          .map((json) => {
+            try {
+              return this.editor.schema.nodeFromJSON(json);
+            } catch {
+              return null;
+            }
+          })
+          .filter((n): n is PmNode => Boolean(n));
+        if (nodes.length > 0) {
+          tr.insert(
+            Math.min(insertPos, tr.doc.content.size),
+            Fragment.from(nodes)
+          );
+        }
+      }
+      tr.setMeta(REVISION_DECO_META, {
+        clear: [sectionId],
+      } as RevisionDecoMeta);
+    });
+  }
+
+  /**
+   * Abort the active op. Revisions restore their pre-revise snapshot.
+   * Mentored chunk appends that only got a pre-set heading (no body) are
+   * removed so a failed/empty stream never leaves an orphan H2.
+   */
+  abortOp(): void {
+    const op = this.op;
+    if (!op) {
+      if (this.revisionBackup) {
+        this.restoreRevisionBackup(this.revisionBackup.sectionId);
+      }
+      return;
+    }
+    if (op.kind === "revision") {
+      this.op = null;
+      this.restoreRevisionBackup(op.sectionId);
+      return;
+    }
+
+    const sectionId = op.sectionId;
+    this.op = null;
+    if (!sectionId.startsWith("chunk:")) return;
+
+    const blocks = this.sectionBlocks(sectionId);
+    if (blocks.length === 0) return;
+    const hasBody = blocks.some((b) => {
+      if (b.node.type.name === "heading") return false;
+      if (b.node.type.name === "paragraph" && b.node.content.size === 0) {
+        return false;
+      }
+      return b.node.textContent.trim().length > 0;
+    });
+    if (hasBody) return;
+    if (
+      blocks.some(
+        (b) =>
+          b.node.attrs?.provenance !== "ai" &&
+          b.node.attrs?.provenance !== "ai-context"
+      )
+    ) {
+      return;
+    }
+    this.dispatchDoc((tr) => {
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        tr.delete(blocks[i]!.pos, blocks[i]!.pos + blocks[i]!.node.nodeSize);
+      }
+    });
   }
 
   // ── Section introspection (for self-revision context) ───────────────────
@@ -388,7 +482,9 @@ export class StreamingNotesWriter {
       op.pendingDivider = false;
       return;
     }
-    const inline = parseInlineMarkdown(line.text.trim());
+    const inline = parseInlineMarkdown(
+      sanitizeIncompleteInlineMarkdown(line.text.trim())
+    );
     this.openStreamingBlock(line, inline);
     // Block content arrived complete — close the line immediately.
     op.mode = "prefix";
@@ -577,9 +673,9 @@ export class StreamingNotesWriter {
   }
 
   /**
-   * Line completed — re-parse `**bold**` spans and replace the raw text
-   * with marked nodes in one transaction (no flicker), then return to
-   * prefix mode for the next line.
+   * Line completed — sanitize truncated emphasis markers, re-parse
+   * `**bold**` / `*italic*` spans, and replace the raw text with marked
+   * nodes in one transaction (no flicker), then return to prefix mode.
    */
   private finalizeLine(): void {
     const op = this.op;
@@ -588,12 +684,19 @@ export class StreamingNotesWriter {
       op.lineStart != null &&
       op.textPos != null &&
       op.textPos > op.lineStart &&
-      op.lineRaw.includes("**")
+      op.lineRaw.includes("*")
     ) {
       const from = op.lineStart;
       const to = op.textPos;
-      const pmNodes = this.inlineToPm(parseInlineMarkdown(op.lineRaw));
-      this.dispatchDoc((tr) => tr.replaceWith(from, to, Fragment.from(pmNodes)));
+      const cleaned = sanitizeIncompleteInlineMarkdown(op.lineRaw);
+      const pmNodes = this.inlineToPm(parseInlineMarkdown(cleaned));
+      this.dispatchDoc((tr) => {
+        if (pmNodes.length === 0) {
+          tr.delete(from, to);
+        } else {
+          tr.replaceWith(from, to, Fragment.from(pmNodes));
+        }
+      });
     }
     op.mode = "prefix";
     op.textPos = null;

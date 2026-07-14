@@ -25,6 +25,10 @@ import {
 import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
 import { NOTE_INSTRUCTION_MAX } from "@/lib/ai/note-instruction";
 import { useT } from "@/lib/i18n/LocaleProvider";
+import {
+  parseInlineMarkdown,
+  sanitizeIncompleteInlineMarkdown,
+} from "@/lib/notes/notes-markdown";
 
 /** Highlighter palette offered in the selection bubble menu. */
 const HIGHLIGHT_COLORS: { label: string; value: string }[] = [
@@ -622,18 +626,21 @@ export function NotesPanel({
           blockNodes.push({ type: "horizontalRule" });
         }
 
+        const inlineFromMarkdown = (raw: string) =>
+          parseInlineMarkdown(sanitizeIncompleteInlineMarkdown(raw));
+
         if (heading && !skipHeading) {
           blockNodes.push({
             type: "heading",
             attrs: { level: 2 },
-            content: [{ type: "text", text: heading }],
+            content: inlineFromMarkdown(heading),
           });
         }
 
         if (intro && intro.trim().length > 0) {
           blockNodes.push({
             type: "paragraph",
-            content: [{ type: "text", text: intro.trim() }],
+            content: inlineFromMarkdown(intro.trim()),
           });
         }
 
@@ -651,19 +658,21 @@ export function NotesPanel({
                 text: string;
                 marks?: { type: string }[];
               };
-              const inlineContent: RichText[] = [];
+              let inlineContent: RichText[];
               if (bold && text.toLowerCase().startsWith(bold.toLowerCase())) {
-                inlineContent.push({
-                  type: "text",
-                  text: text.slice(0, bold.length),
-                  marks: [{ type: "bold" }],
-                });
-                inlineContent.push({
-                  type: "text",
-                  text: text.slice(bold.length),
-                });
+                inlineContent = [
+                  {
+                    type: "text",
+                    text: text.slice(0, bold.length),
+                    marks: [{ type: "bold" }],
+                  },
+                  {
+                    type: "text",
+                    text: text.slice(bold.length),
+                  },
+                ];
               } else {
-                inlineContent.push({ type: "text", text });
+                inlineContent = inlineFromMarkdown(text);
               }
 
               const itemContent: Array<Record<string, unknown>> = [
@@ -677,7 +686,7 @@ export function NotesPanel({
                     content: [
                       {
                         type: "paragraph",
-                        content: [{ type: "text", text: c }],
+                        content: inlineFromMarkdown(c),
                       },
                     ],
                   })),
@@ -724,7 +733,7 @@ export function NotesPanel({
             content: [
               {
                 type: "paragraph",
-                content: [{ type: "text", text: callout.text.trim() }],
+                content: inlineFromMarkdown(callout.text.trim()),
               },
             ],
           });
@@ -743,7 +752,7 @@ export function NotesPanel({
               content: [
                 {
                   type: "paragraph",
-                  content: [{ type: "text", text: q.trim() }],
+                  content: inlineFromMarkdown(q.trim()),
                 },
               ],
             })),
@@ -886,7 +895,8 @@ export function NotesPanel({
         autoGenLog("stream finished", { chunkId });
       },
       abortStreamedNotes: () => {
-        streamWriterRef.current?.finishOp();
+        // Discard orphan heading-only sections / restore failed revisions.
+        streamWriterRef.current?.abortOp();
         streamingChunkIdRef.current = null;
         setStreamingNotes(false);
         autoGenLog("stream aborted");
@@ -1332,15 +1342,29 @@ export function NotesPanel({
           </span>
           <div className="flex items-center gap-3">
             {hideAutoGenerate ? null : (
-              <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700">
-                <input
-                  type="checkbox"
-                  className="h-3.5 w-3.5 rounded border-zinc-300 accent-zinc-700"
-                  checked={autoGenerate}
-                  onChange={(e) => void onToggleAutoGenerate(e.target.checked)}
-                />
-                ✨ Auto-generate
-              </label>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoGenerate}
+                aria-label="Auto-generate notes"
+                onClick={() => void onToggleAutoGenerate(!autoGenerate)}
+                className="flex cursor-pointer items-center gap-2 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-700"
+              >
+                <span aria-hidden>✨</span>
+                <span>Auto-generate</span>
+                <span
+                  aria-hidden
+                  className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors ${
+                    autoGenerate ? "bg-zinc-800" : "bg-zinc-300"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                      autoGenerate ? "translate-x-4" : "translate-x-0"
+                    }`}
+                  />
+                </span>
+              </button>
             )}
           </div>
         </div>

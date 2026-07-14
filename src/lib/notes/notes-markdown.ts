@@ -110,28 +110,96 @@ export function classifyNoteLine(line: string): NoteLineKind {
   return { kind: "paragraph", text: line, prefixLen: 0 };
 }
 
-/** Parse `**bold**` spans into TipTap text nodes. Unclosed `**` is literal. */
+/**
+ * Strip dangling / unclosed emphasis markers left by truncated streams so
+ * students don't see stray `*` / `**` in the finished line. Complete
+ * `**bold**` and `*italic*` spans are preserved.
+ */
+export function sanitizeIncompleteInlineMarkdown(text: string): string {
+  if (!text.includes("*")) return text;
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith("**", i)) {
+      const close = text.indexOf("**", i + 2);
+      if (close === -1) {
+        // Unclosed bold — drop the opening markers, keep the rest.
+        out += text.slice(i + 2);
+        break;
+      }
+      out += text.slice(i, close + 2);
+      i = close + 2;
+      continue;
+    }
+    if (text[i] === "*") {
+      const close = text.indexOf("*", i + 1);
+      if (close === -1 || text[close + 1] === "*") {
+        // Unclosed italic (or a lone `*` before `**`) — drop this marker.
+        i += 1;
+        continue;
+      }
+      out += text.slice(i, close + 1);
+      i = close + 1;
+      continue;
+    }
+    out += text[i];
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Parse `**bold**` and `*italic*` spans into TipTap text nodes.
+ * Unclosed markers are left literal — call
+ * `sanitizeIncompleteInlineMarkdown` first when finalizing a line.
+ */
 export function parseInlineMarkdown(text: string): NoteInlineJson[] {
   const out: NoteInlineJson[] = [];
-  let rest = text;
-  while (rest.length > 0) {
-    const open = rest.indexOf("**");
-    if (open === -1) {
-      out.push({ type: "text", text: rest });
-      break;
+  let i = 0;
+  let plain = "";
+
+  const flushPlain = () => {
+    if (plain) {
+      out.push({ type: "text", text: plain });
+      plain = "";
     }
-    const close = rest.indexOf("**", open + 2);
-    if (close === -1) {
-      out.push({ type: "text", text: rest });
-      break;
+  };
+
+  while (i < text.length) {
+    if (text.startsWith("**", i)) {
+      const close = text.indexOf("**", i + 2);
+      if (close === -1) {
+        plain += text.slice(i);
+        break;
+      }
+      flushPlain();
+      const inner = text.slice(i + 2, close);
+      if (inner) {
+        out.push({ type: "text", text: inner, marks: [{ type: "bold" }] });
+      }
+      i = close + 2;
+      continue;
     }
-    if (open > 0) out.push({ type: "text", text: rest.slice(0, open) });
-    const inner = rest.slice(open + 2, close);
-    if (inner) {
-      out.push({ type: "text", text: inner, marks: [{ type: "bold" }] });
+    if (text[i] === "*") {
+      const close = text.indexOf("*", i + 1);
+      // Don't treat `**` (handled above) or empty `**` as italic.
+      if (close === -1 || close === i + 1 || text[close + 1] === "*") {
+        plain += "*";
+        i += 1;
+        continue;
+      }
+      flushPlain();
+      const inner = text.slice(i + 1, close);
+      if (inner) {
+        out.push({ type: "text", text: inner, marks: [{ type: "italic" }] });
+      }
+      i = close + 1;
+      continue;
     }
-    rest = rest.slice(close + 2);
+    plain += text[i];
+    i += 1;
   }
+  flushPlain();
   return out.filter((n) => n.text.length > 0);
 }
 
@@ -145,7 +213,11 @@ function inlineToMarkdown(
         return inlineToMarkdown((n as NoteNodeJson).content);
       }
       const bold = n.marks?.some((m) => m.type === "bold");
-      return bold ? `**${n.text}**` : n.text;
+      const italic = n.marks?.some((m) => m.type === "italic");
+      let t = n.text;
+      if (bold) t = `**${t}**`;
+      else if (italic) t = `*${t}*`;
+      return t;
     })
     .join("");
 }
