@@ -62,21 +62,26 @@ export default async function NotesHubPage() {
       supabase
         .from("live_lecture_sessions")
         .select(
-          "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text"
+          "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text, deleted_at"
         )
         .eq("user_id", user.id)
+        .is("deleted_at", null)
         .order("updated_at", { ascending: false })
         .limit(60),
       supabase
         .from("tutor_sessions")
-        .select("id, title, topic, status, started_at, updated_at, live_notes_text")
+        .select(
+          "id, title, topic, status, started_at, updated_at, live_notes_text, deleted_at"
+        )
         .eq("user_id", user.id)
+        .is("deleted_at", null)
         .order("updated_at", { ascending: false })
         .limit(100),
       supabase
         .from("user_course_notes")
-        .select("material_id, content_text, updated_at")
+        .select("material_id, content_text, updated_at, deleted_at")
         .eq("user_id", user.id)
+        .is("deleted_at", null)
         .order("updated_at", { ascending: false })
         .limit(100),
     ]);
@@ -85,7 +90,7 @@ export default async function NotesHubPage() {
   // Migration 091 may not be applied yet — if the select failed on deleted_at,
   // retry without it.
   let standaloneNotes = standaloneNotesRaw;
-  let trashedNotes: typeof standaloneNotesRaw = [];
+  let trashedStandalone: typeof standaloneNotesRaw = [];
 
   if (standaloneRes.error && /deleted_at/i.test(standaloneRes.error.message ?? "")) {
     const fallback = await supabase
@@ -108,9 +113,90 @@ export default async function NotesHubPage() {
       .order("deleted_at", { ascending: false })
       .limit(40);
     if (!trashedRes.error) {
-      trashedNotes = trashedRes.data ?? [];
+      trashedStandalone = trashedRes.data ?? [];
     }
   }
+
+  type LiveRow = NonNullable<typeof liveRes.data>[number];
+  type TutorRow = NonNullable<typeof tutorRes.data>[number];
+  type CourseNoteRow = NonNullable<typeof courseNotesRes.data>[number];
+
+  let liveSessions: LiveRow[] = liveRes.data ?? [];
+  let trashedLive: LiveRow[] = [];
+  if (liveRes.error && /deleted_at/i.test(liveRes.error.message ?? "")) {
+    const fallback = await supabase
+      .from("live_lecture_sessions")
+      .select(
+        "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text"
+      )
+      .eq("user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(60);
+    liveSessions = (fallback.data ?? []) as LiveRow[];
+  } else if (!liveRes.error) {
+    const trashedRes = await supabase
+      .from("live_lecture_sessions")
+      .select(
+        "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text, deleted_at"
+      )
+      .eq("user_id", user.id)
+      .not("deleted_at", "is", null)
+      .order("deleted_at", { ascending: false })
+      .limit(40);
+    if (!trashedRes.error) trashedLive = (trashedRes.data ?? []) as LiveRow[];
+  }
+
+  let tutorSessionsRaw: TutorRow[] = tutorRes.data ?? [];
+  let trashedTutor: TutorRow[] = [];
+  if (tutorRes.error && /deleted_at/i.test(tutorRes.error.message ?? "")) {
+    const fallback = await supabase
+      .from("tutor_sessions")
+      .select(
+        "id, title, topic, status, started_at, updated_at, live_notes_text"
+      )
+      .eq("user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(100);
+    tutorSessionsRaw = (fallback.data ?? []) as TutorRow[];
+  } else if (!tutorRes.error) {
+    const trashedRes = await supabase
+      .from("tutor_sessions")
+      .select(
+        "id, title, topic, status, started_at, updated_at, live_notes_text, deleted_at"
+      )
+      .eq("user_id", user.id)
+      .not("deleted_at", "is", null)
+      .order("deleted_at", { ascending: false })
+      .limit(40);
+    if (!trashedRes.error) trashedTutor = (trashedRes.data ?? []) as TutorRow[];
+  }
+
+  let courseNotesRaw: CourseNoteRow[] = courseNotesRes.data ?? [];
+  let trashedCourse: CourseNoteRow[] = [];
+  if (
+    courseNotesRes.error &&
+    /deleted_at/i.test(courseNotesRes.error.message ?? "")
+  ) {
+    const fallback = await supabase
+      .from("user_course_notes")
+      .select("material_id, content_text, updated_at")
+      .eq("user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(100);
+    courseNotesRaw = (fallback.data ?? []) as CourseNoteRow[];
+  } else if (!courseNotesRes.error) {
+    const trashedRes = await supabase
+      .from("user_course_notes")
+      .select("material_id, content_text, updated_at, deleted_at")
+      .eq("user_id", user.id)
+      .not("deleted_at", "is", null)
+      .order("deleted_at", { ascending: false })
+      .limit(40);
+    if (!trashedRes.error) {
+      trashedCourse = (trashedRes.data ?? []) as CourseNoteRow[];
+    }
+  }
+
   type SectionRow = {
     id: string;
     title: string;
@@ -131,7 +217,6 @@ export default async function NotesHubPage() {
   } else {
     userSections = (sectionsRes.data ?? []) as SectionRow[];
   }
-  const liveSessions = liveRes.data ?? [];
   const courseLiveSessions = liveSessions.filter(
     (s) => !s.user_note_id && s.course_id
   );
@@ -144,15 +229,15 @@ export default async function NotesHubPage() {
       )
       .map((s) => [s.user_note_id as string, s])
   );
-  const tutorSessions = (tutorRes.data ?? []).filter(
+  const tutorSessions = tutorSessionsRaw.filter(
     (s) => typeof s.live_notes_text === "string" && s.live_notes_text.trim()
   );
-  const courseNotes = (courseNotesRes.data ?? []).filter(
+  const courseNotes = courseNotesRaw.filter(
     (n) => typeof n.content_text === "string" && n.content_text.trim()
   );
   const materialIds = Array.from(
     new Set(
-      courseNotes
+      [...courseNotes, ...trashedCourse]
         .map((n) => n.material_id as string | null)
         .filter((id): id is string => Boolean(id))
     )
@@ -170,6 +255,9 @@ export default async function NotesHubPage() {
   const courseIds = Array.from(
     new Set([
       ...courseLiveSessions.map((s) => s.course_id as string),
+      ...trashedLive
+        .filter((s) => !s.user_note_id && s.course_id)
+        .map((s) => s.course_id as string),
       ...(materials ?? []).map((m) => m.course_id as string),
     ])
   ).filter(Boolean);
@@ -406,29 +494,97 @@ export default async function NotesHubPage() {
       : section;
   });
 
-  const trashCards: NoteDocCardData[] = trashedNotes.map((n) => {
-    const noteId = n.id as string;
-    const deletedAt =
-      typeof (n as { deleted_at?: string }).deleted_at === "string"
-        ? (n as { deleted_at: string }).deleted_at
-        : (n.updated_at as string);
-    return {
-      key: `standalone-${noteId}`,
-      href: `/notes/doc/${noteId}`,
-      title: (n.title as string) || "Untitled note",
-      subtitle: "In Recently deleted",
-      preview: preview(n.content_text),
-      searchText: buildNoteSearchText(
-        (n.title as string) || "Untitled note",
-        n.content_text
-      ),
-      dateLabel: formatDate(deletedAt),
-      ref: { kind: "standalone", id: noteId },
-      deletable: true,
-      trashed: true,
-      chip: { label: "Deleted", tone: "failed" as const },
-    };
-  });
+  const trashCards: NoteDocCardData[] = [
+    ...trashedStandalone.map((n) => {
+      const noteId = n.id as string;
+      const deletedAt =
+        typeof (n as { deleted_at?: string }).deleted_at === "string"
+          ? (n as { deleted_at: string }).deleted_at
+          : (n.updated_at as string);
+      return {
+        key: `standalone-${noteId}`,
+        href: `/notes/doc/${noteId}`,
+        title: (n.title as string) || "Untitled note",
+        subtitle: "In Recently deleted",
+        preview: preview(n.content_text),
+        searchText: buildNoteSearchText(
+          (n.title as string) || "Untitled note",
+          n.content_text
+        ),
+        dateLabel: formatDate(deletedAt),
+        ref: { kind: "standalone" as const, id: noteId },
+        deletable: true,
+        trashed: true,
+        chip: { label: "Deleted", tone: "failed" as const },
+      };
+    }),
+    ...trashedLive
+      .filter((s) => !s.user_note_id && s.course_id)
+      .map((s) => {
+        const deletedAt =
+          typeof (s as { deleted_at?: string }).deleted_at === "string"
+            ? (s as { deleted_at: string }).deleted_at
+            : ((s.started_at as string) ?? (s.updated_at as string));
+        return {
+          key: `live-${s.id}`,
+          href: `/dashboard/courses/${s.course_id}/live-notes/${s.id}`,
+          title: (s.title as string) || "Live lecture",
+          subtitle: "In Recently deleted",
+          preview: preview(s.notes_text),
+          searchText: buildNoteSearchText(
+            (s.title as string) || "Live lecture",
+            s.notes_text
+          ),
+          dateLabel: formatDate(deletedAt),
+          ref: { kind: "live" as const, id: s.id as string },
+          deletable: true,
+          trashed: true,
+          chip: { label: "Deleted", tone: "failed" as const },
+        };
+      }),
+    ...trashedTutor.map((s) => {
+      const title =
+        (s.title as string) || (s.topic as string) || "Tutor session";
+      const deletedAt =
+        typeof (s as { deleted_at?: string }).deleted_at === "string"
+          ? (s as { deleted_at: string }).deleted_at
+          : ((s.started_at as string) ?? (s.updated_at as string));
+      return {
+        key: `tutor-${s.id}`,
+        href: `/notes/tutor/${s.id}`,
+        title,
+        subtitle: "In Recently deleted",
+        preview: preview(s.live_notes_text),
+        searchText: buildNoteSearchText(title, s.live_notes_text),
+        dateLabel: formatDate(deletedAt),
+        ref: { kind: "tutor" as const, id: s.id as string },
+        deletable: true,
+        trashed: true,
+        chip: { label: "Deleted", tone: "failed" as const },
+      };
+    }),
+    ...trashedCourse.map((n) => {
+      const material = materialById.get(n.material_id as string);
+      const title = materialTitle(material?.file_name);
+      const deletedAt =
+        typeof (n as { deleted_at?: string }).deleted_at === "string"
+          ? (n as { deleted_at: string }).deleted_at
+          : (n.updated_at as string);
+      return {
+        key: `course-${n.material_id}`,
+        href: `/notes/material/${n.material_id}`,
+        title,
+        subtitle: "In Recently deleted",
+        preview: preview(n.content_text),
+        searchText: buildNoteSearchText(title, n.content_text),
+        dateLabel: formatDate(deletedAt),
+        ref: { kind: "course" as const, materialId: n.material_id as string },
+        deletable: true,
+        trashed: true,
+        chip: { label: "Deleted", tone: "failed" as const },
+      };
+    }),
+  ];
 
   const sectionsUnordered: NoteHubSection[] = [
     {
@@ -459,7 +615,7 @@ export default async function NotesHubPage() {
     {
       id: "trash",
       title: "Recently deleted",
-      hint: "Standalone notes you deleted. Restore them, or delete forever.",
+      hint: "Notes you deleted. Restore them, or delete forever.",
       cards: trashCards,
     },
   ];

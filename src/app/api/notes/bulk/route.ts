@@ -33,106 +33,151 @@ function parseRef(raw: unknown): NoteHubRef | null {
   return null;
 }
 
-async function softDeleteStandalone(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+type Supabase = Awaited<ReturnType<typeof createClient>>;
+
+async function softDeleteRow(
+  supabase: Supabase,
+  table: string,
   userId: string,
-  noteId: string
-): Promise<boolean> {
+  match: Record<string, string>,
+  extraUpdate: Record<string, unknown> = {}
+): Promise<"soft" | "hard" | "fail"> {
   const now = new Date().toISOString();
   const { error } = await supabase
-    .from("user_notes")
+    .from(table)
     .update({
       deleted_at: now,
-      section_id: null,
       updated_at: now,
+      ...extraUpdate,
     })
-    .eq("id", noteId)
+    .match(match)
     .eq("user_id", userId)
     .is("deleted_at", null);
-  if (!error) return true;
-  // Migration 091 not applied — fall back to hard delete.
+  if (!error) return "soft";
+  // Migration not applied — fall back to hard delete.
   if (/deleted_at/i.test(error.message ?? "")) {
-    const hard = await supabase
-      .from("user_notes")
-      .delete()
-      .eq("id", noteId)
-      .eq("user_id", userId);
-    return !hard.error;
+    const hard = await supabase.from(table).delete().match(match).eq("user_id", userId);
+    return hard.error ? "fail" : "hard";
   }
-  console.error("[notes softDelete]", error);
-  return false;
+  console.error(`[notes softDelete ${table}]`, error);
+  return "fail";
 }
 
-async function restoreStandalone(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+async function restoreRow(
+  supabase: Supabase,
+  table: string,
   userId: string,
-  noteId: string
+  match: Record<string, string>
 ): Promise<boolean> {
   const { error } = await supabase
-    .from("user_notes")
+    .from(table)
     .update({
       deleted_at: null,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", noteId)
+    .match(match)
     .eq("user_id", userId)
     .not("deleted_at", "is", null);
   return !error;
 }
 
-async function purgeStandalone(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+async function purgeRow(
+  supabase: Supabase,
+  table: string,
   userId: string,
-  noteId: string
+  match: Record<string, string>
 ): Promise<boolean> {
   const { error } = await supabase
-    .from("user_notes")
+    .from(table)
     .delete()
-    .eq("id", noteId)
+    .match(match)
     .eq("user_id", userId);
   return !error;
 }
 
+async function softDeleteHubItem(
+  supabase: Supabase,
+  userId: string,
+  item: NoteHubRef
+): Promise<"soft" | "hard" | "fail"> {
+  switch (item.kind) {
+    case "standalone":
+      return softDeleteRow(supabase, "user_notes", userId, { id: item.id }, {
+        section_id: null,
+      });
+    case "tutor":
+      return softDeleteRow(supabase, "tutor_sessions", userId, { id: item.id });
+    case "live":
+      return softDeleteRow(supabase, "live_lecture_sessions", userId, {
+        id: item.id,
+      });
+    case "course":
+      return softDeleteRow(supabase, "user_course_notes", userId, {
+        material_id: item.materialId,
+      });
+    default:
+      return "fail";
+  }
+}
+
+async function restoreHubItem(
+  supabase: Supabase,
+  userId: string,
+  item: NoteHubRef
+): Promise<boolean> {
+  switch (item.kind) {
+    case "standalone":
+      return restoreRow(supabase, "user_notes", userId, { id: item.id });
+    case "tutor":
+      return restoreRow(supabase, "tutor_sessions", userId, { id: item.id });
+    case "live":
+      return restoreRow(supabase, "live_lecture_sessions", userId, {
+        id: item.id,
+      });
+    case "course":
+      return restoreRow(supabase, "user_course_notes", userId, {
+        material_id: item.materialId,
+      });
+    default:
+      return false;
+  }
+}
+
+async function purgeHubItem(
+  supabase: Supabase,
+  userId: string,
+  item: NoteHubRef
+): Promise<boolean> {
+  switch (item.kind) {
+    case "standalone":
+      return purgeRow(supabase, "user_notes", userId, { id: item.id });
+    case "tutor":
+      return purgeRow(supabase, "tutor_sessions", userId, { id: item.id });
+    case "live":
+      return purgeRow(supabase, "live_lecture_sessions", userId, {
+        id: item.id,
+      });
+    case "course":
+      return purgeRow(supabase, "user_course_notes", userId, {
+        material_id: item.materialId,
+      });
+    default:
+      return false;
+  }
+}
+
 async function deleteHubItem(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase: Supabase,
   userId: string,
   item: NoteHubRef,
   mode: "soft" | "purge" = "soft"
-): Promise<{ ok: boolean; reason?: string }> {
-  switch (item.kind) {
-    case "standalone": {
-      if (mode === "purge") {
-        return { ok: await purgeStandalone(supabase, userId, item.id) };
-      }
-      return { ok: await softDeleteStandalone(supabase, userId, item.id) };
-    }
-    case "tutor": {
-      const { error } = await supabase
-        .from("tutor_sessions")
-        .delete()
-        .eq("id", item.id)
-        .eq("user_id", userId);
-      return { ok: !error };
-    }
-    case "live": {
-      const { error } = await supabase
-        .from("live_lecture_sessions")
-        .delete()
-        .eq("id", item.id)
-        .eq("user_id", userId);
-      return { ok: !error };
-    }
-    case "course": {
-      const { error } = await supabase
-        .from("user_course_notes")
-        .delete()
-        .eq("material_id", item.materialId)
-        .eq("user_id", userId);
-      return { ok: !error };
-    }
-    default:
-      return { ok: false };
+): Promise<{ ok: boolean; permanent?: boolean }> {
+  if (mode === "purge") {
+    return { ok: await purgeHubItem(supabase, userId, item), permanent: true };
   }
+  const result = await softDeleteHubItem(supabase, userId, item);
+  if (result === "fail") return { ok: false };
+  return { ok: true, permanent: result === "hard" };
 }
 
 async function loadNoteFolders(
@@ -283,14 +328,14 @@ export async function POST(request: Request) {
   if (body.action === "restore") {
     let restored = 0;
     for (const item of items) {
-      if (item.kind !== "standalone") continue;
-      if (await restoreStandalone(supabase, user.id, item.id)) restored += 1;
+      if (await restoreHubItem(supabase, user.id, item)) restored += 1;
     }
     return NextResponse.json({ restored });
   }
 
   const purge = body.action === "purge";
   let deleted = 0;
+  let anyPermanent = purge;
   const folders = await loadNoteFolders(supabase, user.id);
   let foldersDirty = false;
   for (const item of items) {
@@ -302,6 +347,7 @@ export async function POST(request: Request) {
     );
     if (result.ok) {
       deleted += 1;
+      if (result.permanent) anyPermanent = true;
       const key = cardKeyForRef(item);
       if (key in folders) {
         delete folders[key];
@@ -311,5 +357,5 @@ export async function POST(request: Request) {
   }
   if (foldersDirty) await saveNoteFolders(supabase, user.id, folders);
 
-  return NextResponse.json({ deleted, permanent: purge });
+  return NextResponse.json({ deleted, permanent: anyPermanent });
 }

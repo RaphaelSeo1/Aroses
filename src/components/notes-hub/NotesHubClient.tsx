@@ -643,16 +643,10 @@ export function NotesHubClient({
 
   const deleteNote = async (card: NoteDocCardData) => {
     if (busy || !card.ref || card.deletable === false) return;
-    const isStandalone = card.ref.kind === "standalone";
-    const isLive = card.ref.kind === "live";
     const ok = await confirmDialog({
       title: `Delete “${card.title}”?`,
-      body: isStandalone
-        ? "It will move to Recently deleted. You can restore it later, or delete it forever from there."
-        : isLive
-          ? "This cannot be undone. The recording, transcript, and notes will be removed."
-          : "This cannot be undone.",
-      confirmLabel: isStandalone ? "Move to Recently deleted" : "Delete",
+      body: "It will move to Recently deleted. You can restore it later, or delete it forever from there.",
+      confirmLabel: "Move to Recently deleted",
       tone: "danger",
     });
     if (!ok) return;
@@ -671,12 +665,16 @@ export function NotesHubClient({
         });
         return;
       }
+      const payload = (await res.json().catch(() => ({}))) as {
+        permanent?: boolean;
+      };
       setSections((prev) => {
         let next = prev.map((s) => ({
           ...s,
           cards: s.cards.filter((c) => c.key !== card.key),
         }));
-        if (isStandalone) {
+        // Hard-delete fallback (migration missing) — don't show in trash.
+        if (!payload.permanent) {
           const trashedCard: NoteDocCardData = {
             ...card,
             trashed: true,
@@ -695,14 +693,18 @@ export function NotesHubClient({
               : s
           );
         }
-        const stillHasActive = next.some(
-          (s) => s.id === activeSectionId && s.cards.length > 0
-        );
-        if (!stillHasActive) {
-          setActiveSectionId(defaultActiveSection(next));
-        }
         return next;
       });
+      if (!payload.permanent) {
+        setActiveSectionId("trash");
+      } else {
+        const stillHasActive = sections.some(
+          (s) => s.id === activeSectionId && s.cards.some((c) => c.key !== card.key)
+        );
+        if (!stillHasActive) {
+          setActiveSectionId(defaultActiveSection(sections));
+        }
+      }
       router.refresh();
     } finally {
       setBusy(false);
@@ -718,7 +720,7 @@ export function NotesHubClient({
 
   const restoreNote = useCallback(
     async (card: NoteDocCardData) => {
-      if (busy || !card.ref || card.ref.kind !== "standalone") return;
+      if (busy || !card.ref) return;
       setBusy(true);
       try {
         const res = await fetch("/api/notes/bulk", {
@@ -733,6 +735,14 @@ export function NotesHubClient({
           });
           return;
         }
+        const homeSectionId =
+          card.ref.kind === "live"
+            ? "live"
+            : card.ref.kind === "tutor"
+              ? "tutor"
+              : card.ref.kind === "course"
+                ? "course"
+                : "standalone";
         setSections((prev) => {
           const restored: NoteDocCardData = {
             ...card,
@@ -744,14 +754,14 @@ export function NotesHubClient({
             if (s.id === "trash") {
               return { ...s, cards: s.cards.filter((c) => c.key !== card.key) };
             }
-            if (s.id === "standalone") {
+            if (s.id === homeSectionId || s.id === "standalone") {
               const exists = s.cards.some((c) => c.key === card.key);
               return exists ? s : { ...s, cards: [restored, ...s.cards] };
             }
             return s;
           });
         });
-        setActiveSectionId("standalone");
+        setActiveSectionId(homeSectionId);
         router.refresh();
       } finally {
         setBusy(false);
