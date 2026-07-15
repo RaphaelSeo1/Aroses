@@ -6,6 +6,7 @@ export const BUILTIN_HUB_SECTION_IDS = [
   "live",
   "tutor",
   "course",
+  "trash",
 ] as const;
 
 export function isValidSectionOrder(

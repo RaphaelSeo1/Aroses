@@ -102,6 +102,10 @@ export type NoteDocCardData = {
   ref?: NoteHubRef;
   /** When false, card cannot be bulk-deleted. */
   deletable?: boolean;
+  /** Custom folder uuid if this note currently lives in one. */
+  folderSectionId?: string | null;
+  /** Soft-deleted note in Recently deleted. */
+  trashed?: boolean;
 };
 
 const FOLDER_UUID_RE =

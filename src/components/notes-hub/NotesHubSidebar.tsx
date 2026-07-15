@@ -25,6 +25,7 @@ const SECTION_META: Record<string, { icon: string; emptyLabel: string }> = {
   live: { icon: "🎙️", emptyLabel: "No live lectures" },
   tutor: { icon: "💬", emptyLabel: "No tutor sessions" },
   course: { icon: "📚", emptyLabel: "No course notes" },
+  trash: { icon: "🗑️", emptyLabel: "Nothing in Recently deleted" },
 };
 
 const CUSTOM_SECTION_META = {
@@ -213,6 +214,9 @@ export function NoteActionsMenu({
   onMove,
   moveTargets,
   onMoveToNewSection,
+  onRemoveFromSection,
+  onRestore,
+  onPurge,
   align = "right",
 }: {
   card: NoteDocCardData;
@@ -221,13 +225,44 @@ export function NoteActionsMenu({
   onMove?: (card: NoteDocCardData, sectionId: string | null) => void;
   moveTargets?: NoteMoveTarget[];
   onMoveToNewSection?: (card: NoteDocCardData) => void;
+  onRemoveFromSection?: (card: NoteDocCardData) => void;
+  onRestore?: (card: NoteDocCardData) => void;
+  onPurge?: (card: NoteDocCardData) => void;
   align?: "left" | "right";
 }) {
   if (card.deletable === false) return null;
+
+  if (card.trashed) {
+    const trashItems = [
+      ...(onRestore
+        ? [{ label: "Restore", onSelect: () => onRestore(card) }]
+        : []),
+      ...(onPurge
+        ? [
+            {
+              label: "Delete forever",
+              onSelect: () => onPurge(card),
+              tone: "danger" as const,
+            },
+          ]
+        : []),
+    ];
+    if (trashItems.length === 0) return null;
+    return (
+      <ItemMoreMenu
+        ariaLabel={`Options for ${card.title}`}
+        align={align}
+        items={trashItems}
+      />
+    );
+  }
+
   const canMove =
     Boolean(card.ref) &&
     Boolean(onMove) &&
     Boolean(moveTargets?.length || onMoveToNewSection);
+  const canRemoveFromSection =
+    Boolean(card.folderSectionId) && Boolean(onRemoveFromSection);
 
   const items = [
     ...(onRename && noteCanRename(card)
@@ -251,6 +286,14 @@ export function NoteActionsMenu({
                   ]
                 : []),
             ],
+          },
+        ]
+      : []),
+    ...(canRemoveFromSection
+      ? [
+          {
+            label: "Remove from section",
+            onSelect: () => onRemoveFromSection?.(card),
           },
         ]
       : []),
@@ -286,6 +329,9 @@ function NoteListItem({
   onMoveNote,
   moveTargets,
   onMoveToNewSection,
+  onRemoveFromSection,
+  onRestoreNote,
+  onPurgeNote,
 }: {
   card: NoteDocCardData;
   sectionId: string;
@@ -298,6 +344,9 @@ function NoteListItem({
   onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
   moveTargets?: NoteMoveTarget[];
   onMoveToNewSection?: (card: NoteDocCardData) => void;
+  onRemoveFromSection?: (card: NoteDocCardData) => void;
+  onRestoreNote?: (card: NoteDocCardData) => void;
+  onPurgeNote?: (card: NoteDocCardData) => void;
 }) {
   const canDrag =
     draggableNotes &&
@@ -328,6 +377,9 @@ function NoteListItem({
         onMove={onMoveNote}
         moveTargets={moveTargets}
         onMoveToNewSection={onMoveToNewSection}
+        onRemoveFromSection={onRemoveFromSection}
+        onRestore={onRestoreNote}
+        onPurge={onPurgeNote}
       />
     ) : null;
 
@@ -424,6 +476,9 @@ function SortableSectionRow({
   onMoveNote,
   moveTargets,
   onMoveToNewSection,
+  onRemoveFromSection,
+  onRestoreNote,
+  onPurgeNote,
   manageMode,
   selectedKeys,
   onToggleSelect,
@@ -447,13 +502,15 @@ function SortableSectionRow({
   onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
   moveTargets?: NoteMoveTarget[];
   onMoveToNewSection?: (card: NoteDocCardData) => void;
+  onRemoveFromSection?: (card: NoteDocCardData) => void;
+  onRestoreNote?: (card: NoteDocCardData) => void;
+  onPurgeNote?: (card: NoteDocCardData) => void;
   manageMode?: boolean;
   selectedKeys?: Set<string>;
   onToggleSelect?: (key: string) => void;
   draggableNotes?: boolean;
   noteDropDisabled?: boolean;
   sortDisabled?: boolean;
-  /** Select mode with notes ready to move — highlight droppable folders. */
   moveReady?: boolean;
 }) {
   const acceptsNotes = sectionAcceptsNoteDropFn(section);
@@ -634,6 +691,9 @@ function SortableSectionRow({
                   onMoveNote={onMoveNote}
                   moveTargets={moveTargets}
                   onMoveToNewSection={onMoveToNewSection}
+                  onRemoveFromSection={onRemoveFromSection}
+                  onRestoreNote={onRestoreNote}
+                  onPurgeNote={onPurgeNote}
                 />
               </li>
             ))
@@ -660,6 +720,9 @@ export function NotesHubSidebar({
   onMoveNote,
   moveTargets,
   onMoveToNewSection,
+  onRemoveFromSection,
+  onRestoreNote,
+  onPurgeNote,
   addingSection,
   draggableNotes,
   dragKind,
@@ -680,6 +743,9 @@ export function NotesHubSidebar({
   onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
   moveTargets?: NoteMoveTarget[];
   onMoveToNewSection?: (card: NoteDocCardData) => void;
+  onRemoveFromSection?: (card: NoteDocCardData) => void;
+  onRestoreNote?: (card: NoteDocCardData) => void;
+  onPurgeNote?: (card: NoteDocCardData) => void;
   addingSection?: boolean;
   draggableNotes?: boolean;
   dragKind?: "note" | "section" | null;
@@ -769,6 +835,9 @@ export function NotesHubSidebar({
                 onMoveNote={onMoveNote}
                 moveTargets={moveTargets}
                 onMoveToNewSection={onMoveToNewSection}
+                onRemoveFromSection={onRemoveFromSection}
+                onRestoreNote={onRestoreNote}
+                onPurgeNote={onPurgeNote}
                 manageMode={manageMode}
                 selectedKeys={selectedKeys}
                 onToggleSelect={onToggleSelect}

@@ -47,9 +47,10 @@ export default async function NotesHubPage() {
       supabase
         .from("user_notes")
         .select(
-          "id, title, content_text, updated_at, course_id, ingest_job_id, section_id"
+          "id, title, content_text, updated_at, course_id, ingest_job_id, section_id, deleted_at"
         )
         .eq("user_id", user.id)
+        .is("deleted_at", null)
         .order("updated_at", { ascending: false })
         .limit(60),
       supabase
@@ -80,7 +81,36 @@ export default async function NotesHubPage() {
         .limit(100),
     ]);
 
-  const standaloneNotes = standaloneRes.data ?? [];
+  const standaloneNotesRaw = standaloneRes.data ?? [];
+  // Migration 091 may not be applied yet — if the select failed on deleted_at,
+  // retry without it.
+  let standaloneNotes = standaloneNotesRaw;
+  let trashedNotes: typeof standaloneNotesRaw = [];
+
+  if (standaloneRes.error && /deleted_at/i.test(standaloneRes.error.message ?? "")) {
+    const fallback = await supabase
+      .from("user_notes")
+      .select(
+        "id, title, content_text, updated_at, course_id, ingest_job_id, section_id"
+      )
+      .eq("user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(60);
+    standaloneNotes = (fallback.data ?? []) as typeof standaloneNotesRaw;
+  } else {
+    const trashedRes = await supabase
+      .from("user_notes")
+      .select(
+        "id, title, content_text, updated_at, course_id, ingest_job_id, section_id, deleted_at"
+      )
+      .eq("user_id", user.id)
+      .not("deleted_at", "is", null)
+      .order("deleted_at", { ascending: false })
+      .limit(40);
+    if (!trashedRes.error) {
+      trashedNotes = trashedRes.data ?? [];
+    }
+  }
   type SectionRow = {
     id: string;
     title: string;
@@ -187,6 +217,7 @@ export default async function NotesHubPage() {
       dateLabel: formatDate(n.updated_at as string),
       ref: { kind: "standalone", id: noteId },
       deletable: true,
+      folderSectionId: (n.section_id as string | null) ?? null,
       isLive: activeStatus === "recording",
       chip: activeStatus === "recording"
         ? { label: "Live", tone: "live" as const }
@@ -364,12 +395,39 @@ export default async function NotesHubPage() {
       if (!card) continue;
       // Standalone already placed via section_id — skip duplicates.
       if (card.ref?.kind === "standalone") continue;
-      extras.push(card);
+      extras.push({
+        ...card,
+        folderSectionId: sectionUuid,
+      });
       seen.add(key);
     }
     return extras.length
       ? { ...section, cards: [...section.cards, ...extras] }
       : section;
+  });
+
+  const trashCards: NoteDocCardData[] = trashedNotes.map((n) => {
+    const noteId = n.id as string;
+    const deletedAt =
+      typeof (n as { deleted_at?: string }).deleted_at === "string"
+        ? (n as { deleted_at: string }).deleted_at
+        : (n.updated_at as string);
+    return {
+      key: `standalone-${noteId}`,
+      href: `/notes/doc/${noteId}`,
+      title: (n.title as string) || "Untitled note",
+      subtitle: "In Recently deleted",
+      preview: preview(n.content_text),
+      searchText: buildNoteSearchText(
+        (n.title as string) || "Untitled note",
+        n.content_text
+      ),
+      dateLabel: formatDate(deletedAt),
+      ref: { kind: "standalone", id: noteId },
+      deletable: true,
+      trashed: true,
+      chip: { label: "Deleted", tone: "failed" as const },
+    };
   });
 
   const sectionsUnordered: NoteHubSection[] = [
@@ -397,6 +455,12 @@ export default async function NotesHubPage() {
       title: "Course notes",
       hint: "Your running notes from mentored learning, one document per material.",
       cards: courseNoteCards,
+    },
+    {
+      id: "trash",
+      title: "Recently deleted",
+      hint: "Standalone notes you deleted. Restore them, or delete forever.",
+      cards: trashCards,
     },
   ];
 

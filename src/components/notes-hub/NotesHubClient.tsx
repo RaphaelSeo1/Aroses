@@ -81,6 +81,7 @@ function applyMoveToSections(
           card.subtitle === "Course build started";
         byKey.set(card.key, {
           ...card,
+          folderSectionId: targetSectionId,
           subtitle: keepCourseSub ? card.subtitle : folderLabel,
         });
       }
@@ -96,6 +97,7 @@ function applyMoveToSections(
             card.subtitle === "Course build started";
           return {
             ...card,
+            folderSectionId: targetSectionId,
             subtitle: keepCourseSub ? card.subtitle : null,
           };
         });
@@ -641,13 +643,16 @@ export function NotesHubClient({
 
   const deleteNote = async (card: NoteDocCardData) => {
     if (busy || !card.ref || card.deletable === false) return;
+    const isStandalone = card.ref.kind === "standalone";
     const isLive = card.ref.kind === "live";
     const ok = await confirmDialog({
       title: `Delete “${card.title}”?`,
-      body: isLive
-        ? "This cannot be undone. The recording, transcript, and notes will be removed."
-        : "This cannot be undone.",
-      confirmLabel: "Delete",
+      body: isStandalone
+        ? "It will move to Recently deleted. You can restore it later, or delete it forever from there."
+        : isLive
+          ? "This cannot be undone. The recording, transcript, and notes will be removed."
+          : "This cannot be undone.",
+      confirmLabel: isStandalone ? "Move to Recently deleted" : "Delete",
       tone: "danger",
     });
     if (!ok) return;
@@ -667,10 +672,29 @@ export function NotesHubClient({
         return;
       }
       setSections((prev) => {
-        const next = prev.map((s) => ({
+        let next = prev.map((s) => ({
           ...s,
           cards: s.cards.filter((c) => c.key !== card.key),
         }));
+        if (isStandalone) {
+          const trashedCard: NoteDocCardData = {
+            ...card,
+            trashed: true,
+            folderSectionId: null,
+            subtitle: "In Recently deleted",
+            chip: { label: "Deleted", tone: "failed" },
+            dateLabel: new Date().toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            }),
+          };
+          next = next.map((s) =>
+            s.id === "trash"
+              ? { ...s, cards: [trashedCard, ...s.cards] }
+              : s
+          );
+        }
         const stillHasActive = next.some(
           (s) => s.id === activeSectionId && s.cards.length > 0
         );
@@ -684,6 +708,95 @@ export function NotesHubClient({
       setBusy(false);
     }
   };
+
+  const removeFromSection = useCallback(
+    (card: NoteDocCardData) => {
+      void moveCardsToSection([card.key], null);
+    },
+    [moveCardsToSection]
+  );
+
+  const restoreNote = useCallback(
+    async (card: NoteDocCardData) => {
+      if (busy || !card.ref || card.ref.kind !== "standalone") return;
+      setBusy(true);
+      try {
+        const res = await fetch("/api/notes/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "restore", items: [card.ref] }),
+        });
+        if (!res.ok) {
+          await alertDialog({
+            title: "Couldn’t restore",
+            body: "Something went wrong. Try again.",
+          });
+          return;
+        }
+        setSections((prev) => {
+          const restored: NoteDocCardData = {
+            ...card,
+            trashed: false,
+            subtitle: null,
+            chip: card.chip?.label === "Deleted" ? undefined : card.chip,
+          };
+          return prev.map((s) => {
+            if (s.id === "trash") {
+              return { ...s, cards: s.cards.filter((c) => c.key !== card.key) };
+            }
+            if (s.id === "standalone") {
+              const exists = s.cards.some((c) => c.key === card.key);
+              return exists ? s : { ...s, cards: [restored, ...s.cards] };
+            }
+            return s;
+          });
+        });
+        setActiveSectionId("standalone");
+        router.refresh();
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, router]
+  );
+
+  const purgeNote = useCallback(
+    async (card: NoteDocCardData) => {
+      if (busy || !card.ref) return;
+      const ok = await confirmDialog({
+        title: `Delete “${card.title}” forever?`,
+        body: "This permanently removes the note. It cannot be restored.",
+        confirmLabel: "Delete forever",
+        tone: "danger",
+      });
+      if (!ok) return;
+      setBusy(true);
+      try {
+        const res = await fetch("/api/notes/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "purge", items: [card.ref] }),
+        });
+        if (!res.ok) {
+          await alertDialog({
+            title: "Couldn’t delete",
+            body: "Something went wrong. Try again.",
+          });
+          return;
+        }
+        setSections((prev) =>
+          prev.map((s) => ({
+            ...s,
+            cards: s.cards.filter((c) => c.key !== card.key),
+          }))
+        );
+        router.refresh();
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, router]
+  );
 
   const canCreateInSection =
     activeSection?.id === "standalone" || isCustomSection(activeSection ?? { id: "" });
@@ -814,6 +927,9 @@ export function NotesHubClient({
             onMoveNote={moveSingleNote}
             moveTargets={moveTargets}
             onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
+            onRemoveFromSection={removeFromSection}
+            onRestoreNote={(c) => void restoreNote(c)}
+            onPurgeNote={(c) => void purgeNote(c)}
           />
         )}
       </section>
@@ -906,6 +1022,9 @@ export function NotesHubClient({
                 onMoveNote={moveSingleNote}
                 moveTargets={moveTargets}
                 onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
+                onRemoveFromSection={removeFromSection}
+                onRestoreNote={(c) => void restoreNote(c)}
+                onPurgeNote={(c) => void purgeNote(c)}
                 addingSection={addingSection}
                 draggableNotes
                 dragKind={dragKind}
@@ -943,6 +1062,9 @@ export function NotesHubClient({
               onMoveNote={moveSingleNote}
               moveTargets={moveTargets}
               onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
+              onRemoveFromSection={removeFromSection}
+              onRestoreNote={(c) => void restoreNote(c)}
+              onPurgeNote={(c) => void purgeNote(c)}
               addingSection={addingSection}
             />
           </aside>

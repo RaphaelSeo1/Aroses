@@ -218,11 +218,28 @@ export async function DELETE(_req: Request, ctx: Params) {
 
   const { error } = await supabase
     .from("user_notes")
-    .delete()
+    .update({
+      deleted_at: new Date().toISOString(),
+      section_id: null,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", noteId)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .is("deleted_at", null);
 
   if (error) {
+    if (/deleted_at/i.test(error.message ?? "")) {
+      const hard = await supabase
+        .from("user_notes")
+        .delete()
+        .eq("id", noteId)
+        .eq("user_id", user.id);
+      if (hard.error) {
+        console.error("[notes DELETE]", hard.error);
+        return NextResponse.json({ error: "Delete failed" }, { status: 500 });
+      }
+      return NextResponse.json({ ok: true, permanent: true });
+    }
     console.error("[notes DELETE]", error);
     return NextResponse.json({ error: "Delete failed" }, { status: 500 });
   }

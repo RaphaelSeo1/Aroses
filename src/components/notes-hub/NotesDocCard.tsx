@@ -76,6 +76,9 @@ export function NoteDocCard({
   onMoveNote,
   moveTargets,
   onMoveToNewSection,
+  onRemoveFromSection,
+  onRestoreNote,
+  onPurgeNote,
 }: {
   card: NoteDocCardData;
   manageMode?: boolean;
@@ -87,6 +90,9 @@ export function NoteDocCard({
   onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
   moveTargets?: NoteMoveTarget[];
   onMoveToNewSection?: (card: NoteDocCardData) => void;
+  onRemoveFromSection?: (card: NoteDocCardData) => void;
+  onRestoreNote?: (card: NoteDocCardData) => void;
+  onPurgeNote?: (card: NoteDocCardData) => void;
 }) {
   const canDrag =
     draggableNotes &&
@@ -176,7 +182,13 @@ export function NoteDocCard({
         {dragHandle}
         <CardInner card={card} />
       </Link>
-      {!manageMode && (onRenameNote || onDeleteNote || onMoveNote) ? (
+      {!manageMode &&
+      (onRenameNote ||
+        onDeleteNote ||
+        onMoveNote ||
+        onRemoveFromSection ||
+        onRestoreNote ||
+        onPurgeNote) ? (
         <div
           className="absolute bottom-2 right-1 z-10"
           onClick={(e) => e.preventDefault()}
@@ -189,6 +201,9 @@ export function NoteDocCard({
             onMove={onMoveNote}
             moveTargets={moveTargets}
             onMoveToNewSection={onMoveToNewSection}
+            onRemoveFromSection={onRemoveFromSection}
+            onRestore={onRestoreNote}
+            onPurge={onPurgeNote}
           />
         </div>
       ) : null}
@@ -207,6 +222,9 @@ export function NotesDocGrid({
   onMoveNote,
   moveTargets,
   onMoveToNewSection,
+  onRemoveFromSection,
+  onRestoreNote,
+  onPurgeNote,
 }: {
   cards: NoteDocCardData[];
   manageMode?: boolean;
@@ -218,6 +236,9 @@ export function NotesDocGrid({
   onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
   moveTargets?: NoteMoveTarget[];
   onMoveToNewSection?: (card: NoteDocCardData) => void;
+  onRemoveFromSection?: (card: NoteDocCardData) => void;
+  onRestoreNote?: (card: NoteDocCardData) => void;
+  onPurgeNote?: (card: NoteDocCardData) => void;
 }) {
   return (
     <div className="grid grid-cols-2 items-stretch gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
@@ -236,6 +257,9 @@ export function NotesDocGrid({
           onMoveNote={onMoveNote}
           moveTargets={moveTargets}
           onMoveToNewSection={onMoveToNewSection}
+          onRemoveFromSection={onRemoveFromSection}
+          onRestoreNote={onRestoreNote}
+          onPurgeNote={onPurgeNote}
         />
       ))}
     </div>
