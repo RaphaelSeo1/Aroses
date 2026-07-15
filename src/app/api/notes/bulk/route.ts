@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
-import type { NoteHubRef } from "@/lib/notes/hub-types";
+import {
+  cardKeyForRef,
+  parseNoteFolders,
+  type NoteHubRef,
+} from "@/lib/notes/hub-types";
 import { createClient } from "@/lib/supabase/server";
-import { isUuid } from "@/lib/voice-tutor/uuid";
 
 const MAX_BULK = 25;
 const UUID_RE =
@@ -73,6 +76,46 @@ async function deleteHubItem(
   }
 }
 
+async function loadNoteFolders(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string
+): Promise<Record<string, string>> {
+  const { data, error } = await supabase
+    .from("user_notes_hub_layout")
+    .select("note_folders")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) {
+    if (/note_folders/i.test(error.message ?? "")) return {};
+    console.error("[notes bulk note_folders]", error);
+    return {};
+  }
+  return parseNoteFolders(data?.note_folders);
+}
+
+async function saveNoteFolders(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  folders: Record<string, string>
+): Promise<boolean> {
+  const { error } = await supabase.from("user_notes_hub_layout").upsert(
+    {
+      user_id: userId,
+      note_folders: folders,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" }
+  );
+  if (error) {
+    // Don't fail the whole move if migration 090 isn't applied yet —
+    // standalone section_id updates still succeed.
+    if (/note_folders/i.test(error.message ?? "")) return false;
+    console.error("[notes bulk save note_folders]", error);
+    return false;
+  }
+  return true;
+}
+
 /** POST /api/notes/bulk — delete or move selected notes from the hub. */
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -100,17 +143,11 @@ export async function POST(request: Request) {
 
     const items = body.items
       .map(parseRef)
-      .filter(
-        (r): r is Extract<NoteHubRef, { kind: "standalone" }> =>
-          r !== null && r.kind === "standalone"
-      )
+      .filter((r): r is NoteHubRef => r !== null)
       .slice(0, MAX_BULK);
 
     if (items.length === 0) {
-      return NextResponse.json(
-        { error: "Only standalone notes can be moved." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid selection." }, { status: 400 });
     }
 
     let sectionId: string | null = null;
@@ -131,19 +168,33 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid sectionId" }, { status: 400 });
     }
 
+    const folders = await loadNoteFolders(supabase, user.id);
     let moved = 0;
+
     for (const item of items) {
-      const { error } = await supabase
-        .from("user_notes")
-        .update({
-          section_id: sectionId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", item.id)
-        .eq("user_id", user.id);
-      if (!error) moved += 1;
+      const key = cardKeyForRef(item);
+      let ok = true;
+
+      if (item.kind === "standalone") {
+        const { error } = await supabase
+          .from("user_notes")
+          .update({
+            section_id: sectionId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", item.id)
+          .eq("user_id", user.id);
+        if (error) ok = false;
+      }
+
+      if (ok) {
+        if (sectionId) folders[key] = sectionId;
+        else delete folders[key];
+        moved += 1;
+      }
     }
 
+    await saveNoteFolders(supabase, user.id, folders);
     return NextResponse.json({ moved, sectionId });
   }
 
@@ -167,10 +218,20 @@ export async function POST(request: Request) {
   }
 
   let deleted = 0;
+  const folders = await loadNoteFolders(supabase, user.id);
+  let foldersDirty = false;
   for (const item of items) {
     const result = await deleteHubItem(supabase, user.id, item);
-    if (result.ok) deleted += 1;
+    if (result.ok) {
+      deleted += 1;
+      const key = cardKeyForRef(item);
+      if (key in folders) {
+        delete folders[key];
+        foldersDirty = true;
+      }
+    }
   }
+  if (foldersDirty) await saveNoteFolders(supabase, user.id, folders);
 
   return NextResponse.json({ deleted });
 }

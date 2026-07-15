@@ -103,3 +103,31 @@ export type NoteDocCardData = {
   /** When false, card cannot be bulk-deleted. */
   deletable?: boolean;
 };
+
+const FOLDER_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Stable hub card key for a typed note ref (used by note_folders map). */
+export function cardKeyForRef(ref: NoteHubRef): string {
+  switch (ref.kind) {
+    case "standalone":
+      return `standalone-${ref.id}`;
+    case "live":
+      return `live-${ref.id}`;
+    case "tutor":
+      return `tutor-${ref.id}`;
+    case "course":
+      return `course-${ref.materialId}`;
+  }
+}
+
+export function parseNoteFolders(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string" && FOLDER_UUID_RE.test(value)) {
+      out[key] = value;
+    }
+  }
+  return out;
+}

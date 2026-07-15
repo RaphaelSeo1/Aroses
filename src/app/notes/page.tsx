@@ -3,7 +3,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { NotesHubClient } from "@/components/notes-hub/NotesHubClient";
 import type { NoteDocCardData, NoteHubSection } from "@/lib/notes/hub-types";
-import { customSectionId, isCustomSection } from "@/lib/notes/hub-types";
+import { customSectionId, isCustomSection, parseNoteFolders } from "@/lib/notes/hub-types";
 import { applySectionOrder } from "@/lib/notes/hub-layout";
 import { buildNoteSearchText } from "@/lib/notes/note-search";
 import { createClient } from "@/lib/supabase/server";
@@ -203,10 +203,10 @@ export default async function NotesHubPage() {
       .filter((n) => (n.section_id as string | null) === sectionId)
       .map((n) => toStandaloneCard(n, n.ingest_job_id ? "Course build started" : null));
 
-  const customSections: NoteHubSection[] = userSections.map((s) => ({
+  const customSectionsBase: NoteHubSection[] = userSections.map((s) => ({
     id: customSectionId(s.id as string),
     title: (s.title as string) || "New section",
-    hint: "Use Select → Move to add notes here, or create a new note in this section.",
+    hint: "⋮ on a note in the sidebar → Move to.",
     cards: customSectionCards(s.id as string),
     custom: true,
     emoji:
@@ -298,6 +298,80 @@ export default async function NotesHubPage() {
     ...courseNoteCards,
   ]);
 
+  const { data: layoutRow, error: layoutError } = await supabase
+    .from("user_notes_hub_layout")
+    .select("section_order, section_emojis, note_folders")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  let savedOrder: string[] = [];
+  let savedEmojis: Record<string, string> = {};
+  let noteFolders: Record<string, string> = {};
+
+  if (layoutError && /note_folders/i.test(layoutError.message ?? "")) {
+    const fallback = await supabase
+      .from("user_notes_hub_layout")
+      .select("section_order, section_emojis")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!fallback.error) {
+      if (Array.isArray(fallback.data?.section_order)) {
+        savedOrder = fallback.data.section_order as string[];
+      }
+      if (
+        fallback.data?.section_emojis &&
+        typeof fallback.data.section_emojis === "object" &&
+        !Array.isArray(fallback.data.section_emojis)
+      ) {
+        savedEmojis = fallback.data.section_emojis as Record<string, string>;
+      }
+    }
+  } else if (layoutError && /section_emojis/i.test(layoutError.message ?? "")) {
+    const fallback = await supabase
+      .from("user_notes_hub_layout")
+      .select("section_order")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!fallback.error && Array.isArray(fallback.data?.section_order)) {
+      savedOrder = fallback.data.section_order as string[];
+    }
+  } else if (!layoutError) {
+    if (Array.isArray(layoutRow?.section_order)) {
+      savedOrder = layoutRow.section_order as string[];
+    }
+    if (
+      layoutRow?.section_emojis &&
+      typeof layoutRow.section_emojis === "object" &&
+      !Array.isArray(layoutRow.section_emojis)
+    ) {
+      savedEmojis = layoutRow.section_emojis as Record<string, string>;
+    }
+    noteFolders = parseNoteFolders(layoutRow?.note_folders);
+  }
+
+  const cardsByKey = new Map(myNotesCards.map((c) => [c.key, c]));
+  const customSections: NoteHubSection[] = customSectionsBase.map((section) => {
+    const sectionUuid = section.id.startsWith("custom:")
+      ? section.id.slice("custom:".length)
+      : null;
+    if (!sectionUuid) return section;
+    const extras: NoteDocCardData[] = [];
+    const seen = new Set(section.cards.map((c) => c.key));
+    for (const [key, folderId] of Object.entries(noteFolders)) {
+      if (folderId !== sectionUuid) continue;
+      if (seen.has(key)) continue;
+      const card = cardsByKey.get(key);
+      if (!card) continue;
+      // Standalone already placed via section_id — skip duplicates.
+      if (card.ref?.kind === "standalone") continue;
+      extras.push(card);
+      seen.add(key);
+    }
+    return extras.length
+      ? { ...section, cards: [...section.cards, ...extras] }
+      : section;
+  });
+
   const sectionsUnordered: NoteHubSection[] = [
     {
       id: "standalone",
@@ -325,37 +399,6 @@ export default async function NotesHubPage() {
       cards: courseNoteCards,
     },
   ];
-
-  const { data: layoutRow, error: layoutError } = await supabase
-    .from("user_notes_hub_layout")
-    .select("section_order, section_emojis")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  let savedOrder: string[] = [];
-  let savedEmojis: Record<string, string> = {};
-
-  if (layoutError && /section_emojis/i.test(layoutError.message ?? "")) {
-    const fallback = await supabase
-      .from("user_notes_hub_layout")
-      .select("section_order")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (!fallback.error && Array.isArray(fallback.data?.section_order)) {
-      savedOrder = fallback.data.section_order as string[];
-    }
-  } else if (!layoutError) {
-    if (Array.isArray(layoutRow?.section_order)) {
-      savedOrder = layoutRow.section_order as string[];
-    }
-    if (
-      layoutRow?.section_emojis &&
-      typeof layoutRow.section_emojis === "object" &&
-      !Array.isArray(layoutRow.section_emojis)
-    ) {
-      savedEmojis = layoutRow.section_emojis as Record<string, string>;
-    }
-  }
 
   const sections = applySectionOrder(sectionsUnordered, savedOrder).map(
     (section) => {

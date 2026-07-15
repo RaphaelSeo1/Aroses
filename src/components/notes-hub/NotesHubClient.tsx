@@ -120,8 +120,6 @@ export function NotesHubClient({
   const [activeSectionId, setActiveSectionId] = useState(() =>
     defaultActiveSection(initialSections)
   );
-  const [manageMode, setManageMode] = useState(false);
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [creating, setCreating] = useState(false);
   const [addingSection, setAddingSection] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -183,17 +181,6 @@ export function NotesHubClient({
 
   const isSearching = searchQuery.trim().length > 0;
 
-  const deletableCards = useMemo(
-    () => allCards.filter((c) => c.deletable !== false && c.ref),
-    [allCards]
-  );
-
-  const movableSelected = useMemo(() => {
-    return allCards.filter(
-      (c) => selectedKeys.has(c.key) && c.ref?.kind === "standalone"
-    );
-  }, [allCards, selectedKeys]);
-
   const moveTargets = useMemo(() => {
     const targets: { id: string | null; label: string }[] = [
       { id: null, label: "My notes" },
@@ -211,27 +198,9 @@ export function NotesHubClient({
     );
   }, [sections]);
 
-  const toggleSelect = useCallback((key: string) => {
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
 
-  const selectAll = useCallback(() => {
-    setSelectedKeys(new Set(deletableCards.map((c) => c.key)));
-  }, [deletableCards]);
 
-  const clearSelection = useCallback(() => {
-    setSelectedKeys(new Set());
-  }, []);
 
-  const exitManage = useCallback(() => {
-    setManageMode(false);
-    setSelectedKeys(new Set());
-  }, []);
 
   const createNote = async () => {
     if (creating) return;
@@ -294,7 +263,7 @@ export function NotesHubClient({
       const newSection: NoteHubSection = {
         id: customSectionId(data.section.id),
         title: data.section.title,
-        hint: "⋮ on a note → Move to, or drag notes here.",
+        hint: "⋮ on a note in the sidebar → Move to.",
         cards: [],
         custom: true,
       };
@@ -438,7 +407,7 @@ export function NotesHubClient({
       const cards = allCards.filter((c) => cardKeys.includes(c.key));
       const items: NoteHubRef[] = cards
         .map((c) => c.ref)
-        .filter((r): r is NoteHubRef => r?.kind === "standalone");
+        .filter((r): r is NoteHubRef => Boolean(r));
 
       if (items.length === 0) return;
 
@@ -472,15 +441,6 @@ export function NotesHubClient({
     [allCards, router]
   );
 
-  const moveSelected = async (targetSectionId: string | null) => {
-    if (busy || movableSelected.length === 0) return;
-    await moveCardsToSection(
-      movableSelected.map((c) => c.key),
-      targetSectionId
-    );
-    clearSelection();
-  };
-
   const moveSingleNote = useCallback(
     (card: NoteDocCardData, sectionId: string | null) => {
       void moveCardsToSection([card.key], sectionId);
@@ -490,7 +450,7 @@ export function NotesHubClient({
 
   const moveNoteToNewSection = useCallback(
     async (card: NoteDocCardData) => {
-      if (busy || card.ref?.kind !== "standalone") return;
+      if (busy || !card.ref) return;
       const title = await promptDialog({
         title: "New section",
         label: "Section name",
@@ -514,7 +474,7 @@ export function NotesHubClient({
         const newSection: NoteHubSection = {
           id: customSectionId(data.section.id),
           title: data.section.title,
-          hint: "⋮ on a note → Move to, or drag notes here.",
+          hint: "⋮ on a note in the sidebar → Move to.",
           cards: [],
           custom: true,
         };
@@ -635,57 +595,6 @@ export function NotesHubClient({
   const handleDragCancel = () => {
     setDragLabel(null);
     setDragKind(null);
-  };
-
-  const deleteSelected = async () => {
-    if (busy || selectedKeys.size === 0) return;
-    const selected = allCards.filter((c) => selectedKeys.has(c.key));
-    const hasLive = selected.some((c) => c.ref?.kind === "live");
-    const ok = await confirmDialog({
-      title: `Delete ${selectedKeys.size} note${selectedKeys.size === 1 ? "" : "s"}?`,
-      body: hasLive
-        ? "This cannot be undone. Live and paused recordings will be removed entirely — including their transcript and notes. Tutor sessions are deleted; course notes are cleared."
-        : "This cannot be undone. Tutor sessions and live lectures are removed entirely; course notes are cleared.",
-      confirmLabel: "Delete",
-      tone: "danger",
-    });
-    if (!ok) return;
-
-    const items: NoteHubRef[] = [];
-    for (const key of selectedKeys) {
-      const card = allCards.find((c) => c.key === key);
-      if (card?.ref) items.push(card.ref);
-    }
-    if (items.length === 0) return;
-
-    setBusy(true);
-    try {
-      const res = await fetch("/api/notes/bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "delete", items }),
-      });
-      if (res.ok) {
-        const removed = new Set(selectedKeys);
-        setSections((prev) => {
-          const next = prev.map((s) => ({
-            ...s,
-            cards: s.cards.filter((c) => !removed.has(c.key)),
-          }));
-          const stillHasActive = next.some(
-            (s) => s.id === activeSectionId && s.cards.length > 0
-          );
-          if (!stillHasActive) {
-            setActiveSectionId(defaultActiveSection(next));
-          }
-          return next;
-        });
-        exitManage();
-        router.refresh();
-      }
-    } finally {
-      setBusy(false);
-    }
   };
 
   const renameNote = async (card: NoteDocCardData) => {
@@ -882,7 +791,7 @@ export function NotesHubClient({
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
               Nothing in this section yet.
               {isCustomSection(activeSection)
-                ? " Use ⋮ on a note → Move to, or drag a note onto this folder."
+                ? " Open the sidebar note ⋮ menu → Move to."
                 : ""}
             </p>
             {canCreateInSection ? (
@@ -899,9 +808,6 @@ export function NotesHubClient({
         ) : (
           <NotesDocGrid
             cards={activeSection.cards}
-            manageMode={manageMode}
-            selectedKeys={selectedKeys}
-            onToggleSelect={toggleSelect}
             draggableNotes={draggableNotes}
             onRenameNote={(c) => void renameNote(c)}
             onDeleteNote={(c) => void deleteNote(c)}
@@ -916,77 +822,14 @@ export function NotesHubClient({
 
   const toolbar = (
     <div className="flex flex-wrap items-center justify-end gap-2">
-      {manageMode ? (
-        <>
-          {movableSelected.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs text-zinc-500">Move to</span>
-              {moveTargets.map((target) => (
-                <button
-                  key={target.id ?? "standalone"}
-                  type="button"
-                  onClick={() => void moveSelected(target.id)}
-                  disabled={busy}
-                  className="rounded-full border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                >
-                  {target.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <button
-            type="button"
-            onClick={selectAll}
-            className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
-          >
-            Select all
-          </button>
-          <button
-            type="button"
-            onClick={clearSelection}
-            className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
-          >
-            Clear
-          </button>
-          <button
-            type="button"
-            onClick={() => void deleteSelected()}
-            disabled={selectedKeys.size === 0 || busy}
-            className="rounded-full bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
-          >
-            {busy
-              ? "Deleting…"
-              : `Delete${selectedKeys.size > 0 ? ` (${selectedKeys.size})` : ""}`}
-          </button>
-          <button
-            type="button"
-            onClick={exitManage}
-            className="rounded-full px-3 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-          >
-            Done
-          </button>
-        </>
-      ) : (
-        <>
-          {!empty && deletableCards.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => setManageMode(true)}
-              className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            >
-              Select / Move
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => void createNote()}
-            disabled={creating}
-            className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow transition hover:from-violet-700 hover:to-fuchsia-700 disabled:opacity-60"
-          >
-            {creating ? "Creating…" : "+ New note"}
-          </button>
-        </>
-      )}
+      <button
+        type="button"
+        onClick={() => void createNote()}
+        disabled={creating}
+        className="inline-flex shrink-0 items-center rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow transition hover:from-violet-700 hover:to-fuchsia-700 disabled:opacity-60"
+      >
+        {creating ? "Creating…" : "+ New note"}
+      </button>
     </div>
   );
 
@@ -1052,9 +895,6 @@ export function NotesHubClient({
                 sections={sections}
                 activeSectionId={activeSectionId}
                 onSectionSelect={setActiveSectionId}
-                manageMode={manageMode}
-                selectedKeys={selectedKeys}
-                onToggleSelect={toggleSelect}
                 onAddSection={() => void addSection()}
                 onRenameSection={(s) => void renameSection(s)}
                 onDeleteSection={(s) => void deleteSection(s)}
@@ -1092,9 +932,6 @@ export function NotesHubClient({
               sections={sections}
               activeSectionId={activeSectionId}
               onSectionSelect={setActiveSectionId}
-              manageMode={manageMode}
-              selectedKeys={selectedKeys}
-              onToggleSelect={toggleSelect}
               onAddSection={() => void addSection()}
               onRenameSection={(s) => void renameSection(s)}
               onDeleteSection={(s) => void deleteSection(s)}

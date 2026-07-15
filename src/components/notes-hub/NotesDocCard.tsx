@@ -91,7 +91,7 @@ export function NoteDocCard({
   const canDrag =
     draggableNotes &&
     !manageMode &&
-    card.ref?.kind === "standalone" &&
+    Boolean(card.ref) &&
     card.deletable !== false;
 
   const {
@@ -178,7 +178,7 @@ export function NoteDocCard({
       </Link>
       {!manageMode && (onRenameNote || onDeleteNote || onMoveNote) ? (
         <div
-          className="absolute bottom-2 right-1 z-10 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+          className="absolute bottom-2 right-1 z-10"
           onClick={(e) => e.preventDefault()}
           onMouseDown={(e) => e.stopPropagation()}
         >

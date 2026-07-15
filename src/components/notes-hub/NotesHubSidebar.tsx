@@ -225,9 +225,9 @@ export function NoteActionsMenu({
 }) {
   if (card.deletable === false) return null;
   const canMove =
-    card.ref?.kind === "standalone" &&
+    Boolean(card.ref) &&
     Boolean(onMove) &&
-    (moveTargets?.length || onMoveToNewSection);
+    Boolean(moveTargets?.length || onMoveToNewSection);
 
   const items = [
     ...(onRename && noteCanRename(card)
@@ -302,7 +302,7 @@ function NoteListItem({
   const canDrag =
     draggableNotes &&
     !manageMode &&
-    card.ref?.kind === "standalone" &&
+    Boolean(card.ref) &&
     card.deletable !== false;
 
   const {
@@ -430,6 +430,7 @@ function SortableSectionRow({
   draggableNotes,
   noteDropDisabled,
   sortDisabled,
+  moveReady,
 }: {
   section: NoteHubSection;
   meta: { icon: string; emptyLabel: string };
@@ -452,11 +453,14 @@ function SortableSectionRow({
   draggableNotes?: boolean;
   noteDropDisabled?: boolean;
   sortDisabled?: boolean;
+  /** Select mode with notes ready to move — highlight droppable folders. */
+  moveReady?: boolean;
 }) {
   const acceptsNotes = sectionAcceptsNoteDropFn(section);
   const custom = isCustomSection(section);
-  // My notes is an all-notes view — listing every note in the sidebar would get huge.
-  const showNoteList = section.id !== "standalone";
+  // List notes under every section so Move lives on the sidebar ⋮ menu.
+  const showNoteList = true;
+  const showAsMoveTarget = false;
 
   const {
     attributes,
@@ -493,13 +497,21 @@ function SortableSectionRow({
     <li ref={setRefs} style={style}>
       <div
         ref={acceptsNotes && !noteDropDisabled ? setDropRef : undefined}
-        className={`relative ${isOver && acceptsNotes && !noteDropDisabled ? "rounded-xl ring-2 ring-violet-400 dark:ring-violet-500" : ""}`}
+        className={`relative ${
+          isOver && acceptsNotes && !noteDropDisabled
+            ? "rounded-xl ring-2 ring-violet-400 dark:ring-violet-500"
+            : showAsMoveTarget
+              ? "rounded-xl ring-1 ring-violet-300/80 dark:ring-violet-700/80"
+              : ""
+        }`}
       >
         <div
           className={`group flex items-center gap-0.5 rounded-xl transition ${
             isActive
               ? "bg-violet-50 dark:bg-violet-950/40"
-              : "hover:bg-zinc-100 dark:hover:bg-zinc-800/60"
+              : showAsMoveTarget
+                ? "bg-violet-50/70 hover:bg-violet-100 dark:bg-violet-950/30 dark:hover:bg-violet-950/50"
+                : "hover:bg-zinc-100 dark:hover:bg-zinc-800/60"
           }`}
         >
           {!sortDisabled ? (
@@ -526,6 +538,11 @@ function SortableSectionRow({
                 : "font-medium text-zinc-700 dark:text-zinc-300"
             }`}
             aria-expanded={showNoteList ? isOpen : undefined}
+            title={
+              showAsMoveTarget
+                ? `Move selected notes to ${section.title}`
+                : undefined
+            }
           >
             {onChangeSectionEmoji ? (
               <span
@@ -646,6 +663,7 @@ export function NotesHubSidebar({
   addingSection,
   draggableNotes,
   dragKind,
+  moveReady,
 }: {
   sections: NoteHubSection[];
   activeSectionId: string;
@@ -665,21 +683,17 @@ export function NotesHubSidebar({
   addingSection?: boolean;
   draggableNotes?: boolean;
   dragKind?: "note" | "section" | null;
+  moveReady?: boolean;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     const active = sections.find((s) => s.id === activeSectionId);
-    // Don't expand My notes — it lists every note and gets too long.
-    if (active && active.id !== "standalone") initial.add(active.id);
-    else {
-      const firstExpandable = sections.find((s) => s.id !== "standalone");
-      if (firstExpandable) initial.add(firstExpandable.id);
-    }
+    if (active) initial.add(active.id);
+    else if (sections[0]) initial.add(sections[0].id);
     return initial;
   });
 
   useEffect(() => {
-    if (activeSectionId === "standalone") return;
     setExpanded((prev) => {
       if (prev.has(activeSectionId)) return prev;
       const next = new Set(prev);
@@ -709,9 +723,13 @@ export function NotesHubSidebar({
       <p className="mb-2 hidden text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400 md:block">
         Sections
       </p>
-      {draggableNotes && !sortDisabled ? (
+      {moveReady ? (
+        <p className="mb-2 text-[10px] leading-relaxed text-violet-600 dark:text-violet-300">
+          Click My notes or a folder to move the selected notes
+        </p>
+      ) : draggableNotes && !sortDisabled ? (
         <p className="mb-2 hidden text-[10px] leading-relaxed text-zinc-400 md:block">
-          Drag ≡ to reorder any section · drag notes onto My notes or a folder
+          Drag ≡ to reorder · open a section and use ⋮ → Move to
         </p>
       ) : null}
       <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
@@ -757,6 +775,7 @@ export function NotesHubSidebar({
                 draggableNotes={draggableNotes}
                 noteDropDisabled={noteDropDisabled}
                 sortDisabled={sortDisabled}
+                moveReady={moveReady}
               />
             );
           })}
