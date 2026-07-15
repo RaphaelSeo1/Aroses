@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { useDraggable } from "@dnd-kit/core";
+import { NoteCardPreview } from "@/components/notes-hub/NoteCardPreview";
 import { NoteActionsMenu } from "@/components/notes-hub/NotesHubSidebar";
 import type { NoteMoveTarget } from "@/components/notes-hub/NotesHubSidebar";
 import type { NoteDocCardData } from "@/lib/notes/hub-types";
@@ -15,17 +16,9 @@ const CHIP_TONES: Record<string, string> = {
 function CardInner({ card }: { card: NoteDocCardData }) {
   return (
     <>
-      <div className="relative aspect-[4/3] w-full shrink-0 overflow-hidden border-b border-zinc-100 bg-[#fafafa] p-3 dark:border-zinc-800 dark:bg-zinc-900/60">
+      <div className="relative aspect-[4/3] w-full shrink-0 overflow-hidden border-b border-zinc-100 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         {card.preview ? (
-          <div className="pointer-events-none absolute inset-3 select-none space-y-1.5 overflow-hidden opacity-90">
-            <div className="h-1.5 w-2/3 rounded-sm bg-zinc-300/80 dark:bg-zinc-600/60" />
-            <div className="h-1 w-full rounded-sm bg-zinc-200/90 dark:bg-zinc-700/50" />
-            <div className="h-1 w-[92%] rounded-sm bg-zinc-200/90 dark:bg-zinc-700/50" />
-            <div className="h-1 w-[85%] rounded-sm bg-zinc-200/90 dark:bg-zinc-700/50" />
-            <p className="mt-1 line-clamp-4 text-[9px] leading-[1.35] text-zinc-500 dark:text-zinc-400">
-              {card.preview}
-            </p>
-          </div>
+          <NoteCardPreview markdown={card.preview} />
         ) : (
           <div className="flex h-full items-center justify-center">
             <p className="text-[10px] italic text-zinc-400 dark:text-zinc-600">
@@ -34,12 +27,12 @@ function CardInner({ card }: { card: NoteDocCardData }) {
           </div>
         )}
         {card.isLive ? (
-          <span className="absolute right-2 top-2 rounded-full bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+          <span className="absolute right-2 top-2 z-10 rounded-full bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
             Live
           </span>
         ) : card.chip ? (
           <span
-            className={`absolute right-2 top-2 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${CHIP_TONES[card.chip.tone]}`}
+            className={`absolute right-2 top-2 z-10 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${CHIP_TONES[card.chip.tone]}`}
           >
             {card.chip.label}
           </span>

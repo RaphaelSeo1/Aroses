@@ -5,6 +5,7 @@ import { NotesHubClient } from "@/components/notes-hub/NotesHubClient";
 import type { NoteDocCardData, NoteHubSection } from "@/lib/notes/hub-types";
 import { customSectionId, isCustomSection, parseNoteFolders } from "@/lib/notes/hub-types";
 import { applySectionOrder } from "@/lib/notes/hub-layout";
+import { hubNotePreviewMarkdown } from "@/lib/notes/hub-note-preview";
 import { buildNoteSearchText } from "@/lib/notes/note-search";
 import { createClient } from "@/lib/supabase/server";
 
@@ -19,13 +20,6 @@ function formatDate(iso: string | null | undefined): string {
     day: "numeric",
     year: "numeric",
   });
-}
-
-function preview(text: unknown, max = 180): string | null {
-  if (typeof text !== "string") return null;
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (!clean) return null;
-  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
 function materialTitle(fileName: string | null | undefined): string {
@@ -47,7 +41,7 @@ export default async function NotesHubPage() {
       supabase
         .from("user_notes")
         .select(
-          "id, title, content_text, updated_at, course_id, ingest_job_id, section_id, deleted_at"
+          "id, title, content_text, content_json, updated_at, course_id, ingest_job_id, section_id, deleted_at"
         )
         .eq("user_id", user.id)
         .is("deleted_at", null)
@@ -62,7 +56,7 @@ export default async function NotesHubPage() {
       supabase
         .from("live_lecture_sessions")
         .select(
-          "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text, deleted_at"
+          "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text, notes_json, deleted_at"
         )
         .eq("user_id", user.id)
         .is("deleted_at", null)
@@ -71,7 +65,7 @@ export default async function NotesHubPage() {
       supabase
         .from("tutor_sessions")
         .select(
-          "id, title, topic, status, started_at, updated_at, live_notes_text, deleted_at"
+          "id, title, topic, status, started_at, updated_at, live_notes_text, live_notes_json, deleted_at"
         )
         .eq("user_id", user.id)
         .is("deleted_at", null)
@@ -79,7 +73,7 @@ export default async function NotesHubPage() {
         .limit(100),
       supabase
         .from("user_course_notes")
-        .select("material_id, content_text, updated_at, deleted_at")
+        .select("material_id, content_text, content_json, updated_at, deleted_at")
         .eq("user_id", user.id)
         .is("deleted_at", null)
         .order("updated_at", { ascending: false })
@@ -96,7 +90,7 @@ export default async function NotesHubPage() {
     const fallback = await supabase
       .from("user_notes")
       .select(
-        "id, title, content_text, updated_at, course_id, ingest_job_id, section_id"
+        "id, title, content_text, content_json, updated_at, course_id, ingest_job_id, section_id"
       )
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
@@ -106,7 +100,7 @@ export default async function NotesHubPage() {
     const trashedRes = await supabase
       .from("user_notes")
       .select(
-        "id, title, content_text, updated_at, course_id, ingest_job_id, section_id, deleted_at"
+        "id, title, content_text, content_json, updated_at, course_id, ingest_job_id, section_id, deleted_at"
       )
       .eq("user_id", user.id)
       .not("deleted_at", "is", null)
@@ -127,7 +121,7 @@ export default async function NotesHubPage() {
     const fallback = await supabase
       .from("live_lecture_sessions")
       .select(
-        "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text"
+        "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text, notes_json"
       )
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
@@ -137,7 +131,7 @@ export default async function NotesHubPage() {
     const trashedRes = await supabase
       .from("live_lecture_sessions")
       .select(
-        "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text, deleted_at"
+        "id, course_id, user_note_id, title, status, started_at, updated_at, notes_text, notes_json, deleted_at"
       )
       .eq("user_id", user.id)
       .not("deleted_at", "is", null)
@@ -152,7 +146,7 @@ export default async function NotesHubPage() {
     const fallback = await supabase
       .from("tutor_sessions")
       .select(
-        "id, title, topic, status, started_at, updated_at, live_notes_text"
+        "id, title, topic, status, started_at, updated_at, live_notes_text, live_notes_json"
       )
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
@@ -162,7 +156,7 @@ export default async function NotesHubPage() {
     const trashedRes = await supabase
       .from("tutor_sessions")
       .select(
-        "id, title, topic, status, started_at, updated_at, live_notes_text, deleted_at"
+        "id, title, topic, status, started_at, updated_at, live_notes_text, live_notes_json, deleted_at"
       )
       .eq("user_id", user.id)
       .not("deleted_at", "is", null)
@@ -179,7 +173,7 @@ export default async function NotesHubPage() {
   ) {
     const fallback = await supabase
       .from("user_course_notes")
-      .select("material_id, content_text, updated_at")
+      .select("material_id, content_text, content_json, updated_at")
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false })
       .limit(100);
@@ -187,7 +181,7 @@ export default async function NotesHubPage() {
   } else if (!courseNotesRes.error) {
     const trashedRes = await supabase
       .from("user_course_notes")
-      .select("material_id, content_text, updated_at, deleted_at")
+      .select("material_id, content_text, content_json, updated_at, deleted_at")
       .eq("user_id", user.id)
       .not("deleted_at", "is", null)
       .order("deleted_at", { ascending: false })
@@ -297,7 +291,10 @@ export default async function NotesHubPage() {
           : n.ingest_job_id
             ? "Course build started"
             : folderTitle,
-      preview: preview(n.content_text),
+      preview: hubNotePreviewMarkdown(
+        (n as { content_json?: unknown }).content_json,
+        n.content_text
+      ),
       searchText: buildNoteSearchText(
         (n.title as string) || "Untitled note",
         n.content_text
@@ -362,7 +359,10 @@ export default async function NotesHubPage() {
       href: `/dashboard/courses/${s.course_id}/live-notes/${s.id}`,
       title: (s.title as string) || "Live lecture",
       subtitle: courseTitleById.get(s.course_id as string) ?? null,
-      preview: preview(s.notes_text),
+      preview: hubNotePreviewMarkdown(
+        (s as { notes_json?: unknown }).notes_json,
+        s.notes_text
+      ),
       searchText: buildNoteSearchText(
         (s.title as string) || "Live lecture",
         s.notes_text
@@ -384,7 +384,10 @@ export default async function NotesHubPage() {
       title,
       subtitle:
         typeof s.topic === "string" && s.topic.trim() ? s.topic.trim() : null,
-      preview: preview(s.live_notes_text),
+      preview: hubNotePreviewMarkdown(
+        (s as { live_notes_json?: unknown }).live_notes_json,
+        s.live_notes_text
+      ),
       searchText: buildNoteSearchText(title, s.live_notes_text),
       dateLabel: formatDate((s.started_at as string) ?? (s.updated_at as string)),
       ref: { kind: "tutor", id: s.id as string },
@@ -402,7 +405,10 @@ export default async function NotesHubPage() {
       subtitle: material
         ? (courseTitleById.get(material.course_id) ?? null)
         : null,
-      preview: preview(n.content_text),
+      preview: hubNotePreviewMarkdown(
+        (n as { content_json?: unknown }).content_json,
+        n.content_text
+      ),
       searchText: buildNoteSearchText(title, n.content_text),
       dateLabel: formatDate(n.updated_at as string),
       ref: { kind: "course", materialId: n.material_id as string },
@@ -506,7 +512,10 @@ export default async function NotesHubPage() {
         href: `/notes/doc/${noteId}`,
         title: (n.title as string) || "Untitled note",
         subtitle: "In Recently deleted",
-        preview: preview(n.content_text),
+        preview: hubNotePreviewMarkdown(
+          (n as { content_json?: unknown }).content_json,
+          n.content_text
+        ),
         searchText: buildNoteSearchText(
           (n.title as string) || "Untitled note",
           n.content_text
@@ -530,7 +539,10 @@ export default async function NotesHubPage() {
           href: `/dashboard/courses/${s.course_id}/live-notes/${s.id}`,
           title: (s.title as string) || "Live lecture",
           subtitle: "In Recently deleted",
-          preview: preview(s.notes_text),
+          preview: hubNotePreviewMarkdown(
+            (s as { notes_json?: unknown }).notes_json,
+            s.notes_text
+          ),
           searchText: buildNoteSearchText(
             (s.title as string) || "Live lecture",
             s.notes_text
@@ -554,7 +566,10 @@ export default async function NotesHubPage() {
         href: `/notes/tutor/${s.id}`,
         title,
         subtitle: "In Recently deleted",
-        preview: preview(s.live_notes_text),
+        preview: hubNotePreviewMarkdown(
+          (s as { live_notes_json?: unknown }).live_notes_json,
+          s.live_notes_text
+        ),
         searchText: buildNoteSearchText(title, s.live_notes_text),
         dateLabel: formatDate(deletedAt),
         ref: { kind: "tutor" as const, id: s.id as string },
@@ -575,7 +590,10 @@ export default async function NotesHubPage() {
         href: `/notes/material/${n.material_id}`,
         title,
         subtitle: "In Recently deleted",
-        preview: preview(n.content_text),
+        preview: hubNotePreviewMarkdown(
+          (n as { content_json?: unknown }).content_json,
+          n.content_text
+        ),
         searchText: buildNoteSearchText(title, n.content_text),
         dateLabel: formatDate(deletedAt),
         ref: { kind: "course" as const, materialId: n.material_id as string },
