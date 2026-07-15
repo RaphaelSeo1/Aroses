@@ -55,6 +55,10 @@ function applyMoveToSections(
 ): NoteHubSection[] {
   const targetId =
     targetSectionId === null ? "standalone" : customSectionId(targetSectionId);
+  const folderLabel =
+    targetSectionId === null
+      ? null
+      : sections.find((s) => s.id === targetId)?.title ?? null;
 
   const moving: NoteHubSection["cards"] = [];
   const seen = new Set<string>();
@@ -67,17 +71,35 @@ function applyMoveToSections(
   }
 
   return sections.map((section) => {
-    // My notes is an all-notes view — keep moved cards there.
+    // My notes is an all-notes view — keep moved cards there, but update
+    // the folder subtitle so the move is visible.
     if (section.id === "standalone") {
       const byKey = new Map(section.cards.map((c) => [c.key, c]));
-      for (const card of moving) byKey.set(card.key, card);
+      for (const card of moving) {
+        const keepCourseSub =
+          card.chip?.label === "Course" ||
+          card.subtitle === "Course build started";
+        byKey.set(card.key, {
+          ...card,
+          subtitle: keepCourseSub ? card.subtitle : folderLabel,
+        });
+      }
       return { ...section, cards: Array.from(byKey.values()) };
     }
 
     if (isCustomSection(section)) {
       const remaining = section.cards.filter((c) => !movedKeys.has(c.key));
       if (section.id === targetId) {
-        return { ...section, cards: [...moving, ...remaining] };
+        const labeled = moving.map((card) => {
+          const keepCourseSub =
+            card.chip?.label === "Course" ||
+            card.subtitle === "Course build started";
+          return {
+            ...card,
+            subtitle: keepCourseSub ? card.subtitle : null,
+          };
+        });
+        return { ...section, cards: [...labeled, ...remaining] };
       }
       return { ...section, cards: remaining };
     }
@@ -272,7 +294,7 @@ export function NotesHubClient({
       const newSection: NoteHubSection = {
         id: customSectionId(data.section.id),
         title: data.section.title,
-        hint: "Use Move in Select mode to add notes here.",
+        hint: "⋮ on a note → Move to, or drag notes here.",
         cards: [],
         custom: true,
       };
@@ -458,6 +480,61 @@ export function NotesHubClient({
     );
     clearSelection();
   };
+
+  const moveSingleNote = useCallback(
+    (card: NoteDocCardData, sectionId: string | null) => {
+      void moveCardsToSection([card.key], sectionId);
+    },
+    [moveCardsToSection]
+  );
+
+  const moveNoteToNewSection = useCallback(
+    async (card: NoteDocCardData) => {
+      if (busy || card.ref?.kind !== "standalone") return;
+      const title = await promptDialog({
+        title: "New section",
+        label: "Section name",
+        placeholder: "e.g. Midterm prep, Biology",
+        defaultValue: "",
+      });
+      if (!title?.trim()) return;
+
+      setBusy(true);
+      try {
+        const res = await fetch("/api/notes/sections", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: title.trim() }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          section?: { id: string; title: string };
+        };
+        if (!res.ok || !data.section) return;
+
+        const newSection: NoteHubSection = {
+          id: customSectionId(data.section.id),
+          title: data.section.title,
+          hint: "⋮ on a note → Move to, or drag notes here.",
+          cards: [],
+          custom: true,
+        };
+
+        setSections((prev) => {
+          const standaloneIdx = prev.findIndex((s) => s.id === "standalone");
+          const insertAt = standaloneIdx >= 0 ? standaloneIdx + 1 : 0;
+          const next = [...prev];
+          next.splice(insertAt, 0, newSection);
+          void persistHubLayout(next.map((s) => s.id));
+          return next;
+        });
+
+        await moveCardsToSection([card.key], data.section.id);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, moveCardsToSection, persistHubLayout]
+  );
 
   const reorderSections = async (orderedIds: string[]) => {
     if (orderedIds.length < 2) return;
@@ -804,6 +881,9 @@ export function NotesHubClient({
           <div className="rounded-2xl border border-dashed border-zinc-200 bg-white/60 px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950/40">
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
               Nothing in this section yet.
+              {isCustomSection(activeSection)
+                ? " Use ⋮ on a note → Move to, or drag a note onto this folder."
+                : ""}
             </p>
             {canCreateInSection ? (
               <button
@@ -825,6 +905,9 @@ export function NotesHubClient({
             draggableNotes={draggableNotes}
             onRenameNote={(c) => void renameNote(c)}
             onDeleteNote={(c) => void deleteNote(c)}
+            onMoveNote={moveSingleNote}
+            moveTargets={moveTargets}
+            onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
           />
         )}
       </section>
@@ -891,7 +974,7 @@ export function NotesHubClient({
               onClick={() => setManageMode(true)}
               className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
             >
-              Select
+              Select / Move
             </button>
           ) : null}
           <button
@@ -980,6 +1063,9 @@ export function NotesHubClient({
                 }
                 onRenameNote={(c) => void renameNote(c)}
                 onDeleteNote={(c) => void deleteNote(c)}
+                onMoveNote={moveSingleNote}
+                moveTargets={moveTargets}
+                onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
                 addingSection={addingSection}
                 draggableNotes
                 dragKind={dragKind}
@@ -1017,6 +1103,9 @@ export function NotesHubClient({
               }
               onRenameNote={(c) => void renameNote(c)}
               onDeleteNote={(c) => void deleteNote(c)}
+              onMoveNote={moveSingleNote}
+              moveTargets={moveTargets}
+              onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
               addingSection={addingSection}
             />
           </aside>

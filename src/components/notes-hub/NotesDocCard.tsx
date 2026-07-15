@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { useDraggable } from "@dnd-kit/core";
 import { NoteActionsMenu } from "@/components/notes-hub/NotesHubSidebar";
+import type { NoteMoveTarget } from "@/components/notes-hub/NotesHubSidebar";
 import type { NoteDocCardData } from "@/lib/notes/hub-types";
 import { noteDragId } from "@/lib/notes/hub-types";
 
@@ -72,6 +73,9 @@ export function NoteDocCard({
   draggableNotes = false,
   onRenameNote,
   onDeleteNote,
+  onMoveNote,
+  moveTargets,
+  onMoveToNewSection,
 }: {
   card: NoteDocCardData;
   manageMode?: boolean;
@@ -80,6 +84,9 @@ export function NoteDocCard({
   draggableNotes?: boolean;
   onRenameNote?: (card: NoteDocCardData) => void;
   onDeleteNote?: (card: NoteDocCardData) => void;
+  onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
+  moveTargets?: NoteMoveTarget[];
+  onMoveToNewSection?: (card: NoteDocCardData) => void;
 }) {
   const canDrag =
     draggableNotes &&
@@ -169,7 +176,7 @@ export function NoteDocCard({
         {dragHandle}
         <CardInner card={card} />
       </Link>
-      {!manageMode && (onRenameNote || onDeleteNote) ? (
+      {!manageMode && (onRenameNote || onDeleteNote || onMoveNote) ? (
         <div
           className="absolute bottom-2 right-1 z-10 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
           onClick={(e) => e.preventDefault()}
@@ -179,6 +186,9 @@ export function NoteDocCard({
             card={card}
             onRename={onRenameNote}
             onDelete={onDeleteNote}
+            onMove={onMoveNote}
+            moveTargets={moveTargets}
+            onMoveToNewSection={onMoveToNewSection}
           />
         </div>
       ) : null}
@@ -194,6 +204,9 @@ export function NotesDocGrid({
   draggableNotes,
   onRenameNote,
   onDeleteNote,
+  onMoveNote,
+  moveTargets,
+  onMoveToNewSection,
 }: {
   cards: NoteDocCardData[];
   manageMode?: boolean;
@@ -202,6 +215,9 @@ export function NotesDocGrid({
   draggableNotes?: boolean;
   onRenameNote?: (card: NoteDocCardData) => void;
   onDeleteNote?: (card: NoteDocCardData) => void;
+  onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
+  moveTargets?: NoteMoveTarget[];
+  onMoveToNewSection?: (card: NoteDocCardData) => void;
 }) {
   return (
     <div className="grid grid-cols-2 items-stretch gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
@@ -217,6 +233,9 @@ export function NotesDocGrid({
           draggableNotes={draggableNotes}
           onRenameNote={onRenameNote}
           onDeleteNote={onDeleteNote}
+          onMoveNote={onMoveNote}
+          moveTargets={moveTargets}
+          onMoveToNewSection={onMoveToNewSection}
         />
       ))}
     </div>

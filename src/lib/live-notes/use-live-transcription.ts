@@ -881,6 +881,38 @@ export function useLiveLectureTranscription(options: {
       runningSinceRef.current = null;
     }
     setElapsedMs(currentElapsedMs());
+
+    const source = lastSourceRef.current;
+    const stream = streamRef.current;
+    if (source === "mic" && stream) {
+      // Fully release the mic so the browser stops monitoring / the tab mic
+      // indicator goes away. Resume re-acquires via getUserMedia.
+      try {
+        if (recorder && recorder.state !== "inactive") {
+          recorder.stop();
+        }
+      } catch {
+        /* ignore */
+      }
+      recorderRef.current = null;
+      for (const t of stream.getTracks()) {
+        try {
+          t.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      streamRef.current = null;
+      setMediaStream(null);
+      setHasVideo(false);
+    } else if (stream) {
+      // Tab/system: keep the share alive for preview, but mute audio so
+      // nothing is transcribed while paused.
+      for (const t of stream.getAudioTracks()) {
+        t.enabled = false;
+      }
+    }
+
     setStatusBoth("paused");
     void saveTranscriptNow();
     void fetch(`/api/live-notes/${sessionId}`, {
@@ -915,6 +947,7 @@ export function useLiveLectureTranscription(options: {
 
     // Fast path: same live socket, same paused recorder, live track — a
     // plain MediaRecorder.resume() continues the original WebM stream.
+    // (Mic pause stops tracks on purpose, so this path is tab/system only.)
     const currentWs = socketRef.current;
     const recorder = recorderRef.current;
     const track = streamRef.current?.getAudioTracks()[0];
@@ -929,6 +962,10 @@ export function useLiveLectureTranscription(options: {
     ) {
       let resumed = false;
       try {
+        track.enabled = true;
+        for (const t of streamRef.current?.getAudioTracks() ?? []) {
+          t.enabled = true;
+        }
         recorder.resume();
         // Re-read via a widened type: TS narrowed `state` to "paused" from
         // the guard above and doesn't model resume()'s mutation.

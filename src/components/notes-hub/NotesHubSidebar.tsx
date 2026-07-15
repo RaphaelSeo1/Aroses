@@ -86,18 +86,23 @@ function ItemMoreMenu({
   ariaLabel: string;
   items: Array<{
     label: string;
-    onSelect: () => void;
+    onSelect?: () => void;
     tone?: "danger";
+    children?: Array<{ label: string; onSelect: () => void }>;
   }>;
   align?: "left" | "right";
 }) {
   const [open, setOpen] = useState(false);
+  const [openSub, setOpenSub] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const onPointer = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setOpen(false);
+        setOpenSub(null);
+      }
     };
     window.addEventListener("mousedown", onPointer);
     return () => window.removeEventListener("mousedown", onPointer);
@@ -110,6 +115,7 @@ function ItemMoreMenu({
         onClick={(e) => {
           e.stopPropagation();
           setOpen((v) => !v);
+          setOpenSub(null);
         }}
         className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-black/5 hover:text-zinc-600 dark:hover:bg-white/5 dark:hover:text-zinc-300"
         aria-label={ariaLabel}
@@ -119,28 +125,74 @@ function ItemMoreMenu({
       </button>
       {open ? (
         <div
-          className={`absolute top-full z-30 mt-1 min-w-[10rem] overflow-hidden rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${
+          className={`absolute top-full z-30 mt-1 min-w-[11rem] overflow-visible rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${
             align === "right" ? "right-0" : "left-0"
           }`}
         >
-          {items.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-                item.onSelect();
-              }}
-              className={`flex w-full px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
-                item.tone === "danger"
-                  ? "text-rose-600 dark:text-rose-400 dark:hover:bg-rose-950/40"
-                  : "text-zinc-700 dark:text-zinc-200"
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
+          {items.map((item) =>
+            item.children?.length ? (
+              <div key={item.label} className="relative">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenSub((cur) =>
+                      cur === item.label ? null : item.label
+                    );
+                  }}
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  <span>{item.label}</span>
+                  <span className="text-zinc-400" aria-hidden>
+                    ›
+                  </span>
+                </button>
+                {openSub === item.label ? (
+                  <div
+                    className={`absolute top-0 z-40 max-h-64 min-w-[11rem] overflow-auto rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${
+                      align === "right"
+                        ? "right-full mr-1"
+                        : "left-full ml-1"
+                    }`}
+                  >
+                    {item.children.map((child) => (
+                      <button
+                        key={child.label}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpen(false);
+                          setOpenSub(null);
+                          child.onSelect();
+                        }}
+                        className="flex w-full px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                      >
+                        {child.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <button
+                key={item.label}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  setOpenSub(null);
+                  item.onSelect?.();
+                }}
+                className={`flex w-full px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${
+                  item.tone === "danger"
+                    ? "text-rose-600 dark:text-rose-400 dark:hover:bg-rose-950/40"
+                    : "text-zinc-700 dark:text-zinc-200"
+                }`}
+              >
+                {item.label}
+              </button>
+            )
+          )}
         </div>
       ) : null}
     </div>
@@ -152,21 +204,55 @@ function noteCanRename(card: NoteDocCardData): boolean {
   return kind === "standalone" || kind === "live" || kind === "tutor";
 }
 
+export type NoteMoveTarget = { id: string | null; label: string };
+
 export function NoteActionsMenu({
   card,
   onRename,
   onDelete,
+  onMove,
+  moveTargets,
+  onMoveToNewSection,
   align = "right",
 }: {
   card: NoteDocCardData;
   onRename?: (card: NoteDocCardData) => void;
   onDelete?: (card: NoteDocCardData) => void;
+  onMove?: (card: NoteDocCardData, sectionId: string | null) => void;
+  moveTargets?: NoteMoveTarget[];
+  onMoveToNewSection?: (card: NoteDocCardData) => void;
   align?: "left" | "right";
 }) {
   if (card.deletable === false) return null;
+  const canMove =
+    card.ref?.kind === "standalone" &&
+    Boolean(onMove) &&
+    (moveTargets?.length || onMoveToNewSection);
+
   const items = [
     ...(onRename && noteCanRename(card)
       ? [{ label: "Rename", onSelect: () => onRename(card) }]
+      : []),
+    ...(canMove
+      ? [
+          {
+            label: "Move to",
+            children: [
+              ...(moveTargets ?? []).map((t) => ({
+                label: t.label,
+                onSelect: () => onMove?.(card, t.id),
+              })),
+              ...(onMoveToNewSection
+                ? [
+                    {
+                      label: "+ New section…",
+                      onSelect: () => onMoveToNewSection(card),
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ]
       : []),
     ...(onDelete
       ? [
@@ -197,6 +283,9 @@ function NoteListItem({
   draggableNotes,
   onRenameNote,
   onDeleteNote,
+  onMoveNote,
+  moveTargets,
+  onMoveToNewSection,
 }: {
   card: NoteDocCardData;
   sectionId: string;
@@ -206,6 +295,9 @@ function NoteListItem({
   draggableNotes?: boolean;
   onRenameNote?: (card: NoteDocCardData) => void;
   onDeleteNote?: (card: NoteDocCardData) => void;
+  onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
+  moveTargets?: NoteMoveTarget[];
+  onMoveToNewSection?: (card: NoteDocCardData) => void;
 }) {
   const canDrag =
     draggableNotes &&
@@ -233,6 +325,9 @@ function NoteListItem({
         card={card}
         onRename={onRenameNote}
         onDelete={onDeleteNote}
+        onMove={onMoveNote}
+        moveTargets={moveTargets}
+        onMoveToNewSection={onMoveToNewSection}
       />
     ) : null;
 
@@ -326,6 +421,9 @@ function SortableSectionRow({
   onChangeSectionEmoji,
   onRenameNote,
   onDeleteNote,
+  onMoveNote,
+  moveTargets,
+  onMoveToNewSection,
   manageMode,
   selectedKeys,
   onToggleSelect,
@@ -345,6 +443,9 @@ function SortableSectionRow({
   onChangeSectionEmoji?: (section: NoteHubSection, emoji: string) => void;
   onRenameNote?: (card: NoteDocCardData) => void;
   onDeleteNote?: (card: NoteDocCardData) => void;
+  onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
+  moveTargets?: NoteMoveTarget[];
+  onMoveToNewSection?: (card: NoteDocCardData) => void;
   manageMode?: boolean;
   selectedKeys?: Set<string>;
   onToggleSelect?: (key: string) => void;
@@ -513,6 +614,9 @@ function SortableSectionRow({
                   draggableNotes={draggableNotes}
                   onRenameNote={onRenameNote}
                   onDeleteNote={onDeleteNote}
+                  onMoveNote={onMoveNote}
+                  moveTargets={moveTargets}
+                  onMoveToNewSection={onMoveToNewSection}
                 />
               </li>
             ))
@@ -536,6 +640,9 @@ export function NotesHubSidebar({
   onChangeSectionEmoji,
   onRenameNote,
   onDeleteNote,
+  onMoveNote,
+  moveTargets,
+  onMoveToNewSection,
   addingSection,
   draggableNotes,
   dragKind,
@@ -552,6 +659,9 @@ export function NotesHubSidebar({
   onChangeSectionEmoji?: (section: NoteHubSection, emoji: string) => void;
   onRenameNote?: (card: NoteDocCardData) => void;
   onDeleteNote?: (card: NoteDocCardData) => void;
+  onMoveNote?: (card: NoteDocCardData, sectionId: string | null) => void;
+  moveTargets?: NoteMoveTarget[];
+  onMoveToNewSection?: (card: NoteDocCardData) => void;
   addingSection?: boolean;
   draggableNotes?: boolean;
   dragKind?: "note" | "section" | null;
@@ -638,6 +748,9 @@ export function NotesHubSidebar({
                 onChangeSectionEmoji={onChangeSectionEmoji}
                 onRenameNote={onRenameNote}
                 onDeleteNote={onDeleteNote}
+                onMoveNote={onMoveNote}
+                moveTargets={moveTargets}
+                onMoveToNewSection={onMoveToNewSection}
                 manageMode={manageMode}
                 selectedKeys={selectedKeys}
                 onToggleSelect={onToggleSelect}

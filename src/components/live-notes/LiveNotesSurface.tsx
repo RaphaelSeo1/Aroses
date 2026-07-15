@@ -978,7 +978,7 @@ export function LiveNotesSurface({
             </span>
           ) : status === "paused" ? (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
-              ⏸ Paused
+              ⏸ {activeSource === "mic" ? "Mic paused" : "Paused"}
             </span>
           ) : null}
           <span className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold tabular-nums text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
@@ -1038,17 +1038,27 @@ export function LiveNotesSurface({
             <button
               type="button"
               onClick={() => void pause()}
+              title={
+                activeSource === "mic"
+                  ? "Stop listening — releases the microphone until you resume"
+                  : "Pause transcription (audio is muted until you resume)"
+              }
               className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
-              Pause
+              {activeSource === "mic" ? "Pause mic" : "Pause"}
             </button>
           ) : (status === "paused" || status === "error") && started ? (
             <button
               type="button"
               onClick={() => void resume()}
+              title={
+                activeSource === "mic"
+                  ? "Start listening again — turns the microphone back on"
+                  : "Resume transcription"
+              }
               className="rounded-full bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
             >
-              Resume
+              {activeSource === "mic" ? "Start mic" : "Resume"}
             </button>
           ) : null}
 
