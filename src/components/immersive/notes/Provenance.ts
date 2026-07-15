@@ -56,6 +56,8 @@ export const PROVENANCE_BLOCK_TYPES = [
   "codeBlock",
   "callout",
   "horizontalRule",
+  "image",
+  "table",
 ];
 
 export const Provenance = Extension.create({

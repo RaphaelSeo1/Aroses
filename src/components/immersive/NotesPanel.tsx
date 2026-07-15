@@ -8,14 +8,21 @@ import Placeholder from "@tiptap/extension-placeholder";
 import Underline from "@tiptap/extension-underline";
 import Highlight from "@tiptap/extension-highlight";
 import Link from "@tiptap/extension-link";
+import Image from "@tiptap/extension-image";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Typography from "@tiptap/extension-typography";
+import TextAlign from "@tiptap/extension-text-align";
+import { Table } from "@tiptap/extension-table";
+import { TableRow } from "@tiptap/extension-table-row";
+import { TableCell } from "@tiptap/extension-table-cell";
+import { TableHeader } from "@tiptap/extension-table-header";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
+import { NotesFormatToolbar } from "./notes/NotesFormatToolbar";
 import { AI_APPEND_META, Provenance } from "./notes/Provenance";
 import { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
-import { promptDialog } from "@/components/AppDialogs";
+import { promptDialog, alertDialog } from "@/components/AppDialogs";
 import { EmojiPickerButton } from "@/components/EmojiPickerButton";
 import {
   readRoseAppendedChunkIds,
@@ -29,6 +36,11 @@ import {
   parseInlineMarkdown,
   sanitizeIncompleteInlineMarkdown,
 } from "@/lib/notes/notes-markdown";
+import {
+  imageFilesFromDataTransfer,
+  NOTE_IMAGE_MIME_TYPES,
+  uploadNoteImage,
+} from "@/lib/notes/upload-note-image";
 
 /** Highlighter palette offered in the selection bubble menu. */
 const HIGHLIGHT_COLORS: { label: string; value: string }[] = [
@@ -49,7 +61,8 @@ const HIGHLIGHT_COLORS: { label: string; value: string }[] = [
  *     typography hierarchy, document title up top.
  *   - Rich formatting: H1/H2/H3, bold/italic/underline/strike,
  *     bullet / numbered / task lists with nesting, code blocks,
- *     blockquotes, dividers, links, highlights, callouts.
+ *     blockquotes, dividers, links, highlights, callouts,
+ *     images/screenshots (paste, drop, or upload), tables, text align.
  *   - Slash-command menu (Notion-style) for inserting blocks.
  *   - Bubble menu over selections for inline formatting.
  *   - Auto-save with a subtle, fading "Saved" indicator.
@@ -339,6 +352,10 @@ export function NotesPanel({
   // Live handle to the editor so the (synchronously-defined) key handler can
   // reach commands without a use-before-define on `editor`.
   const editorInstanceRef = useRef<Editor | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const pickImageRef = useRef<() => void>(() => {});
+  const insertNoteImageRef = useRef<(file: File) => Promise<void>>(async () => {});
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   // Scrollable document-body wrapper — used by `preserveSelection` appends to
   // decide whether to follow new content (only when already near the bottom).
@@ -381,6 +398,9 @@ export function NotesPanel({
       Underline,
       Highlight.configure({ multicolor: true }),
       Typography,
+      TextAlign.configure({
+        types: ["heading", "paragraph"],
+      }),
       Link.configure({
         openOnClick: false,
         autolink: true,
@@ -390,11 +410,25 @@ export function NotesPanel({
           target: "_blank",
         },
       }),
+      Image.configure({
+        inline: false,
+        allowBase64: false,
+        HTMLAttributes: { class: "tn-img" },
+      }),
+      Table.configure({
+        resizable: true,
+        HTMLAttributes: { class: "tn-table" },
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
       TaskList,
       TaskItem.configure({ nested: true }),
       Callout,
       Provenance,
-      SlashCommand,
+      SlashCommand.configure({
+        onPickImage: () => pickImageRef.current(),
+      }),
       Placeholder.configure({
         placeholder: ({ node }) => {
           if (node.type.name === "heading") return "Heading";
@@ -408,6 +442,20 @@ export function NotesPanel({
       attributes: {
         class:
           "tn-prose max-w-none focus:outline-none min-h-[6rem] caret-zinc-700",
+      },
+      handlePaste: (_view, event) => {
+        const files = imageFilesFromDataTransfer(event.clipboardData);
+        if (files.length === 0) return false;
+        event.preventDefault();
+        void insertNoteImageRef.current(files[0]!);
+        return true;
+      },
+      handleDrop: (_view, event) => {
+        const files = imageFilesFromDataTransfer(event.dataTransfer);
+        if (files.length === 0) return false;
+        event.preventDefault();
+        void insertNoteImageRef.current(files[0]!);
+        return true;
       },
       handleKeyDown: (view, event) => {
         // Tab / Shift-Tab nest & un-nest list items (bulleted, numbered, and
@@ -472,6 +520,28 @@ export function NotesPanel({
     content: (initialContentJson as object | undefined) ?? undefined,
   });
   editorInstanceRef.current = editor;
+
+  const insertNoteImage = useCallback(async (file: File) => {
+    const ed = editorInstanceRef.current;
+    if (!ed || ed.isDestroyed) return;
+    setUploadingImage(true);
+    try {
+      const result = await uploadNoteImage(file);
+      if (!result.ok) {
+        await alertDialog({
+          title: "Couldn’t add image",
+          body: result.error,
+        });
+        return;
+      }
+      ed.chain().focus().setImage({ src: result.url }).run();
+    } finally {
+      setUploadingImage(false);
+    }
+  }, []);
+
+  insertNoteImageRef.current = insertNoteImage;
+  pickImageRef.current = () => imageInputRef.current?.click();
 
   const [streamingNotes, setStreamingNotes] = useState(false);
   const streamingChunkIdRef = useRef<string | null>(null);
@@ -1471,6 +1541,26 @@ export function NotesPanel({
             <div className="mt-5 h-px w-full bg-zinc-100" />
           </header>
 
+          {editor ? (
+            <NotesFormatToolbar
+              editor={editor}
+              uploadingImage={uploadingImage}
+              onPickImage={() => imageInputRef.current?.click()}
+            />
+          ) : null}
+
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept={NOTE_IMAGE_MIME_TYPES.join(",")}
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void insertNoteImage(file);
+              e.target.value = "";
+            }}
+          />
+
           {/* Editor */}
           {editor ? (
             <BubbleMenu
@@ -1603,7 +1693,7 @@ export function NotesPanel({
             <kbd className="rounded border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">
               /
             </kbd>{" "}
-            for commands, or toggle{" "}
+            for headings, lists, images, and tables — or paste a screenshot. Toggle{" "}
             <span className="text-zinc-500">✨ Auto-generate</span> to ask Rose
             to write in-depth notes as she teaches.
           </p>
@@ -1852,6 +1942,73 @@ export function NotesPanel({
         .tn-prose hr + h2,
         .tn-prose hr + h3 {
           margin-top: 0.85rem !important;
+        }
+
+        /* Images / screenshots */
+        .tn-prose img.tn-img,
+        .tn-prose img {
+          display: block;
+          max-width: 100%;
+          height: auto;
+          margin: 0.85rem 0;
+          border-radius: 0.65rem;
+          border: 1px solid #ececec;
+          background: #fafafa;
+        }
+
+        /* Tables */
+        .tn-prose table.tn-table,
+        .tn-prose table {
+          width: 100%;
+          border-collapse: collapse;
+          margin: 0.9rem 0;
+          table-layout: fixed;
+          overflow: hidden;
+          border-radius: 0.5rem;
+          border: 1px solid #e4e4e7;
+        }
+        .tn-prose th,
+        .tn-prose td {
+          border: 1px solid #e4e4e7;
+          padding: 0.45rem 0.65rem;
+          vertical-align: top;
+          min-width: 1em;
+          position: relative;
+        }
+        .tn-prose th {
+          background: #f4f4f5;
+          font-weight: 600;
+          text-align: left;
+        }
+        .tn-prose .selectedCell::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: rgba(139, 92, 246, 0.12);
+          pointer-events: none;
+        }
+        .tn-prose .column-resize-handle {
+          position: absolute;
+          right: -1px;
+          top: 0;
+          bottom: 0;
+          width: 3px;
+          background: #a78bfa;
+          pointer-events: none;
+        }
+
+        /* Text align */
+        .tn-prose [style*="text-align: center"],
+        .tn-prose [data-text-align="center"] {
+          text-align: center;
+        }
+        .tn-prose [style*="text-align: right"],
+        .tn-prose [data-text-align="right"] {
+          text-align: right;
+        }
+        .tn-prose [style*="text-align: left"],
+        .tn-prose [data-text-align="left"] {
+          text-align: left;
         }
 
         /* Highlight */

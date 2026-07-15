@@ -391,6 +391,29 @@ export function noteNodesToMarkdown(nodes: NoteNodeJson[]): string {
       case "horizontalRule":
         out.push("---");
         break;
+      case "image": {
+        const src =
+          typeof node.attrs?.src === "string" ? node.attrs.src.trim() : "";
+        if (src) {
+          const alt =
+            typeof node.attrs?.alt === "string" ? node.attrs.alt.trim() : "";
+          out.push(`![${alt}](${src})`);
+        }
+        break;
+      }
+      case "table": {
+        // Compact preview: flatten cell text into pipe rows.
+        const rows = (node.content ?? []) as NoteNodeJson[];
+        for (const row of rows) {
+          if (row.type !== "tableRow") continue;
+          const cells = (row.content ?? []) as NoteNodeJson[];
+          const parts = cells.map((cell) =>
+            inlineToMarkdown(cell.content).replace(/\|/g, "\\|").trim()
+          );
+          if (parts.some(Boolean)) out.push(`| ${parts.join(" | ")} |`);
+        }
+        break;
+      }
       default: {
         const text = inlineToMarkdown(node.content).trim();
         if (text) out.push(text);

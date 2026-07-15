@@ -15,131 +15,155 @@ import type { Editor, Range } from "@tiptap/core";
 /**
  * Notion-style slash command extension.
  *
- * Typing `/` at the start of a new line opens a popover menu of
- * block insertion options (headings, lists, callout, code, etc.).
- * Filter narrows as the user types — Enter / click inserts the
- * selected block at the trigger position. Esc closes.
- *
- * The Suggestion utility (`@tiptap/suggestion`) handles the
- * range/keystroke plumbing; we just provide the command list and
- * render it via a React-rendered tippy popover.
+ * Typing `/` opens a popover of block insertion options. Filter narrows as
+ * the user types — Enter / click inserts the selected block.
  */
 
 type Command = {
   title: string;
   description: string;
-  /** Lucide-style emoji for quick visual scanning. */
   icon: string;
   keywords: string[];
   run: (props: { editor: Editor; range: Range }) => void;
 };
 
-const COMMANDS: Command[] = [
-  {
-    title: "Heading 1",
-    description: "Big section title",
-    icon: "H1",
-    keywords: ["h1", "title", "heading"],
-    run: ({ editor, range }) =>
-      editor
-        .chain()
-        .focus()
-        .deleteRange(range)
-        .setNode("heading", { level: 1 })
-        .run(),
-  },
-  {
-    title: "Heading 2",
-    description: "Medium section heading",
-    icon: "H2",
-    keywords: ["h2", "subheading", "section"],
-    run: ({ editor, range }) =>
-      editor
-        .chain()
-        .focus()
-        .deleteRange(range)
-        .setNode("heading", { level: 2 })
-        .run(),
-  },
-  {
-    title: "Heading 3",
-    description: "Small subsection heading",
-    icon: "H3",
-    keywords: ["h3", "subsection"],
-    run: ({ editor, range }) =>
-      editor
-        .chain()
-        .focus()
-        .deleteRange(range)
-        .setNode("heading", { level: 3 })
-        .run(),
-  },
-  {
-    title: "Bulleted list",
-    description: "Simple bulleted list",
-    icon: "•",
-    keywords: ["bullet", "list", "ul"],
-    run: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleBulletList().run(),
-  },
-  {
-    title: "Numbered list",
-    description: "1. 2. 3. ordered list",
-    icon: "1.",
-    keywords: ["number", "ordered", "ol"],
-    run: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleOrderedList().run(),
-  },
-  {
-    title: "To-do list",
-    description: "Tick-box checklist",
-    icon: "☐",
-    keywords: ["todo", "task", "checkbox"],
-    run: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleTaskList().run(),
-  },
-  {
-    title: "Callout",
-    description: "Highlighted box with an emoji",
-    icon: "💡",
-    keywords: ["callout", "note", "warning", "info"],
-    run: ({ editor, range }) =>
-      editor
-        .chain()
-        .focus()
-        .deleteRange(range)
-        .insertContent({
-          type: "callout",
-          attrs: { emoji: "💡" },
-          content: [{ type: "paragraph" }],
-        })
-        .run(),
-  },
-  {
-    title: "Quote",
-    description: "Block quote",
-    icon: "❝",
-    keywords: ["quote", "blockquote"],
-    run: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleBlockquote().run(),
-  },
-  {
-    title: "Code block",
-    description: "Monospace code block",
-    icon: "</>",
-    keywords: ["code", "pre"],
-    run: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).toggleCodeBlock().run(),
-  },
-  {
-    title: "Divider",
-    description: "Horizontal rule",
-    icon: "—",
-    keywords: ["hr", "divider", "rule", "line"],
-    run: ({ editor, range }) =>
-      editor.chain().focus().deleteRange(range).setHorizontalRule().run(),
-  },
-];
+type SlashOptions = {
+  onPickImage?: () => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  suggestion?: Record<string, any>;
+};
+
+function buildCommands(options: SlashOptions): Command[] {
+  return [
+    {
+      title: "Heading 1",
+      description: "Big section title",
+      icon: "H1",
+      keywords: ["h1", "title", "heading"],
+      run: ({ editor, range }) =>
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .setNode("heading", { level: 1 })
+          .run(),
+    },
+    {
+      title: "Heading 2",
+      description: "Medium section heading",
+      icon: "H2",
+      keywords: ["h2", "subheading", "section"],
+      run: ({ editor, range }) =>
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .setNode("heading", { level: 2 })
+          .run(),
+    },
+    {
+      title: "Heading 3",
+      description: "Small subsection heading",
+      icon: "H3",
+      keywords: ["h3", "subsection"],
+      run: ({ editor, range }) =>
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .setNode("heading", { level: 3 })
+          .run(),
+    },
+    {
+      title: "Bulleted list",
+      description: "Simple bulleted list",
+      icon: "•",
+      keywords: ["bullet", "list", "ul"],
+      run: ({ editor, range }) =>
+        editor.chain().focus().deleteRange(range).toggleBulletList().run(),
+    },
+    {
+      title: "Numbered list",
+      description: "1. 2. 3. ordered list",
+      icon: "1.",
+      keywords: ["number", "ordered", "ol"],
+      run: ({ editor, range }) =>
+        editor.chain().focus().deleteRange(range).toggleOrderedList().run(),
+    },
+    {
+      title: "To-do list",
+      description: "Tick-box checklist",
+      icon: "☐",
+      keywords: ["todo", "task", "checkbox"],
+      run: ({ editor, range }) =>
+        editor.chain().focus().deleteRange(range).toggleTaskList().run(),
+    },
+    {
+      title: "Image",
+      description: "Upload a photo or paste a screenshot",
+      icon: "🖼",
+      keywords: ["image", "photo", "picture", "screenshot", "png", "jpg"],
+      run: ({ editor, range }) => {
+        editor.chain().focus().deleteRange(range).run();
+        options.onPickImage?.();
+      },
+    },
+    {
+      title: "Table",
+      description: "Insert a 3×3 table",
+      icon: "▦",
+      keywords: ["table", "grid", "spreadsheet"],
+      run: ({ editor, range }) =>
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+          .run(),
+    },
+    {
+      title: "Callout",
+      description: "Highlighted box with an emoji",
+      icon: "💡",
+      keywords: ["callout", "note", "warning", "info"],
+      run: ({ editor, range }) =>
+        editor
+          .chain()
+          .focus()
+          .deleteRange(range)
+          .insertContent({
+            type: "callout",
+            attrs: { emoji: "💡" },
+            content: [{ type: "paragraph" }],
+          })
+          .run(),
+    },
+    {
+      title: "Quote",
+      description: "Block quote",
+      icon: "❝",
+      keywords: ["quote", "blockquote"],
+      run: ({ editor, range }) =>
+        editor.chain().focus().deleteRange(range).toggleBlockquote().run(),
+    },
+    {
+      title: "Code block",
+      description: "Monospace code block",
+      icon: "</>",
+      keywords: ["code", "pre"],
+      run: ({ editor, range }) =>
+        editor.chain().focus().deleteRange(range).toggleCodeBlock().run(),
+    },
+    {
+      title: "Divider",
+      description: "Horizontal rule",
+      icon: "—",
+      keywords: ["hr", "divider", "rule", "line"],
+      run: ({ editor, range }) =>
+        editor.chain().focus().deleteRange(range).setHorizontalRule().run(),
+    },
+  ];
+}
 
 type SlashMenuProps = {
   items: Command[];
@@ -216,17 +240,14 @@ const SlashMenu = forwardRef<SlashMenuHandle, SlashMenuProps>(
 );
 SlashMenu.displayName = "SlashMenu";
 
-export const SlashCommand = Extension.create({
+export const SlashCommand = Extension.create<SlashOptions>({
   name: "slashCommand",
 
   addOptions() {
     return {
+      onPickImage: undefined,
       suggestion: {
         char: "/",
-        // `startOfLine: false` matches Notion's "anywhere" behavior;
-        // ProseMirror won't trigger mid-word because the suggestion
-        // utility requires a non-word char immediately before the
-        // trigger.
         startOfLine: false,
         allowSpaces: false,
         command: ({
@@ -245,14 +266,17 @@ export const SlashCommand = Extension.create({
   },
 
   addProseMirrorPlugins() {
+    const commands = buildCommands({
+      onPickImage: this.options.onPickImage,
+    });
     return [
       Suggestion({
         editor: this.editor,
         ...this.options.suggestion,
         items: ({ query }: { query: string }) => {
           const q = query.toLowerCase().trim();
-          if (!q) return COMMANDS;
-          return COMMANDS.filter(
+          if (!q) return commands;
+          return commands.filter(
             (cmd) =>
               cmd.title.toLowerCase().includes(q) ||
               cmd.keywords.some((k) => k.includes(q))
@@ -285,10 +309,6 @@ export const SlashCommand = Extension.create({
                 placement: "bottom-start",
                 arrow: false,
                 offset: [0, 6],
-                // No tippy theme imported — the React component owns
-                // all visual chrome (rounded card, shadow). Tippy's
-                // wrapper is transparent so it doesn't add a second
-                // border.
                 duration: [120, 80],
               });
             },

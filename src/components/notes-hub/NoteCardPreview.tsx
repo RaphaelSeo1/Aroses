@@ -95,7 +95,15 @@ export function NoteCardPreview({ markdown }: { markdown: string }) {
                   {...props}
                 />
               ),
-              img: () => null,
+              img: ({ src, alt }) =>
+                typeof src === "string" && src ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={src}
+                    alt={typeof alt === "string" ? alt : ""}
+                    className="my-2 max-h-40 w-auto max-w-full rounded-md border border-zinc-200 object-cover dark:border-zinc-700"
+                  />
+                ) : null,
             }}
           >
             {markdown}
