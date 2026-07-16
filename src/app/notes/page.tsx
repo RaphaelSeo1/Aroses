@@ -223,6 +223,16 @@ export default async function NotesHubPage() {
       )
       .map((s) => [s.user_note_id as string, s])
   );
+  // Latest session per note (already ordered by updated_at desc) — cards open
+  // the Live Notes surface even after a soft stop / completed session.
+  const latestNoteSessionByNoteId = new Map<string, (typeof liveSessions)[number]>();
+  for (const s of liveSessions) {
+    if (!s.user_note_id) continue;
+    const noteId = s.user_note_id as string;
+    if (!latestNoteSessionByNoteId.has(noteId)) {
+      latestNoteSessionByNoteId.set(noteId, s);
+    }
+  }
   const tutorSessions = tutorSessionsRaw.filter(
     (s) => typeof s.live_notes_text === "string" && s.live_notes_text.trim()
   );
@@ -275,14 +285,16 @@ export default async function NotesHubPage() {
   ): NoteDocCardData => {
     const noteId = n.id as string;
     const active = activeNoteSessionByNoteId.get(noteId);
+    const latest = latestNoteSessionByNoteId.get(noteId);
+    const sessionForHref = active ?? latest;
     const activeStatus = active?.status as string | undefined;
     const folderTitle = n.section_id
       ? sectionTitleById.get(n.section_id as string) ?? null
       : null;
     return {
       key: `standalone-${noteId}`,
-      href: active
-        ? `/notes/doc/${noteId}/record/${active.id as string}`
+      href: sessionForHref
+        ? `/notes/doc/${noteId}/record/${sessionForHref.id as string}`
         : `/notes/doc/${noteId}`,
       title: (n.title as string) || "Untitled note",
       subtitle:

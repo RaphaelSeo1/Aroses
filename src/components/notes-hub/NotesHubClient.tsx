@@ -219,9 +219,18 @@ export function NotesHubClient({
       const data = (await res.json().catch(() => ({}))) as {
         noteId?: string;
       };
-      if (data.noteId) {
-        router.push(`/notes/doc/${data.noteId}`);
-      }
+      if (!data.noteId) return;
+      // Open the Live Notes surface (transcript + editor) — not the old
+      // NotesDocView page.
+      const recordRes = await fetch(`/api/notes/${data.noteId}/record`, {
+        method: "POST",
+      });
+      const recordData = (await recordRes.json().catch(() => ({}))) as {
+        redirect?: string;
+      };
+      router.push(
+        recordData.redirect || `/notes/doc/${data.noteId}`
+      );
     } finally {
       setCreating(false);
     }

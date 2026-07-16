@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { clampNoteInstruction } from "@/lib/ai/note-instruction";
 import { isNoteInstructionColumnError } from "@/lib/load-note-instruction";
+import { syncLiveSessionToStandaloneNote } from "@/lib/live-notes/sync-standalone-note";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
@@ -182,6 +183,20 @@ export async function PATCH(request: Request, ctx: Params) {
       })
       .eq("id", data.user_note_id)
       .eq("user_id", user.id);
+  }
+
+  // Soft-stop / pause: mirror notes (+ transcript-backed content) onto the
+  // linked user_notes row so hub previews stay current.
+  if (
+    patch.status === "paused" &&
+    typeof data.user_note_id === "string" &&
+    data.user_note_id
+  ) {
+    try {
+      await syncLiveSessionToStandaloneNote(supabase, sessionId, user.id);
+    } catch (e) {
+      console.error("[live-notes] pause sync", e);
+    }
   }
 
   return NextResponse.json({ ok: true, status: data.status, title: data.title });

@@ -7,9 +7,10 @@ type Params = { params: Promise<{ noteId: string }> };
 /**
  * POST /api/notes/[noteId]/record
  *
- * Start live audio capture for a standalone note — same Deepgram +
- * AI note flow as course live lectures, stored on a live_lecture_sessions
- * row linked via user_note_id.
+ * Open (or create) the live-notes surface for a standalone note. Reuses the
+ * active session when present; otherwise reopens the latest session for this
+ * note so the transcript is preserved across stop → record-again. Only creates
+ * a new session when the note has never been recorded.
  */
 export async function POST(_request: Request, ctx: Params) {
   const { noteId } = await ctx.params;
@@ -36,20 +37,55 @@ export async function POST(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const { data: existing } = await supabase
+  const { data: active } = await supabase
     .from("live_lecture_sessions")
     .select("id")
     .eq("user_note_id", noteId)
     .eq("user_id", user.id)
     .in("status", ["recording", "paused"])
-    .order("created_at", { ascending: false })
+    .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (existing?.id) {
+  if (active?.id) {
     return NextResponse.json({
-      sessionId: existing.id,
-      redirect: `/notes/doc/${noteId}/record/${existing.id}`,
+      sessionId: active.id,
+      redirect: `/notes/doc/${noteId}/record/${active.id}`,
+    });
+  }
+
+  // Keep one continuous transcript per note: reopen the latest session
+  // instead of starting a blank one after Stop.
+  const { data: latest } = await supabase
+    .from("live_lecture_sessions")
+    .select("id, status")
+    .eq("user_note_id", noteId)
+    .eq("user_id", user.id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (latest?.id) {
+    if (latest.status !== "recording" && latest.status !== "paused") {
+      const { error: reopenErr } = await supabase
+        .from("live_lecture_sessions")
+        .update({
+          status: "paused",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", latest.id)
+        .eq("user_id", user.id);
+      if (reopenErr) {
+        console.error("[notes/record] reopen", reopenErr);
+        return NextResponse.json(
+          { error: "Could not reopen this note's recording session." },
+          { status: 500 }
+        );
+      }
+    }
+    return NextResponse.json({
+      sessionId: latest.id,
+      redirect: `/notes/doc/${noteId}/record/${latest.id}`,
     });
   }
 
@@ -65,7 +101,7 @@ export async function POST(_request: Request, ctx: Params) {
       user_note_id: noteId,
       course_id: null,
       title,
-      status: "recording",
+      status: "paused",
       notes_json: note.content_json,
       notes_text:
         typeof note.content_text === "string" ? note.content_text : "",

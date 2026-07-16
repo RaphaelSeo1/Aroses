@@ -46,6 +46,21 @@ export default async function StandaloneNoteRecordPage({ params }: Props) {
 
   if (!session || session.user_note_id !== noteId) notFound();
 
+  // Soft-stop never ends a standalone session; reopen completed/failed ones
+  // so the same transcript + notes stay editable.
+  let sessionStatus = session.status as string;
+  if (sessionStatus !== "recording" && sessionStatus !== "paused") {
+    await supabase
+      .from("live_lecture_sessions")
+      .update({
+        status: "paused",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", sessionId)
+      .eq("user_id", user.id);
+    sessionStatus = "paused";
+  }
+
   const { data: segments } = await supabase
     .from("live_lecture_segments")
     .select("seq, text, at_ms")
@@ -66,7 +81,7 @@ export default async function StandaloneNoteRecordPage({ params }: Props) {
       typeof session.title === "string" && session.title.trim()
         ? session.title.trim()
         : (note.title as string) || "Untitled note",
-    status: session.status as LiveNotesInitialSession["status"],
+    status: sessionStatus as LiveNotesInitialSession["status"],
     durationSeconds:
       typeof session.duration_seconds === "number"
         ? session.duration_seconds

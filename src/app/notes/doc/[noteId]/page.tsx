@@ -1,8 +1,5 @@
 import { after } from "next/server";
 import { redirect, notFound } from "next/navigation";
-import { AppHeader } from "@/components/AppHeader";
-import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
-import { StandaloneNoteEditor } from "@/components/notes-hub/StandaloneNoteEditor";
 import { createClient } from "@/lib/supabase/server";
 
 const EMPTY_DOC = {
@@ -10,6 +7,10 @@ const EMPTY_DOC = {
   content: [{ type: "paragraph" }],
 };
 
+/**
+ * Standalone note entry — always opens the Live Notes surface (transcript +
+ * editor). The old NotesDocView page is no longer the primary destination.
+ */
 export default async function StandaloneNotePage(props: {
   params: Promise<{ noteId: string }>;
 }) {
@@ -22,41 +23,14 @@ export default async function StandaloneNotePage(props: {
     redirect(`/login?next=/notes/doc/${noteId}`);
   }
 
-  // Load note + sessions in parallel so the page isn't blocked on
-  // sequential round-trips before content can render.
-  const [noteRes, activeSessionRes, latestSessionRes] = await Promise.all([
-    supabase
-      .from("user_notes")
-      .select(
-        "id, title, content_json, updated_at, course_id, ingest_job_id"
-      )
-      .eq("id", noteId)
-      .eq("user_id", user.id)
-      .maybeSingle(),
-    supabase
-      .from("live_lecture_sessions")
-      .select("id")
-      .eq("user_note_id", noteId)
-      .eq("user_id", user.id)
-      .in("status", ["recording", "paused"])
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    // Any session for this note — powers Lecture recap generate/regenerate.
-    supabase
-      .from("live_lecture_sessions")
-      .select("id")
-      .eq("user_note_id", noteId)
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
-
-  const note = noteRes.data;
+  const { data: note } = await supabase
+    .from("user_notes")
+    .select("id, title, content_json, content_text")
+    .eq("id", noteId)
+    .eq("user_id", user.id)
+    .maybeSingle();
   if (!note) notFound();
 
-  // Don't block first paint on last_opened_at (Welcome back tracking).
   const userId = user.id;
   after(() => {
     void supabase
@@ -71,29 +45,67 @@ export default async function StandaloneNotePage(props: {
       });
   });
 
-  return (
-    <>
-      <AppHeader right={<HeaderNavLoggedInServer />} />
-      <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-        <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
-          <StandaloneNoteEditor
-            noteId={note.id as string}
-            initialTitle={(note.title as string) || "Untitled note"}
-            initialContentJson={note.content_json ?? EMPTY_DOC}
-            initialUpdatedAt={(note.updated_at as string) ?? null}
-            initialActiveSessionId={
-              (activeSessionRes.data?.id as string) ?? null
-            }
-            lectureSessionId={
-              (latestSessionRes.data?.id as string) ??
-              (activeSessionRes.data?.id as string) ??
-              null
-            }
-            courseId={(note.course_id as string) ?? null}
-            ingestJobId={(note.ingest_job_id as string) ?? null}
-          />
-        </div>
-      </main>
-    </>
-  );
+  const { data: active } = await supabase
+    .from("live_lecture_sessions")
+    .select("id")
+    .eq("user_note_id", noteId)
+    .eq("user_id", user.id)
+    .in("status", ["recording", "paused"])
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (active?.id) {
+    redirect(`/notes/doc/${noteId}/record/${active.id}`);
+  }
+
+  const { data: latest } = await supabase
+    .from("live_lecture_sessions")
+    .select("id, status")
+    .eq("user_note_id", noteId)
+    .eq("user_id", user.id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (latest?.id) {
+    if (latest.status !== "recording" && latest.status !== "paused") {
+      await supabase
+        .from("live_lecture_sessions")
+        .update({
+          status: "paused",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", latest.id)
+        .eq("user_id", user.id);
+    }
+    redirect(`/notes/doc/${noteId}/record/${latest.id}`);
+  }
+
+  const title =
+    typeof note.title === "string" && note.title.trim()
+      ? note.title.trim().slice(0, 200)
+      : "Untitled note";
+
+  const { data: created, error } = await supabase
+    .from("live_lecture_sessions")
+    .insert({
+      user_id: user.id,
+      user_note_id: noteId,
+      course_id: null,
+      title,
+      status: "paused",
+      notes_json: note.content_json ?? EMPTY_DOC,
+      notes_text:
+        typeof note.content_text === "string" ? note.content_text : "",
+    })
+    .select("id")
+    .single();
+
+  if (error || !created?.id) {
+    console.error("[notes/doc] ensure session", error);
+    notFound();
+  }
+
+  redirect(`/notes/doc/${noteId}/record/${created.id}`);
 }

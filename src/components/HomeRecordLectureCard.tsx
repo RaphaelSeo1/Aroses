@@ -43,8 +43,9 @@ export function HomeRecordLectureCard() {
         error?: string;
       };
       if (!recordRes.ok || !recordData.redirect) {
-        setError(recordData.error || "Could not start recording.");
+        setError(recordData.error || "Could not open live notes.");
         setBusy(false);
+        // Doc route ensures a session and opens the Live Notes surface.
         router.push(`/notes/doc/${createData.noteId}`);
         return;
       }

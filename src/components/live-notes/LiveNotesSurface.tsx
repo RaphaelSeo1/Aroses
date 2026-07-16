@@ -168,9 +168,8 @@ export function LiveNotesSurface({
   const router = useRouter();
   const sessionId = session.id;
   const isStandalone = variant === "standalone" || Boolean(session.userNoteId);
-  const noteDocHref = session.userNoteId
-    ? `/notes/doc/${session.userNoteId}`
-    : "/notes";
+  /** Hub list — standalone notes no longer use a separate "doc" editor page. */
+  const allNotesHref = "/notes";
 
   const [segments, setSegments] = useState<LiveTranscriptSegment[]>(
     initialSegments
@@ -183,7 +182,15 @@ export function LiveNotesSurface({
   const [finishing, setFinishing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmFinish, setConfirmFinish] = useState(false);
-  const [started, setStarted] = useState(false);
+  // Returning sessions (paused / prior transcript) skip the blocking start
+  // overlay so the student can keep typing immediately.
+  const returningSession =
+    initialSegments.length > 0 ||
+    session.status === "paused" ||
+    session.status === "recording" ||
+    (typeof session.durationSeconds === "number" &&
+      session.durationSeconds > 0);
+  const [started, setStarted] = useState(returningSession);
   const [aiWriting, setAiWriting] = useState(false);
   const [aiLogOpen, setAiLogOpen] = useState(false);
   const [aiActivity, setAiActivity] = useState<AiActivityEntry[]>([]);
@@ -827,8 +834,45 @@ export function LiveNotesSurface({
     { id: "mic", label: "Mic" },
   ];
 
+  /**
+   * Standalone "Stop recording": release capture, flush transcript + notes,
+   * keep the same session (paused) so the transcript is still here when they
+   * start the mic again. Stay on this page — no redirect to the old doc view.
+   */
+  const handleSoftStop = useCallback(async () => {
+    if (finishing) return;
+    setConfirmFinish(false);
+    setFinishing(true);
+    setError(null);
+    try {
+      await maybeSynthesize(true);
+      const st = status;
+      if (st === "recording" || st === "reconnecting" || st === "paused") {
+        await pause();
+      }
+      await flushNow();
+      await fetch(`/api/live-notes/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "paused",
+          durationSeconds: Math.round(elapsedMsRef.current / 1000),
+        }),
+      });
+      setStarted(true);
+    } catch {
+      setError("Could not stop recording. Your transcript may still be saving — try again.");
+    } finally {
+      setFinishing(false);
+    }
+  }, [finishing, maybeSynthesize, pause, flushNow, sessionId, status]);
+
   const handleFinish = useCallback(async () => {
     if (finishing) return;
+    if (isStandalone) {
+      await handleSoftStop();
+      return;
+    }
     setConfirmFinish(false);
     setFinishing(true);
     setError(null);
@@ -836,26 +880,6 @@ export function LiveNotesSurface({
       await maybeSynthesize(true);
       await stop();
       await flushNow();
-
-      if (isStandalone) {
-        const res = await fetch(`/api/live-notes/${sessionId}/finish`, {
-          method: "POST",
-        });
-        const data = (await res.json().catch(() => ({}))) as {
-          redirect?: string;
-          error?: string;
-        };
-        if (!res.ok || !data.redirect) {
-          setError(
-            data.error ||
-              "Could not save your recording. Your notes are still in this session — try again."
-          );
-          setFinishing(false);
-          return;
-        }
-        router.push(data.redirect);
-        return;
-      }
 
       const res = await fetch(`/api/live-notes/${sessionId}/complete`, {
         method: "POST",
@@ -877,7 +901,16 @@ export function LiveNotesSurface({
       setError("Could not finish the session. Check your connection and try again.");
       setFinishing(false);
     }
-  }, [finishing, maybeSynthesize, stop, flushNow, sessionId, router, isStandalone]);
+  }, [
+    finishing,
+    isStandalone,
+    handleSoftStop,
+    maybeSynthesize,
+    stop,
+    flushNow,
+    sessionId,
+    router,
+  ]);
 
   const handleDelete = useCallback(async () => {
     if (deleting || finishing) return;
@@ -904,33 +937,46 @@ export function LiveNotesSurface({
         setDeleting(false);
         return;
       }
-      router.push(isStandalone ? noteDocHref : "/notes");
+      router.push(allNotesHref);
     } catch {
       setError("Could not delete this session. Check your connection and try again.");
       setDeleting(false);
     }
-  }, [deleting, finishing, started, status, stop, sessionId, router, isStandalone, noteDocHref]);
+  }, [
+    deleting,
+    finishing,
+    started,
+    status,
+    stop,
+    sessionId,
+    router,
+    allNotesHref,
+  ]);
 
   const alreadyCompleted =
     !isStandalone && session.status === "completed" && session.ingestJobId;
-  const standaloneDone = isStandalone && session.status === "completed";
   const isLive = status === "recording" || status === "reconnecting";
+  const canResumeCapture =
+    started &&
+    !mediaStream &&
+    (status === "paused" || status === "error" || status === "idle");
   const showStartOverlay =
     !alreadyCompleted &&
     !started &&
     !mediaStream &&
     (status === "idle" || status === "connecting") &&
-    !finishing;
+    !finishing &&
+    !returningSession;
 
   return (
     <div className="flex h-dvh flex-col bg-app-gradient">
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <header className="flex flex-wrap items-center gap-3 border-b border-zinc-200 bg-white/85 px-4 py-3 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/85 sm:px-6">
         <Link
-          href={isStandalone ? noteDocHref : "/notes"}
+          href={allNotesHref}
           className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
-          {isStandalone ? "← Back to note" : "← All notes"}
+          ← All notes
         </Link>
         {!isStandalone && session.courseId ? (
           <Link
@@ -966,9 +1012,12 @@ export function LiveNotesSurface({
                     ? "AI is listening"
                     : "Recording"}
             </span>
-          ) : status === "paused" ? (
+          ) : status === "paused" || canResumeCapture ? (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
-              ⏸ {activeSource === "mic" ? "Mic paused" : "Paused"}
+              ⏸{" "}
+              {activeSource === "mic" || !activeSource
+                ? "Mic paused"
+                : "Paused"}
             </span>
           ) : null}
           <span className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold tabular-nums text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
@@ -978,7 +1027,10 @@ export function LiveNotesSurface({
 
         {/* Controls */}
         <div className="flex items-center gap-2">
-          {(isLive || status === "paused" || (status === "error" && started)) &&
+          {(isLive ||
+            status === "paused" ||
+            (status === "error" && started) ||
+            canResumeCapture) &&
           !finishing ? (
             <div
               className="inline-flex items-center overflow-hidden rounded-full border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"
@@ -1037,22 +1089,30 @@ export function LiveNotesSurface({
             >
               {activeSource === "mic" ? "Pause mic" : "Pause"}
             </button>
-          ) : (status === "paused" || status === "error") && started ? (
+          ) : canResumeCapture ? (
             <button
               type="button"
-              onClick={() => void resume()}
+              onClick={() => {
+                if (status === "paused" || status === "error") {
+                  void resume();
+                  return;
+                }
+                void handleStart(activeSource ?? "mic");
+              }}
               title={
-                activeSource === "mic"
+                activeSource === "mic" || !activeSource
                   ? "Start listening again — turns the microphone back on"
                   : "Resume transcription"
               }
               className="rounded-full bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
             >
-              {activeSource === "mic" ? "Start mic" : "Resume"}
+              {activeSource === "mic" || !activeSource ? "Start mic" : "Resume"}
             </button>
           ) : null}
 
-          {started || alreadyCompleted || standaloneDone || segments.length > 0 ? (
+          {alreadyCompleted ||
+          (!isStandalone && (started || segments.length > 0)) ||
+          (isStandalone && isLive) ? (
             confirmFinish ? (
               <span className="inline-flex items-center gap-1.5">
                 <button
@@ -1066,7 +1126,7 @@ export function LiveNotesSurface({
                       ? "Saving…"
                       : "Building…"
                     : isStandalone
-                      ? "Confirm — stop recording"
+                      ? "Confirm — stop & stay"
                       : "Confirm — build course"}
                 </button>
                 <button
@@ -1086,8 +1146,6 @@ export function LiveNotesSurface({
                     router.push(
                       `/dashboard/courses/${session.courseId}/study/build?pdfJobs=${session.ingestJobId}`
                     );
-                  } else if (standaloneDone) {
-                    router.push(noteDocHref);
                   } else {
                     setConfirmFinish(true);
                   }
@@ -1097,15 +1155,13 @@ export function LiveNotesSurface({
               >
                 {alreadyCompleted
                   ? "View course build"
-                  : standaloneDone
-                    ? "Back to note"
-                    : finishing
-                      ? isStandalone
-                        ? "Saving…"
-                        : "Building…"
-                      : isStandalone
-                        ? "Stop recording"
-                        : "Finish & build course"}
+                  : finishing
+                    ? isStandalone
+                      ? "Saving…"
+                      : "Building…"
+                    : isStandalone
+                      ? "Stop recording"
+                      : "Finish & build course"}
               </button>
             )
           ) : null}
