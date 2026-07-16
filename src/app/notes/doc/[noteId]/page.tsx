@@ -22,9 +22,9 @@ export default async function StandaloneNotePage(props: {
     redirect(`/login?next=/notes/doc/${noteId}`);
   }
 
-  // Load note + active session in parallel so the page isn't blocked on
+  // Load note + sessions in parallel so the page isn't blocked on
   // sequential round-trips before content can render.
-  const [noteRes, activeSessionRes] = await Promise.all([
+  const [noteRes, activeSessionRes, latestSessionRes] = await Promise.all([
     supabase
       .from("user_notes")
       .select(
@@ -39,6 +39,15 @@ export default async function StandaloneNotePage(props: {
       .eq("user_note_id", noteId)
       .eq("user_id", user.id)
       .in("status", ["recording", "paused"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // Any session for this note — powers Lecture recap generate/regenerate.
+    supabase
+      .from("live_lecture_sessions")
+      .select("id")
+      .eq("user_note_id", noteId)
+      .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
@@ -74,6 +83,11 @@ export default async function StandaloneNotePage(props: {
             initialUpdatedAt={(note.updated_at as string) ?? null}
             initialActiveSessionId={
               (activeSessionRes.data?.id as string) ?? null
+            }
+            lectureSessionId={
+              (latestSessionRes.data?.id as string) ??
+              (activeSessionRes.data?.id as string) ??
+              null
             }
             courseId={(note.course_id as string) ?? null}
             ingestJobId={(note.ingest_job_id as string) ?? null}

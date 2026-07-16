@@ -1198,6 +1198,7 @@ export function LiveNotesSurface({
             noteInstruction={noteInstruction}
             onNoteInstructionChange={handleNoteInstructionChange}
             onNoteInstructionSave={handleNoteInstructionSave}
+            lectureRecapEndpoint={`/api/live-notes/${sessionId}/recap`}
             className="min-h-0 flex-1"
           />
           <LiveNotesAiActivity

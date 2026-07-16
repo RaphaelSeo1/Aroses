@@ -256,6 +256,7 @@ export function NotesPanel({
   noteInstruction = "",
   onNoteInstructionChange,
   onNoteInstructionSave,
+  lectureRecapEndpoint = null,
 }: {
   /**
    * Mentored Learning path — when set, the panel reads/writes
@@ -310,6 +311,12 @@ export function NotesPanel({
   onNoteInstructionChange?: (v: string) => void;
   /** Persist the current note-style instruction. Required for the Save button. */
   onNoteInstructionSave?: (v: string) => Promise<void>;
+  /**
+   * Live lecture sessions: POST endpoint to generate/regenerate the tutor-style
+   * lecture recap. When set, the Lecture recap control stays visible even before
+   * Finish has written one.
+   */
+  lectureRecapEndpoint?: string | null;
 }) {
   const t = useT();
   const endpoint = notesEndpoint ?? `/api/mentored/notes/${materialId}`;
@@ -328,6 +335,13 @@ export function NotesPanel({
     if (!initialUpdatedAt) return null;
     const t = Date.parse(initialUpdatedAt);
     return Number.isNaN(t) ? null : t;
+  });
+  /** Bumped after setContent so LectureSummaryButton re-reads doc attrs. */
+  const [contentRevision, setContentRevision] = useState(0);
+  const [lectureRecapSeed, setLectureRecapSeed] = useState<string | null>(() => {
+    if (!initialContentJson) return null;
+    const raw = readRoseDocAttrs(initialContentJson).roseLectureRecap;
+    return typeof raw === "string" && raw.trim() ? raw.trim() : null;
   });
 
   // Reset note-style draft when switching notes endpoints / materials.
@@ -1085,6 +1099,9 @@ export function NotesPanel({
         if (doc && editor && !editor.isDestroyed) {
           initialDocRef.current = doc;
           editor.commands.setContent(doc as never, { emitUpdate: false });
+          const recap = attrs.roseLectureRecap?.trim();
+          setLectureRecapSeed(recap ? recap : null);
+          setContentRevision((n) => n + 1);
           autoGenLog("editor hydrated from saved doc");
         }
         if (typeof body.notes?.autoGenerate === "boolean") {
@@ -1132,9 +1149,16 @@ export function NotesPanel({
     contentText: string;
   } | null => {
     if (!editor || editor.isDestroyed) return null;
+    const prevAttrs = readRoseDocAttrs(editor.getJSON());
     editor.commands.updateAttributes("doc", {
       roseDocTitle: docTitle.trim(),
       roseDocEmoji: docEmoji,
+      // Explicitly keep recap / chunk tracking — some TipTap paths drop
+      // unspecified custom attrs when only title/emoji are patched.
+      roseLectureRecap: prevAttrs.roseLectureRecap ?? "",
+      roseAppendedChunkIds: Array.isArray(prevAttrs.roseAppendedChunkIds)
+        ? prevAttrs.roseAppendedChunkIds
+        : [],
     });
     const contentJson = editor.getJSON();
     return {
@@ -1608,7 +1632,12 @@ export function NotesPanel({
                 ? `Edited ${formatRelativeTime(lastSavedAt)}`
                 : "Not saved yet"}
             </p>
-            <LectureSummaryButton editor={editor} />
+            <LectureSummaryButton
+              editor={editor}
+              contentRevision={contentRevision}
+              seedMarkdown={lectureRecapSeed}
+              generateEndpoint={lectureRecapEndpoint}
+            />
             <div className="mt-5 h-px w-full bg-zinc-100" />
           </header>
 

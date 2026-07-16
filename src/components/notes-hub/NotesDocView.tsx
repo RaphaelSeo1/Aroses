@@ -18,6 +18,7 @@ export function NotesDocView({
   initialContentJson,
   initialUpdatedAt,
   onDocTitleChange,
+  lectureRecapEndpoint = null,
 }: {
   notesEndpoint: string;
   title: string;
@@ -27,6 +28,8 @@ export function NotesDocView({
   initialUpdatedAt?: string | null;
   /** Live-sync doc title edits to a parent header (standalone notes). */
   onDocTitleChange?: (title: string) => void;
+  /** When set, shows Lecture recap + Generate (live lecture notes). */
+  lectureRecapEndpoint?: string | null;
 }) {
   const [autoGenerate, setAutoGenerate] = useState(false);
 
@@ -45,6 +48,7 @@ export function NotesDocView({
         initialContentJson={initialContentJson}
         initialUpdatedAt={initialUpdatedAt}
         onDocTitleChange={onDocTitleChange}
+        lectureRecapEndpoint={lectureRecapEndpoint}
       />
     </div>
   );

@@ -16,6 +16,7 @@ export function StandaloneNoteEditor({
   initialContentJson,
   initialUpdatedAt = null,
   initialActiveSessionId = null,
+  lectureSessionId = null,
   courseId,
   ingestJobId,
 }: {
@@ -24,6 +25,8 @@ export function StandaloneNoteEditor({
   initialContentJson?: unknown;
   initialUpdatedAt?: string | null;
   initialActiveSessionId?: string | null;
+  /** Latest live lecture session for this note — enables Lecture recap generate. */
+  lectureSessionId?: string | null;
   courseId: string | null;
   ingestJobId: string | null;
 }) {
@@ -289,6 +292,11 @@ export function StandaloneNoteEditor({
         initialContentJson={initialContentJson}
         initialUpdatedAt={initialUpdatedAt}
         onDocTitleChange={handleDocTitleChange}
+        lectureRecapEndpoint={
+          lectureSessionId
+            ? `/api/live-notes/${lectureSessionId}/recap`
+            : null
+        }
       />
     </div>
   );
