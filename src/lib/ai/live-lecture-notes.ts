@@ -52,17 +52,18 @@ export const MAX_REVISABLE_SECTIONS = 4;
 const MAX_SECTION_MARKDOWN_CHARS = 1_600;
 const MAX_SECTION_EXCERPT_CHARS = 2_400;
 
-const NOTE_STYLE_RULES = `You write TIGHT STUDY-REVIEW NOTES a student skims before an exam — never a transcript or a re-narration of the lecture. Compression is the goal; concise and skimmable beats long and thorough.
+const NOTE_STYLE_RULES = `You write structured STUDY NOTES — useful to reread later, not a transcript and not a re-narration of the lecture. Aim for the old thorough default, cleaned up: keep the substance, drop the noise.
 
-- Start a "## " heading for each distinct concept (3–8 words) that names the MAIN IDEA; never repeat a RECENT HEADING.
-- Under each heading, at most 2–4 bullets ("- ", one "  - " nesting level for sub-points). Keep ONLY load-bearing, testable content: precise definitions, key numbers/units, named studies/people/dates, and cause→effect relationships.
-- Cut narrative, framing, transitions, anecdotes, repetition, and anything a student would not be tested on. If a detail wouldn't help answer an exam question, omit it.
-- Bold key terms with **term** on first introduction only. State definitions crisply even when the lecturer phrased them loosely — but only from what was said or shown.
-- When the lecturer works an example, capture it as a numbered list ("1. ", "2. ") using their actual numbers/steps — only the steps that matter.
-- "**Why it matters:**" is RARE. Include it ONLY when the lecturer explicitly flags exam relevance ("this will be on the exam", "the key idea is…") or one takeaway genuinely ties a section together. Most sections have NONE. Never add it by default.
+- Start a "## " heading whenever the lecturer moves to a distinct topic or concept (3–8 words naming the idea; never repeat a RECENT HEADING).
+- Under each heading, write enough that a student who missed the verbal fluff still understands the point: crisp definitions, key numbers/units, named studies/people/dates, cause→effect, and the load-bearing supporting detail. Prefer a short paragraph or a handful of solid bullets over one telegraphic line.
+- SUMMARIZE as you go. New transcript arrives often — do NOT dump every utterance. Fold related sentences into one clear note. Skip filler, hedging, transitions, anecdotes, repetition, and anything that wouldn't help someone study the material.
+- Bold key terms with **term** on first introduction only. State definitions cleanly even when the lecturer phrased them loosely — but only from what was said or shown.
+- When the lecturer works an example, capture it as a numbered list ("1. ", "2. ") with their actual numbers/steps — keep the steps that teach the method; drop purely verbal padding around them.
+- When the lecturer signals importance ("this will be on the exam", "this is the key idea"), add one line: "**Why it matters:** ...". Don't sprinkle it on every section.
 - Administrative chatter (attendance, logistics, "can everyone see the screen") is NOT teaching content — skip it.
+- Bullets ("- ", one "  - " nesting level for sub-points) for lists of points; short prose when a definition or relationship needs a full sentence. Concise and readable — in-depth where the idea needs it, never padded.
 
-COMPRESSION MUST BE LOSSLESS ON FACTS: never drop a number, definition, named study/person, or result to save space. Shorten the prose, not the substance. Prefer one precise bullet over three vague ones.
+DO NOT under-write: if a definition, number, named study/person, result, or worked step was taught, it must appear. Condensing means clearer prose and fewer redundant bullets — not omitting teachable content.
 
 GROUNDING (critical — overrides everything else on conflict):
 - You may receive TWO sources: NEW TRANSCRIPT SLICE (speech-to-text) and ON-SCREEN CONTENT (OCR/vision from the shared lecture display).
