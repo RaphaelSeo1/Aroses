@@ -182,12 +182,11 @@ export function LiveNotesSurface({
   const [finishing, setFinishing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmFinish, setConfirmFinish] = useState(false);
-  // Returning sessions (paused / prior transcript) skip the blocking start
-  // overlay so the student can keep typing immediately.
+  // Returning sessions (prior transcript / elapsed time) skip the blocking
+  // start overlay so the student can keep typing. Empty brand-new sessions
+  // still get the source picker — even if DB status is "paused".
   const returningSession =
     initialSegments.length > 0 ||
-    session.status === "paused" ||
-    session.status === "recording" ||
     (typeof session.durationSeconds === "number" &&
       session.durationSeconds > 0);
   const [started, setStarted] = useState(returningSession);
@@ -787,8 +786,9 @@ export function LiveNotesSurface({
 
   const confirmSwitchFromGuide = useCallback(async () => {
     if (!shareGuideSource || shareGuideBusy) return;
-    // First start uses start(); mid-session uses switchSource.
-    if (!started) {
+    // First capture — or restart after reload / soft-stop when the hook is
+    // idle again — must use start(). switchSource() no-ops while idle.
+    if (!started || status === "idle" || !mediaStream) {
       await confirmShareGuide();
       return;
     }
@@ -808,6 +808,8 @@ export function LiveNotesSurface({
     shareGuideSource,
     shareGuideBusy,
     started,
+    status,
+    mediaStream,
     confirmShareGuide,
     switchSource,
     prefetchToken,
@@ -1093,6 +1095,8 @@ export function LiveNotesSurface({
             <button
               type="button"
               onClick={() => {
+                // Same-page pause keeps hook status "paused" → resume().
+                // After a reload the hook is idle again → must start() fresh.
                 if (status === "paused" || status === "error") {
                   void resume();
                   return;
