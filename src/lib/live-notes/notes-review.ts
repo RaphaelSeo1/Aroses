@@ -16,7 +16,14 @@ import {
  * provenance `ai-edited` or null is excluded from review entirely.
  */
 
-type PmDoc = { type?: string; content?: NoteNodeJson[] };
+/** Stable section id for the end-of-lecture exam-morning summary. */
+export const LECTURE_SUMMARY_SECTION_ID = "lecture-summary";
+
+type PmDoc = {
+  type?: string;
+  content?: NoteNodeJson[];
+  attrs?: Record<string, unknown>;
+};
 
 function topLevelNodes(notesJson: unknown): NoteNodeJson[] {
   const doc = notesJson as PmDoc | null;
@@ -44,6 +51,8 @@ export function collectAiNoteSections(
   for (const node of topLevelNodes(notesJson)) {
     const sid = sectionIdOf(node);
     if (!sid) continue;
+    // Lecture summary is generated after review — never feed it back into review.
+    if (sid === LECTURE_SUMMARY_SECTION_ID) continue;
     if (!isAiOwned(node)) excluded.add(sid);
     if (!groups.has(sid)) {
       groups.set(sid, []);
@@ -54,8 +63,57 @@ export function collectAiNoteSections(
 
   return order
     .filter((id) => !excluded.has(id))
-    .map((id) => ({ sectionId: id, markdown: noteNodesToMarkdown(groups.get(id)!) }))
+    .map((id) => ({
+      sectionId: id,
+      markdown: noteNodesToMarkdown(groups.get(id)!),
+    }))
     .filter((s) => s.markdown.trim().length > 0);
+}
+
+/** Markdown for the Lecture summary section, if present. */
+export function extractLectureSummaryMarkdown(
+  notesJson: unknown
+): string | null {
+  const nodes = topLevelNodes(notesJson).filter(
+    (n) => sectionIdOf(n) === LECTURE_SUMMARY_SECTION_ID
+  );
+  if (nodes.length === 0) return null;
+  const md = noteNodesToMarkdown(nodes).trim();
+  return md.length > 0 ? md : null;
+}
+
+/**
+ * Prepend (or replace) the Lecture summary section at the top of the notes doc.
+ */
+export function prependLectureSummary(
+  notesJson: unknown,
+  markdown: string
+): unknown {
+  const replacement = markdownToNoteNodes(markdown, {
+    sectionId: LECTURE_SUMMARY_SECTION_ID,
+    provenance: "ai",
+  });
+  if (replacement.length === 0) return notesJson;
+
+  const doc = notesJson as PmDoc | null;
+  const existing = doc && Array.isArray(doc.content) ? doc.content : [];
+  const withoutSummary = existing.filter(
+    (n) => sectionIdOf(n) !== LECTURE_SUMMARY_SECTION_ID
+  );
+  // Drop a lone empty leading paragraph so the summary sits at the top.
+  const rest =
+    withoutSummary.length === 1 &&
+    withoutSummary[0]?.type === "paragraph" &&
+    !(withoutSummary[0].content && withoutSummary[0].content.length)
+      ? []
+      : withoutSummary;
+
+  const divider: NoteNodeJson = { type: "horizontalRule" };
+  return {
+    type: "doc",
+    ...(doc?.attrs ? { attrs: doc.attrs } : {}),
+    content: [...replacement, divider, ...rest],
+  };
 }
 
 /**

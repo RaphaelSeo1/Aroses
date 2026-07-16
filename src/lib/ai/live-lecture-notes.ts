@@ -385,3 +385,103 @@ export async function reviewLiveLectureNotes(input: {
     return null;
   }
 }
+
+// ── End-of-lecture summary (once, on Finish) ─────────────────────────────────
+
+const LECTURE_SUMMARY_SYSTEM = `You write a one-glance LECTURE SUMMARY a student reads the morning of an exam.
+
+Return ONLY this markdown subset — no preamble, no code fences:
+## Lecture summary
+- bullet
+- bullet
+…
+
+Rules:
+- 5–10 tight bullets covering the lecture's MAIN THREADS only (the big ideas a student must remember).
+- Grounded ONLY in the transcript and optional on-screen content — no outside knowledge, no invented facts/numbers/names.
+- Compression is lossless on the big ideas: keep key definitions, decisive numbers/units, named studies/people/dates, and cause→effect when they define a thread.
+- No narrative, no "Why it matters", no logistics, no filler. Prefer one precise bullet over three vague ones.
+- Bold a **key term** only on first use when it names a concept.`;
+
+/**
+ * One bounded Haiku call → "## Lecture summary" + 5–10 grounded bullets.
+ * Returns null when the model/key is unavailable or the transcript is too thin.
+ */
+export async function summarizeLiveLecture(input: {
+  transcript: string;
+  screenContent?: string;
+  lectureTitle?: string;
+  /** Optional existing note markdown — coverage guide only, not a new fact source. */
+  notesOutline?: string;
+  userId?: string;
+}): Promise<string | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const transcript = input.transcript.trim();
+  if (!apiKey || transcript.length < 80) return null;
+
+  const screen = (input.screenContent ?? "").trim();
+  const outline = (input.notesOutline ?? "").trim();
+  const userPrompt = [
+    input.lectureTitle ? `LECTURE: ${input.lectureTitle.slice(0, 200)}` : null,
+    outline
+      ? `EXISTING NOTE OUTLINE (coverage guide only — do not invent beyond transcript/screen):\n${outline.slice(0, 8_000)}`
+      : null,
+    screen
+      ? `ON-SCREEN CONTENT:\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
+      : null,
+    `FULL LECTURE TRANSCRIPT:\n${transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
+    "\nReturn the ## Lecture summary markdown now.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const anthropic = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 1 });
+  try {
+    const msg = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 1_200,
+      temperature: 0.25,
+      system: LECTURE_SUMMARY_SYSTEM,
+      messages: [{ role: "user", content: userPrompt }],
+    });
+    recordAiUsage({
+      model: MODEL,
+      inputTokens: msg.usage?.input_tokens,
+      outputTokens: msg.usage?.output_tokens,
+      feature: "live-notes-lecture-summary",
+      userId: input.userId ?? null,
+    });
+
+    const textBlock = msg.content.find((b) => b.type === "text");
+    if (!textBlock || textBlock.type !== "text") return null;
+    let raw = textBlock.text
+      .replace(/^```(?:markdown|md)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    if (!raw) return null;
+
+    // Normalize heading so the client can find this section reliably.
+    if (!/^##\s+Lecture summary\b/im.test(raw)) {
+      raw = `## Lecture summary\n${raw.replace(/^#+\s*.*\n?/, "").trim()}`;
+    } else {
+      raw = raw.replace(/^##\s+Lecture summary\b[^\n]*/im, "## Lecture summary");
+    }
+
+    // Keep only the summary block (drop trailing chatter if any).
+    const lines = raw.split("\n");
+    const kept: string[] = [];
+    for (const line of lines) {
+      if (kept.length > 0 && /^##\s+/.test(line) && !/^##\s+Lecture summary\b/i.test(line)) {
+        break;
+      }
+      kept.push(line);
+    }
+    const markdown = kept.join("\n").trim();
+    const bulletCount = (markdown.match(/^\s*[-*]\s+/gm) ?? []).length;
+    if (bulletCount < 2) return null;
+    return markdown.slice(0, 4_000);
+  } catch (e) {
+    console.error("[live-lecture-notes] lecture summary", e);
+    return null;
+  }
+}

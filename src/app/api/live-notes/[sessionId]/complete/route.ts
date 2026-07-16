@@ -1,14 +1,10 @@
 import { NextResponse } from "next/server";
-import { reviewLiveLectureNotes } from "@/lib/ai/live-lecture-notes";
 import { recordVoiceSeconds } from "@/lib/billing/voice-usage";
 import {
   buildLiveNotesStudyContext,
   extractLiveNotesEmphasis,
 } from "@/lib/live-notes/notes-emphasis";
-import {
-  applyNoteRevisions,
-  collectAiNoteSections,
-} from "@/lib/live-notes/notes-review";
+import { runLiveNotesWrapUp } from "@/lib/live-notes/run-notes-wrap-up";
 import { report } from "@/lib/report-error";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -17,7 +13,7 @@ import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 90;
 
 type Params = { params: Promise<{ sessionId: string }> };
 
@@ -254,38 +250,27 @@ export async function POST(_request: Request, ctx: Params) {
     .select("id", { count: "exact", head: true })
     .eq("exam_group_id", examGroupId);
 
-  // ── Wrap-up consistency review (once, before course generation) ─────────
-  // One Haiku pass verifies every fully-AI note section against the full
-  // transcript (ground truth) and rewrites the ones that misrepresent it.
-  // Student-authored and student-edited blocks are never touched. Best
-  // effort: any failure leaves the notes as-is and generation proceeds.
+  // ── Wrap-up: consistency review + lecture summary ───────────────────────
+  // One Haiku pass verifies AI note sections, then prepends a grounded
+  // "## Lecture summary" for exam-morning review. Best effort: any failure
+  // leaves the notes as-is and generation proceeds.
   let notesJson: unknown = session.notes_json;
   try {
-    const sections = collectAiNoteSections(notesJson);
-    if (sections.length > 0) {
-      const revisions = await reviewLiveLectureNotes({
-        sections,
-        transcript: transcriptOnly,
-        screenContent: screenContent || undefined,
-        lectureTitle: title,
-        userId: user.id,
-      });
-      if (
-        revisions &&
-        (revisions.revisions.length > 0 || revisions.removeSectionIds.length > 0)
-      ) {
-        notesJson = applyNoteRevisions(
-          notesJson,
-          revisions.revisions,
-          revisions.removeSectionIds
-        );
-        const { error: notesErr } = await supabase
-          .from("live_lecture_sessions")
-          .update({ notes_json: notesJson, updated_at: new Date().toISOString() })
-          .eq("id", sessionId)
-          .eq("user_id", user.id);
-        if (notesErr) notesJson = session.notes_json;
-      }
+    const next = await runLiveNotesWrapUp({
+      notesJson,
+      transcript: transcriptOnly,
+      screenContent: screenContent || undefined,
+      lectureTitle: title,
+      userId: user.id,
+    });
+    if (next !== notesJson) {
+      notesJson = next;
+      const { error: notesErr } = await supabase
+        .from("live_lecture_sessions")
+        .update({ notes_json: notesJson, updated_at: new Date().toISOString() })
+        .eq("id", sessionId)
+        .eq("user_id", user.id);
+      if (notesErr) notesJson = session.notes_json;
     }
   } catch (e) {
     notesJson = session.notes_json;

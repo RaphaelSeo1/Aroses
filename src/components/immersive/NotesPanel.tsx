@@ -20,6 +20,7 @@ import { TableHeader } from "@tiptap/extension-table-header";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
 import { NotesFormatToolbar } from "./notes/NotesFormatToolbar";
+import { LectureSummaryButton } from "./notes/LectureSummaryButton";
 import { AI_APPEND_META, Provenance } from "./notes/Provenance";
 import { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
 import { promptDialog, alertDialog } from "@/components/AppDialogs";
@@ -1538,6 +1539,7 @@ export function NotesPanel({
                 ? `Edited ${formatRelativeTime(lastSavedAt)}`
                 : "Not saved yet"}
             </p>
+            <LectureSummaryButton editor={editor} />
             <div className="mt-5 h-px w-full bg-zinc-100" />
           </header>
 
@@ -1942,6 +1944,20 @@ export function NotesPanel({
         .tn-prose hr + h2,
         .tn-prose hr + h3 {
           margin-top: 0.85rem !important;
+        }
+
+        /* Lecture summary jump highlight */
+        .tn-prose .tn-summary-flash {
+          animation: tnSummaryFlash 1.4s ease;
+          border-radius: 0.5rem;
+        }
+        @keyframes tnSummaryFlash {
+          0% {
+            background: rgba(196, 181, 253, 0.55);
+          }
+          100% {
+            background: transparent;
+          }
         }
 
         /* Images / screenshots */
