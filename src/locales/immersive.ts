@@ -23,6 +23,10 @@ const en = {
   noteStyleHint:
     "Applies to this session only and can only shape style and emphasis — never facts or format.",
   noteStyleDone: "Done",
+  noteStyleSave: "Save",
+  noteStyleSaving: "Saving…",
+  noteStyleSaved: "Saved",
+  noteStyleSaveFailed: "Couldn't save",
 };
 
 const ko: typeof en = {
@@ -50,6 +54,10 @@ const ko: typeof en = {
   noteStyleHint:
     "이 세션에만 적용되고, 스타일과 강조만 바꿀 수 있어요 — 사실이나 형식은 바뀌지 않아요.",
   noteStyleDone: "완료",
+  noteStyleSave: "저장",
+  noteStyleSaving: "저장 중…",
+  noteStyleSaved: "저장됨",
+  noteStyleSaveFailed: "저장 실패",
 };
 
 export const immersive = { en, ko };

@@ -255,6 +255,7 @@ export function NotesPanel({
   initialUpdatedAt = null,
   noteInstruction = "",
   onNoteInstructionChange,
+  onNoteInstructionSave,
 }: {
   /**
    * Mentored Learning path — when set, the panel reads/writes
@@ -302,12 +303,13 @@ export function NotesPanel({
   initialUpdatedAt?: string | null;
   /**
    * Per-session "tell the AI how to write these notes" free text.
-   * The parent runner owns the value (load + debounced save); the panel only
-   * renders the inline control. When `onNoteInstructionChange` is absent the
-   * control is hidden entirely (backward compatible).
+   * The parent owns the live value (for the next synthesize call). Persist
+   * via `onNoteInstructionSave` when the student taps Save.
    */
   noteInstruction?: string;
   onNoteInstructionChange?: (v: string) => void;
+  /** Persist the current note-style instruction. Required for the Save button. */
+  onNoteInstructionSave?: (v: string) => Promise<void>;
 }) {
   const t = useT();
   const endpoint = notesEndpoint ?? `/api/mentored/notes/${materialId}`;
@@ -316,11 +318,41 @@ export function NotesPanel({
   );
   // Collapsed by default; expand to edit. Empty stays the default style.
   const [noteStyleOpen, setNoteStyleOpen] = useState(false);
+  const [noteStyleDraft, setNoteStyleDraft] = useState(noteInstruction);
+  const [noteStyleSaved, setNoteStyleSaved] = useState(noteInstruction);
+  const [noteStyleSaveState, setNoteStyleSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const noteStyleDirty = noteStyleDraft !== noteStyleSaved;
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(() => {
     if (!initialUpdatedAt) return null;
     const t = Date.parse(initialUpdatedAt);
     return Number.isNaN(t) ? null : t;
   });
+
+  // Reset note-style draft when switching notes endpoints / materials.
+  useEffect(() => {
+    setNoteStyleDraft(noteInstruction);
+    setNoteStyleSaved(noteInstruction);
+    setNoteStyleSaveState("idle");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on endpoint change
+  }, [endpoint]);
+
+  const saveNoteStyle = useCallback(async () => {
+    if (!onNoteInstructionSave || noteStyleSaveState === "saving") return;
+    setNoteStyleSaveState("saving");
+    try {
+      await onNoteInstructionSave(noteStyleDraft);
+      setNoteStyleSaved(noteStyleDraft);
+      setNoteStyleSaveState("saved");
+      window.setTimeout(() => {
+        setNoteStyleSaveState((s) => (s === "saved" ? "idle" : s));
+      }, 1600);
+    } catch {
+      setNoteStyleSaveState("error");
+    }
+  }, [onNoteInstructionSave, noteStyleDraft, noteStyleSaveState]);
+
   const saveTimerRef = useRef<number | null>(null);
   const titleSaveTimerRef = useRef<number | null>(null);
   const initialDocRef = useRef<unknown | null>(initialContentJson ?? null);
@@ -1451,15 +1483,20 @@ export function NotesPanel({
               <span className="flex min-w-0 items-center gap-1.5 text-[12px] font-medium text-zinc-700">
                 <span aria-hidden>✎</span>
                 {t.immersive.noteStyleButton}
-                {noteInstruction.trim() ? (
+                {noteStyleDraft.trim() ? (
                   <span className="truncate font-normal text-zinc-500">
-                    — {noteInstruction.trim()}
+                    — {noteStyleDraft.trim()}
                   </span>
                 ) : (
                   <span className="truncate font-normal text-zinc-400">
                     — {t.immersive.noteStyleTitle}
                   </span>
                 )}
+                {noteStyleDirty ? (
+                  <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+                    Unsaved
+                  </span>
+                ) : null}
               </span>
               <span className="shrink-0 text-[11px] text-zinc-400">
                 {noteStyleOpen ? "▴" : "▾"}
@@ -1468,25 +1505,57 @@ export function NotesPanel({
             {noteStyleOpen ? (
               <div className="mt-2">
                 <textarea
-                  value={noteInstruction}
-                  onChange={(e) =>
-                    onNoteInstructionChange(
-                      e.target.value.slice(0, NOTE_INSTRUCTION_MAX)
-                    )
-                  }
+                  value={noteStyleDraft}
+                  onChange={(e) => {
+                    const next = e.target.value.slice(0, NOTE_INSTRUCTION_MAX);
+                    setNoteStyleDraft(next);
+                    onNoteInstructionChange(next);
+                    if (
+                      noteStyleSaveState === "saved" ||
+                      noteStyleSaveState === "error"
+                    ) {
+                      setNoteStyleSaveState("idle");
+                    }
+                  }}
                   maxLength={NOTE_INSTRUCTION_MAX}
                   rows={3}
                   autoFocus
                   placeholder={t.immersive.noteStylePlaceholder}
                   className="w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-[12px] leading-relaxed text-zinc-800 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none"
                 />
-                <div className="mt-1 flex items-center justify-between gap-3">
-                  <p className="text-[10.5px] leading-snug text-zinc-400">
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <p className="min-w-0 text-[10.5px] leading-snug text-zinc-400">
                     {t.immersive.noteStyleHint}
                   </p>
-                  <span className="shrink-0 text-[10.5px] tabular-nums text-zinc-400">
-                    {noteInstruction.length}/{NOTE_INSTRUCTION_MAX}
-                  </span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="text-[10.5px] tabular-nums text-zinc-400">
+                      {noteStyleDraft.length}/{NOTE_INSTRUCTION_MAX}
+                    </span>
+                    {onNoteInstructionSave ? (
+                      <button
+                        type="button"
+                        disabled={
+                          !noteStyleDirty || noteStyleSaveState === "saving"
+                        }
+                        onClick={() => void saveNoteStyle()}
+                        className={`rounded-full px-3 py-1 text-[11px] font-semibold transition disabled:cursor-default disabled:opacity-50 ${
+                          noteStyleSaveState === "error"
+                            ? "bg-red-600 text-white"
+                            : noteStyleSaveState === "saved"
+                              ? "bg-emerald-600 text-white"
+                              : "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                        }`}
+                      >
+                        {noteStyleSaveState === "saving"
+                          ? t.immersive.noteStyleSaving
+                          : noteStyleSaveState === "saved"
+                            ? t.immersive.noteStyleSaved
+                            : noteStyleSaveState === "error"
+                              ? t.immersive.noteStyleSaveFailed
+                              : t.immersive.noteStyleSave}
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             ) : null}

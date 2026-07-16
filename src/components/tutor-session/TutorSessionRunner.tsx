@@ -280,38 +280,28 @@ export function TutorSessionRunner({
   const notesSynthesisInFlightRef = useRef(false);
 
   // Per-session note-style instruction — edited inline in the NotesPanel
-  // header, debounced-saved to the session row, and sent with synthesize
-  // calls so an edit applies to the very next generated block.
+  // header, saved explicitly via Save, and sent with synthesize calls so an
+  // edit applies to the very next generated block.
   const [noteInstruction, setNoteInstruction] = useState(
     initial.noteInstruction ?? ""
   );
   const noteInstructionRef = useRef(noteInstruction);
-  const noteInstructionSaveTimerRef = useRef<number | null>(null);
-  const handleNoteInstructionChange = useCallback(
-    (value: string) => {
+  const handleNoteInstructionChange = useCallback((value: string) => {
+    setNoteInstruction(value);
+    noteInstructionRef.current = value;
+  }, []);
+  const handleNoteInstructionSave = useCallback(
+    async (value: string) => {
+      const res = await fetch(`/api/tutor-session/${initial.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ noteInstruction: value }),
+      });
+      if (!res.ok) throw new Error("Could not save note style");
       setNoteInstruction(value);
       noteInstructionRef.current = value;
-      if (noteInstructionSaveTimerRef.current !== null) {
-        window.clearTimeout(noteInstructionSaveTimerRef.current);
-      }
-      noteInstructionSaveTimerRef.current = window.setTimeout(() => {
-        noteInstructionSaveTimerRef.current = null;
-        void fetch(`/api/tutor-session/${initial.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ noteInstruction: value }),
-        }).catch(() => {});
-      }, 600);
     },
     [initial.id]
-  );
-  useEffect(
-    () => () => {
-      if (noteInstructionSaveTimerRef.current !== null) {
-        window.clearTimeout(noteInstructionSaveTimerRef.current);
-      }
-    },
-    []
   );
 
   useEffect(() => {
@@ -1938,6 +1928,7 @@ export function TutorSessionRunner({
               editorRef={notesPanelRef}
               noteInstruction={noteInstruction}
               onNoteInstructionChange={handleNoteInstructionChange}
+              onNoteInstructionSave={handleNoteInstructionSave}
               className="h-full min-h-0"
             />
           </div>

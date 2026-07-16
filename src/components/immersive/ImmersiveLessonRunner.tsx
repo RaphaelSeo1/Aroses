@@ -328,38 +328,28 @@ export function ImmersiveLessonRunner({
   const showDockedNotes = useMinWidth(1280);
 
   // Per-course note-style instruction — edited inline in the NotesPanel
-  // header, debounced-saved to the onboarding row, and sent with the
-  // generate-stream call so an edit applies to the very next chunk's notes.
+  // header, saved explicitly via Save, and sent with the generate-stream
+  // call so an edit applies to the very next chunk's notes.
   const [noteInstruction, setNoteInstruction] = useState(
     onboarding.noteInstruction ?? ""
   );
   const noteInstructionRef = useRef(noteInstruction);
-  const noteInstructionSaveTimerRef = useRef<number | null>(null);
-  const handleNoteInstructionChange = useCallback(
-    (value: string) => {
+  const handleNoteInstructionChange = useCallback((value: string) => {
+    setNoteInstruction(value);
+    noteInstructionRef.current = value;
+  }, []);
+  const handleNoteInstructionSave = useCallback(
+    async (value: string) => {
+      const res = await fetch(`/api/mentored/onboarding/${materialId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ noteInstruction: value }),
+      });
+      if (!res.ok) throw new Error("Could not save note style");
       setNoteInstruction(value);
       noteInstructionRef.current = value;
-      if (noteInstructionSaveTimerRef.current !== null) {
-        window.clearTimeout(noteInstructionSaveTimerRef.current);
-      }
-      noteInstructionSaveTimerRef.current = window.setTimeout(() => {
-        noteInstructionSaveTimerRef.current = null;
-        void fetch(`/api/mentored/onboarding/${materialId}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ noteInstruction: value }),
-        }).catch(() => {});
-      }, 600);
     },
     [materialId]
-  );
-  useEffect(
-    () => () => {
-      if (noteInstructionSaveTimerRef.current !== null) {
-        window.clearTimeout(noteInstructionSaveTimerRef.current);
-      }
-    },
-    []
   );
 
   // When the student toggles auto-generate OFF→ON we clear the
@@ -2984,6 +2974,7 @@ export function ImmersiveLessonRunner({
             editorRef={notesPanelRef}
             noteInstruction={noteInstruction}
             onNoteInstructionChange={handleNoteInstructionChange}
+            onNoteInstructionSave={handleNoteInstructionSave}
             fillHeight
             pinToolbar
             className="h-full w-full"
@@ -3048,6 +3039,7 @@ export function ImmersiveLessonRunner({
                     editorRef={notesPanelRef}
                     noteInstruction={noteInstruction}
                     onNoteInstructionChange={handleNoteInstructionChange}
+            onNoteInstructionSave={handleNoteInstructionSave}
                     className="h-full"
                   />
             </div>

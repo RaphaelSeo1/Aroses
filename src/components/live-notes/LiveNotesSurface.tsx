@@ -200,38 +200,28 @@ export function LiveNotesSurface({
   const titleSaveTimerRef = useRef<number | null>(null);
 
   // Per-session note-style instruction — owned here, edited inline in the
-  // NotesPanel header, debounced-saved to the session row, and sent with
-  // every synthesize call so edits apply to the very next slice.
+  // NotesPanel header, saved explicitly via Save, and sent with every
+  // synthesize call so edits apply to the very next slice.
   const [noteInstruction, setNoteInstruction] = useState(
     session.noteInstruction ?? ""
   );
   const noteInstructionRef = useRef(noteInstruction);
-  const noteInstructionSaveTimerRef = useRef<number | null>(null);
-  const handleNoteInstructionChange = useCallback(
-    (value: string) => {
+  const handleNoteInstructionChange = useCallback((value: string) => {
+    setNoteInstruction(value);
+    noteInstructionRef.current = value;
+  }, []);
+  const handleNoteInstructionSave = useCallback(
+    async (value: string) => {
+      const res = await fetch(`/api/live-notes/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ noteInstruction: value }),
+      });
+      if (!res.ok) throw new Error("Could not save note style");
       setNoteInstruction(value);
       noteInstructionRef.current = value;
-      if (noteInstructionSaveTimerRef.current !== null) {
-        window.clearTimeout(noteInstructionSaveTimerRef.current);
-      }
-      noteInstructionSaveTimerRef.current = window.setTimeout(() => {
-        noteInstructionSaveTimerRef.current = null;
-        void fetch(`/api/live-notes/${sessionId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ noteInstruction: value }),
-        }).catch(() => {});
-      }, 600);
     },
     [sessionId]
-  );
-  useEffect(
-    () => () => {
-      if (noteInstructionSaveTimerRef.current !== null) {
-        window.clearTimeout(noteInstructionSaveTimerRef.current);
-      }
-    },
-    []
   );
   const aiActivitySeqRef = useRef(0);
   // Detected after mount so the server-rendered HTML never depends on the
@@ -1207,6 +1197,7 @@ export function LiveNotesSurface({
             onDocTitleChange={handleDocTitleChange}
             noteInstruction={noteInstruction}
             onNoteInstructionChange={handleNoteInstructionChange}
+            onNoteInstructionSave={handleNoteInstructionSave}
             className="min-h-0 flex-1"
           />
           <LiveNotesAiActivity
