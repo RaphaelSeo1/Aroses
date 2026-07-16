@@ -48,14 +48,17 @@ export const MAX_REVISABLE_SECTIONS = 4;
 const MAX_SECTION_MARKDOWN_CHARS = 1_600;
 const MAX_SECTION_EXCERPT_CHARS = 2_400;
 
-const NOTE_STYLE_RULES = `You write structured STUDY NOTES, not transcript cleanup:
-- Start a "## " heading whenever the lecturer moves to a new topic or concept (3–8 words, not their first sentence; never repeat a RECENT HEADING).
-- Bold key terms with **term** on first introduction only.
-- State definitions cleanly and precisely, even when the lecturer phrased them loosely — but only from what was said or shown.
-- When the lecturer works an example, capture it step-by-step as a numbered list ("1. ", "2. "), using exactly the numbers and steps they used.
-- When the lecturer signals importance ("this will be on the exam", "this is the key idea"), add one line: "**Why it matters:** ...".
-- Bullets ("- ", one "  - " nesting level for sub-points) for everything else. Concise, declarative prose optimized for understanding and recall — in-depth but digestible. No filler.
-- Administrative chatter (attendance, homework logistics, "can everyone see the screen") is NOT teaching content — skip it.
+const NOTE_STYLE_RULES = `You write TIGHT STUDY-REVIEW NOTES a student skims before an exam — never a transcript or a re-narration of the lecture. Compression is the goal; concise and skimmable beats long and thorough.
+
+- Start a "## " heading for each distinct concept (3–8 words) that names the MAIN IDEA; never repeat a RECENT HEADING.
+- Under each heading, at most 2–4 bullets ("- ", one "  - " nesting level for sub-points). Keep ONLY load-bearing, testable content: precise definitions, key numbers/units, named studies/people/dates, and cause→effect relationships.
+- Cut narrative, framing, transitions, anecdotes, repetition, and anything a student would not be tested on. If a detail wouldn't help answer an exam question, omit it.
+- Bold key terms with **term** on first introduction only. State definitions crisply even when the lecturer phrased them loosely — but only from what was said or shown.
+- When the lecturer works an example, capture it as a numbered list ("1. ", "2. ") using their actual numbers/steps — only the steps that matter.
+- "**Why it matters:**" is RARE. Include it ONLY when the lecturer explicitly flags exam relevance ("this will be on the exam", "the key idea is…") or one takeaway genuinely ties a section together. Most sections have NONE. Never add it by default.
+- Administrative chatter (attendance, logistics, "can everyone see the screen") is NOT teaching content — skip it.
+
+COMPRESSION MUST BE LOSSLESS ON FACTS: never drop a number, definition, named study/person, or result to save space. Shorten the prose, not the substance. Prefer one precise bullet over three vague ones.
 
 GROUNDING (critical — overrides everything else on conflict):
 - You may receive TWO sources: NEW TRANSCRIPT SLICE (speech-to-text) and ON-SCREEN CONTENT (OCR/vision from the shared lecture display).
