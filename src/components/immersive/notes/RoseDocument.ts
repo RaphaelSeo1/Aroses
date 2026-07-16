@@ -14,6 +14,13 @@ export const RoseDocument = Document.extend({
       roseAppendedChunkIds: {
         default: [] as string[],
       },
+      /**
+       * Tutor-style end-of-lecture recap markdown (generated on Finish).
+       * Shown via the Lecture summary button — not mixed into the live notes body.
+       */
+      roseLectureRecap: {
+        default: "",
+      },
     };
   },
 });
@@ -22,6 +29,7 @@ export type RoseDocAttrs = {
   roseDocTitle?: string;
   roseDocEmoji?: string;
   roseAppendedChunkIds?: string[];
+  roseLectureRecap?: string;
 };
 
 export function readRoseDocAttrs(doc: unknown): RoseDocAttrs {

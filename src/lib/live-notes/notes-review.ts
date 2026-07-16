@@ -22,7 +22,7 @@ export const LECTURE_SUMMARY_SECTION_ID = "lecture-summary";
 type PmDoc = {
   type?: string;
   content?: NoteNodeJson[];
-  attrs?: Record<string, unknown>;
+  attrs?: Record<string, unknown> & { roseLectureRecap?: string };
 };
 
 function topLevelNodes(notesJson: unknown): NoteNodeJson[] {
@@ -70,10 +70,16 @@ export function collectAiNoteSections(
     .filter((s) => s.markdown.trim().length > 0);
 }
 
-/** Markdown for the Lecture summary section, if present. */
+/** Markdown for the Lecture summary / tutor-style recap, if present. */
 export function extractLectureSummaryMarkdown(
   notesJson: unknown
 ): string | null {
+  const doc = notesJson as PmDoc | null;
+  const fromAttr = doc?.attrs?.roseLectureRecap;
+  if (typeof fromAttr === "string" && fromAttr.trim()) {
+    return fromAttr.trim();
+  }
+  // Legacy: short "## Lecture summary" section prepended into the body.
   const nodes = topLevelNodes(notesJson).filter(
     (n) => sectionIdOf(n) === LECTURE_SUMMARY_SECTION_ID
   );
@@ -83,7 +89,33 @@ export function extractLectureSummaryMarkdown(
 }
 
 /**
- * Prepend (or replace) the Lecture summary section at the top of the notes doc.
+ * Store a tutor-style lecture recap on the TipTap doc attrs (not in the
+ * live notes body). Replaces any prior recap.
+ */
+export function setLectureRecapMarkdown(
+  notesJson: unknown,
+  markdown: string
+): unknown {
+  const trimmed = markdown.trim();
+  if (!trimmed) return notesJson;
+  const doc = notesJson as PmDoc | null;
+  const content =
+    doc && Array.isArray(doc.content)
+      ? doc.content
+      : [{ type: "paragraph" } as NoteNodeJson];
+  return {
+    type: "doc",
+    attrs: {
+      ...(doc?.attrs ?? {}),
+      roseLectureRecap: trimmed.slice(0, 40_000),
+    },
+    content,
+  };
+}
+
+/**
+ * Prepend (or replace) a short Lecture summary section at the top of the
+ * notes doc. Prefer `setLectureRecapMarkdown` for tutor-style recaps.
  */
 export function prependLectureSummary(
   notesJson: unknown,

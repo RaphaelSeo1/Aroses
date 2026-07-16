@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { voiceRules } from "@/lib/ai/study-generation";
+import { TUTOR_NOTES_QUALITY_RULES } from "@/lib/ai/tutor-notes-quality";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
 import {
   createMarkerParser,
@@ -38,6 +39,9 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
  */
 
 const MODEL = process.env.ANTHROPIC_TUTOR_FAST_MODEL?.trim() || "claude-haiku-4-5";
+/** Same model as tutor-session recaps — lecture Finish recap should match that quality. */
+const RECAP_MODEL =
+  process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
 
 /** Hard cap on the rolling summary we store + send back to the model. */
 export const ROLLING_SUMMARY_MAX_CHARS = 1_600;
@@ -386,25 +390,51 @@ export async function reviewLiveLectureNotes(input: {
   }
 }
 
-// ── End-of-lecture summary (once, on Finish) ─────────────────────────────────
+// ── End-of-lecture recap (once, on Finish) — same shape as tutor-session recaps ─
 
-const LECTURE_SUMMARY_SYSTEM = `You write a one-glance LECTURE SUMMARY a student reads the morning of an exam.
+const LECTURE_RECAP_SYSTEM = `You generate a polished, study-ready RECAP from a live lecture transcript (and optional on-screen extracts). Output MARKDOWN — proper headings, bullets, callouts, bold for key terms.
 
-Return ONLY this markdown subset — no preamble, no code fences:
-## Lecture summary
-- bullet
-- bullet
-…
+${TUTOR_NOTES_QUALITY_RULES}
 
-Rules:
-- 5–10 tight bullets covering the lecture's MAIN THREADS only (the big ideas a student must remember).
-- Grounded ONLY in the transcript and optional on-screen content — no outside knowledge, no invented facts/numbers/names.
-- Compression is lossless on the big ideas: keep key definitions, decisive numbers/units, named studies/people/dates, and cause→effect when they define a thread.
-- No narrative, no "Why it matters", no logistics, no filler. Prefer one precise bullet over three vague ones.
-- Bold a **key term** only on first use when it names a concept.`;
+This is a LECTURE (spoken teaching + slides), not a 1:1 tutor chat. Ground every claim in the transcript and/or on-screen content — no outside knowledge, no invented facts/numbers/names.
+
+STRUCTURE (use this EXACTLY):
+
+# {Emoji} {Title}
+
+> *Live lecture · {Approx duration} · {Date}*
+
+## Overview
+{2-3 sentence summary of what the lecture covered and the main thread a student should remember.}
+
+## What we covered
+{For each major topic, an H3 section. Under each:
+- Brief concept explanation (1-2 sentences)
+- A bullet list of key takeaways, with **bold** lead-ins for key terms
+- Worked examples if the lecturer walked them (use code blocks for formulas / equations)
+- A > callout block for any "remember this" / exam-trap moment the lecturer flagged
+}
+
+## Key terms
+{A definition list of important terms from the lecture. Format as:
+- **Term** — definition.}
+
+## Self-check questions
+{3-5 questions the student can use to verify retention later. Mix of conceptual and applied. Grounded in what was actually taught.}
+
+## What to study next
+{2-4 specific next steps tied to natural follow-ups from this lecture (or gaps the lecturer flagged). Each as a bullet starting with a verb.}
+
+STYLE RULES:
+- Polished but warm. Sound like a thoughtful TA wrote the recap — same quality as a tutor-session recap.
+- Concise — better tight and readable than long and waffly.
+- NO generic filler. Every section should be specific to what THIS lecture taught.
+- Use ONE emoji in the H1 title that matches the topic.
+- Skip sections that aren't relevant (e.g. no worked-example bullets if none were discussed).
+- Compression is lossless on facts: keep key definitions, decisive numbers/units, named studies/people/dates, and cause→effect.`;
 
 /**
- * One bounded Haiku call → "## Lecture summary" + 5–10 grounded bullets.
+ * One Sonnet call → tutor-session-style lecture recap markdown.
  * Returns null when the model/key is unavailable or the transcript is too thin.
  */
 export async function summarizeLiveLecture(input: {
@@ -413,75 +443,75 @@ export async function summarizeLiveLecture(input: {
   lectureTitle?: string;
   /** Optional existing note markdown — coverage guide only, not a new fact source. */
   notesOutline?: string;
+  durationSeconds?: number | null;
+  startedAt?: string | null;
   userId?: string;
 }): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const transcript = input.transcript.trim();
   if (!apiKey || transcript.length < 80) return null;
 
+  const duration =
+    input.durationSeconds && input.durationSeconds > 0
+      ? `${Math.round(input.durationSeconds / 60)} min`
+      : "—";
+  const dateStr = input.startedAt
+    ? new Date(input.startedAt).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
+    : new Date().toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+
   const screen = (input.screenContent ?? "").trim();
   const outline = (input.notesOutline ?? "").trim();
   const userPrompt = [
-    input.lectureTitle ? `LECTURE: ${input.lectureTitle.slice(0, 200)}` : null,
+    `TITLE HINT: ${input.lectureTitle?.trim() || "Live lecture"}`,
+    `DURATION: ${duration}`,
+    `DATE: ${dateStr}`,
     outline
-      ? `EXISTING NOTE OUTLINE (coverage guide only — do not invent beyond transcript/screen):\n${outline.slice(0, 8_000)}`
+      ? `EXISTING LIVE NOTES (coverage guide only — do not invent beyond transcript/screen):\n"""\n${outline.slice(0, 6_000)}\n"""`
       : null,
     screen
-      ? `ON-SCREEN CONTENT:\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
+      ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n"""\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}\n"""`
       : null,
-    `FULL LECTURE TRANSCRIPT:\n${transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
-    "\nReturn the ## Lecture summary markdown now.",
+    `FULL LECTURE TRANSCRIPT:\n"""\n${transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}\n"""`,
+    "\nGenerate the recap now. Start with the H1 title.",
   ]
     .filter(Boolean)
     .join("\n\n");
 
-  const anthropic = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 1 });
+  const anthropic = new Anthropic({ apiKey, timeout: 90_000, maxRetries: 1 });
   try {
     const msg = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 1_200,
-      temperature: 0.25,
-      system: LECTURE_SUMMARY_SYSTEM,
+      model: RECAP_MODEL,
+      max_tokens: 2_500,
+      temperature: 0.4,
+      system: LECTURE_RECAP_SYSTEM,
       messages: [{ role: "user", content: userPrompt }],
     });
     recordAiUsage({
-      model: MODEL,
+      model: RECAP_MODEL,
       inputTokens: msg.usage?.input_tokens,
       outputTokens: msg.usage?.output_tokens,
-      feature: "live-notes-lecture-summary",
+      feature: "live-notes-lecture-recap",
       userId: input.userId ?? null,
     });
 
     const textBlock = msg.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") return null;
-    let raw = textBlock.text
+    const raw = textBlock.text
       .replace(/^```(?:markdown|md)?\s*/i, "")
       .replace(/```\s*$/i, "")
       .trim();
-    if (!raw) return null;
-
-    // Normalize heading so the client can find this section reliably.
-    if (!/^##\s+Lecture summary\b/im.test(raw)) {
-      raw = `## Lecture summary\n${raw.replace(/^#+\s*.*\n?/, "").trim()}`;
-    } else {
-      raw = raw.replace(/^##\s+Lecture summary\b[^\n]*/im, "## Lecture summary");
-    }
-
-    // Keep only the summary block (drop trailing chatter if any).
-    const lines = raw.split("\n");
-    const kept: string[] = [];
-    for (const line of lines) {
-      if (kept.length > 0 && /^##\s+/.test(line) && !/^##\s+Lecture summary\b/i.test(line)) {
-        break;
-      }
-      kept.push(line);
-    }
-    const markdown = kept.join("\n").trim();
-    const bulletCount = (markdown.match(/^\s*[-*]\s+/gm) ?? []).length;
-    if (bulletCount < 2) return null;
-    return markdown.slice(0, 4_000);
+    if (!raw || raw.length < 80) return null;
+    return raw.slice(0, 40_000);
   } catch (e) {
-    console.error("[live-lecture-notes] lecture summary", e);
+    console.error("[live-lecture-notes] lecture recap", e);
     return null;
   }
 }

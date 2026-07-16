@@ -261,6 +261,12 @@ export async function POST(_request: Request, ctx: Params) {
       transcript: transcriptOnly,
       screenContent: screenContent || undefined,
       lectureTitle: title,
+      durationSeconds:
+        typeof session.duration_seconds === "number"
+          ? session.duration_seconds
+          : null,
+      startedAt:
+        typeof session.started_at === "string" ? session.started_at : null,
       userId: user.id,
     });
     if (next !== notesJson) {

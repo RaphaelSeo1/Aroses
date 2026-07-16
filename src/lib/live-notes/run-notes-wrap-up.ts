@@ -6,19 +6,21 @@ import {
 import {
   applyNoteRevisions,
   collectAiNoteSections,
-  prependLectureSummary,
+  setLectureRecapMarkdown,
 } from "@/lib/live-notes/notes-review";
 
 /**
- * Finish wrap-up: factual review of AI sections, then prepend a grounded
- * "## Lecture summary" block at the top of the notes doc. Best-effort —
- * failures leave notes as-is for that step.
+ * Finish wrap-up: factual review of AI sections, then store a tutor-style
+ * lecture recap on the notes doc attrs. Best-effort — failures leave notes
+ * as-is for that step.
  */
 export async function runLiveNotesWrapUp(input: {
   notesJson: unknown;
   transcript: string;
   screenContent?: string;
   lectureTitle?: string;
+  durationSeconds?: number | null;
+  startedAt?: string | null;
   userId?: string;
 }): Promise<unknown> {
   let notesJson = input.notesJson;
@@ -52,18 +54,20 @@ export async function runLiveNotesWrapUp(input: {
     const outline = collectAiNoteSections(notesJson)
       .map((s) => s.markdown)
       .join("\n\n");
-    const summaryMd = await summarizeLiveLecture({
+    const recapMd = await summarizeLiveLecture({
       transcript: input.transcript,
       screenContent: input.screenContent,
       lectureTitle: input.lectureTitle,
       notesOutline: outline || undefined,
+      durationSeconds: input.durationSeconds,
+      startedAt: input.startedAt,
       userId: input.userId,
     });
-    if (summaryMd) {
-      notesJson = prependLectureSummary(notesJson, summaryMd);
+    if (recapMd) {
+      notesJson = setLectureRecapMarkdown(notesJson, recapMd);
     }
   } catch (e) {
-    console.error("[live-notes wrap-up] summary", e);
+    console.error("[live-notes wrap-up] recap", e);
   }
 
   return notesJson;
