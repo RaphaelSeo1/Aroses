@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertCanStartLectureRecording } from "@/lib/billing/lecture-recording-cap";
 import { hasCourseEdit } from "@/lib/collaboration/api-guards";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
@@ -57,6 +58,19 @@ export async function POST(request: Request) {
         { status: 403 }
       );
     }
+  }
+
+  const cap = await assertCanStartLectureRecording(user.id);
+  if (!cap.ok) {
+    return NextResponse.json(
+      {
+        error: cap.error,
+        code: cap.code,
+        used: cap.used,
+        cap: cap.cap,
+      },
+      { status: cap.status }
+    );
   }
 
   const title =

@@ -84,6 +84,9 @@ export function BillingClient({
   const t = useT();
   const searchParams = useSearchParams();
   const checkoutStatus = searchParams.get("status");
+  const lectureCapHit = searchParams.get("lectureCap") === "1";
+  const lectureCapUsed = searchParams.get("used");
+  const lectureCapLimit = searchParams.get("cap");
 
   const [busyTier, setBusyTier] = useState<PlanTier | null>(null);
   const [portalBusy, setPortalBusy] = useState(false);
@@ -170,6 +173,15 @@ export function BillingClient({
         <Banner tone="success">{t.billing.checkoutSuccessLong}</Banner>
       ) : checkoutStatus === "cancel" ? (
         <Banner tone="muted">{t.billing.checkoutCanceled}</Banner>
+      ) : null}
+
+      {lectureCapHit ? (
+        <Banner tone="error">
+          {tf(t.billing.lectureCapBanner, {
+            used: lectureCapUsed || "—",
+            cap: lectureCapLimit || "—",
+          })}
+        </Banner>
       ) : null}
 
       {error ? <Banner tone="error">{error}</Banner> : null}

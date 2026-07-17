@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertCanStartLectureRecording } from "@/lib/billing/lecture-recording-cap";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
@@ -10,7 +11,8 @@ type Params = { params: Promise<{ noteId: string }> };
  * Open (or create) the live-notes surface for a standalone note. Reuses the
  * active session when present; otherwise reopens the latest session for this
  * note so the transcript is preserved across stop → record-again. Only creates
- * a new session when the note has never been recorded.
+ * a new session when the note has never been recorded (counts against the
+ * monthly lecture-recording cap).
  */
 export async function POST(_request: Request, ctx: Params) {
   const { noteId } = await ctx.params;
@@ -87,6 +89,19 @@ export async function POST(_request: Request, ctx: Params) {
       sessionId: latest.id,
       redirect: `/notes/doc/${noteId}/record/${latest.id}`,
     });
+  }
+
+  const cap = await assertCanStartLectureRecording(user.id);
+  if (!cap.ok) {
+    return NextResponse.json(
+      {
+        error: cap.error,
+        code: cap.code,
+        used: cap.used,
+        cap: cap.cap,
+      },
+      { status: cap.status }
+    );
   }
 
   const title =

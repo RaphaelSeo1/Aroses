@@ -1,14 +1,14 @@
 /**
  * Subscription plans — THE single source of truth for tiers, prices, Stripe
- * price IDs, voice allowance, and course-build caps. Tune everything here.
+ * price IDs, voice allowance, course caps, and lecture-recording caps.
+ * Tune everything here.
  *
  * To show/hide checkout and the billing page site-wide, see
  * `feature-flag.ts` (`BILLING_UI_ENABLED`).
  *
- * Voice is metered monthly on every tier. Course creation is capped on
- * Student (2 courses); Free and Premium stay unlimited. Quizzes, SRS, and
- * text tutoring stay unlimited. When voice hours run out, voice stops and
- * the user keeps free TEXT mode (never a hard block).
+ * Metered monthly: voice hours + lecture recordings (Live Notes).
+ * Course creation is capped on Student (2); Free/Premium courses unlimited.
+ * Quizzes, SRS, and text tutoring stay unlimited.
  *
  * Stripe price IDs come from env so test/live keys swap without code changes,
  * but the mapping + limits live ONLY in this file.
@@ -30,6 +30,11 @@ export type PlanConfig = {
    * Enforced on course insert (not on rebuilding materials inside a course).
    */
   maxCourses: number | null;
+  /**
+   * Max NEW live lecture recording sessions per billing period
+   * (course live notes + standalone note recordings).
+   */
+  maxLectureRecordingsPerMonth: number;
   /** One-line tagline for the pricing card. */
   tagline: string;
   /** Bullet highlights for the pricing card. */
@@ -44,10 +49,11 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     stripePriceId: null,
     voiceHours: 0.5,
     maxCourses: null,
+    maxLectureRecordingsPerMonth: 1,
     tagline: "Everything to start learning, on us.",
     highlights: [
       "30 minutes of voice tutoring / month",
-      "Unlimited text tutoring after that",
+      "1 lecture recording / month",
       "Course building, quizzes & spaced repetition",
     ],
   },
@@ -58,10 +64,11 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     stripePriceId: process.env.STRIPE_PRICE_STUDENT ?? null,
     voiceHours: 5,
     maxCourses: 2,
+    maxLectureRecordingsPerMonth: 5,
     tagline: "For daily, voice-first studying.",
     highlights: [
       "5 hours of voice tutoring / month",
-      "Build up to 2 courses",
+      "Build up to 2 courses · 5 lecture recordings / month",
       "Unlimited quizzes, SRS & text tutoring",
     ],
   },
@@ -72,10 +79,11 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     stripePriceId: process.env.STRIPE_PRICE_PREMIUM ?? null,
     voiceHours: 15,
     maxCourses: null,
+    maxLectureRecordingsPerMonth: 20,
     tagline: "For power users who live in voice.",
     highlights: [
       "15 hours of voice tutoring / month",
-      "Unlimited course building",
+      "Unlimited courses · 20 lecture recordings / month",
       "Priority features (coming soon)",
     ],
   },
@@ -103,6 +111,11 @@ export function voiceCapSeconds(tier: PlanTier): number {
 export function courseCap(tier: PlanTier): number | null {
   const cap = PLANS[tier]?.maxCourses;
   return typeof cap === "number" && cap >= 0 ? cap : null;
+}
+
+/** Monthly lecture-recording session cap for a tier. */
+export function lectureRecordingCap(tier: PlanTier): number {
+  return Math.max(0, PLANS[tier]?.maxLectureRecordingsPerMonth ?? 0);
 }
 
 /** Resolve a Stripe price ID back to a tier (used by the webhook). */

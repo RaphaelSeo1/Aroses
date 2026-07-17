@@ -227,7 +227,21 @@ export function NotesHubClient({
       });
       const recordData = (await recordRes.json().catch(() => ({}))) as {
         redirect?: string;
+        error?: string;
+        code?: string;
+        used?: number;
+        cap?: number;
       };
+      if (!recordRes.ok) {
+        if (recordData.code === "lecture_recording_cap_reached") {
+          router.push(
+            `/dashboard/billing?lectureCap=1&used=${recordData.used ?? ""}&cap=${recordData.cap ?? ""}`
+          );
+          return;
+        }
+        window.alert(recordData.error || "Could not open live notes.");
+        return;
+      }
       router.push(
         recordData.redirect || `/notes/doc/${data.noteId}`
       );

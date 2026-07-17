@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { redirect, notFound } from "next/navigation";
+import { assertCanStartLectureRecording } from "@/lib/billing/lecture-recording-cap";
 import { createClient } from "@/lib/supabase/server";
 
 const EMPTY_DOC = {
@@ -80,6 +81,13 @@ export default async function StandaloneNotePage(props: {
         .eq("user_id", user.id);
     }
     redirect(`/notes/doc/${noteId}/record/${latest.id}`);
+  }
+
+  const cap = await assertCanStartLectureRecording(user.id);
+  if (!cap.ok) {
+    redirect(
+      `/dashboard/billing?lectureCap=1&used=${cap.used}&cap=${cap.cap}`
+    );
   }
 
   const title =

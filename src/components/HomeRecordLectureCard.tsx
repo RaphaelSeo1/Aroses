@@ -41,12 +41,19 @@ export function HomeRecordLectureCard() {
       const recordData = (await recordRes.json().catch(() => ({}))) as {
         redirect?: string;
         error?: string;
+        code?: string;
+        used?: number;
+        cap?: number;
       };
       if (!recordRes.ok || !recordData.redirect) {
+        if (recordData.code === "lecture_recording_cap_reached") {
+          router.push(
+            `/dashboard/billing?lectureCap=1&used=${recordData.used ?? ""}&cap=${recordData.cap ?? ""}`
+          );
+          return;
+        }
         setError(recordData.error || "Could not open live notes.");
         setBusy(false);
-        // Doc route ensures a session and opens the Live Notes surface.
-        router.push(`/notes/doc/${createData.noteId}`);
         return;
       }
       router.push(recordData.redirect);
