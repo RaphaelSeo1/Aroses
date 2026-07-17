@@ -7,7 +7,7 @@
  * student-facing surfaces are hidden.
  */
 
-export const BILLING_UI_ENABLED = false;
+export const BILLING_UI_ENABLED = true;
 
 export function isBillingUiEnabled(): boolean {
   return BILLING_UI_ENABLED;

@@ -7,7 +7,7 @@
  * student-facing and seller-facing surfaces are hidden.
  */
 
-export const MARKETPLACE_UI_ENABLED = false;
+export const MARKETPLACE_UI_ENABLED = true;
 
 export function isMarketplaceUiEnabled(): boolean {
   return MARKETPLACE_UI_ENABLED;
