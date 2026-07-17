@@ -23,6 +23,14 @@ export type AdminCourseRow = {
   user_id: string;
   created_at: string;
   is_public: boolean | null;
+  /** Unique material kinds used to build the course (PDF, Image, Link…). */
+  sourceLabels: string[];
+  /** Individual uploads / jobs for hover detail. */
+  materials: Array<{
+    label: string;
+    fileName: string | null;
+    kindKey: string;
+  }>;
 };
 
 type Props = {
@@ -225,9 +233,19 @@ export function AdminDashboardClient({
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return initialCourses;
-    return initialCourses.filter((c) =>
-      (c.title || "Untitled").toLowerCase().includes(q)
-    );
+    return initialCourses.filter((c) => {
+      const hay = [
+        c.title || "Untitled",
+        c.user_id,
+        ...(c.sourceLabels ?? []),
+        ...(c.materials ?? []).flatMap((m) =>
+          [m.label, m.fileName ?? ""].filter(Boolean)
+        ),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
   }, [initialCourses, query]);
 
   const onDelete = useCallback(
@@ -527,14 +545,17 @@ export function AdminDashboardClient({
                 <span className="sr-only">Search courses</span>
                 <input
                   type="search"
-                  placeholder="Search courses…"
+                  placeholder="Search courses or sources…"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-800 shadow-sm outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-2 focus:ring-[#DC2626]/15 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-red-500/25"
                 />
               </label>
             </div>
-
+            <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+              Sources come from ingest jobs — PDF, images, links, live lecture
+              transcripts, notes, etc. Hover a Sources cell for file names.
+            </p>
             <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200/90 bg-white shadow-sm dark:border-zinc-700/90 dark:bg-zinc-900/60 dark:shadow-black/30">
               <div className={TABLE_BODY_SCROLL}>
                 <table className="min-w-full border-collapse text-left">
@@ -545,6 +566,9 @@ export function AdminDashboardClient({
                       </th>
                       <th className="hidden px-3 py-2 font-semibold md:table-cell md:px-3.5">
                         Owner ID
+                      </th>
+                      <th className="px-3 py-2 font-semibold sm:px-3.5">
+                        Sources
                       </th>
                       <th className="px-3 py-2 font-semibold sm:px-3.5">
                         Visibility
@@ -558,7 +582,7 @@ export function AdminDashboardClient({
                     {filtered.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={4}
+                          colSpan={5}
                           className="px-3 py-8 text-center text-xs text-zinc-500 dark:text-zinc-400"
                         >
                           No courses match your search.
@@ -567,6 +591,18 @@ export function AdminDashboardClient({
                     ) : (
                       filtered.map((c, index) => {
                         const isPublic = Boolean(c.is_public);
+                        const sourceLabels = c.sourceLabels ?? [];
+                        const materials = c.materials ?? [];
+                        const detailTitle =
+                          materials.length > 0
+                            ? materials
+                                .map((m) =>
+                                  m.fileName
+                                    ? `${m.label}: ${m.fileName}`
+                                    : m.label
+                                )
+                                .join("\n")
+                            : "No ingest jobs recorded";
                         return (
                           <tr
                             key={c.id}
@@ -603,6 +639,40 @@ export function AdminDashboardClient({
                                   label="Copy owner ID"
                                 />
                               </div>
+                            </td>
+                            <td
+                              className="border-t border-zinc-100/90 px-3 py-2 dark:border-zinc-800 sm:px-3.5"
+                              title={detailTitle}
+                            >
+                              {sourceLabels.length === 0 ? (
+                                <span className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                                  —
+                                </span>
+                              ) : (
+                                <div className="flex max-w-[14rem] flex-wrap gap-1">
+                                  {sourceLabels.map((label) => (
+                                    <span
+                                      key={label}
+                                      className="inline-flex rounded-md bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-900 ring-1 ring-sky-600/15 dark:bg-sky-950/50 dark:text-sky-200 dark:ring-sky-500/25"
+                                    >
+                                      {label}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {materials.some((m) => m.fileName) ? (
+                                <p className="mt-1 line-clamp-2 text-[10px] leading-snug text-zinc-400 dark:text-zinc-500">
+                                  {materials
+                                    .filter((m) => m.fileName)
+                                    .slice(0, 3)
+                                    .map((m) => m.fileName)
+                                    .join(" · ")}
+                                  {materials.filter((m) => m.fileName).length >
+                                  3
+                                    ? "…"
+                                    : ""}
+                                </p>
+                              ) : null}
                             </td>
                             <td className="border-t border-zinc-100/90 px-3 py-2 dark:border-zinc-800 sm:px-3.5">
                               {isPublic ? (

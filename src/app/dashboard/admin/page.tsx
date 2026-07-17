@@ -6,22 +6,20 @@ import {
   fetchAdminUserDirectory,
   fetchRecentAdminActivity,
 } from "@/lib/admin-dashboard-data";
+import { loadAdminCourseSources } from "@/lib/admin-course-sources";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
-import { AdminDashboardClient } from "./AdminDashboardClient";
+import {
+  AdminDashboardClient,
+  type AdminCourseRow,
+} from "./AdminDashboardClient";
 import type { PendingListingRow } from "@/components/admin/AdminPendingListings";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminDashboardPage() {
   const admin = createAdminClient();
-  let courses: {
-    id: string;
-    title: string;
-    user_id: string;
-    created_at: string;
-    is_public: boolean | null;
-  }[] = [];
+  let courses: AdminCourseRow[] = [];
   let loadError: string | null = null;
   let totalCourses = 0;
   let publicCourses = 0;
@@ -62,7 +60,28 @@ export default async function AdminDashboardPage() {
       console.error("[admin] courses", listRes.error);
       loadError = "Could not load courses.";
     } else {
-      courses = (listRes.data ?? []) as typeof courses;
+      const base = (listRes.data ?? []) as Array<{
+        id: string;
+        title: string;
+        user_id: string;
+        created_at: string;
+        is_public: boolean | null;
+      }>;
+      const sourcesByCourse = await loadAdminCourseSources(
+        admin,
+        base.map((c) => c.id)
+      );
+      courses = base.map((c) => {
+        const sources = sourcesByCourse.get(c.id) ?? {
+          labels: [],
+          materials: [],
+        };
+        return {
+          ...c,
+          sourceLabels: sources.labels,
+          materials: sources.materials,
+        };
+      });
     }
 
     totalCourses = countRes.count ?? 0;
@@ -110,8 +129,8 @@ export default async function AdminDashboardPage() {
           | { title: string; user_id: string }
           | { title: string; user_id: string }[]
           | null;
-        const courses = Array.isArray(joined) ? (joined[0] ?? null) : joined;
-        const uid = courses?.user_id ?? "";
+        const coursesJoin = Array.isArray(joined) ? (joined[0] ?? null) : joined;
+        const uid = coursesJoin?.user_id ?? "";
         return {
           course_id: row.course_id,
           price_cents: row.price_cents,
@@ -120,7 +139,7 @@ export default async function AdminDashboardPage() {
           quality_review: row.quality_review as PendingListingRow["quality_review"],
           originality_review:
             row.originality_review as PendingListingRow["originality_review"],
-          courses,
+          courses: coursesJoin,
           seller_label: profileMap.get(uid) ?? uid.slice(0, 8),
         };
       });
@@ -136,9 +155,7 @@ export default async function AdminDashboardPage() {
 
   return (
     <>
-      <AppHeader
-        right={<HeaderNavLoggedInServer />}
-      />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
         <AdminDashboardClient
           courses={courses}
