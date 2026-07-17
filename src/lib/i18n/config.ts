@@ -3,10 +3,13 @@
  * Separate from course output language (`courses.output_language`), which
  * controls what language AI-generated lessons are written in.
  *
- * Adding a language: add the code here, create `src/locales/<code>.ts`,
- * register it in `src/locales/index.ts`, and extend the DB check constraint.
+ * Korean locale files remain in `src/locales/*` for a later re-enable; only
+ * English is offered in the UI for now.
+ *
+ * Adding a language: add the code here, create/register locale strings, and
+ * extend the DB check constraint.
  */
-export const UI_LOCALES = ["en", "ko"] as const;
+export const UI_LOCALES = ["en"] as const;
 
 export type UiLocale = (typeof UI_LOCALES)[number];
 
@@ -28,7 +31,9 @@ export function isUiLocale(value: unknown): value is UiLocale {
 export const UI_LOCALE_OPTIONS: ReadonlyArray<{
   value: UiLocale;
   label: string;
-}> = [
-  { value: "en", label: "English" },
-  { value: "ko", label: "한국어" },
-];
+}> = [{ value: "en", label: "English" }];
+
+/** True when more than one UI language is offered (controls switcher visibility). */
+export function isUiLocaleSwitcherEnabled(): boolean {
+  return UI_LOCALE_OPTIONS.length > 1;
+}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  isUiLocaleSwitcherEnabled,
   UI_LOCALE_OPTIONS,
   type UiLocale,
 } from "@/lib/i18n/config";
@@ -27,8 +28,8 @@ function GlobeIcon({ className }: { className?: string }) {
 }
 
 /**
- * Globe dropdown that switches the app UI language (English / 한국어).
- * Used in page headers and the profile settings page.
+ * Globe dropdown that switches the app UI language.
+ * Hidden while only one locale is enabled.
  */
 export function LanguageSwitcher({ className }: { className?: string }) {
   const t = useT();
@@ -72,6 +73,8 @@ export function LanguageSwitcher({ className }: { className?: string }) {
     },
     [locale, pending, setUiLocale]
   );
+
+  if (!isUiLocaleSwitcherEnabled()) return null;
 
   const current = UI_LOCALE_OPTIONS.find((o) => o.value === locale);
 
@@ -152,8 +155,8 @@ export function LanguageSwitcher({ className }: { className?: string }) {
 }
 
 /**
- * Compact language picker for the avatar dropdown — label on top, full-width
- * segmented control below so "English" / "한국어" never clip or wrap vertically.
+ * Compact language picker for the avatar dropdown.
+ * Hidden while only one locale is enabled.
  */
 export function LanguageToggleRow() {
   const t = useT();
@@ -173,6 +176,8 @@ export function LanguageToggleRow() {
     },
     [locale, pending, setUiLocale]
   );
+
+  if (!isUiLocaleSwitcherEnabled()) return null;
 
   return (
     <div className="px-3.5 py-2.5">

@@ -109,8 +109,9 @@ export function CourseVisibilityToggle({
 
       {marketplaceEnabled && listingBlocksExplore ? (
         <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
-          A marketplace listing is active or in progress. Delist or wait for
-          review before enabling free Explore.
+          {isPublic
+            ? "A marketplace listing draft is in progress while Explore is still on. You can turn Explore off anytime; turn the listing off (or wait for review) before enabling free Explore again."
+            : "A marketplace listing is active or in progress. Delist or wait for review before enabling free Explore."}
         </p>
       ) : null}
 
@@ -140,7 +141,12 @@ export function CourseVisibilityToggle({
           <VisibilitySwitch
             id={switchId}
             checked={isPublic}
-            disabled={pending || (marketplaceEnabled && listingBlocksExplore)}
+            // Listing blocks turning Explore *on*; turning *off* must stay allowed
+            // (API already allows isPublic:false even with a draft listing).
+            disabled={
+              pending ||
+              (marketplaceEnabled && listingBlocksExplore && !isPublic)
+            }
             onChange={(next) => void apply(next)}
           />
         </div>

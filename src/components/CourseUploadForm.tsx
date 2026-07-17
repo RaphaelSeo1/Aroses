@@ -20,7 +20,6 @@ import {
   DEFAULT_COURSE_OUTPUT_LANGUAGE,
   type CourseOutputLanguage,
 } from "@/lib/course-output-language";
-import { useLocale } from "@/lib/i18n/LocaleProvider";
 import {
   estimatedProcessingHint,
   formatLabel,
@@ -123,7 +122,6 @@ export function CourseUploadForm({
   defaultOutputLanguage?: CourseOutputLanguage;
 }) {
   const t = useT();
-  const uiLocale = useLocale();
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const dragDepthRef = useRef(0);
@@ -137,12 +135,8 @@ export function CourseUploadForm({
   // own focus statement, not a stale course-wide one. For self-study courses
   // we open the block by default so the learner remembers to fill it in.
   const [studyGoal, setStudyGoal] = useState<string>("");
-  const initialOutputLanguage =
-    defaultOutputLanguage === DEFAULT_COURSE_OUTPUT_LANGUAGE && uiLocale === "ko"
-      ? "ko"
-      : defaultOutputLanguage;
   const [outputLanguage, setOutputLanguage] =
-    useState<CourseOutputLanguage>(initialOutputLanguage);
+    useState<CourseOutputLanguage>(defaultOutputLanguage);
   const [showGoal, setShowGoal] = useState<boolean>(isSelfStudy);
   const [polishingGoal, setPolishingGoal] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
@@ -199,12 +193,8 @@ export function CourseUploadForm({
   const chipReorderActiveRef = useRef(false);
 
   useEffect(() => {
-    setOutputLanguage(
-      defaultOutputLanguage === DEFAULT_COURSE_OUTPUT_LANGUAGE && uiLocale === "ko"
-        ? "ko"
-        : defaultOutputLanguage
-    );
-  }, [defaultOutputLanguage, uiLocale]);
+    setOutputLanguage(defaultOutputLanguage);
+  }, [defaultOutputLanguage]);
 
   const fileKey = (f: File) => `${f.name}:${f.size}`;
 

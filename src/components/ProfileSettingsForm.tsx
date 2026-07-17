@@ -14,6 +14,7 @@ import { LogoutButton } from "@/components/LogoutButton";
 import { FriendsApp } from "@/components/messaging/FriendsApp";
 import { MessagingWorkspace } from "@/components/messaging/MessagingWorkspace";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { isUiLocaleSwitcherEnabled } from "@/lib/i18n/config";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { createClient } from "@/lib/supabase/client";
@@ -896,14 +897,16 @@ export function ProfileSettingsForm({
                     </div>
                   </SettingsRow>
 
-                  <SettingsRow
-                    label={t.settings.languageLabel}
-                    hint={t.settings.languageHint}
-                  >
-                    <div className="flex justify-end">
-                      <LanguageSwitcher />
-                    </div>
-                  </SettingsRow>
+                  {isUiLocaleSwitcherEnabled() ? (
+                    <SettingsRow
+                      label={t.settings.languageLabel}
+                      hint={t.settings.languageHint}
+                    >
+                      <div className="flex justify-end">
+                        <LanguageSwitcher />
+                      </div>
+                    </SettingsRow>
+                  ) : null}
                 </div>
               </div>
 
