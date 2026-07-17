@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertCanCreateCourse } from "@/lib/billing/course-cap";
 import {
   buildLiveNotesStudyContext,
   extractLiveNotesEmphasis,
@@ -73,6 +74,14 @@ export async function POST(request: Request, ctx: Params) {
       : (note.title as string)?.trim() || "Notes course";
 
   if (!courseId) {
+    const cap = await assertCanCreateCourse(user.id);
+    if (!cap.ok) {
+      return NextResponse.json(
+        { error: cap.error, code: cap.code, used: cap.used, cap: cap.cap },
+        { status: cap.status }
+      );
+    }
+
     const { data: maxRow } = await supabase
       .from("courses")
       .select("sort_order")

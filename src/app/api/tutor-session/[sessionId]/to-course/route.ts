@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertCanCreateCourse } from "@/lib/billing/course-cap";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateCourseFromMaterial } from "@/lib/ai/study-generation";
@@ -155,6 +156,14 @@ export async function POST(_req: Request, ctx: Params) {
     .maybeSingle();
   const nextOrder =
     typeof maxRow?.sort_order === "number" ? maxRow.sort_order + 1 : 0;
+
+  const cap = await assertCanCreateCourse(user.id);
+  if (!cap.ok) {
+    return NextResponse.json(
+      { error: cap.error, code: cap.code, used: cap.used, cap: cap.cap },
+      { status: cap.status }
+    );
+  }
 
   const { data: courseRow, error: courseErr } = await supabase
     .from("courses")

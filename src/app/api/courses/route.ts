@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertCanCreateCourse } from "@/lib/billing/course-cap";
 import { createClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
@@ -56,6 +57,14 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "Please enter a course title (at least 2 characters)." },
       { status: 400 }
+    );
+  }
+
+  const cap = await assertCanCreateCourse(user.id);
+  if (!cap.ok) {
+    return NextResponse.json(
+      { error: cap.error, code: cap.code, used: cap.used, cap: cap.cap },
+      { status: cap.status }
     );
   }
 
