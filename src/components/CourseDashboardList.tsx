@@ -16,26 +16,38 @@ export type DashboardCourse = {
   is_public?: boolean;
   /** Conversational / private self-study flow — never mixed into the public grid. */
   is_self_study?: boolean;
+  /** Marketplace listing status when the owner has a course_listings row. */
+  listingStatus?: string | null;
 };
 
-type DashboardSection = "explore" | "private" | "self";
-
-function isExploreListed(c: DashboardCourse): boolean {
-  return Boolean(c.is_public) && !Boolean(c.is_self_study);
-}
+type DashboardSection = "explore" | "forSale" | "private" | "self";
 
 function isSelfStudyCourse(c: DashboardCourse): boolean {
   return Boolean(c.is_self_study);
 }
 
+function isForSaleListed(c: DashboardCourse): boolean {
+  return !isSelfStudyCourse(c) && c.listingStatus === "approved";
+}
+
+function isExploreListed(c: DashboardCourse): boolean {
+  return (
+    Boolean(c.is_public) && !isSelfStudyCourse(c) && !isForSaleListed(c)
+  );
+}
+
 function isPrivateDraft(c: DashboardCourse): boolean {
-  return !isSelfStudyCourse(c) && !isExploreListed(c);
+  return (
+    !isSelfStudyCourse(c) && !isExploreListed(c) && !isForSaleListed(c)
+  );
 }
 
 function sectionPredicate(section: DashboardSection): (c: DashboardCourse) => boolean {
   switch (section) {
     case "explore":
       return isExploreListed;
+    case "forSale":
+      return isForSaleListed;
     case "self":
       return isSelfStudyCourse;
     case "private":
@@ -189,6 +201,10 @@ export function CourseDashboardList({
     () => courses.filter(isExploreListed),
     [courses]
   );
+  const forSaleCourses = useMemo(
+    () => courses.filter(isForSaleListed),
+    [courses]
+  );
   const privateCourses = useMemo(
     () => courses.filter(isPrivateDraft),
     [courses]
@@ -209,6 +225,18 @@ export function CourseDashboardList({
     }
     return reorderLocal(exploreCourses, dragFrom, dragOver);
   }, [exploreCourses, dragSection, dragFrom, dragOver]);
+
+  const previewForSale = useMemo(() => {
+    if (
+      dragSection !== "forSale" ||
+      dragFrom === null ||
+      dragOver === null ||
+      dragFrom === dragOver
+    ) {
+      return forSaleCourses;
+    }
+    return reorderLocal(forSaleCourses, dragFrom, dragOver);
+  }, [forSaleCourses, dragSection, dragFrom, dragOver]);
 
   const previewPrivate = useMemo(() => {
     if (
@@ -238,9 +266,11 @@ export function CourseDashboardList({
     dragFrom !== null && dragSection !== null
       ? (dragSection === "explore"
           ? exploreCourses[dragFrom]
-          : dragSection === "private"
-            ? privateCourses[dragFrom]
-            : selfStudyCourses[dragFrom]
+          : dragSection === "forSale"
+            ? forSaleCourses[dragFrom]
+            : dragSection === "private"
+              ? privateCourses[dragFrom]
+              : selfStudyCourses[dragFrom]
         )?.id
       : null;
 
@@ -420,9 +450,11 @@ export function CourseDashboardList({
     const slice =
       section === "explore"
         ? exploreCourses
-        : section === "private"
-          ? privateCourses
-          : selfStudyCourses;
+        : section === "forSale"
+          ? forSaleCourses
+          : section === "private"
+            ? privateCourses
+            : selfStudyCourses;
     const nextSlice = reorderLocal(slice, dragFrom, toIndex);
     const merged = mergeSectionOrder(courses, section, nextSlice);
     setCourses(merged);
@@ -518,6 +550,52 @@ export function CourseDashboardList({
             />
           </ul>
         )}
+
+        {previewForSale.length > 0 ? (
+          <>
+            <div className="mt-10 flex flex-wrap items-start gap-3">
+              <span
+                className="mt-1.5 hidden h-8 w-0.5 shrink-0 rounded-full bg-emerald-400 dark:bg-emerald-600 sm:block"
+                aria-hidden
+              />
+              <div>
+                <h4 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+                  {t.dashboard.forSaleCourses}
+                </h4>
+                <p className="mt-1 max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">
+                  {t.dashboard.forSaleCoursesDesc}
+                </p>
+              </div>
+            </div>
+            <ul className={courseGridClass}>
+              {previewForSale.map((c, index) => (
+                <CourseCard
+                  key={c.id}
+                  course={c}
+                  index={index}
+                  density={density}
+                  viewerUserId={viewerUserId}
+                  busy={busyId === c.id || busyId === "__reorder__"}
+                  editingId={editingId}
+                  draftTitle={draftTitle}
+                  draftDescription={draftDescription}
+                  setDraftTitle={setDraftTitle}
+                  setDraftDescription={setDraftDescription}
+                  onStartEdit={startEdit}
+                  onSaveEdit={saveEdit}
+                  onCancelEdit={cancelEdit}
+                  onRemove={removeCourse}
+                  isDragging={c.id === draggedId}
+                  visualVariant="default"
+                  onDragStart={() => handleDragStart("forSale", index)}
+                  onDragOver={(e) => handleDragOver("forSale", e, index)}
+                  onDrop={() => handleDrop("forSale", index)}
+                  onDragEnd={handleDragEnd}
+                />
+              ))}
+            </ul>
+          </>
+        ) : null}
 
         {previewPrivate.length > 0 ? (
           <>
@@ -767,10 +845,12 @@ function CourseCard({
   const isEditing = editingId === c.id;
   const canManage = c.user_id === viewerUserId;
   const listedOnExplore = isExploreListed(c);
+  const listedForSale = isForSaleListed(c);
   const canToggleExplore =
     canManage &&
     onToggleExploreListing != null &&
-    !isSelfStudyCourse(c);
+    !isSelfStudyCourse(c) &&
+    !listedForSale;
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -981,7 +1061,11 @@ function CourseCard({
               >
                 {c.title}
               </Link>
-              {listedOnExplore ? (
+              {listedForSale ? (
+                <span className="rounded-full border border-emerald-200/80 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
+                  {t.dashboard.forSaleBadge}
+                </span>
+              ) : listedOnExplore ? (
                 <span className="rounded-full border border-emerald-200/80 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900 shadow-sm dark:border-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-200">
                   {t.dashboard.onExplore}
                 </span>

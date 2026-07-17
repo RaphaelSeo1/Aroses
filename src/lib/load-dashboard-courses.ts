@@ -82,6 +82,24 @@ export async function loadDashboardCourseLists(
   const rawOwned =
     fallback && !fallback.error ? fallback.data : primary.data;
 
+  const ownedIdsList = (rawOwned ?? [])
+    .filter((row) => row.user_id === userId)
+    .map((row) => row.id as string);
+
+  const listingStatusByCourse = new Map<string, string>();
+  if (ownedIdsList.length > 0) {
+    const { data: listings } = await supabase
+      .from("course_listings")
+      .select("course_id, status")
+      .in("course_id", ownedIdsList)
+      .eq("seller_user_id", userId);
+    for (const row of listings ?? []) {
+      if (typeof row.course_id === "string" && typeof row.status === "string") {
+        listingStatusByCourse.set(row.course_id, row.status);
+      }
+    }
+  }
+
   const owned: DashboardCourse[] = (rawOwned ?? [])
     .filter((row) => row.user_id === userId)
     .map((row) => ({
@@ -91,6 +109,7 @@ export async function loadDashboardCourseLists(
       user_id: row.user_id,
       is_public: Boolean((row as { is_public?: boolean }).is_public),
       is_self_study: Boolean((row as { is_self_study?: boolean }).is_self_study),
+      listingStatus: listingStatusByCourse.get(row.id) ?? null,
     }));
 
   const ownedIds = new Set(owned.map((c) => c.id));

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { marketplaceApiUnavailable } from "@/lib/marketplace/api-guard";
 import {
   fetchSellerPayoutAccount,
+  refreshConnectAccountFromStripe,
   sellerCanReceivePayments,
 } from "@/lib/marketplace/connect";
 import {
@@ -11,6 +12,7 @@ import {
 import { hasPurchasedCourse } from "@/lib/marketplace/purchases";
 import { formatPrice } from "@/lib/marketplace/listing-access";
 import { getStripe, isStripeConfigured, originFromRequest } from "@/lib/stripe/client";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -81,10 +83,28 @@ export async function POST(request: Request, ctx: Params) {
     );
   }
 
-  const sellerAccount = await fetchSellerPayoutAccount(
-    supabase,
+  // Buyers cannot read another user's payout row under RLS — use service role.
+  const admin = createAdminClient();
+  if (!admin) {
+    return NextResponse.json(
+      { error: "Marketplace payments are not configured yet." },
+      { status: 503 }
+    );
+  }
+
+  let sellerAccount = await fetchSellerPayoutAccount(
+    admin,
     listing.seller_user_id
   );
+  if (
+    sellerAccount?.stripeAccountId &&
+    !sellerCanReceivePayments(sellerAccount)
+  ) {
+    const refreshed = await refreshConnectAccountFromStripe(
+      sellerAccount.stripeAccountId
+    );
+    if (refreshed) sellerAccount = refreshed;
+  }
   if (!sellerCanReceivePayments(sellerAccount)) {
     return NextResponse.json(
       { error: "This seller has not finished payout setup yet." },

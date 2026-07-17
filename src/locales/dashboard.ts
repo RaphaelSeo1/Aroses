@@ -128,6 +128,10 @@ const en = {
   createCoursePlus: "+ Create a course",
   privateCourses: "Private courses",
   privateCoursesDesc: "Not on Explore — only you can open them from here.",
+  forSaleCourses: "For sale",
+  forSaleCoursesDesc:
+    "Live on the marketplace — learners can buy full access with Stripe.",
+  forSaleBadge: "For sale",
   selfStudyHeading: "Self study",
   selfStudyDesc: "Private — only visible to you in your workspace.",
   selfStudyEmpty:
@@ -366,6 +370,10 @@ const ko: typeof en = {
   createCoursePlus: "+ 코스 만들기",
   privateCourses: "비공개 코스",
   privateCoursesDesc: "탐색에 표시되지 않아요 — 여기서 나만 열 수 있어요.",
+  forSaleCourses: "판매 중",
+  forSaleCoursesDesc:
+    "마켓플레이스에 등록된 코스예요 — 학습자가 Stripe로 구매할 수 있어요.",
+  forSaleBadge: "판매 중",
   selfStudyHeading: "자율 학습",
   selfStudyDesc: "비공개 — 내 워크스페이스에서 나만 볼 수 있어요.",
   selfStudyEmpty:
