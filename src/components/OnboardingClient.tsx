@@ -755,21 +755,33 @@ export function OnboardingClient() {
               <p className="mx-auto mt-5 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-600">
                 {t.onboarding.doneBody}
               </p>
-              <div className="mx-auto mt-10 flex max-w-md flex-col gap-3 sm:flex-row sm:justify-center">
+              <div className="mx-auto mt-10 flex max-w-md flex-col gap-3">
                 <Link
-                  href="/dashboard/courses/new"
-                  className={`${BTN_PRIMARY} flex-1 gap-2 sm:flex-initial`}
+                  href="/?tour=1"
+                  className={`${BTN_PRIMARY} w-full gap-2`}
                 >
-                  {t.onboarding.createCourse}
+                  {t.onboarding.takeTour}
                   <IconArrowRight className="h-4 w-4" />
                 </Link>
-                <Link
-                  href="/explore"
-                  className={`${BTN_SECONDARY} flex-1 gap-2 font-semibold sm:flex-initial`}
+                <button
+                  type="button"
+                  className={`${BTN_SECONDARY} w-full gap-2 font-semibold`}
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        await fetch("/api/product-tour/complete", {
+                          method: "POST",
+                        });
+                      } catch {
+                        /* still leave onboarding */
+                      }
+                      router.replace("/");
+                      router.refresh();
+                    })();
+                  }}
                 >
-                  {t.onboarding.exploreCourses}
-                  <IconArrowRight className="h-4 w-4" />
-                </Link>
+                  {t.onboarding.skipTutorial}
+                </button>
               </div>
             </div>
           ) : null}

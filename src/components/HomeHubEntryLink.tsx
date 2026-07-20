@@ -283,6 +283,7 @@ export function HomeHubEntryLink({
   count,
   size = "default",
   layout = "row",
+  dataTour,
 }: {
   href: string;
   label: string;
@@ -291,6 +292,8 @@ export function HomeHubEntryLink({
   count?: number;
   size?: "default" | "lg";
   layout?: "row" | "tile";
+  /** Product-tour spotlight target (`data-tour`). */
+  dataTour?: string;
 }) {
   const styles = variantStyles[variant];
   const isLg = size === "lg";
@@ -299,6 +302,7 @@ export function HomeHubEntryLink({
     return (
       <Link
         href={href}
+        data-tour={dataTour}
         className={[
           "group relative flex h-full min-h-[8.25rem] flex-col overflow-hidden rounded-xl border border-zinc-200/90 p-4 shadow-sm ring-1 ring-white/50 transition hover:-translate-y-0.5 hover:shadow-md dark:border-zinc-800 dark:ring-zinc-700/30",
           styles.cardBg,
@@ -351,6 +355,7 @@ export function HomeHubEntryLink({
   return (
     <Link
       href={href}
+      data-tour={dataTour}
       className={[
         "group relative block overflow-hidden rounded-3xl border border-zinc-200/90 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md transition hover:-translate-y-0.5 hover:shadow-md dark:border-zinc-800 dark:ring-zinc-700/30",
         styles.cardBg,

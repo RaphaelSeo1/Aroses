@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getHelpVideos } from "@/lib/help-videos";
 import { HonestFaqSection } from "@/components/help/HonestFaqSection";
@@ -136,6 +137,20 @@ export function HelpPageContent() {
       </nav>
 
       <article className="min-w-0 flex-1">
+        <div className="mb-8 rounded-2xl border border-zinc-200/90 bg-white/80 p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/80">
+          <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+            {t.replayTour}
+          </p>
+          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+            {t.replayTourHint}
+          </p>
+          <Link
+            href="/?tour=1"
+            className="mt-3 inline-flex rounded-full bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover"
+          >
+            {t.replayTour}
+          </Link>
+        </div>
         <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
           {t.intro}
         </p>

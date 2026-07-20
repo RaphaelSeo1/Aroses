@@ -57,15 +57,17 @@ async function ExploreCoursesSection() {
   return (
     <main className="min-h-[calc(100vh-4rem)] flex-1 bg-app-gradient">
       <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-14">
-        <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-          {t.explore.eyebrow}
-        </p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          {t.explore.title}
-        </h1>
-        <p className="mt-3 max-w-2xl text-zinc-600 dark:text-zinc-400">
-          {marketplaceEnabled ? t.explore.descMarketplace : t.explore.descFree}
-        </p>
+        <div data-tour="explore-heading">
+          <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+            {t.explore.eyebrow}
+          </p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            {t.explore.title}
+          </h1>
+          <p className="mt-3 max-w-2xl text-zinc-600 dark:text-zinc-400">
+            {marketplaceEnabled ? t.explore.descMarketplace : t.explore.descFree}
+          </p>
+        </div>
 
         {coursesError ? (
           <p className="mt-12 text-sm text-red-600 dark:text-red-400">

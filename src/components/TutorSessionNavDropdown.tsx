@@ -53,7 +53,11 @@ export function TutorSessionNavDropdown() {
     : "font-medium text-brand-muted hover:bg-brand-blush hover:text-brand-ink dark:text-zinc-500 dark:hover:bg-white/10 dark:hover:text-zinc-100";
 
   return (
-    <div ref={containerRef} className="relative inline-block">
+    <div
+      ref={containerRef}
+      className="relative inline-block"
+      data-tour="nav-tutor"
+    >
       <div
         className={`inline-flex items-center rounded-full py-2 pl-3 pr-2 text-sm transition ${pillVisual}`}
       >

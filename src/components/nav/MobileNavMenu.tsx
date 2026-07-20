@@ -66,6 +66,7 @@ export function MobileNavMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t.nav.menu}
+        data-tour="nav-menu"
         className="inline-flex h-9 w-9 items-center justify-center rounded-full text-brand-muted transition hover:bg-brand-blush hover:text-brand-ink dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
       >
         <svg

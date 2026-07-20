@@ -5,6 +5,7 @@ import Script from "next/script";
 import { ActivePdfBuildProvider } from "@/components/ActivePdfBuildProvider";
 import { AppAdminNavGate } from "@/components/AppAdminNavGate";
 import { AppDialogs } from "@/components/AppDialogs";
+import { ProductTourHost } from "@/components/product-tour/ProductTourHost";
 import { ScrollRestoration } from "@/components/ScrollRestoration";
 import { ThemeHydration } from "@/components/ThemeHydration";
 import { APP_NAME } from "@/lib/brand";
@@ -98,6 +99,7 @@ export default async function RootLayout({
             <AppAdminNavGate>{children}</AppAdminNavGate>
           </ActivePdfBuildProvider>
           <AppDialogs />
+          <ProductTourHost />
         </LocaleProvider>
         <Analytics />
       </body>

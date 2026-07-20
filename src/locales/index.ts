@@ -13,6 +13,7 @@ import { legal } from "./legal";
 import { messages } from "./messages";
 import { nav } from "./nav";
 import { onboarding } from "./onboarding";
+import { productTour } from "./productTour";
 import { progress } from "./progress";
 import { review } from "./review";
 import { settings } from "./settings";
@@ -32,6 +33,7 @@ export function getDictionary(locale: UiLocale) {
     auth: auth[locale],
     landing: landing[locale],
     onboarding: onboarding[locale],
+    productTour: productTour[locale],
     dashboard: dashboard[locale],
     settings: settings[locale],
     study: study[locale],

@@ -75,6 +75,7 @@ export function AvatarMenu({
         aria-expanded={open}
         aria-label={t.nav.accountMenu}
         title={label}
+        data-tour="nav-account"
         className={`inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-sm font-semibold transition ${
           onAccountPage
             ? "ring-2 ring-brand ring-offset-2 ring-offset-white dark:ring-brand-soft dark:ring-offset-[#141110]"

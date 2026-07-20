@@ -104,7 +104,7 @@ export async function DashboardHomeContent({
                 }}
               />
 
-              <section className="mt-8">
+              <section className="mt-8" data-tour="home-start">
                 <header className="mb-3 flex items-baseline justify-between">
                   <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
                     {t.dashboard.startSomethingNew}
@@ -113,6 +113,7 @@ export async function DashboardHomeContent({
                 <div className="grid gap-4 md:grid-cols-3">
                   <Link
                     href="/dashboard/courses/new"
+                    data-tour="home-create-course"
                     className={[
                       "group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md",
                       primaryAction === "create"
@@ -239,6 +240,7 @@ export async function DashboardHomeContent({
                     href="/notes"
                     variant="notes"
                     layout="tile"
+                    dataTour="home-notes"
                     label={t.dashboard.viewYourNotes}
                     hint={t.dashboard.viewNotesHint}
                   />
@@ -246,6 +248,7 @@ export async function DashboardHomeContent({
                     href="/library/courses"
                     variant="courses"
                     layout="tile"
+                    dataTour="home-courses"
                     label={t.dashboard.yourCourses}
                     hint={t.dashboard.hubCoursesHint}
                     count={hasOwned ? ownedCourses.length : undefined}

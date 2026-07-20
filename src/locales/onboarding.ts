@@ -77,7 +77,9 @@ const en = {
   doneTitle: "You're all set, {name}!",
   doneFallbackName: "friend",
   doneBody:
-    "Your Aroses account is ready. Start by creating your first course or exploring what others have made.",
+    "Your Aroses account is ready. Take a quick tour of the site, or skip and jump straight in.",
+  takeTour: "Take the tour",
+  skipTutorial: "Skip tutorial",
   createCourse: "Create a course",
   exploreCourses: "Explore courses",
 };
@@ -160,7 +162,9 @@ const ko: typeof en = {
   doneTitle: "{name}님, 모든 준비가 끝났어요!",
   doneFallbackName: "회원",
   doneBody:
-    "Aroses 계정이 준비됐어요. 첫 코스를 만들거나 다른 사람들이 만든 코스를 둘러보세요.",
+    "Aroses 계정이 준비됐어요. 사이트를 간단히 둘러보거나 건너뛰고 바로 시작할 수 있어요.",
+  takeTour: "둘러보기 시작",
+  skipTutorial: "튜토리얼 건너뛰기",
   createCourse: "코스 만들기",
   exploreCourses: "코스 둘러보기",
 };

@@ -58,6 +58,7 @@ export function HeaderNavLoggedIn({
       <div className="hidden items-center gap-1.5 lg:flex lg:gap-2">
         <HeaderNavLink
           href="/"
+          data-tour="nav-home"
           activeWhen={(p) =>
             p === "/" ||
             p === "/dashboard" ||
