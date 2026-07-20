@@ -8,6 +8,7 @@ import { MobileNavMenu } from "@/components/nav/MobileNavMenu";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { useSrsDueCounts, type SrsDueCounts } from "@/lib/srs-due";
+import type { SocialBadgeCounts } from "@/lib/messaging/social-badge-types";
 
 /**
  * Primary navigation on every authenticated screen.
@@ -22,6 +23,7 @@ export function HeaderNavLoggedIn({
   courseHomeHref,
   adminHubHref: adminHubHrefProp,
   initialDueCounts,
+  initialSocialCounts,
   displayName,
   email,
   avatarUrl,
@@ -32,6 +34,8 @@ export function HeaderNavLoggedIn({
   adminHubHref?: string;
   /** SSR due counts so the Review badge renders on first paint. */
   initialDueCounts?: SrsDueCounts;
+  /** SSR social badge counts (unread DMs + friend requests). */
+  initialSocialCounts?: SocialBadgeCounts;
   /** Profile bits for the avatar menu (fetched server-side). */
   displayName?: string | null;
   email?: string | null;
@@ -133,6 +137,7 @@ export function HeaderNavLoggedIn({
         email={email}
         avatarUrl={avatarUrl}
         adminHubHref={adminHubHref}
+        initialSocialCounts={initialSocialCounts}
       />
     </>
   );

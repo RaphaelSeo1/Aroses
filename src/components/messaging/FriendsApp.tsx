@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { friendDisplayName } from "@/lib/messaging/display-name";
+import { dispatchMessagingRefresh } from "@/lib/messaging/realtime";
 import { socialMessagesHref } from "@/lib/messaging/social-url";
 import type { FriendshipListItem } from "@/lib/messaging/types";
 import { useT } from "@/lib/i18n/LocaleProvider";
@@ -175,6 +176,7 @@ export function FriendsApp({
         setUsername("");
         setSuggestions([]);
         await load();
+        dispatchMessagingRefresh();
       }
     } catch {
       setError(t.messages.networkError);
@@ -191,6 +193,7 @@ export function FriendsApp({
         body: JSON.stringify({ action }),
       });
       await load();
+      dispatchMessagingRefresh();
     } catch {
       setError(t.messages.networkError);
     }
@@ -202,6 +205,7 @@ export function FriendsApp({
     try {
       await fetch(`/api/friends/${id}`, { method: "DELETE" });
       await load();
+      dispatchMessagingRefresh();
     } catch {
       setError("Network error.");
     }

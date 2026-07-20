@@ -8,6 +8,12 @@ import { LogoutButton } from "@/components/LogoutButton";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
+import {
+  formatBadgeCount,
+  useSocialBadgeCounts,
+  type SocialBadgeCounts,
+} from "@/lib/social-badge";
 
 /**
  * Top-right account menu. Click the avatar to open Profile / Admin (admins
@@ -20,16 +26,23 @@ export function AvatarMenu({
   email,
   avatarUrl,
   adminHubHref,
+  initialSocialCounts,
 }: {
   displayName?: string | null;
   email?: string | null;
   avatarUrl?: string | null;
   adminHubHref?: string;
+  initialSocialCounts?: SocialBadgeCounts | null;
 }) {
   const t = useT();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const { counts: socialCounts } = useSocialBadgeCounts({
+    initialCounts: initialSocialCounts,
+  });
+  const socialTotal = socialCounts.total;
+  const socialBadge = formatBadgeCount(socialTotal);
 
   const close = useCallback(() => setOpen(false), []);
   const toggle = useCallback(() => setOpen((v) => !v), []);
@@ -76,10 +89,14 @@ export function AvatarMenu({
         onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={t.nav.accountMenu}
+        aria-label={
+          socialTotal > 0
+            ? tf(t.nav.socialAriaBadge, { count: socialTotal })
+            : t.nav.accountMenu
+        }
         title={label}
         data-tour="nav-account"
-        className={`inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-sm font-semibold transition ${
+        className={`relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-sm font-semibold transition ${
           onAccountPage
             ? "ring-2 ring-brand ring-offset-2 ring-offset-white dark:ring-brand-soft dark:ring-offset-[#141110]"
             : "ring-1 ring-brand-border hover:ring-brand/50 dark:ring-white/15 dark:hover:ring-white/30"
@@ -100,6 +117,11 @@ export function AvatarMenu({
         ) : (
           <span aria-hidden>{initials}</span>
         )}
+        {socialTotal > 0 ? (
+          <span className="absolute -right-0.5 -top-0.5 inline-flex min-w-[1.05rem] items-center justify-center rounded-full bg-brand px-1 py-0.5 text-[9px] font-bold leading-none text-white tabular-nums ring-2 ring-white dark:ring-[#141110]">
+            {socialBadge}
+          </span>
+        ) : null}
       </button>
 
       {open ? (
@@ -160,7 +182,12 @@ export function AvatarMenu({
               <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
-            {t.nav.social}
+            <span className="flex-1">{t.nav.social}</span>
+            {socialTotal > 0 ? (
+              <span className="inline-flex min-w-[1.15rem] items-center justify-center rounded-full bg-brand px-1.5 py-0.5 text-[10px] font-bold leading-none text-white tabular-nums">
+                {socialBadge}
+              </span>
+            ) : null}
           </Link>
           {isBillingUiEnabled() ? (
             <Link

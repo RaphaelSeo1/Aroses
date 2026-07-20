@@ -8,6 +8,7 @@ import { HomeResumeHero } from "@/components/HomeResumeHero";
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
 import { ReviewDueBanner } from "@/components/ReviewDueBanner";
 import { PendingCollaboratorInvites } from "@/components/PendingCollaboratorInvites";
+import { PendingFriendRequests } from "@/components/PendingFriendRequests";
 import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
 import type { HomeActivityPreview } from "@/lib/home-preview-data";
 import { resolveHomeResumeTarget } from "@/lib/home-resume-target";
@@ -72,6 +73,7 @@ export async function DashboardHomeContent({
           <div className="grid gap-8 lg:grid-cols-[1fr_22rem] lg:items-start">
             <div className="min-w-0">
               <PendingCollaboratorInvites />
+              <PendingFriendRequests />
               <ReviewDueBanner
                 initialDueCounts={initialDueCounts}
                 demoteCta={primaryAction !== "review"}
