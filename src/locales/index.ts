@@ -16,6 +16,7 @@ import { onboarding } from "./onboarding";
 import { productTour } from "./productTour";
 import { progress } from "./progress";
 import { review } from "./review";
+import { sales } from "./sales";
 import { settings } from "./settings";
 import { study } from "./study";
 import { tutor } from "./tutor";
@@ -40,6 +41,7 @@ export function getDictionary(locale: UiLocale) {
     explore: explore[locale],
     review: review[locale],
     billing: billing[locale],
+    sales: sales[locale],
     tutor: tutor[locale],
     immersive: immersive[locale],
     courseBuild: courseBuild[locale],

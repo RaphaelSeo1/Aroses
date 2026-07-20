@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { LanguageToggleRow } from "@/components/LanguageSwitcher";
 import { LogoutButton } from "@/components/LogoutButton";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
@@ -61,6 +62,7 @@ export function AvatarMenu({
   const onAccountPage =
     pathname === "/dashboard/profile" ||
     (isBillingUiEnabled() && pathname === "/dashboard/billing") ||
+    (isMarketplaceUiEnabled() && pathname === "/dashboard/sales") ||
     pathname.startsWith("/dashboard/admin");
 
   const initials = deriveInitials(displayName, email);
@@ -200,6 +202,29 @@ export function AvatarMenu({
                 <path d="M2 10h20" />
               </svg>
               {t.nav.plansBilling}
+            </Link>
+          ) : null}
+          {isMarketplaceUiEnabled() ? (
+            <Link
+              href="/dashboard/sales"
+              role="menuitem"
+              onClick={close}
+              className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
+            >
+              <svg
+                className="h-4 w-4 shrink-0 opacity-70"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M3 3v18h18" />
+                <path d="M7 14l4-4 4 3 5-6" />
+              </svg>
+              {t.nav.sales}
             </Link>
           ) : null}
           {adminHubHref ? (

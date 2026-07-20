@@ -50,7 +50,7 @@ export function ProgressDashboardContent({
             <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-3xl">
               {t.progress.title}
             </h2>
-            <p className="max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+            <p className="max-w-2xl text-pretty text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
               {t.progress.subtitleLong}
             </p>
           </div>

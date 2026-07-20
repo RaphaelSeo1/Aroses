@@ -493,7 +493,7 @@ export function CourseDashboardList({
             <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
               {t.dashboard.publicCourses}
             </h3>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+            <p className="mt-2 max-w-2xl text-pretty text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
               {t.dashboard.publicCoursesDesc}
             </p>
           </div>
@@ -562,8 +562,14 @@ export function CourseDashboardList({
                 <h4 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
                   {t.dashboard.forSaleCourses}
                 </h4>
-                <p className="mt-1 max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">
-                  {t.dashboard.forSaleCoursesDesc}
+                <p className="mt-1 max-w-2xl text-pretty text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
+                  {t.dashboard.forSaleCoursesDesc}{" "}
+                  <Link
+                    href="/dashboard/sales"
+                    className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
+                  >
+                    {t.sales.viewSales}
+                  </Link>
                 </p>
               </div>
             </div>
@@ -608,7 +614,7 @@ export function CourseDashboardList({
                 <h4 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
                   {t.dashboard.privateCourses}
                 </h4>
-                <p className="mt-1 max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">
+                <p className="mt-1 max-w-2xl text-pretty text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
                   {t.dashboard.privateCoursesDesc}
                 </p>
               </div>
@@ -665,7 +671,7 @@ export function CourseDashboardList({
             <h3 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
               {t.dashboard.selfStudyHeading}
             </h3>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+            <p className="mt-2 max-w-2xl text-pretty text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
               {t.dashboard.selfStudyDesc}
             </p>
           </div>
@@ -1167,7 +1173,7 @@ export function StudyingCoursesSection({
           <h2 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
             {t.dashboard.continueLearning}
           </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+          <p className="mt-2 max-w-2xl text-pretty text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
             {t.dashboard.continueLearningDesc}
           </p>
         </div>

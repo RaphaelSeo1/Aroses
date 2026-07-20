@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { getUserSubscription } from "@/lib/billing/subscription";
+import { reconcileUserSubscription } from "@/lib/billing/subscription";
 import { getStripe, isStripeConfigured, originFromRequest } from "@/lib/stripe/client";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 
@@ -27,10 +27,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Sign in first." }, { status: 401 });
   }
 
-  const sub = await getUserSubscription(user.id);
+  // Heal stale test-mode / deleted Stripe ids before opening the portal.
+  const sub = await reconcileUserSubscription(user.id);
   if (!sub.stripeCustomerId) {
     return NextResponse.json(
-      { error: "No billing account yet — upgrade to a paid plan first." },
+      {
+        error:
+          sub.tier === "free"
+            ? "You're already on the Free plan — no billing account to manage."
+            : "No billing account yet — upgrade to a paid plan first.",
+      },
       { status: 400 }
     );
   }
@@ -45,9 +51,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ url: session.url });
   } catch (err) {
     console.error("[billing] portal failed", err);
-    return NextResponse.json(
-      { error: "Could not open the billing portal. Try again." },
-      { status: 500 }
-    );
+    const message =
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code?: string }).code === "resource_missing"
+        ? "Your billing account is out of date. Refresh this page and try again."
+        : "Could not open the billing portal. Try again.";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

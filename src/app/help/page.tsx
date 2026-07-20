@@ -59,7 +59,7 @@ export default async function HelpPage() {
           <h1 className="mt-5 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-4xl">
             {tf(t.help.title, { app: APP_NAME })}
           </h1>
-          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+          <p className="mt-3 max-w-2xl text-pretty text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
             {t.help.subtitle}
           </p>
 

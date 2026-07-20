@@ -5,7 +5,7 @@ import { BillingClient } from "@/components/billing/BillingClient";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { APP_NAME } from "@/lib/brand";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { getUserSubscription } from "@/lib/billing/subscription";
+import { reconcileUserSubscription } from "@/lib/billing/subscription";
 import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 
@@ -23,10 +23,9 @@ export default async function BillingPage() {
     redirect("/login?next=/dashboard/billing");
   }
 
-  const [sub, usage] = await Promise.all([
-    getUserSubscription(user.id),
-    checkVoiceAllowance(user.id),
-  ]);
+  // Reconcile first so stale test-mode Stripe ids don't show a phantom paid plan.
+  const sub = await reconcileUserSubscription(user.id);
+  const usage = await checkVoiceAllowance(user.id);
 
   return (
     <>

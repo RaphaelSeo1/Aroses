@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -94,7 +95,13 @@ export function SellerConnectPanel({
       </p>
       <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
         Connect a Stripe account to receive payments when learners buy your
-        courses. Required before you can submit a listing for review.
+        courses. Required before you can submit a listing for review.{" "}
+        <Link
+          href="/dashboard/sales"
+          className="font-medium text-brand underline-offset-2 hover:underline dark:text-brand-soft"
+        >
+          View sales
+        </Link>
       </p>
 
       <p
