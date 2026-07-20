@@ -263,7 +263,7 @@ function MessageThreadInner({
           ) : (
             <button
               type="button"
-              onClick={() => router.push("/messages")}
+              onClick={() => router.push("/dashboard/social?tab=messages")}
               className="shrink-0 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
             >
               ← Inbox

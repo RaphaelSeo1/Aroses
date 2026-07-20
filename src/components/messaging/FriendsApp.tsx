@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { friendDisplayName } from "@/lib/messaging/display-name";
+import { socialMessagesHref } from "@/lib/messaging/social-url";
 import type { FriendshipListItem } from "@/lib/messaging/types";
 import { useT } from "@/lib/i18n/LocaleProvider";
 
@@ -214,7 +215,7 @@ export function FriendsApp({
     setBusyId(null);
     if (conversationId) {
       if (onOpenConversation) onOpenConversation(conversationId);
-      else router.push(`/messages/${conversationId}`);
+      else router.push(socialMessagesHref(conversationId));
     } else {
       setError(openError ?? t.messages.couldNotOpenConversation);
     }
@@ -240,7 +241,7 @@ export function FriendsApp({
         setError(typeof body.error === "string" ? body.error : "Could not create group.");
       } else if (body.conversationId) {
         if (onOpenConversation) onOpenConversation(body.conversationId);
-        else router.push(`/messages/${body.conversationId}`);
+        else router.push(socialMessagesHref(body.conversationId));
       }
     } catch {
       setError("Network error.");
@@ -473,7 +474,7 @@ export function FriendsApp({
       {!embedded ? (
         <p className="text-center text-sm text-zinc-500">
           Open your{" "}
-          <Link href="/messages" className="font-medium text-brand hover:underline">
+          <Link href={socialMessagesHref()} className="font-medium text-brand hover:underline">
             inbox
           </Link>{" "}
           to see conversations.

@@ -30,16 +30,26 @@ export default async function ProfilePage({ searchParams }: PageProps) {
   }
 
   const sp = await searchParams;
+
+  // Friends / messages moved to the dedicated Social page.
+  if (sp.tab === "friends") {
+    redirect("/dashboard/social?tab=friends");
+  }
+  if (sp.tab === "messages") {
+    const conversation = sp.conversation?.trim();
+    redirect(
+      conversation
+        ? `/dashboard/social?tab=messages&conversation=${encodeURIComponent(conversation)}`
+        : "/dashboard/social?tab=messages"
+    );
+  }
+
   const initialPanel =
     sp.tab === "progress"
       ? ("progress" as const)
       : sp.tab === "account"
         ? ("account" as const)
-        : sp.tab === "friends"
-          ? ("friends" as const)
-          : sp.tab === "messages"
-            ? ("messages" as const)
-            : ("general" as const);
+        : ("general" as const);
 
   return (
     <>
@@ -76,7 +86,7 @@ async function ProfilePageBody({
 }: {
   userEmail: string;
   userId: string;
-  initialPanel: "progress" | "account" | "general" | "friends" | "messages";
+  initialPanel: "progress" | "account" | "general";
 }) {
   const { supabase } = await getServerAuth();
   const [selProfiles, progressData] = await Promise.all([

@@ -11,8 +11,6 @@ import {
 } from "react";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { LogoutButton } from "@/components/LogoutButton";
-import { FriendsApp } from "@/components/messaging/FriendsApp";
-import { MessagingWorkspace } from "@/components/messaging/MessagingWorkspace";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { isUiLocaleSwitcherEnabled } from "@/lib/i18n/config";
 import { useT } from "@/lib/i18n/LocaleProvider";
@@ -20,11 +18,10 @@ import { tf } from "@/lib/i18n/format";
 import { createClient } from "@/lib/supabase/client";
 import { getBrowserAuthOrigin } from "@/lib/site-url";
 import { replaceProfileUrl } from "@/lib/messaging/profile-url";
-import { MESSAGING_REFRESH_EVENT } from "@/lib/messaging/realtime";
 import { parseUsername } from "@/lib/onboarding";
 import type { UserProfileRow } from "@/types/profile";
 
-type Panel = "general" | "account" | "progress" | "friends" | "messages";
+type Panel = "general" | "account" | "progress";
 
 // Values are stored in the DB as-is; only display labels are translated.
 const STUDY_FOCUS_VALUES = [
@@ -70,8 +67,6 @@ async function fileToResizedJpegBlob(file: File, maxEdge: number): Promise<Blob>
 function tabToPanel(tab: string | null | undefined): Panel {
   if (tab === "progress") return "progress";
   if (tab === "account") return "account";
-  if (tab === "friends") return "friends";
-  if (tab === "messages") return "messages";
   return "general";
 }
 
@@ -162,25 +157,6 @@ function IconChart({ className }: { className?: string }) {
   );
 }
 
-function IconUsers({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.5}
-      aria-hidden
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"
-      />
-    </svg>
-  );
-}
-
 type Props = {
   email: string;
   initial: UserProfileRow | null;
@@ -200,24 +176,10 @@ export function ProfileSettingsForm({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [panel, setPanel] = useState<Panel>(initialPanel);
-  const [conversationId, setConversationId] = useState<string | null>(() =>
-    searchParams.get("conversation")
-  );
-  const [socialOpen, setSocialOpen] = useState(
-    initialPanel === "friends" || initialPanel === "messages"
-  );
-  const [unreadMessages, setUnreadMessages] = useState(0);
 
   useEffect(() => {
     setPanel(tabToPanel(searchParams.get("tab")));
-    setConversationId(searchParams.get("conversation"));
   }, [searchParams]);
-
-  useEffect(() => {
-    if (panel === "friends" || panel === "messages") {
-      setSocialOpen(true);
-    }
-  }, [panel]);
 
   const [visitedPanels, setVisitedPanels] = useState<Set<Panel>>(
     () => new Set([initialPanel])
@@ -232,52 +194,14 @@ export function ProfileSettingsForm({
     });
   }, [panel]);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function loadUnread() {
-      try {
-        const res = await fetch("/api/messages/unread-count");
-        const body = await res.json().catch(() => ({}));
-        if (!cancelled && res.ok) {
-          setUnreadMessages(typeof body.count === "number" ? body.count : 0);
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-    void loadUnread();
-    const onRefresh = () => void loadUnread();
-    window.addEventListener(MESSAGING_REFRESH_EVENT, onRefresh);
-    return () => {
-      cancelled = true;
-      window.removeEventListener(MESSAGING_REFRESH_EVENT, onRefresh);
-    };
-  }, []);
-
   function goPanel(next: Panel) {
     setPanel(next);
-    if (next === "messages") {
-      replaceProfileUrl({ tab: "messages", conversation: conversationId });
-    } else if (next === "general") {
+    if (next === "general") {
       replaceProfileUrl({ tab: undefined, conversation: null });
     } else {
       replaceProfileUrl({ tab: next, conversation: null });
     }
   }
-
-  function openConversation(id: string) {
-    setPanel("messages");
-    setSocialOpen(true);
-    setConversationId(id);
-    replaceProfileUrl({ tab: "messages", conversation: id });
-  }
-
-  function onConversationChange(id: string | null) {
-    setConversationId(id);
-    replaceProfileUrl({ tab: "messages", conversation: id });
-  }
-  const unreadBadge =
-    unreadMessages > 99 ? "99+" : String(unreadMessages);
   const [displayName, setDisplayName] = useState(initial?.display_name ?? "");
   const [usernameInput, setUsernameInput] = useState(initial?.username ?? "");
   const [usernameDirty, setUsernameDirty] = useState(false);
@@ -565,11 +489,6 @@ export function ProfileSettingsForm({
   const navBtnActive =
     "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50";
 
-  const navBtnSub =
-    "flex w-full items-center gap-2.5 rounded-lg py-2 pl-9 pr-3 text-left text-[13px] font-medium text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/80 dark:hover:text-zinc-100";
-  const navBtnSubActive =
-    "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50";
-
   const studyFocusLabels: Record<(typeof STUDY_FOCUS_VALUES)[number], string> = {
     "": t.settings.studyFocusSelect,
     student: t.settings.studyFocusStudent,
@@ -583,12 +502,8 @@ export function ProfileSettingsForm({
     backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2371717a'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`,
   };
 
-  const wideLayout = panel === "messages";
-
   return (
-    <div
-      className={`flex flex-col gap-8 lg:flex-row lg:items-start lg:gap-10 ${wideLayout ? "mx-auto max-w-6xl" : ""}`}
-    >
+    <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:gap-10">
       <aside className="shrink-0 lg:w-56 lg:pt-1">
         <nav
           className="flex flex-row gap-1 overflow-x-auto rounded-2xl border border-zinc-200/90 bg-white/90 p-1.5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90 lg:flex-col lg:overflow-visible lg:p-2 lg:shadow-md lg:shadow-zinc-900/5 dark:lg:shadow-black/40"
@@ -610,52 +525,6 @@ export function ProfileSettingsForm({
             <IconShield className="h-5 w-5 shrink-0 opacity-70" />
             {t.settings.navAccount}
           </button>
-
-          <div className="shrink-0">
-            <button
-              type="button"
-              onClick={() => setSocialOpen((v) => !v)}
-              aria-expanded={socialOpen}
-              className={`${navBtn} w-full ${panel === "friends" || panel === "messages" ? navBtnActive : ""}`}
-            >
-              <IconUsers className="h-5 w-5 shrink-0 opacity-70" />
-              <span className="flex-1 text-left">{t.settings.navSocial}</span>
-              <svg
-                className={`h-4 w-4 shrink-0 opacity-50 transition ${socialOpen ? "rotate-180" : ""}`}
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                aria-hidden
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {socialOpen ? (
-              <div className="mt-0.5 space-y-0.5 lg:pl-1">
-                <button
-                  type="button"
-                  onClick={() => goPanel("friends")}
-                  className={`${navBtnSub} ${panel === "friends" ? navBtnSubActive : ""}`}
-                >
-                  {t.settings.navFriends}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => goPanel("messages")}
-                  className={`${navBtnSub} ${panel === "messages" ? navBtnSubActive : ""}`}
-                >
-                  <span className="flex-1">{t.settings.navMessages}</span>
-                  {unreadMessages > 0 ? (
-                    <span className="inline-flex min-w-[1.1rem] items-center justify-center rounded-full bg-brand px-1.5 py-0.5 text-[9px] font-bold leading-none text-white tabular-nums">
-                      {unreadBadge}
-                    </span>
-                  ) : null}
-                </button>
-              </div>
-            ) : null}
-          </div>
-
           <button
             type="button"
             onClick={() => goPanel("progress")}
@@ -1005,45 +874,6 @@ export function ProfileSettingsForm({
                     <LogoutButton className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900" />
                   </div>
                 </SettingsRow>
-              </div>
-            </>
-          )}
-          </div>
-
-          <div className={panel === "friends" ? undefined : "hidden"}>
-          {visitedPanels.has("friends") && (
-            <>
-              <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
-                <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  {t.settings.friendsTitle}
-                </h1>
-                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  {t.settings.friendsSubtitle}
-                </p>
-              </header>
-              <div className="px-4 py-6 sm:px-6">
-                <FriendsApp embedded onOpenConversation={openConversation} />
-              </div>
-            </>
-          )}
-          </div>
-
-          <div className={panel === "messages" ? undefined : "hidden"}>
-          {visitedPanels.has("messages") && (
-            <>
-              <header className="border-b border-zinc-100 px-6 py-5 dark:border-zinc-800">
-                <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  {t.settings.messagesTitle}
-                </h1>
-                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  {t.settings.messagesSubtitle}
-                </p>
-              </header>
-              <div className="p-3 sm:p-4">
-                <MessagingWorkspace
-                  conversationId={conversationId}
-                  onConversationChange={onConversationChange}
-                />
               </div>
             </>
           )}

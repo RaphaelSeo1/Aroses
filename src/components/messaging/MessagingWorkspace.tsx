@@ -7,9 +7,14 @@ import { MessagesInbox } from "@/components/messaging/MessagesInbox";
 type Props = {
   conversationId: string | null;
   onConversationChange: (conversationId: string | null) => void;
+  friendsHref?: string;
 };
 
-function MessagingWorkspaceInner({ conversationId, onConversationChange }: Props) {
+function MessagingWorkspaceInner({
+  conversationId,
+  onConversationChange,
+  friendsHref = "/dashboard/social?tab=friends",
+}: Props) {
   return (
     <div className="flex min-h-[36rem] overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-inner dark:border-zinc-800 dark:bg-zinc-950">
       <aside
@@ -26,7 +31,7 @@ function MessagingWorkspaceInner({ conversationId, onConversationChange }: Props
           <MessagesInbox
             compact
             activeConversationId={conversationId}
-            friendsHref="/dashboard/profile?tab=friends"
+            friendsHref={friendsHref}
             onSelectConversation={(id) => onConversationChange(id)}
           />
         </div>

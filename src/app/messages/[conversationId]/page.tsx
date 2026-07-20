@@ -10,6 +10,6 @@ export default async function ConversationPage({ params }: Props) {
   if (!UUID_RE.test(conversationId)) notFound();
 
   redirect(
-    `/dashboard/profile?tab=messages&conversation=${encodeURIComponent(conversationId)}`
+    `/dashboard/social?tab=messages&conversation=${encodeURIComponent(conversationId)}`
   );
 }

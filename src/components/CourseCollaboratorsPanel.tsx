@@ -135,7 +135,7 @@ export function CourseCollaboratorsPanel({
       const body = await res.json().catch(() => ({}));
       if (res.ok && body.conversationId) {
         router.push(
-          `/dashboard/profile?tab=messages&conversation=${encodeURIComponent(body.conversationId)}`
+          `/dashboard/social?tab=messages&conversation=${encodeURIComponent(body.conversationId)}`
         );
       } else {
         setError(typeof body.error === "string" ? body.error : "Could not open message.");
@@ -368,7 +368,7 @@ export function CourseCollaboratorsPanel({
           {inviteMode === "friends" && !friendsLoading && friends.length === 0 ? (
             <p className="mt-2 text-xs text-zinc-500">
               No friends yet — add friends from the{" "}
-              <a href="/dashboard/profile?tab=friends" className="font-medium text-brand hover:underline">
+              <a href="/dashboard/social?tab=friends" className="font-medium text-brand hover:underline">
                 Friends page
               </a>
               .

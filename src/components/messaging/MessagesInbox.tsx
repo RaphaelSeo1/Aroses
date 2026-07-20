@@ -42,7 +42,7 @@ type Props = {
 
 function MessagesInboxInner({
   onSelectConversation,
-  friendsHref = "/friends",
+  friendsHref = "/dashboard/social?tab=friends",
   compact = false,
   activeConversationId = null,
 }: Props) {
@@ -151,7 +151,9 @@ function MessagesInboxInner({
                 onClick={() =>
                   onSelectConversation
                     ? onSelectConversation(c.id)
-                    : router.push(`/messages/${c.id}`)
+                    : router.push(
+                        `/dashboard/social?tab=messages&conversation=${encodeURIComponent(c.id)}`
+                      )
                 }
                 className={`flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition ${
                   active
@@ -238,7 +240,9 @@ function MessagesInboxInner({
                   onClick={() =>
                     onSelectConversation
                       ? onSelectConversation(c.id)
-                      : router.push(`/messages/${c.id}`)
+                      : router.push(
+                        `/dashboard/social?tab=messages&conversation=${encodeURIComponent(c.id)}`
+                      )
                   }
                   className="flex w-full items-start gap-3 px-4 py-4 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900/80"
                 >
