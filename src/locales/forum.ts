@@ -42,10 +42,12 @@ const en = {
     "Add details (optional) — what you'd like, why it'd help, links, images…",
   posting: "Posting…",
   postThread: "Post thread",
+  categoryGeneral: "General",
   categoryCourseRequest: "Course request",
   categoryFeedback: "Feedback",
   categoryDiscussion: "Discussion",
   categoryBug: "Bug",
+  categoryOther: "Other",
 };
 
 const ko: typeof en = {
@@ -92,10 +94,12 @@ const ko: typeof en = {
     "세부 내용 추가 (선택) — 원하는 것, 도움이 될 이유, 링크, 이미지…",
   posting: "게시 중…",
   postThread: "스레드 게시",
+  categoryGeneral: "일반",
   categoryCourseRequest: "코스 요청",
   categoryFeedback: "피드백",
   categoryDiscussion: "토론",
   categoryBug: "버그",
+  categoryOther: "기타",
 };
 
 export const forum = { en, ko };

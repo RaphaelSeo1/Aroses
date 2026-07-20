@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     category?: unknown;
   };
   const title = typeof b.title === "string" ? b.title.trim() : "";
-  const category = isForumCategory(b.category) ? b.category : "discussion";
+  const category = isForumCategory(b.category) ? b.category : "general";
 
   // Prefer the rich (TipTap JSON) body when present: sanitize it (strips unsafe
   // link/image URLs) and derive the plain-text mirror used for search/previews.

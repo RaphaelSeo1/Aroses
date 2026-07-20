@@ -35,6 +35,8 @@ function forumCategoryLabel(
   category: ForumCategory
 ): string {
   switch (category) {
+    case "general":
+      return t.categoryGeneral;
     case "course_request":
       return t.categoryCourseRequest;
     case "feedback":
@@ -43,6 +45,8 @@ function forumCategoryLabel(
       return t.categoryDiscussion;
     case "bug":
       return t.categoryBug;
+    case "other":
+      return t.categoryOther;
   }
 }
 
@@ -725,7 +729,7 @@ function Composer({
   onCreated: (post: ForumPost) => void;
 }) {
   const t = useT();
-  const [category, setCategory] = useState<ForumCategory>("course_request");
+  const [category, setCategory] = useState<ForumCategory>("general");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [bodyRich, setBodyRich] = useState<unknown>(null);

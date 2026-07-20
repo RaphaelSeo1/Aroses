@@ -1,4 +1,10 @@
-export type ForumCategory = "course_request" | "feedback" | "discussion" | "bug";
+export type ForumCategory =
+  | "general"
+  | "course_request"
+  | "discussion"
+  | "feedback"
+  | "bug"
+  | "other";
 
 export type ForumPost = {
   id: string;
@@ -26,6 +32,7 @@ export type ForumComment = {
   created_at: string;
 };
 
+/** Display order for sidebar chips and the composer. */
 export const FORUM_CATEGORIES: {
   id: ForumCategory;
   label: string;
@@ -33,16 +40,16 @@ export const FORUM_CATEGORIES: {
   badge: string;
 }[] = [
   {
+    id: "general",
+    label: "General",
+    badge:
+      "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/30",
+  },
+  {
     id: "course_request",
     label: "Course request",
     badge:
       "bg-indigo-50 text-indigo-700 ring-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-300 dark:ring-indigo-500/30",
-  },
-  {
-    id: "feedback",
-    label: "Feedback",
-    badge:
-      "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30",
   },
   {
     id: "discussion",
@@ -51,10 +58,22 @@ export const FORUM_CATEGORIES: {
       "bg-zinc-100 text-zinc-700 ring-zinc-200 dark:bg-white/10 dark:text-zinc-300 dark:ring-white/15",
   },
   {
+    id: "feedback",
+    label: "Feedback",
+    badge:
+      "bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30",
+  },
+  {
     id: "bug",
     label: "Bug",
     badge:
       "bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30",
+  },
+  {
+    id: "other",
+    label: "Other",
+    badge:
+      "bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-500/30",
   },
 ];
 
@@ -71,10 +90,5 @@ export const FORUM_CATEGORY_BADGE: Record<ForumCategory, string> =
   >;
 
 export function isForumCategory(value: unknown): value is ForumCategory {
-  return (
-    value === "course_request" ||
-    value === "feedback" ||
-    value === "discussion" ||
-    value === "bug"
-  );
+  return FORUM_CATEGORIES.some((c) => c.id === value);
 }
