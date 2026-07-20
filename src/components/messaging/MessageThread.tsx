@@ -398,14 +398,14 @@ function MessageThreadInner({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={onComposerKeyDown}
-              rows={1}
+              rows={3}
               placeholder="Message the room…"
-              className="max-h-32 min-h-[2.25rem] flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-sm outline-none ring-0 placeholder:text-zinc-400"
+              className="h-20 w-full min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-1 py-1.5 text-sm leading-5 outline-none ring-0 placeholder:text-zinc-400"
             />
             <button
               type="submit"
               disabled={sending || !draft.trim()}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition hover:bg-zinc-800 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+              className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-white transition hover:bg-zinc-800 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
               aria-label="Send message"
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
