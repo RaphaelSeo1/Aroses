@@ -664,20 +664,19 @@ export default async function NotesHubPage() {
     <>
       <AppHeader right={<HeaderNavLoggedInServer />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-        <div
-          className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14"
-          data-tour="notes-hub"
-        >
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
-            Your library
-          </p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl dark:text-zinc-50">
-            Notes
-          </h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Write notes, or browse everything from live lectures, tutor
-            sessions, and courses — build a course when you are ready.
-          </p>
+        <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
+          <div data-tour="notes-hub">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
+              Your library
+            </p>
+            <h1 className="mt-1 text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl dark:text-zinc-50">
+              Notes
+            </h1>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              Write notes, or browse everything from live lectures, tutor
+              sessions, and courses — build a course when you are ready.
+            </p>
+          </div>
 
           <NotesHubClient sections={sections} empty={empty} />
         </div>

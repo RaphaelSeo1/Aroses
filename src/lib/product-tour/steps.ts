@@ -30,6 +30,12 @@ export const PRODUCT_TOUR_STEPS: readonly ProductTourStep[] = [
     copyKey: "createCourse",
   },
   {
+    id: "course-modes",
+    route: "/dashboard/courses/new",
+    target: "course-mode-chooser",
+    copyKey: "courseModes",
+  },
+  {
     id: "library-courses",
     route: "/",
     target: "home-courses",

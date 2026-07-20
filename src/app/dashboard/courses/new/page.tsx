@@ -491,7 +491,10 @@ export default function NewCoursePage() {
               <p className="mt-3 text-zinc-500 dark:text-zinc-400">
                 {t.courseBuild.modeIntro}
               </p>
-              <div className="mt-8 grid gap-4 sm:grid-cols-2">
+              <div
+                className="mt-8 grid gap-4 sm:grid-cols-2"
+                data-tour="course-mode-chooser"
+              >
                 <ModeCard
                   icon="🌐"
                   title={t.courseBuild.publicCourseTitle}

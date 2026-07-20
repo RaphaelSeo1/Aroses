@@ -104,8 +104,11 @@ export async function DashboardHomeContent({
                 }}
               />
 
-              <section className="mt-8" data-tour="home-start">
-                <header className="mb-3 flex items-baseline justify-between">
+              <section className="mt-8">
+                <header
+                  className="mb-3 flex items-baseline justify-between"
+                  data-tour="home-start"
+                >
                   <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
                     {t.dashboard.startSomethingNew}
                   </h2>

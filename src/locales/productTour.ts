@@ -3,6 +3,10 @@ const en = {
   finish: "Finish",
   skip: "Skip tutorial",
   stepOf: "Step {current} of {total}",
+  celebrationTitle: "You finished the tour!",
+  celebrationTagline: "The edge for the class that's breaking you.",
+  celebrationBody: "You're ready — go beat it. Have fun exploring Aroses.",
+  celebrationCta: "Let's go",
   steps: {
     welcome: {
       title: "Welcome to your workspace",
@@ -10,7 +14,11 @@ const en = {
     },
     createCourse: {
       title: "Create a course",
-      body: "Upload lecture slides or materials here and Aroses builds a structured course you can study with Rose.",
+      body: "Start here to turn lecture slides or materials into a structured course. Next we'll open the create screen and explain the two modes.",
+    },
+    courseModes: {
+      title: "Public course vs Self Study",
+      body: "Public course is for class materials you may share on Explore or sell later — upload slides, build lessons, manage visibility. Self Study is private to you: describe a topic or goal and get a personal learning path that never goes on Explore.",
     },
     libraryCourses: {
       title: "Your courses",
@@ -33,8 +41,8 @@ const en = {
       body: "Jump into a one-on-one session with Rose anytime — ask questions, work a problem, or review a concept.",
     },
     account: {
-      title: "Your account",
-      body: "Profile, settings, and billing live under your avatar. You're ready — finish the tour or skip anytime.",
+      title: "You're all set",
+      body: "Profile, settings, and billing live under your avatar. Tap Finish to start using Aroses.",
     },
   },
 };
@@ -44,6 +52,10 @@ const ko: typeof en = {
   finish: "완료",
   skip: "튜토리얼 건너뛰기",
   stepOf: "{total}단계 중 {current}단계",
+  celebrationTitle: "투어를 끝냈어요!",
+  celebrationTagline: "당신을 힘들게 하는 그 수업을 이기기 위한 엣지.",
+  celebrationBody: "준비 완료예요. 이제 그 수업을 이겨 보세요. Aroses를 마음껏 탐험해 보세요.",
+  celebrationCta: "시작하기",
   steps: {
     welcome: {
       title: "워크스페이스에 오신 것을 환영해요",
@@ -51,7 +63,11 @@ const ko: typeof en = {
     },
     createCourse: {
       title: "코스 만들기",
-      body: "여기에 강의 자료나 슬라이드를 올리면 Aroses가 Rose와 함께 공부할 구조화된 코스를 만들어 줘요.",
+      body: "여기서 강의 자료나 슬라이드로 구조화된 코스를 시작해요. 다음으로 만들기 화면에서 두 가지 모드를 설명할게요.",
+    },
+    courseModes: {
+      title: "공개 코스 vs 셀프 스터디",
+      body: "공개 코스는 수업 자료용이에요 — 슬라이드를 올리고 레슨을 만든 뒤 Explore에 공유하거나 나중에 판매할 수 있어요. 셀프 스터디는 나만의 비공개 모드예요 — 주제나 목표를 말하면 개인 학습 경로가 만들어지고 Explore에는 올라가지 않아요.",
     },
     libraryCourses: {
       title: "내 코스",
@@ -74,8 +90,8 @@ const ko: typeof en = {
       body: "언제든 Rose와 1:1 세션을 시작하세요 — 질문하고, 문제를 풀고, 개념을 복습할 수 있어요.",
     },
     account: {
-      title: "내 계정",
-      body: "프로필, 설정, 결제는 아바타 메뉴에 있어요. 준비가 끝났으니 투어를 끝내거나 언제든 건너뛸 수 있어요.",
+      title: "준비 완료",
+      body: "프로필, 설정, 결제는 아바타 메뉴에 있어요. 완료를 눌러 Aroses를 시작해 보세요.",
     },
   },
 };
