@@ -47,6 +47,8 @@ const en = {
   ownerAccess: "You own this course — full access from your dashboard or here.",
   purchasedAccess: "You purchased this course — full lesson access is unlocked.",
   mentoredAccess: "Opens Mentored Learning with full lesson access.",
+  freeExploreAccess:
+    "Opens Free Exploration — lessons, quizzes, and Ask Rose at your own pace.",
   ownerListingManage: "This is your listing. Manage it from your course dashboard.",
   outlineMigration: "Course outline requires migration",
 };
@@ -99,6 +101,8 @@ const ko: typeof en = {
   ownerAccess: "이 코스의 소유자예요 — 대시보드 또는 여기에서 전체 접근할 수 있어요.",
   purchasedAccess: "이 코스를 구매했어요 — 전체 레슨 접근이 열렸어요.",
   mentoredAccess: "멘토 학습으로 열리며 전체 레슨 접근이 가능해요.",
+  freeExploreAccess:
+    "자유 탐색으로 열려요 — 레슨, 퀴즈, Ask Rose를 원하는 속도로 이용할 수 있어요.",
   ownerListingManage: "내가 등록한 코스예요. 코스 대시보드에서 관리하세요.",
   outlineMigration: "코스 개요에는 마이그레이션이 필요해요",
 };

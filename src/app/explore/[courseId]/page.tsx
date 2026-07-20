@@ -71,7 +71,7 @@ export default async function ExploreCoursePage({ params }: Props) {
   const canStudy = isOwner || !isForSale || hasPurchased;
   const paymentsEnabled =
     isMarketplaceUiEnabled() && isMarketplacePaymentsEnabled();
-  const studyHref = `/explore/${courseId}/learn`;
+  const studyHref = `/explore/${courseId}/study?mode=learn`;
 
   const { data: sellerProfile } = await supabase
     .from("profiles")
@@ -170,7 +170,7 @@ export default async function ExploreCoursePage({ params }: Props) {
                     ? t.explore.ownerAccess
                     : hasPurchased
                       ? t.explore.purchasedAccess
-                      : t.explore.mentoredAccess}
+                      : t.explore.freeExploreAccess}
                 </p>
               </>
             )}

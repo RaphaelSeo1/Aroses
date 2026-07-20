@@ -258,16 +258,16 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
               {uploadsCount > 0 ? (
                 <div className="mt-4 flex flex-wrap gap-3">
                   <Link
-                    href={`/dashboard/courses/${course.id}/learn`}
+                    href={`/dashboard/courses/${course.id}/study?mode=learn`}
                     className="inline-flex items-center justify-center rounded-full bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-600/20 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
                   >
                     Start learning →
                   </Link>
                   <Link
-                    href={`/dashboard/courses/${course.id}/study`}
+                    href={`/dashboard/courses/${course.id}/learn`}
                     className="inline-flex items-center justify-center rounded-full border border-zinc-200 bg-white px-6 py-3 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
                   >
-                    Open study room
+                    Mentored learning
                   </Link>
                 </div>
               ) : null}
