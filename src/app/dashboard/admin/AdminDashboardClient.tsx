@@ -308,9 +308,9 @@ function CourseSourcesButton({
                 </ul>
               )}
               <p className="mt-3 text-[10px] leading-relaxed text-zinc-400 dark:text-zinc-500">
-                PDFs, audio, and video are usually kept after ingest. Word,
-                slides, images, and plain text are often deleted after
-                processing — those show as “Not in storage.”
+                New uploads stay in storage after course builds. Older courses
+                may show “Not in storage” if the file was deleted before
+                retention was turned on.
               </p>
             </div>
           </div>

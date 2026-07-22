@@ -95,7 +95,7 @@ export async function extractContentForIngestJob(input: {
 
   const extractedParts = [];
   const rawImages = [];
-  let retainStorage = false;
+  let retainStorage = true;
   let mediaMeta: JobExtractSuccess["ingestMedia"] = null;
   let primaryPdfBuffer: Buffer | null = null;
   let primaryPdfFileName: string | null = null;
@@ -301,8 +301,10 @@ export async function removeIngestObjects(
   paths: string[],
   retainStorage: boolean
 ): Promise<void> {
-  if (retainStorage) return;
-  const unique = [...new Set(paths.filter(Boolean))];
-  if (unique.length === 0) return;
-  await admin.storage.from(STUDY_PDF_INGEST_BUCKET).remove(unique).catch(() => {});
+  // Always keep course ingest uploads (admin review + reprocessing).
+  // Orphan cleanup for failed pre-job uploads lives in `/api/process-pdf` only.
+  void admin;
+  void paths;
+  void retainStorage;
+  return;
 }

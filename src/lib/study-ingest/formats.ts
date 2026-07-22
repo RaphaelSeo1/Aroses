@@ -163,9 +163,12 @@ export function contentTypeForUpload(
   return "video/mp4";
 }
 
-export function shouldRetainStorageAfterIngest(kind: IngestFormatKind): boolean {
-  // PDF must stay in storage until finalize so page render + vision crop can run.
-  return kind === "video" || kind === "audio" || kind === "pdf";
+/**
+ * Keep original uploads in `study-pdf-ingest` after course build so admins
+ * (and reprocessing) can open the source files. Always retain.
+ */
+export function shouldRetainStorageAfterIngest(_kind: IngestFormatKind): boolean {
+  return true;
 }
 
 export const INGEST_ACCEPT_ATTRIBUTE = [

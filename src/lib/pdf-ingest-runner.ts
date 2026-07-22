@@ -1237,7 +1237,7 @@ async function finalizePdfIngest(
   }
 
   await removeIngestObject(admin, storagePath, {
-    retainStorage: options?.retainStorage,
+    retainStorage: true,
   });
 
   return { materialId: row.id };

@@ -60,6 +60,25 @@ function asKind(raw: unknown): IngestFormatKind | null {
   return detectIngestFormat(t);
 }
 
+function readPathFromRef(f: Record<string, unknown>): string | null {
+  for (const key of ["storagePath", "storage_path", "path"] as const) {
+    const v = f[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+function readNameFromRef(
+  f: Record<string, unknown>,
+  fallbackPath: string
+): string {
+  for (const key of ["originalFileName", "original_file_name", "fileName"] as const) {
+    const v = f[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return fallbackPath.split("/").pop() || "file";
+}
+
 function collectPaths(job: JobRow): Array<{
   storagePath: string;
   fileName: string;
@@ -70,30 +89,32 @@ function collectPaths(job: JobRow): Array<{
     fileName: string;
     kind: IngestFormatKind | null;
   }> = [];
+  const seen = new Set<string>();
+
+  const push = (
+    storagePath: string,
+    fileName: string,
+    kind: IngestFormatKind | null
+  ) => {
+    if (seen.has(storagePath)) return;
+    seen.add(storagePath);
+    out.push({ storagePath, fileName, kind });
+  };
 
   if (Array.isArray(job.source_files)) {
-    for (const f of job.source_files) {
-      if (!f || typeof f !== "object") continue;
-      const path = (f as { storagePath?: unknown }).storagePath;
-      if (typeof path !== "string" || !path.trim()) continue;
-      const nameRaw = (f as { originalFileName?: unknown }).originalFileName;
-      const fileName =
-        typeof nameRaw === "string" && nameRaw.trim()
-          ? nameRaw.trim()
-          : path.split("/").pop() || "file";
+    for (const item of job.source_files) {
+      if (!item || typeof item !== "object") continue;
+      const f = item as Record<string, unknown>;
+      const path = readPathFromRef(f);
+      if (!path) continue;
+      const fileName = readNameFromRef(f, path);
       const kind =
-        asKind((f as { kind?: unknown }).kind) ??
-        detectIngestFormat(fileName) ??
-        detectIngestFormat(path);
-      out.push({ storagePath: path.trim(), fileName, kind });
+        asKind(f.kind) ?? detectIngestFormat(fileName) ?? detectIngestFormat(path);
+      push(path, fileName, kind);
     }
   }
 
-  if (
-    out.length === 0 &&
-    typeof job.storage_path === "string" &&
-    job.storage_path.trim()
-  ) {
+  if (typeof job.storage_path === "string" && job.storage_path.trim()) {
     const path = job.storage_path.trim();
     const fileName =
       typeof job.original_file_name === "string" && job.original_file_name.trim()
@@ -103,15 +124,51 @@ function collectPaths(job: JobRow): Array<{
       asKind(job.source_format) ??
       detectIngestFormat(fileName) ??
       detectIngestFormat(path);
-    out.push({ storagePath: path, fileName, kind });
+    push(path, fileName, kind);
   }
 
   return out;
 }
 
+async function signedUrlForPath(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  storagePath: string
+): Promise<{ url: string | null; missing: boolean }> {
+  const slash = storagePath.lastIndexOf("/");
+  const folder = slash >= 0 ? storagePath.slice(0, slash) : "";
+  const objectName = slash >= 0 ? storagePath.slice(slash + 1) : storagePath;
+
+  const { data: listed, error: listErr } = await admin.storage
+    .from(STUDY_PDF_INGEST_BUCKET)
+    .list(folder, { search: objectName, limit: 20 });
+
+  const exists =
+    !listErr &&
+    Array.isArray(listed) &&
+    listed.some((o) => o.name === objectName);
+
+  if (!exists) {
+    if (listErr) {
+      console.warn("[admin] source list failed", storagePath, listErr.message);
+    }
+    return { url: null, missing: true };
+  }
+
+  const { data: signed, error: signErr } = await admin.storage
+    .from(STUDY_PDF_INGEST_BUCKET)
+    .createSignedUrl(storagePath, 60 * 60);
+
+  if (!signErr && signed?.signedUrl) {
+    return { url: signed.signedUrl, missing: false };
+  }
+
+  console.warn("[admin] signed url failed", storagePath, signErr?.message);
+  return { url: null, missing: true };
+}
+
 /**
  * GET — admin-only list of course upload sources with signed view URLs.
- * PDFs/audio/video are usually retained; other formats may be missing after ingest.
+ * Uploads are retained after ingest so PDFs (and other sources) stay openable.
  */
 export async function GET(_request: Request, ctx: Params) {
   const { courseId } = await ctx.params;
@@ -185,18 +242,7 @@ export async function GET(_request: Request, ctx: Params) {
     }
 
     for (const ref of paths) {
-      let url: string | null = null;
-      let missing = true;
-
-      const { data: signed, error: signErr } = await admin.storage
-        .from(STUDY_PDF_INGEST_BUCKET)
-        .createSignedUrl(ref.storagePath, 60 * 60);
-
-      if (!signErr && signed?.signedUrl) {
-        url = signed.signedUrl;
-        missing = false;
-      }
-
+      const { url, missing } = await signedUrlForPath(admin, ref.storagePath);
       files.push({
         jobId: job.id,
         fileName: ref.fileName,

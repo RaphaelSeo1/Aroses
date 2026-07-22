@@ -90,6 +90,7 @@ const OPTIONAL_INGEST_JOB_COLUMNS = [
   "study_context",
   "source_format",
   "source_files",
+  "retain_storage",
 ] as const;
 
 /** Best-effort parse of the offending column name from a Postgres/PostgREST error. */
@@ -334,6 +335,8 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     status: "pending",
     source_format: primaryKind,
     source_files: files.length > 1 ? sourceFilesJson : null,
+    // Always keep uploads so admins can open source PDFs later.
+    retain_storage: true,
     material_sort_order: intendedSortOrder,
     output_language: outputLanguage,
   };
