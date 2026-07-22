@@ -16,10 +16,25 @@ import {
   compressCourseForRefineInput,
   type RefineIntent,
 } from "@/lib/ai/refine-course-intent";
+import { extractStreamingLessonContents } from "@/lib/ai/refine-stream-extract";
+import {
+  applyLessonEditOps,
+  coerceLessonEditOps,
+  type LessonEditChange,
+  type LessonEditOp,
+} from "@/lib/ai/refine-lesson-ops";
 
 const REFINE_SYSTEM = `You are Rose, an expert course editor for the Aroses study platform. You revise structured course JSON generated from a student's uploaded materials.
 
 You MUST apply the student's edit request and return a modified course. Never return the input unchanged unless the request is literally impossible.
+
+SURGICAL EDITS (critical):
+- Prefer the smallest change that satisfies the request. Do NOT rewrite whole lessons, modules, or the course "for polish" when the ask is to add, remove, fix, or tweak one part.
+- Copy every sentence/paragraph you are not changing character-for-character from the input (same wording, markdown, headings, lists, images, key_terms, examples, quiz items).
+- Add → insert only the new material in the right place; leave the rest identical.
+- Remove / shorten → delete only the targeted sentences or sections; keep everything else identical.
+- Fix / clarify → change only the incorrect or unclear span; do not paraphrase surrounding text.
+- Never regenerate a lesson from scratch unless the student explicitly asked to rewrite or fully restructure it.
 
 Lesson "content" is Markdown (headings, lists, **bold**, inline math). Images use ![caption](url) or <img> tags.
 
@@ -27,12 +42,14 @@ Output ONLY one valid JSON object — no markdown fences, no commentary.`;
 
 /**
  * Refine applies edits to an existing course JSON (not a cold build from PDF).
- * Default **Sonnet** for instruction-following on large JSON edits. Set
- * `ANTHROPIC_REFINE_MODEL=claude-haiku-4-5` if you prefer speed over fidelity.
+ * Per-module edits default to **Haiku** for speed (live document typing).
+ * Whole-course structural edits stay on Sonnet unless overridden.
+ * Set `ANTHROPIC_REFINE_MODEL=…` to force one model for everything.
  */
-function resolveRefineModel(): string {
+function resolveRefineModel(kind: "module" | "course" = "course"): string {
   const override = process.env.ANTHROPIC_REFINE_MODEL?.trim();
   if (override) return override;
+  if (kind === "module") return "claude-haiku-4-5";
   return "claude-sonnet-4-6";
 }
 
@@ -347,6 +364,15 @@ Module schema:
 - Keep the SAME "id". Keep ≥1 lesson unless told to remove content.
 - Quiz mcq: {"type":"mcq","question","choices":[4 strings],"correct","explanation"}; free response: {"type":"free_response","question","reference_answer","explanation"}.
 - Apply the request fully. Do NOT return the module unchanged unless impossible.
+- Emit lessons in order. Inside each lesson object put "title" then "content" next (before key_terms/examples/quiz) so the body can stream to the student early.
+
+SURGICAL EDITS (critical — students hate full rewrites):
+- Make the SMALLEST change that satisfies the request. Do NOT rewrite an entire lesson (or module) when the ask is to add, remove, fix, expand, or shorten a specific part.
+- Preserve unchanged text VERBATIM: same sentences, markdown, headings, lists, images, key_terms, examples, and quiz items you are not touching. Copy them exactly from the input — do not paraphrase, restyle, or "improve" them.
+- Add / expand → insert only the new sentences/paragraphs (or new key_terms/examples) at the right place; leave all other content identical.
+- Remove / shorten / delete → delete only the targeted sentences, sections, terms, or examples; keep the rest character-for-character.
+- Fix / clarify / reword → change only the incorrect or unclear span; leave surrounding paragraphs identical.
+- Only rewrite a whole lesson from scratch if the student explicitly asks to rewrite, overhaul, or fully restructure that lesson.
 
 Output ONLY the module JSON — no fences, no commentary.`;
 
@@ -362,7 +388,12 @@ ${JSON.stringify(module)}
 
 EDIT REQUEST:
 ${editInstruction.trim()}
-${sharpen ? "\nIMPORTANT: A previous attempt returned the module unchanged. You MUST make concrete edits that satisfy the request this time." : ""}
+
+EDITING RULES:
+- Surgical only: insert, delete, or replace the minimum span needed.
+- Preserve every untouched sentence/field exactly as given above.
+- Do not rewrite the whole lesson or module unless the request explicitly asks for a full rewrite.
+${sharpen ? "\nIMPORTANT: A previous attempt returned the module unchanged. Make a concrete surgical edit that satisfies the request — still do NOT rewrite unchanged sections." : ""}
 
 Return the revised module JSON now.`;
 }
@@ -401,9 +432,10 @@ export async function refineModule(
 
   const run = async (sharpen: boolean): Promise<CourseModule> => {
     const msg = await createMessageWithRetries(anthropic, {
-      model: resolveRefineModel(),
+      model: resolveRefineModel("module"),
       max_tokens: MODULE_MAX_OUTPUT_TOKENS,
-      temperature: 0.2,
+      // Low temp keeps surgical edits close to the source wording.
+      temperature: 0.05,
       system: MODULE_EDIT_SYSTEM,
       messages: [
         {
@@ -437,6 +469,247 @@ export async function refineModule(
   return result;
 }
 
+export type ModuleLessonDelta = {
+  lessonIndex: number;
+  content: string;
+  complete: boolean;
+};
+
+/**
+ * Same as {@link refineModule}, but streams lesson `content` fields to the
+ * caller as tokens arrive so the open course document can type live.
+ */
+export async function refineModuleStreaming(
+  module: CourseModule,
+  editInstruction: string,
+  courseTitle: string,
+  opts?: {
+    expectChange?: boolean;
+    onLessonDelta?: (delta: ModuleLessonDelta) => void;
+  }
+): Promise<CourseModule> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+
+  const anthropic = new Anthropic({
+    apiKey,
+    timeout: 180_000,
+    maxRetries: 0,
+  });
+
+  const run = async (sharpen: boolean): Promise<CourseModule> => {
+    const stream = anthropic.messages.stream({
+      model: resolveRefineModel("module"),
+      max_tokens: MODULE_MAX_OUTPUT_TOKENS,
+      temperature: 0.05,
+      system: MODULE_EDIT_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content: buildModuleEditPrompt(
+            module,
+            editInstruction,
+            courseTitle,
+            sharpen
+          ),
+        },
+      ],
+    });
+
+    let accumulated = "";
+    const lastEmittedLen = new Map<number, number>();
+
+    for await (const evt of stream) {
+      if (
+        evt.type === "content_block_delta" &&
+        evt.delta.type === "text_delta"
+      ) {
+        accumulated += evt.delta.text;
+        if (!opts?.onLessonDelta) continue;
+        const lessons = extractStreamingLessonContents(accumulated);
+        for (const lesson of lessons) {
+          const prevLen = lastEmittedLen.get(lesson.index) ?? -1;
+          // Emit often enough to feel like typing; skip tiny ticks.
+          if (
+            lesson.complete ||
+            lesson.content.length - prevLen >= 12 ||
+            prevLen < 0
+          ) {
+            lastEmittedLen.set(lesson.index, lesson.content.length);
+            opts.onLessonDelta({
+              lessonIndex: lesson.index,
+              content: lesson.content,
+              complete: lesson.complete,
+            });
+          }
+        }
+      }
+    }
+
+    const finalMessage = await stream.finalMessage();
+    recordAiUsage({
+      model: resolveRefineModel("module"),
+      inputTokens: finalMessage.usage?.input_tokens,
+      outputTokens: finalMessage.usage?.output_tokens,
+      feature: "refine-course",
+    });
+    const rawText = extractTextBlock(finalMessage);
+    const next = await moduleFromAssistantText(rawText, module.quiz);
+    return { ...next, id: module.id };
+  };
+
+  let result = await run(false);
+
+  const expectChange = opts?.expectChange !== false;
+  const unchanged = JSON.stringify(result) === JSON.stringify(module);
+  if (expectChange && unchanged) {
+    try {
+      result = await run(true);
+    } catch {
+      /* keep first result if the retry fails */
+    }
+  }
+
+  return result;
+}
+
+// ===========================================================================
+// Surgical edit ops (find / replace / insert) — the anti "rewrite everything"
+// path. The model returns a tiny op list instead of a whole module, we apply
+// it in code (untouched text stays byte-identical), and we get exact change
+// offsets so the client can animate a caret at the edit site.
+// ===========================================================================
+
+const OPS_EDIT_SYSTEM = `You are Rose, a precise course editor. You receive ONE module's lessons and an edit request. Return the SMALLEST set of edit operations that fulfils the request — never a rewritten module.
+
+Return ONLY JSON of this shape (no prose, no code fences):
+{"ops":[
+  {"lessonIndex":<int>,"find":"<verbatim snippet from content>","replace":"<new text; \\"\\" to DELETE>"},
+  {"lessonIndex":<int>,"insert":"end","text":"<new paragraph to append>"},
+  {"lessonIndex":<int>,"addKeyTerm":{"term":"...","definition":"..."}},
+  {"lessonIndex":<int>,"removeKeyTerm":"<existing term>"},
+  {"lessonIndex":<int>,"replaceKeyTerm":{"term":"<existing>","definition":"<new definition>"}},
+  {"lessonIndex":<int>,"addExample":"<new example>"},
+  {"lessonIndex":<int>,"removeExample":"<substring matching an existing example>"}
+]}
+
+Rules:
+- Prefer structured ops for key terms and examples. NEVER rewrite lesson content just to add/remove a key term or example.
+- Content "find" MUST be copied character-for-character from the given lesson content (a single contiguous substring). Include enough surrounding words to be unique.
+- DELETE content → set "replace" to "" (empty string). Include the trailing/leading space or punctuation you want gone.
+- REPLACE / FIX content → set "replace" to the corrected span only; change as few characters as possible.
+- ADD content next to existing text → find = an existing anchor snippet, replace = that same snippet PLUS your new text.
+- ADD content with no natural anchor → {"lessonIndex":i,"insert":"end"|"start","text":"..."}.
+- Do NOT touch, restyle, reorder, or reproduce any text / key_terms / examples you are not explicitly changing.
+- Keep ops minimal (usually 1–3). NEVER output whole lessons or whole modules.
+- If the request is impossible, return {"ops":[]}.`;
+
+function buildOpsEditPrompt(
+  module: CourseModule,
+  editInstruction: string,
+  courseTitle: string
+): string {
+  const lessons = module.lessons
+    .map((l, i) => {
+      const terms =
+        l.key_terms.length === 0
+          ? "(none)"
+          : l.key_terms
+              .map((k) => `  - ${k.term}: ${k.definition}`)
+              .join("\n");
+      const examples =
+        l.examples.length === 0
+          ? "(none)"
+          : l.examples.map((e) => `  - ${e}`).join("\n");
+      return `--- lessonIndex ${i} | "${l.title}" ---
+CONTENT:
+${l.content ?? ""}
+
+KEY_TERMS:
+${terms}
+
+EXAMPLES:
+${examples}`;
+    })
+    .join("\n\n");
+  return `COURSE: "${courseTitle}"
+MODULE: "${module.title}"
+
+LESSONS (for content find/replace, copy "find" verbatim from CONTENT; for key terms / examples use structured ops):
+${lessons}
+
+EDIT REQUEST:
+${editInstruction.trim()}
+
+Return the ops JSON now.`;
+}
+
+/**
+ * Ask the model for a minimal op list and apply it in code. Throws
+ * `REFINE_NO_OPS` when the model produced nothing usable (caller falls back to
+ * the full-module editor).
+ */
+export async function refineModuleOps(
+  module: CourseModule,
+  editInstruction: string,
+  courseTitle: string
+): Promise<{
+  module: CourseModule;
+  changes: LessonEditChange[];
+  ops: LessonEditOp[];
+}> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
+
+  const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 0 });
+  const msg = await createMessageWithRetries(anthropic, {
+    model: resolveRefineModel("module"),
+    max_tokens: MODULE_MAX_OUTPUT_TOKENS,
+    temperature: 0,
+    system: OPS_EDIT_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content: buildOpsEditPrompt(module, editInstruction, courseTitle),
+      },
+    ],
+  });
+
+  const rawText = extractTextBlock(msg);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonFence(rawText));
+  } catch {
+    throw new Error("REFINE_OPS_JSON_PARSE");
+  }
+  const ops = coerceLessonEditOps(parsed);
+  if (ops.length === 0) throw new Error("REFINE_NO_OPS");
+
+  const { module: edited, changes, structuredTouched } = applyLessonEditOps(
+    module,
+    ops
+  );
+  // Structured-only edits (key terms / examples) are valid even with no
+  // content caret changes — that used to throw and force a full rewrite.
+  if (changes.length === 0 && structuredTouched === 0) {
+    throw new Error("REFINE_NO_OPS");
+  }
+  return { module: { ...edited, id: module.id }, changes, ops };
+}
+
+/**
+ * Surgical-first module edit. Does NOT fall back to a full-module rewrite —
+ * that path is what caused "add one key term" to regenerate the whole course.
+ * Callers that truly need a rewrite must opt into refineModule explicitly.
+ */
+export async function refineModuleSurgical(
+  module: CourseModule,
+  editInstruction: string,
+  courseTitle: string
+): Promise<{ module: CourseModule; changes: LessonEditChange[] }> {
+  return refineModuleOps(module, editInstruction, courseTitle);
+}
+
 /**
  * Edit many modules concurrently (bounded) and return them in original order.
  * Modules that error keep their original content so one failure never nukes
@@ -446,7 +719,10 @@ export async function refineModulesConcurrently(
   modules: CourseModule[],
   editInstruction: string,
   courseTitle: string,
-  opts?: { concurrency?: number; onModuleDone?: (done: number, total: number) => void }
+  opts?: {
+    concurrency?: number;
+    onModuleDone?: (done: number, total: number, module: CourseModule) => void;
+  }
 ): Promise<{ modules: CourseModule[]; failures: number }> {
   const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 4, 6));
   const results = new Array<CourseModule>(modules.length);
@@ -459,14 +735,19 @@ export async function refineModulesConcurrently(
       const idx = cursor++;
       const mod = modules[idx];
       try {
-        results[idx] = await refineModule(mod, editInstruction, courseTitle);
+        const { module: edited } = await refineModuleSurgical(
+          mod,
+          editInstruction,
+          courseTitle
+        );
+        results[idx] = edited;
       } catch (e) {
-        console.warn(`[refine] module ${mod.id} edit failed; keeping original`, e);
+        console.warn(`[refine] module ${mod.id} surgical edit failed; keeping original`, e);
         results[idx] = mod;
         failures++;
       } finally {
         done++;
-        opts?.onModuleDone?.(done, modules.length);
+        opts?.onModuleDone?.(done, modules.length, results[idx]!);
       }
     }
   }
@@ -494,7 +775,7 @@ export async function refineCourseMetadata(
     .join("\n");
 
   const msg = await createMessageWithRetries(anthropic, {
-    model: resolveRefineModel(),
+    model: resolveRefineModel("course"),
     max_tokens: 1024,
     temperature: 0.3,
     system:

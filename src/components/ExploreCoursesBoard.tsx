@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { formatPrice } from "@/lib/marketplace/listing-access";
+import { schoolChipClassName } from "@/lib/school-chip-style";
 import { useMemo, useState } from "react";
 import { useT } from "@/lib/i18n/LocaleProvider";
 
@@ -9,7 +10,7 @@ import type { ExploreListingCard } from "@/lib/marketplace/types";
 
 export type ExploreCourseCard = ExploreListingCard;
 
-type ExploreFilter = "all" | "free" | "for_sale" | "featured";
+type ExploreFilter = "all" | "free" | "for_sale" | "featured" | "my_school";
 
 const CARD_GRADIENTS = [
   "from-rose-500/[0.22] via-orange-400/[0.14] to-amber-200/[0.08] dark:from-rose-600/[0.35] dark:via-red-950/[0.65] dark:to-zinc-950",
@@ -33,9 +34,14 @@ function sortNewestFirst(list: ExploreCourseCard[]) {
   );
 }
 
+function normSchool(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase();
+}
+
 function applyFilter(
   courses: ExploreCourseCard[],
-  filter: ExploreFilter
+  filter: ExploreFilter,
+  viewerSchoolName: string | null | undefined
 ): ExploreCourseCard[] {
   switch (filter) {
     case "free":
@@ -46,6 +52,13 @@ function applyFilter(
       );
     case "featured":
       return sortNewestFirst(courses).slice(0, 6);
+    case "my_school": {
+      const key = normSchool(viewerSchoolName);
+      if (!key) return [];
+      return sortNewestFirst(
+        courses.filter((c) => normSchool(c.school_name) === key)
+      );
+    }
     case "all":
     default:
       return sortNewestFirst(courses);
@@ -56,32 +69,43 @@ export function ExploreCoursesBoard({
   courses,
   currentUserId,
   marketplaceEnabled = true,
+  viewerSchoolName = null,
 }: {
   courses: ExploreCourseCard[];
   currentUserId?: string;
   marketplaceEnabled?: boolean;
+  viewerSchoolName?: string | null;
 }) {
   const t = useT();
+  const hasSchool = Boolean(viewerSchoolName?.trim());
   const sidebar = useMemo(() => {
-    if (marketplaceEnabled) {
-      return [
-        { id: "all" as const, label: t.explore.filterAll, hint: t.explore.filterAllHintMarket },
-        { id: "free" as const, label: t.explore.filterFree, hint: t.explore.filterFreeHintMarket },
-        { id: "for_sale" as const, label: t.explore.filterForSale, hint: t.explore.filterForSaleHint },
-        { id: "featured" as const, label: t.explore.filterFeatured, hint: t.explore.filterFeaturedHint },
-      ];
+    const base: { id: ExploreFilter; label: string; hint: string }[] =
+      marketplaceEnabled
+        ? [
+            { id: "all", label: t.explore.filterAll, hint: t.explore.filterAllHintMarket },
+            { id: "free", label: t.explore.filterFree, hint: t.explore.filterFreeHintMarket },
+            { id: "for_sale", label: t.explore.filterForSale, hint: t.explore.filterForSaleHint },
+            { id: "featured", label: t.explore.filterFeatured, hint: t.explore.filterFeaturedHint },
+          ]
+        : [
+            { id: "all", label: t.explore.filterAll, hint: t.explore.filterAllHintFree },
+            { id: "free", label: t.explore.filterFree, hint: t.explore.filterFreeHintFree },
+            { id: "featured", label: t.explore.filterFeatured, hint: t.explore.filterFeaturedHint },
+          ];
+    if (hasSchool) {
+      base.splice(1, 0, {
+        id: "my_school",
+        label: t.explore.filterMySchool,
+        hint: t.explore.filterMySchoolHint,
+      });
     }
-    return [
-      { id: "all" as const, label: t.explore.filterAll, hint: t.explore.filterAllHintFree },
-      { id: "free" as const, label: t.explore.filterFree, hint: t.explore.filterFreeHintFree },
-      { id: "featured" as const, label: t.explore.filterFeatured, hint: t.explore.filterFeaturedHint },
-    ];
-  }, [marketplaceEnabled, t.explore]);
+    return base;
+  }, [marketplaceEnabled, t.explore, hasSchool]);
   const [filter, setFilter] = useState<ExploreFilter>("all");
 
   const visible = useMemo(
-    () => applyFilter(courses, filter),
-    [courses, filter]
+    () => applyFilter(courses, filter, viewerSchoolName),
+    [courses, filter, viewerSchoolName]
   );
 
   return (
@@ -121,6 +145,14 @@ export function ExploreCoursesBoard({
                           </span>
                         ) : null}
                       </div>
+                      {c.school_name ? (
+                        <span
+                          className={`mt-2 inline-flex max-w-full items-center truncate rounded-full px-2.5 py-0.5 text-[10px] font-bold ring-1 ${schoolChipClassName(c.school_name)}`}
+                          title={c.school_name}
+                        >
+                          {c.school_name}
+                        </span>
+                      ) : null}
                       {c.description ? (
                         <p className="mt-2 line-clamp-3 flex-1 text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
                           {c.description}

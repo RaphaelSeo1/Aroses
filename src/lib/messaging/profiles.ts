@@ -174,6 +174,88 @@ export async function searchProfilesForFriendAdd(
   return searchProfilesInternal(supabase, excludeUserId, query);
 }
 
+export type SameSchoolSuggestion = ProfileLookupRow & {
+  school_name: string | null;
+};
+
+/** People who share the viewer's school (RPC; falls back to admin direct query). */
+export async function suggestProfilesSameSchool(
+  supabase: SupabaseClient,
+  viewerId: string,
+  limit = 12
+): Promise<SameSchoolSuggestion[]> {
+  const { data, error } = await supabase.rpc("suggest_profiles_same_school", {
+    p_viewer_id: viewerId,
+    p_limit: limit,
+  });
+
+  if (!error && data) {
+    return (data as SameSchoolSuggestion[]).map((p) => ({
+      id: p.id,
+      display_name: p.display_name,
+      username: p.username,
+      avatar_url: p.avatar_url ?? null,
+      school_name: p.school_name ?? null,
+    }));
+  }
+
+  if (
+    error &&
+    !/suggest_profiles_same_school|schema cache|PGRST202/i.test(error.message)
+  ) {
+    console.error("[suggest_profiles_same_school]", error.message);
+  }
+
+  // Fallback when RPC isn't migrated yet.
+  const admin = createAdminClient();
+  if (!admin) return [];
+
+  const { data: me } = await admin
+    .from("profiles")
+    .select("school_name")
+    .eq("id", viewerId)
+    .maybeSingle();
+  const school =
+    typeof me?.school_name === "string" ? me.school_name.trim() : "";
+  if (!school) return [];
+
+  const { data: friends } = await admin
+    .from("friendships")
+    .select("requester_id, addressee_id, status")
+    .or(`requester_id.eq.${viewerId},addressee_id.eq.${viewerId}`)
+    .in("status", ["pending", "accepted", "blocked"]);
+
+  const blocked = new Set<string>([viewerId]);
+  for (const f of friends ?? []) {
+    blocked.add(
+      f.requester_id === viewerId ? f.addressee_id : f.requester_id
+    );
+  }
+
+  const { data: rows } = await admin
+    .from("profiles")
+    .select("id, display_name, username, avatar_url, school_name")
+    .ilike("school_name", school)
+    .neq("id", viewerId)
+    .limit(40);
+
+  return (rows ?? [])
+    .filter((p) => !blocked.has(p.id))
+    .filter(
+      (p) =>
+        typeof p.school_name === "string" &&
+        p.school_name.trim().toLowerCase() === school.toLowerCase()
+    )
+    .slice(0, limit)
+    .map((p) => ({
+      id: p.id,
+      display_name: p.display_name,
+      username: p.username,
+      avatar_url: p.avatar_url ?? null,
+      school_name: p.school_name ?? null,
+    }));
+}
+
 export async function enrichProfiles(
   supabase: SupabaseClient,
   userIds: string[]

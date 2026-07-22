@@ -11,6 +11,8 @@ import {
 } from "@/components/immersive/notes/Provenance";
 import {
   classifyNoteLine,
+  isGfmTableLine,
+  markdownToNoteNodes,
   mightBecomeNotePrefix,
   noteNodesToMarkdown,
   parseInlineMarkdown,
@@ -89,6 +91,8 @@ type ActiveOp = {
   lineRaw: string;
   /** A blank line was seen — the next bullet starts a NEW list. */
   breakList: boolean;
+  /** Buffered GFM pipe-table lines until the table ends. */
+  tableBuf: string[] | null;
   /** Revision placeholder paragraph awaiting the first real block. */
   pendingPlaceholder: boolean;
   /** Divider deferred until the append produces actual content. */
@@ -255,14 +259,22 @@ export class StreamingNotesWriter {
     if (!op) return;
     // A trailing line without a newline is still real content.
     if (op.buf.length > 0 && op.mode === "prefix") {
-      const line = classifyNoteLine(op.buf);
-      if (line.kind !== "blank") this.insertWholeLine(line);
+      const raw = op.buf;
       op.buf = "";
+      if (isGfmTableLine(raw) || op.tableBuf) {
+        op.tableBuf = op.tableBuf ?? [];
+        if (raw.trim().length > 0) op.tableBuf.push(raw);
+        this.flushTableBuf();
+      } else {
+        const line = classifyNoteLine(raw);
+        if (line.kind !== "blank") this.insertWholeLine(line);
+      }
     } else if (op.buf.length > 0 && op.mode === "text") {
       this.insertText(op.buf);
       op.buf = "";
     }
     if (op.mode === "text") this.finalizeLine();
+    this.flushTableBuf();
 
     if (op.kind === "revision") {
       // Empty / placeholder-only revision → restore the pre-revise snapshot
@@ -415,6 +427,7 @@ export class StreamingNotesWriter {
       lineStart: null,
       lineRaw: "",
       breakList: false,
+      tableBuf: null,
       pendingPlaceholder: false,
       pendingDivider: false,
       wroteAnything: false,
@@ -432,8 +445,24 @@ export class StreamingNotesWriter {
         const nl = op.buf.indexOf("\n");
         if (nl >= 0) {
           // A full line is available — insert it as one finished block.
-          const line = classifyNoteLine(op.buf.slice(0, nl));
+          const rawLine = op.buf.slice(0, nl);
           op.buf = op.buf.slice(nl + 1);
+
+          if (op.tableBuf) {
+            if (isGfmTableLine(rawLine)) {
+              op.tableBuf.push(rawLine);
+              continue;
+            }
+            this.flushTableBuf();
+            // Fall through to handle the non-table line below.
+          }
+
+          if (isGfmTableLine(rawLine)) {
+            op.tableBuf = [rawLine];
+            continue;
+          }
+
+          const line = classifyNoteLine(rawLine);
           if (line.kind === "blank") {
             op.breakList = true;
             continue;
@@ -441,7 +470,10 @@ export class StreamingNotesWriter {
           this.insertWholeLine(line);
           continue;
         }
-        if (mightBecomeNotePrefix(op.buf)) return; // hold until decided
+        // Hold pipe-started lines and undecided prefixes until a newline.
+        if (op.buf.trimStart().startsWith("|") || mightBecomeNotePrefix(op.buf)) {
+          return;
+        }
         // Prefix decided — open a streaming block and seed the text so far.
         const line = classifyNoteLine(op.buf);
         op.buf = "";
@@ -466,6 +498,46 @@ export class StreamingNotesWriter {
       if (chunk) this.insertText(chunk);
       this.finalizeLine();
     }
+  }
+
+  /** Insert a buffered GFM pipe table as a single TipTap table node. */
+  private flushTableBuf(): void {
+    const op = this.op;
+    if (!op?.tableBuf?.length) {
+      if (op) op.tableBuf = null;
+      return;
+    }
+    const md = op.tableBuf.join("\n");
+    op.tableBuf = null;
+    const nodes = markdownToNoteNodes(md, {
+      sectionId: op.sectionId,
+      provenance: "ai",
+    }).filter((n) => n.type === "table");
+    if (nodes.length === 0) return;
+
+    this.flushPendingDivider();
+    for (const json of nodes) {
+      let pm: PmNode | null = null;
+      try {
+        pm = this.editor.schema.nodeFromJSON(json);
+      } catch {
+        pm = null;
+      }
+      if (!pm) continue;
+      const target = this.blockInsertionPos();
+      let base = target.pos;
+      this.dispatchDoc((tr) => {
+        base = insertionPoint(tr, target);
+        tr.insert(base, pm!);
+      });
+      op.wroteAnything = true;
+      op.pendingPlaceholder = false;
+    }
+    op.breakList = true;
+    op.mode = "prefix";
+    op.textPos = null;
+    op.lineStart = null;
+    op.lineRaw = "";
   }
 
   /** Insert one complete line as a finished block (fast path). */

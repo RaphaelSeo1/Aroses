@@ -68,4 +68,7 @@ export type ExploreListingCard = {
   currency?: string;
   seller_display_name?: string | null;
   seller_username?: string | null;
+  /** Resolved school for display: course tag, else creator profile. */
+  school_name?: string | null;
+  school_source?: "tagged" | "creator" | null;
 };

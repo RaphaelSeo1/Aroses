@@ -11,6 +11,7 @@ import {
 } from "react";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { LogoutButton } from "@/components/LogoutButton";
+import { SchoolNameAutocomplete } from "@/components/SchoolNameAutocomplete";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { isUiLocaleSwitcherEnabled } from "@/lib/i18n/config";
 import { useT } from "@/lib/i18n/LocaleProvider";
@@ -719,13 +720,11 @@ export function ProfileSettingsForm({
                     label={t.settings.schoolLabel}
                     hint={t.settings.schoolHint}
                   >
-                    <input
+                    <SchoolNameAutocomplete
                       id="school_name"
-                      type="text"
-                      autoComplete="organization"
                       maxLength={200}
                       value={schoolName}
-                      onChange={(e) => setSchoolName(e.target.value)}
+                      onChange={setSchoolName}
                       placeholder={t.settings.schoolPlaceholder}
                       className={FIELD}
                     />

@@ -7,7 +7,11 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { enterAiUsageContext } from "@/lib/billing/ai-usage";
-import { runRefine } from "@/lib/ai/refine-course-orchestrator";
+import {
+  planRefineOnly,
+  runRefine,
+} from "@/lib/ai/refine-course-orchestrator";
+import type { RefinePlan } from "@/lib/ai/refine-course-planner";
 import type { CoursePayload } from "@/types/course";
 
 export const runtime = "nodejs";
@@ -54,6 +58,17 @@ function noChangesMessage(): string {
   return "Rose didn't change anything. Try being more specific — name a module (\"module 3\"), or describe a concrete edit like \"shorten every lesson\" or \"remove all images.\"";
 }
 
+function isRefinePlan(v: unknown): v is RefinePlan {
+  if (!v || typeof v !== "object") return false;
+  const p = v as Record<string, unknown>;
+  return (
+    typeof p.summary === "string" &&
+    typeof p.editInstruction === "string" &&
+    typeof p.needsLlm === "boolean" &&
+    Array.isArray(p.proposedChanges)
+  );
+}
+
 export async function POST(request: Request) {
   const cookieStore = await cookies();
   const supabase = createServerClient(
@@ -93,6 +108,9 @@ export async function POST(request: Request) {
     materialId?: string;
     instruction?: string;
     stream?: boolean;
+    mode?: "plan" | "apply";
+    plan?: RefinePlan;
+    preferModuleId?: number;
   };
 
   if (typeof b.materialId !== "string" || !UUID_RE.test(b.materialId)) {
@@ -124,15 +142,32 @@ export async function POST(request: Request) {
   }
 
   const current = row.course_payload as CoursePayload;
-  if (
-    !current?.modules?.length ||
-    typeof current.title !== "string"
-  ) {
+  if (!current?.modules?.length || typeof current.title !== "string") {
     return NextResponse.json({ error: "Nothing to refine yet" }, { status: 422 });
   }
 
-  const wantStream = b.stream === true;
+  const mode = b.mode === "plan" ? "plan" : "apply";
   const materialId = b.materialId;
+  const preferModuleId =
+    typeof b.preferModuleId === "number" && Number.isFinite(b.preferModuleId)
+      ? b.preferModuleId
+      : undefined;
+
+  if (mode === "plan") {
+    try {
+      const plan = await planRefineOnly(current, instruction, preferModuleId);
+      return NextResponse.json({ ok: true, plan });
+    } catch (e) {
+      console.error(e);
+      return NextResponse.json(
+        { error: refineFailureMessage(e) },
+        { status: 502 }
+      );
+    }
+  }
+
+  const confirmedPlan = isRefinePlan(b.plan) ? b.plan : undefined;
+  const wantStream = b.stream === true;
 
   async function saveRevised(revised: CoursePayload) {
     const { error: saveErr } = await supabase
@@ -160,8 +195,14 @@ export async function POST(request: Request) {
 
         let result;
         try {
-          result = await runRefine(materialId, current, instruction, (message) =>
-            send({ type: "phase", message })
+          result = await runRefine(
+            materialId,
+            current,
+            instruction,
+            (message) => send({ type: "phase", message }),
+            (event) => send(event),
+            confirmedPlan,
+            preferModuleId
           );
         } catch (e) {
           console.error(e);
@@ -188,6 +229,7 @@ export async function POST(request: Request) {
         send({
           type: "done",
           applied: result.applied.length ? result.applied : undefined,
+          course: result.course,
         });
         controller.close();
       },
@@ -196,14 +238,23 @@ export async function POST(request: Request) {
     return new Response(stream, {
       headers: {
         "Content-Type": "application/x-ndjson; charset=utf-8",
-        "Cache-Control": "no-store",
+        "Cache-Control": "no-store, no-transform",
+        "X-Accel-Buffering": "no",
       },
     });
   }
 
   let result;
   try {
-    result = await runRefine(materialId, current, instruction);
+    result = await runRefine(
+      materialId,
+      current,
+      instruction,
+      undefined,
+      undefined,
+      confirmedPlan,
+      preferModuleId
+    );
   } catch (e) {
     console.error(e);
     return NextResponse.json(

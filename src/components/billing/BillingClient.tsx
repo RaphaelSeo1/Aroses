@@ -8,6 +8,12 @@ import {
   isPaidTier,
   type PlanTier,
 } from "@/lib/billing/plans";
+import {
+  isSubscriptionSaleActive,
+  compareAtPriceMonthly,
+  salePriceMonthly,
+  subscriptionSalePercent,
+} from "@/lib/billing/sale";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import type { Dictionary } from "@/locales";
@@ -251,6 +257,11 @@ export function BillingClient({
           const plan = planStrings(t.billing, tier);
           const price = PLANS[tier].priceMonthly;
           const isCurrent = tier === currentTier;
+          const showSale =
+            isSubscriptionSaleActive() && isPaidTier(tier) && price > 0;
+          const salePrice = showSale ? salePriceMonthly(tier) : price;
+          const wasPrice = showSale ? compareAtPriceMonthly(tier) : price;
+          const salePercent = subscriptionSalePercent();
           return (
             <div
               key={tier}
@@ -260,28 +271,51 @@ export function BillingClient({
                   : "border-zinc-200/90 bg-white/95 dark:border-zinc-800 dark:bg-zinc-950/90"
               }`}
             >
-              <div className="flex items-baseline justify-between">
+              <div className="flex items-baseline justify-between gap-2">
                 <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                   {plan.name}
                 </h2>
-                {isCurrent ? (
-                  <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand dark:bg-brand-soft/15 dark:text-brand-soft">
-                    {t.billing.current}
-                  </span>
-                ) : null}
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {showSale ? (
+                    <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300">
+                      {tf(t.billing.saleBadge, { percent: String(salePercent) })}
+                    </span>
+                  ) : null}
+                  {isCurrent ? (
+                    <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand dark:bg-brand-soft/15 dark:text-brand-soft">
+                      {t.billing.current}
+                    </span>
+                  ) : null}
+                </div>
               </div>
               <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
                 {plan.tagline}
               </p>
               <p className="mt-3">
-                <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                  ${price}
-                </span>
+                {showSale ? (
+                  <>
+                    <span className="mr-2 text-lg font-medium text-zinc-400 line-through dark:text-zinc-500">
+                      ${wasPrice}
+                    </span>
+                    <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                      ${salePrice}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                    ${price}
+                  </span>
+                )}
                 <span className="text-sm text-zinc-500 dark:text-zinc-400">
                   {" "}
                   {t.billing.perMonthLabel}
                 </span>
               </p>
+              {showSale ? (
+                <p className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                  {t.billing.salePriceNote}
+                </p>
+              ) : null}
               <ul className="mt-4 flex-1 space-y-2 text-sm text-zinc-600 dark:text-zinc-300">
                 {plan.highlights.map((h) => (
                   <li key={h} className="flex items-start gap-2">

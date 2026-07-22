@@ -55,6 +55,7 @@ export async function POST(request: Request) {
     });
     const origin = originFromRequest(request);
     const stripe = getStripe();
+    // Sale UI is cosmetic — Stripe prices ($29 / $59) are already the sale rates.
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,

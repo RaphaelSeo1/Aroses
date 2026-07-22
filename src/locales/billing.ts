@@ -53,6 +53,9 @@ const en = {
   pastDue: "Payment past due — update your card in the billing portal.",
   renewsOnFull: "Renews on {date}.",
   voiceHoursMonth: "{hours}h voice / month",
+  saleBadge: "{percent}% off",
+  saleWas: "Was ${price}",
+  salePriceNote: "Limited-time sale price",
 };
 
 const ko: typeof en = {
@@ -110,6 +113,9 @@ const ko: typeof en = {
   pastDue: "결제가 연체되었어요 — 결제 포털에서 카드를 업데이트하세요.",
   renewsOnFull: "{date}에 갱신됩니다.",
   voiceHoursMonth: "월 음성 {hours}시간",
+  saleBadge: "{percent}% 할인",
+  saleWas: "정가 ${price}",
+  salePriceNote: "한정 세일가",
 };
 
 export const billing = { en, ko };

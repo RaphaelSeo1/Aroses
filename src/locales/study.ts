@@ -20,6 +20,8 @@ const en = {
   delete: "Delete",
   sourceFile: "Source file:",
   noModules: "No modules in this course.",
+  hideModules: "Hide modules",
+  showModules: "Show modules",
 
   // Refine-applied flash banner
   updatingStudyContent: "Updating study content",
@@ -183,6 +185,8 @@ const ko: typeof en = {
   delete: "삭제",
   sourceFile: "원본 파일:",
   noModules: "이 코스에 모듈이 없어요.",
+  hideModules: "모듈 숨기기",
+  showModules: "모듈 보기",
 
   // Refine-applied flash banner
   updatingStudyContent: "학습 콘텐츠 업데이트 중",

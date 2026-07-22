@@ -13,6 +13,9 @@ export type DashboardCourseRow = {
   is_self_study?: boolean;
   study_context?: string | null;
   output_language?: string | null;
+  school_name?: string | null;
+  /** When false, Explore hides school chip (default true). */
+  show_school_label?: boolean;
   /** Present when `025_app_super_admins.sql` is applied and you are in `app_super_admins`. */
   owner_user_id?: string;
   viewer_role?: ViewerCourseRole;
@@ -39,13 +42,17 @@ export async function fetchCourseForDashboard(
     is_self_study?: boolean | null;
     study_context?: string | null;
     output_language?: string | null;
+    school_name?: string | null;
+    show_school_label?: boolean | null;
   };
 
   let row: Row | null = null;
 
   const primary = await supabase
     .from("courses")
-    .select("id, user_id, title, description, created_at, is_public, is_self_study, study_context, output_language")
+    .select(
+      "id, user_id, title, description, created_at, is_public, is_self_study, study_context, output_language, school_name, show_school_label"
+    )
     .eq("id", courseId)
     .maybeSingle();
 
@@ -54,24 +61,46 @@ export async function fetchCourseForDashboard(
   } else if (primary.error) {
     const msg = primary.error.message ?? "";
     const code = primary.error.code;
-    const missingIsPublic =
+    const missingCol =
       code === "42703" ||
       msg.includes("is_public") ||
+      msg.includes("school_name") ||
+      msg.includes("show_school_label") ||
       msg.includes("schema cache");
-    if (!missingIsPublic) {
+    if (!missingCol) {
       console.error(primary.error);
       return null;
     }
     const fb = await supabase
       .from("courses")
-      .select("id, user_id, title, description, created_at")
+      .select(
+        "id, user_id, title, description, created_at, is_public, is_self_study, study_context, output_language, school_name"
+      )
       .eq("id", courseId)
       .maybeSingle();
     if (fb.error || !fb.data) {
-      if (fb.error) console.error(fb.error);
-      return null;
+      if (fb.error) {
+        const fb2 = await supabase
+          .from("courses")
+          .select("id, user_id, title, description, created_at")
+          .eq("id", courseId)
+          .maybeSingle();
+        if (fb2.error || !fb2.data) {
+          if (fb2.error) console.error(fb2.error);
+          return null;
+        }
+        row = {
+          ...fb2.data,
+          is_public: false,
+          school_name: null,
+          show_school_label: true,
+        } as Row;
+      } else {
+        return null;
+      }
+    } else {
+      row = { ...(fb.data as Row), show_school_label: true };
     }
-    row = { ...fb.data, is_public: false } as Row;
   } else {
     return null;
   }
@@ -106,6 +135,8 @@ export async function fetchCourseForDashboard(
     is_self_study: Boolean(rest.is_self_study),
     study_context: rest.study_context ?? null,
     output_language: rest.output_language ?? null,
+    school_name: rest.school_name ?? null,
+    show_school_label: rest.show_school_label !== false,
     owner_user_id: ownerUserId,
     viewer_role: isAdmin && rowUserId !== viewerUserId ? null : access?.role ?? null,
     can_edit_content: isAdmin || Boolean(access?.canEditContent),

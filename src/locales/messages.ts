@@ -30,6 +30,14 @@ const en = {
   couldNotLoadFriends: "Could not load friends.",
   couldNotSendRequest: "Could not send request.",
   couldNotOpenConversation: "Could not open conversation.",
+  peopleFromYourSchool: "People from your school",
+  peopleFromYourSchoolHint:
+    "Suggested classmates based on the school on your profile.",
+  noSchoolOnProfile:
+    "Add your school in profile settings to see classmates you might know.",
+  noSchoolmatesYet: "No one else from your school on Aroses yet — invite a friend.",
+  addSchoolSettings: "Add school in settings",
+  suggestedAdd: "Add",
 };
 
 const ko: typeof en = {
@@ -64,6 +72,14 @@ const ko: typeof en = {
   couldNotLoadFriends: "친구 목록을 불러오지 못했어요.",
   couldNotSendRequest: "요청을 보내지 못했어요.",
   couldNotOpenConversation: "대화를 열지 못했어요.",
+  peopleFromYourSchool: "같은 학교 사람들",
+  peopleFromYourSchoolHint: "프로필에 등록한 학교 기준으로 추천해요.",
+  noSchoolOnProfile:
+    "같은 학교 친구를 보려면 프로필 설정에서 학교를 추가하세요.",
+  noSchoolmatesYet:
+    "아직 같은 학교 사용자가 없어요 — 친구를 초대해 보세요.",
+  addSchoolSettings: "설정에서 학교 추가",
+  suggestedAdd: "추가",
 };
 
 export const messages = { en, ko };

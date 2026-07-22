@@ -28,11 +28,22 @@ export function sanitizeStudyChatReply(text: string): string {
   if (/^\{\s*"reply"\s*:/.test(s)) {
     const parsed = tryParseObject(s);
     if (parsed && typeof parsed.reply === "string") {
-      return parsed.reply.trim();
+      return stripStudyChatEmojis(parsed.reply.trim());
     }
     return "";
   }
-  return s;
+  return stripStudyChatEmojis(s);
+}
+
+/** Ask Rose replies should stay professional — strip model-generated emoji. */
+function stripStudyChatEmojis(text: string): string {
+  return text
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/\uFE0F/g, "")
+    .replace(/\u200D/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ ?\n[ \t]+/g, "\n")
+    .trim();
 }
 
 export function parseStudyChatResponse(raw: string): {

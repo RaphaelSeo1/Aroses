@@ -16,7 +16,7 @@ function MessagingWorkspaceInner({
   friendsHref = "/dashboard/social?tab=friends",
 }: Props) {
   return (
-    <div className="flex min-h-[36rem] overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-inner dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="flex h-[min(40rem,calc(100dvh-12rem))] min-h-0 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-inner dark:border-zinc-800 dark:bg-zinc-950">
       <aside
         className={`w-full shrink-0 border-r border-zinc-100 dark:border-zinc-800 sm:w-52 md:w-56 ${
           conversationId ? "hidden sm:flex sm:flex-col" : "flex flex-col"
@@ -38,7 +38,7 @@ function MessagingWorkspaceInner({
       </aside>
 
       <main
-        className={`min-w-0 flex-1 flex-col ${
+        className={`min-h-0 min-w-0 flex-1 flex-col ${
           conversationId ? "flex" : "hidden sm:flex"
         }`}
       >

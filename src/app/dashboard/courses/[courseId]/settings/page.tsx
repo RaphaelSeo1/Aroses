@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseListingPanel } from "@/components/CourseListingPanel";
+import { CourseSchoolTagField } from "@/components/CourseSchoolTagField";
 import { CourseVisibilityToggle } from "@/components/CourseVisibilityToggle";
 import { EditableCourseTitle } from "@/components/EditableCourseTitle";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
@@ -127,6 +128,11 @@ export default async function CourseSettingsPage({ params, searchParams }: Props
               initialPublic={publishing.isPublic}
               listingBlocksExplore={publishing.listingBlocksExplore}
               marketplaceEnabled={marketplaceEnabled}
+            />
+            <CourseSchoolTagField
+              courseId={course.id}
+              initialSchoolName={course.school_name ?? null}
+              initialShowSchoolLabel={course.show_school_label !== false}
             />
           </div>
 

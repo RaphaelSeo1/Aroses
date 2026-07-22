@@ -32,7 +32,8 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
  *
  * Markdown subset (shared grammar in `src/lib/notes/notes-markdown.ts`):
  * "## " headings, "- " bullets (one nest level), "1. " steps, "**bold**"
- * key terms, and "> (AI) " for AI-added context the lecturer did NOT say.
+ * key terms, GFM pipe tables, and "> (AI) " for AI-added context the lecturer
+ * did NOT say.
  *
  * The rolling summary is re-compressed by the model on every call and
  * hard-capped, so input stays bounded on any lecture length.
@@ -59,6 +60,7 @@ const NOTE_STYLE_RULES = `You write structured STUDY NOTES — useful to reread 
 - SUMMARIZE as you go. New transcript arrives often — do NOT dump every utterance. Fold related sentences into one clear note. Skip filler, hedging, transitions, anecdotes, repetition, and anything that wouldn't help someone study the material.
 - Bold key terms with **term** on first introduction only. State definitions cleanly even when the lecturer phrased them loosely — but only from what was said or shown.
 - When the lecturer works an example, capture it as a numbered list ("1. ", "2. ") with their actual numbers/steps — keep the steps that teach the method; drop purely verbal padding around them.
+- When the slide or lecture shows a comparison grid, drug/dose chart, criteria matrix, or other tabular data, capture it as a GFM pipe table (header row, then a "| --- | --- |" separator, then data rows). Keep cells faithful to what was shown/said — do not invent columns.
 - When the lecturer signals importance ("this will be on the exam", "this is the key idea"), add one line: "**Why it matters:** ...". Don't sprinkle it on every section.
 - Administrative chatter (attendance, logistics, "can everyone see the screen") is NOT teaching content — skip it.
 - Bullets ("- ", one "  - " nesting level for sub-points) for lists of points; short prose when a definition or relationship needs a full sentence. Concise and readable — in-depth where the idea needs it, never padded.
@@ -282,7 +284,7 @@ Do TWO jobs:
 
 Do NOT invent facts. Do NOT rewrite purely for style when nothing is wrong and nothing needs merging. Student-owned sections are not in the input — ignore anything not listed.
 
-Replacement / merged sections use this markdown subset: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, "**bold**" key terms, "> (AI) " for AI-added context, and "- **Open question:** …" for unresolved conflicts. ${voiceRules()}
+Replacement / merged sections use this markdown subset: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, "**bold**" key terms, GFM pipe tables ("| col |" + "| --- |" separator), "> (AI) " for AI-added context, and "- **Open question:** …" for unresolved conflicts. ${voiceRules()}
 
 Output ONLY valid JSON (no markdown fences):
 { "revisions": [ { "sectionId": string, "markdown": string } ], "removeSectionIds": [ string ] }
@@ -393,7 +395,7 @@ export async function reviewLiveLectureNotes(input: {
 
 // ── End-of-lecture recap (once, on Finish) — same shape as tutor-session recaps ─
 
-const LECTURE_RECAP_SYSTEM = `You generate a polished, study-ready RECAP from a live lecture transcript (and optional on-screen extracts). Output MARKDOWN — proper headings, bullets, callouts, bold for key terms.
+const LECTURE_RECAP_SYSTEM = `You generate a polished, study-ready RECAP from a live lecture transcript (and optional on-screen extracts). Output MARKDOWN — proper headings, bullets, callouts, bold for key terms, and GFM pipe tables when the lecture showed comparison grids or charts.
 
 ${TUTOR_NOTES_QUALITY_RULES}
 

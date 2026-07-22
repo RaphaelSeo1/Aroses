@@ -54,6 +54,18 @@ async function ExploreCoursesSection() {
   const marketplaceEnabled = isMarketplaceUiEnabled();
   const { courses, error: coursesError } = await fetchExploreCatalog(supabase);
 
+  let viewerSchoolName: string | null = null;
+  if (user) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("school_name")
+      .eq("id", user.id)
+      .maybeSingle();
+    const sn = profile?.school_name;
+    viewerSchoolName =
+      typeof sn === "string" && sn.trim() ? sn.trim() : null;
+  }
+
   return (
     <main className="min-h-[calc(100vh-4rem)] flex-1 bg-app-gradient">
       <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-14">
@@ -97,6 +109,7 @@ async function ExploreCoursesSection() {
             courses={courses}
             currentUserId={user?.id}
             marketplaceEnabled={marketplaceEnabled}
+            viewerSchoolName={viewerSchoolName}
           />
         )}
       </div>

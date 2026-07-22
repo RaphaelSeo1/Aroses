@@ -8,6 +8,7 @@
  *   - "**term**" bold key terms
  *   - "> (AI) " AI-added context the lecturer did NOT say (rendered as a
  *     visually distinct callout, provenance "ai-context")
+ *   - GFM pipe tables (`| col | col |` + `| --- | --- |` separator)
  *   - "---" horizontal rule
  *
  * This module is pure (no editor, no DOM) so BOTH consumers share one
@@ -228,6 +229,136 @@ function paragraphOf(inline: NoteInlineJson[]): NoteNodeJson {
     : { type: "paragraph" };
 }
 
+/** True for a GFM pipe row (`| a | b |`). Leading `|` required to avoid math `|x|`. */
+export function isGfmTableRowLine(line: string): boolean {
+  const t = line.trim();
+  if (!t.startsWith("|")) return false;
+  if (isGfmTableSeparatorLine(t)) return false;
+  return t.includes("|", 1);
+}
+
+/** True for a GFM alignment/separator row (`| --- | :---: |`). */
+export function isGfmTableSeparatorLine(line: string): boolean {
+  const t = line.trim();
+  if (!t.startsWith("|") || !/-{3,}/.test(t)) return false;
+  const cells = splitTableCells(t);
+  if (cells.length === 0) return false;
+  return cells.every((c) => /^:?-{3,}:?$/.test(c));
+}
+
+export function isGfmTableLine(line: string): boolean {
+  return isGfmTableRowLine(line) || isGfmTableSeparatorLine(line);
+}
+
+function splitTableCells(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|")) t = t.slice(0, -1);
+  return t.split("|").map((c) => c.trim());
+}
+
+function tableCellNode(
+  text: string,
+  type: "tableHeader" | "tableCell"
+): NoteNodeJson {
+  return {
+    type,
+    content: [paragraphOf(parseInlineMarkdown(text))],
+  };
+}
+
+/**
+ * Consume a GFM pipe table starting at `start`. Returns the TipTap table
+ * node and the index of the first line after the table.
+ */
+export function consumeGfmTable(
+  lines: string[],
+  start: number
+): { node: NoteNodeJson; end: number } | null {
+  if (start >= lines.length || !isGfmTableLine(lines[start]!)) return null;
+
+  const block: string[] = [];
+  let i = start;
+  while (i < lines.length && isGfmTableLine(lines[i]!)) {
+    block.push(lines[i]!);
+    i += 1;
+  }
+  if (block.length === 0) return null;
+
+  let header: string[] | null = null;
+  const body: string[][] = [];
+  let idx = 0;
+
+  if (
+    block.length >= 2 &&
+    isGfmTableRowLine(block[0]!) &&
+    isGfmTableSeparatorLine(block[1]!)
+  ) {
+    header = splitTableCells(block[0]!);
+    idx = 2;
+  }
+
+  for (; idx < block.length; idx++) {
+    const line = block[idx]!;
+    if (isGfmTableSeparatorLine(line)) continue;
+    if (isGfmTableRowLine(line)) body.push(splitTableCells(line));
+  }
+
+  // Models sometimes omit the separator — treat the first data row as header.
+  if (!header) {
+    if (body.length === 0) return null;
+    header = body.shift()!;
+  }
+
+  const colCount = Math.max(header.length, ...body.map((r) => r.length), 1);
+  const pad = (cells: string[]): string[] => {
+    const out = cells.slice(0, colCount);
+    while (out.length < colCount) out.push("");
+    return out;
+  };
+
+  const rows: NoteNodeJson[] = [
+    {
+      type: "tableRow",
+      content: pad(header).map((c) => tableCellNode(c, "tableHeader")),
+    },
+    ...body.map((r) => ({
+      type: "tableRow",
+      content: pad(r).map((c) => tableCellNode(c, "tableCell")),
+    })),
+  ];
+
+  return { node: { type: "table", content: rows }, end: i };
+}
+
+function tableToMarkdown(node: NoteNodeJson): string {
+  const rows = (node.content ?? []) as NoteNodeJson[];
+  const cellTexts: string[][] = [];
+  for (const row of rows) {
+    if (row.type !== "tableRow") continue;
+    const cells = (row.content ?? []) as NoteNodeJson[];
+    const parts = cells.map((cell) =>
+      inlineToMarkdown(cell.content).replace(/\|/g, "\\|").trim()
+    );
+    if (parts.length > 0) cellTexts.push(parts);
+  }
+  if (cellTexts.length === 0) return "";
+
+  const cols = Math.max(...cellTexts.map((r) => r.length), 1);
+  const fmt = (cells: string[]) => {
+    const padded = cells.slice(0, cols);
+    while (padded.length < cols) padded.push("");
+    return `| ${padded.join(" | ")} |`;
+  };
+
+  const out = [fmt(cellTexts[0]!)];
+  out.push(`| ${Array.from({ length: cols }, () => "---").join(" | ")} |`);
+  for (let r = 1; r < cellTexts.length; r++) {
+    out.push(fmt(cellTexts[r]!));
+  }
+  return out.join("\n");
+}
+
 /**
  * Convert the markdown subset into top-level TipTap JSON nodes. Every
  * top-level node is stamped with the given provenance + sectionId
@@ -257,7 +388,20 @@ export function markdownToNoteNodes(
     openList = null;
   };
 
-  for (const rawLine of markdown.split("\n")) {
+  const lines = markdown.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i]!;
+
+    if (isGfmTableLine(rawLine)) {
+      closeList();
+      const table = consumeGfmTable(lines, i);
+      if (table) {
+        nodes.push(stamp(table.node));
+        i = table.end - 1;
+        continue;
+      }
+    }
+
     const line = classifyNoteLine(rawLine);
     switch (line.kind) {
       case "blank":
@@ -402,16 +546,8 @@ export function noteNodesToMarkdown(nodes: NoteNodeJson[]): string {
         break;
       }
       case "table": {
-        // Compact preview: flatten cell text into pipe rows.
-        const rows = (node.content ?? []) as NoteNodeJson[];
-        for (const row of rows) {
-          if (row.type !== "tableRow") continue;
-          const cells = (row.content ?? []) as NoteNodeJson[];
-          const parts = cells.map((cell) =>
-            inlineToMarkdown(cell.content).replace(/\|/g, "\\|").trim()
-          );
-          if (parts.some(Boolean)) out.push(`| ${parts.join(" | ")} |`);
-        }
+        const md = tableToMarkdown(node);
+        if (md) out.push(md);
         break;
       }
       default: {

@@ -106,6 +106,15 @@ export function FriendsApp({
   const [suggestions, setSuggestions] = useState<
     { id: string; username: string | null; displayName: string | null }[]
   >([]);
+  const [schoolSuggestions, setSchoolSuggestions] = useState<
+    {
+      id: string;
+      username: string | null;
+      displayName: string | null;
+    }[]
+  >([]);
+  const [viewerSchoolName, setViewerSchoolName] = useState<string | null>(null);
+  const [schoolSuggestionsLoaded, setSchoolSuggestionsLoaded] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -124,11 +133,28 @@ export function FriendsApp({
       setError(t.messages.networkError);
     }
     setLoading(false);
+  }, [t.messages.couldNotLoadFriends, t.messages.networkError]);
+
+  const loadSchoolSuggestions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/friends/suggestions");
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setViewerSchoolName(
+          typeof body.schoolName === "string" ? body.schoolName : null
+        );
+        setSchoolSuggestions(body.suggestions ?? []);
+      }
+    } catch {
+      /* ignore */
+    }
+    setSchoolSuggestionsLoaded(true);
   }, []);
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadSchoolSuggestions();
+  }, [load, loadSchoolSuggestions]);
 
   useEffect(() => {
     const q = username.trim().replace(/^@/, "");
@@ -155,15 +181,15 @@ export function FriendsApp({
   async function sendRequest(e: React.FormEvent, pick?: { username?: string; userId?: string }) {
     e.preventDefault();
     setError(null);
-    setBusyId("add");
+    setBusyId(pick?.userId ?? "add");
     const target = (pick?.username ?? username).trim().replace(/^@/, "");
     try {
       const res = await fetch("/api/friends", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: target,
-          userId: pick?.userId,
+          ...(target ? { username: target } : {}),
+          ...(pick?.userId ? { userId: pick.userId } : {}),
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -176,6 +202,7 @@ export function FriendsApp({
         setUsername("");
         setSuggestions([]);
         await load();
+        await loadSchoolSuggestions();
         dispatchMessagingRefresh();
       }
     } catch {
@@ -255,6 +282,74 @@ export function FriendsApp({
 
   return (
     <div className="space-y-10">
+      <section className="rounded-3xl border border-zinc-200/90 bg-white/95 p-6 shadow-lg dark:border-zinc-800 dark:bg-zinc-950/95 sm:p-8">
+        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+          {t.messages.peopleFromYourSchool}
+        </h2>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          {t.messages.peopleFromYourSchoolHint}
+          {viewerSchoolName ? (
+            <>
+              {" "}
+              <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                ({viewerSchoolName})
+              </span>
+            </>
+          ) : null}
+        </p>
+        {!schoolSuggestionsLoaded ? (
+          <p className="mt-4 text-sm text-zinc-500">{t.common.loading}</p>
+        ) : !viewerSchoolName ? (
+          <div className="mt-4 rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-4 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-400">
+            <p>{t.messages.noSchoolOnProfile}</p>
+            <Link
+              href="/dashboard/profile?panel=general"
+              className="mt-2 inline-flex text-sm font-semibold text-brand hover:underline dark:text-brand-soft"
+            >
+              {t.messages.addSchoolSettings} →
+            </Link>
+          </div>
+        ) : schoolSuggestions.length === 0 ? (
+          <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+            {t.messages.noSchoolmatesYet}
+          </p>
+        ) : (
+          <ul className="mt-4 space-y-2">
+            {schoolSuggestions.map((s) => (
+              <li
+                key={s.id}
+                className="flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-200/90 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-blush text-sm font-semibold text-brand dark:bg-[#1e1616] dark:text-brand-soft">
+                  {(s.displayName || s.username || "?").slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-zinc-900 dark:text-zinc-50">
+                    {s.displayName || s.username || "Student"}
+                  </p>
+                  {s.username ? (
+                    <p className="text-xs text-zinc-500">@{s.username}</p>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  disabled={busyId === s.id || busyId === "add"}
+                  onClick={(e) =>
+                    void sendRequest(e, {
+                      userId: s.id,
+                      username: s.username ?? undefined,
+                    })
+                  }
+                  className="rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover disabled:opacity-50"
+                >
+                  {t.messages.suggestedAdd}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       <section className="rounded-3xl border border-zinc-200/90 bg-white/95 p-6 shadow-lg dark:border-zinc-800 dark:bg-zinc-950/95 sm:p-8">
         <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Add a friend</h2>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">

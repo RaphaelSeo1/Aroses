@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { STUDY_CHAT_PREFILL_EVENT } from "@/components/StudyChatDrawer";
+import { AI_ASSISTANT_NAME } from "@/lib/brand";
 
 export const LESSON_QUOTE_EVENT = "aroses-lesson-quote";
 export const LESSON_HAS_NOTE_QUERY_EVENT = "aroses-lesson-has-note-query";
@@ -1335,9 +1336,9 @@ export function LessonQuoteCaptureRegion({
                 <button
                   type="button"
                   onClick={askAi}
-                  className="rounded-full bg-zinc-900 px-2.5 py-1 font-semibold text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                  className="rounded-full bg-brand px-2.5 py-1 font-semibold text-white hover:bg-brand-hover dark:bg-brand dark:text-white dark:hover:bg-brand-hover"
                 >
-                  Ask AI
+                  Ask {AI_ASSISTANT_NAME}
                 </button>
               ) : (
                 <button

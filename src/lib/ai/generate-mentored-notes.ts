@@ -32,7 +32,7 @@ Your job: produce specific, in-depth notes about what is being taught — the ki
 
 Guidelines:
 - Write from the student's perspective. Be concrete: explain what things are, how they work, why they matter, and how ideas connect.
-- Use this markdown subset only: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, and "**bold**" for key terms. Do NOT use single-asterisk *italic* or other markup — unclosed markers show up as raw asterisks.
+- Use this markdown subset only: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, "**bold**" for key terms, and GFM pipe tables when comparing options/criteria (header row, a "| --- | --- |" separator, then data rows). Do NOT use single-asterisk *italic* or other markup — unclosed markers show up as raw asterisks.
 - Let structure emerge organically — do NOT force rigid sections like "Key Terms:" or "Summary:" unless that genuinely fits the material.
 - Include examples, formulas, or worked steps when the source material includes them.
 - Be substantive and specific to THIS topic — no generic study-skills fluff. Finish every list and explanation you start; do not leave stub lines.

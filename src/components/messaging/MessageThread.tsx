@@ -171,7 +171,13 @@ function MessageThreadInner({
   }, [conversationId, loadMessages, markRead]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
-    bottomRef.current?.scrollIntoView({ behavior });
+    const el = scrollRef.current;
+    if (!el) return;
+    if (behavior === "smooth") {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
   }, []);
 
   useEffect(() => {
@@ -245,8 +251,8 @@ function MessageThreadInner({
   const canManageMembers = !!isGroup && selfMember?.role === "admin";
 
   const shellClass = embedded
-    ? `flex min-h-0 flex-1 bg-white dark:bg-zinc-950 ${infoOpen ? "flex-col lg:flex-row" : "flex-col"}`
-    : `flex min-h-[calc(100vh-12rem)] rounded-3xl border border-zinc-200/90 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-950 ${infoOpen ? "flex-col lg:flex-row" : "flex-col"}`;
+    ? `flex h-full min-h-0 flex-1 overflow-hidden bg-white dark:bg-zinc-950 ${infoOpen ? "flex-col lg:flex-row" : "flex-col"}`
+    : `flex h-[calc(100dvh-12rem)] min-h-0 overflow-hidden rounded-3xl border border-zinc-200/90 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-950 ${infoOpen ? "flex-col lg:flex-row" : "flex-col"}`;
 
   return (
     <div className={shellClass}>

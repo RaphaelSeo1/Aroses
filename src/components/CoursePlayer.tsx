@@ -35,9 +35,25 @@ import {
   moduleTitleFromLessonTitles,
 } from "@/lib/study-ingest/normalize-ingest-title";
 import {
+  AROSES_COURSE_REFINE_APPLY_START_EVENT,
+  AROSES_COURSE_REFINE_LESSON_DELTA_EVENT,
+  AROSES_COURSE_REFINE_LESSON_EDIT_EVENT,
+  AROSES_COURSE_REFINE_PATCH_EVENT,
+  AROSES_COURSE_REFINE_PREVIEW_EVENT,
   AROSES_COURSE_REFINED_EVENT,
+  type ArosesCourseRefineApplyStartDetail,
+  type ArosesCourseRefineLessonDeltaDetail,
+  type ArosesCourseRefineLessonEditDetail,
+  type ArosesCourseRefinePatchDetail,
+  type ArosesCourseRefinePreviewDetail,
+  type ArosesCourseRefinePreviewEdit,
   type ArosesCourseRefinedDetail,
 } from "@/lib/refine-course-events";
+import {
+  AROSES_COURSE_REFINE_APPLY_CANCELLED_EVENT,
+  stopRefineApplyJob,
+  type ArosesCourseRefineApplyCancelledDetail,
+} from "@/lib/refine-course-client-job";
 import type {
   CourseModule,
   CoursePayload,
@@ -141,7 +157,7 @@ function pickInitialModuleId(
 }
 
 export function CoursePlayer({
-  course,
+  course: courseProp,
   courseId,
   materialId,
   sourceLabel,
@@ -186,6 +202,16 @@ export function CoursePlayer({
   const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const [course, setCourse] = useState(courseProp);
+  const morphingRef = useRef(false);
+  const courseRef = useRef(course);
+  courseRef.current = course;
+
+  useEffect(() => {
+    if (morphingRef.current || refineApplyingRef.current) return;
+    setCourse(courseProp);
+  }, [courseProp]);
+
   const studyBase =
     studyHrefBase ?? `/dashboard/courses/${courseId}/study`;
   const learnBase =
@@ -204,8 +230,10 @@ export function CoursePlayer({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const isDescriptionLong = (course.description?.length ?? 0) > 140;
   const [activeModuleId, setActiveModuleId] = useState(() =>
-    pickInitialModuleId(course, initialModuleFromUrl)
+    pickInitialModuleId(courseProp, initialModuleFromUrl)
   );
+  const activeModuleIdRef = useRef(activeModuleId);
+  activeModuleIdRef.current = activeModuleId;
   const [completed, setCompleted] = useState<Set<number>>(
     () => new Set(initialCompletedModuleIds)
   );
@@ -227,14 +255,91 @@ export function CoursePlayer({
   const [progressPanelOpen, setProgressPanelOpen] = useState(false);
   const [personalBankEpoch, setPersonalBankEpoch] = useState(0);
   const [focusItemCount, setFocusItemCount] = useState(0);
-  const [refineApplyFlash, setRefineApplyFlash] = useState(false);
+  /** True from apply-start until final refresh — banner while Rose writes. */
+  const [refineApplying, setRefineApplying] = useState(false);
+  /** Module id highlighted (ring) while Rose is editing it. */
+  const [refineMorphingModuleId, setRefineMorphingModuleId] = useState<
+    number | null
+  >(null);
+  /** Module using the fallback full-lesson typewriter reveal (no caret ops). */
+  const [liveMorphModuleId, setLiveMorphModuleId] = useState<number | null>(
+    null
+  );
+  /**
+   * In-place surgical edit currently animating: the caret sits at `caret`
+   * inside `text` for lesson (`moduleId`,`lessonIndex`), deleting/typing there.
+   */
+  const [liveEdit, setLiveEdit] = useState<{
+    moduleId: number;
+    lessonIndex: number;
+    text: string;
+    caret: number;
+  } | null>(null);
+  /**
+   * Pre-confirm preview: caret(s) hovering over the exact spans the pending
+   * edit will change, shown on the current (unedited) document.
+   */
+  const [previewEdits, setPreviewEdits] = useState<
+    ArosesCourseRefinePreviewEdit[] | null
+  >(null);
+  const refineApplyingRef = useRef(false);
   // On narrow screens (< lg) the voice dock collapses to a compact trigger so
   // it can't cover the lesson text; tapping it opens a dismissible bottom sheet.
   // On lg+ it always shows, sitting in the reserved right rail.
   const [voiceDockOpen, setVoiceDockOpen] = useState(false);
-  const refineClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [askRoseOpen, setAskRoseOpen] = useState(false);
+  const [refineOpen, setRefineOpen] = useState(false);
+  /** True once we've focused the module being edited (prevents focus-stealing). */
+  const refineDidFocusRef = useRef(false);
+  /** Timestamp (ms) when the live typewriter for the current edit should finish. */
+  const typeDoneAtRef = useRef(0);
+  /** Queue of surgical in-place edits (caret animation) waiting to play. */
+  const editQueueRef = useRef<
+    Array<{
+      moduleId: number;
+      lessonIndex: number;
+      start: number;
+      deleteLen: number;
+      insert: string;
+    }>
+  >([]);
+  /** True while the caret animation loop is running. */
+  const editRunningRef = useRef(false);
+  /** Working copy of the lesson being animated, mutated char by char. */
+  const liveEditRef = useRef<{
+    moduleId: number;
+    lessonIndex: number;
+    text: string;
+    caret: number;
+  } | null>(null);
+  /** Modules that used surgical caret ops (so patches don't re-type them). */
+  const inPlaceModulesRef = useRef<Set<number>>(new Set());
+  /** finalizeRefine deferred until the caret animation drains the queue. */
+  const pendingFinalizeRef = useRef<(() => void) | null>(null);
+
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("aroses_study_sidebar_open");
+      if (stored === "0") setSidebarOpen(false);
+      if (stored === "1") setSidebarOpen(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const setSidebarOpenPersist = useCallback((next: boolean) => {
+    setSidebarOpen(next);
+    try {
+      window.localStorage.setItem(
+        "aroses_study_sidebar_open",
+        next ? "1" : "0"
+      );
+    } catch {
+      /* ignore */
+    }
+  }, []);
   // True once the user has navigated (module change) since this material loaded.
   // The one-time "resume saved position" effect below checks this so it only
   // restores the saved scroll on the initial page load — never after the user
@@ -242,33 +347,403 @@ export function CoursePlayer({
   const hasNavigatedRef = useRef(false);
 
   useEffect(() => {
-    setRefineApplyFlash(false);
+    setRefineApplying(false);
+    refineApplyingRef.current = false;
+    refineDidFocusRef.current = false;
+    typeDoneAtRef.current = 0;
+    morphingRef.current = false;
+    setRefineMorphingModuleId(null);
+    setLiveMorphModuleId(null);
+    setLiveEdit(null);
+    setPreviewEdits(null);
+    editQueueRef.current = [];
+    editRunningRef.current = false;
+    liveEditRef.current = null;
+    inPlaceModulesRef.current = new Set();
+    pendingFinalizeRef.current = null;
     hasNavigatedRef.current = false;
-    if (refineClearTimerRef.current) {
-      clearTimeout(refineClearTimerRef.current);
-      refineClearTimerRef.current = null;
-    }
   }, [materialId]);
 
   useEffect(() => {
+    // Live "Rose is writing" reveal. We reuse the SAME progressive typewriter
+    // the course/notes generation uses (useTypewriterString in
+    // LessonEditableBlocks): drop the FINAL edited module into state once and
+    // flip it into "live typing" mode, and the lesson types itself out
+    // character by character. No incremental pump, and no refresh mid-reveal.
+    // Must roughly match LessonEditableBlocks live speed (chars per second).
+    const LIVE_CPS = 320;
+    let finalizeTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function focusModule(moduleId: number) {
+      refineDidFocusRef.current = true;
+      if (moduleId !== activeModuleIdRef.current) {
+        activeModuleIdRef.current = moduleId;
+        setActiveModuleId(moduleId);
+        hasNavigatedRef.current = true;
+      }
+    }
+
+    function finalizeRefine() {
+      // If a caret animation is still playing, wait for it to drain first so
+      // the last delete/type isn't cut off by the refresh.
+      if (editRunningRef.current || editQueueRef.current.length > 0) {
+        pendingFinalizeRef.current = finalizeRefine;
+        return;
+      }
+      if (finalizeTimer) {
+        clearTimeout(finalizeTimer);
+        finalizeTimer = null;
+      }
+      pendingFinalizeRef.current = null;
+      morphingRef.current = false;
+      refineApplyingRef.current = false;
+      refineDidFocusRef.current = false;
+      typeDoneAtRef.current = 0;
+      inPlaceModulesRef.current = new Set();
+      liveEditRef.current = null;
+      setLiveEdit(null);
+      setLiveMorphModuleId(null);
+      setRefineMorphingModuleId(null);
+      setRefineApplying(false);
+      // Content is already final in state (from patches); sync any server-side
+      // normalization now that the animation is done — the guard in the
+      // courseProp effect lets this apply cleanly.
+      router.refresh();
+    }
+
+    // Bring the lesson being edited into view so the caret is visible, then
+    // play the queued surgical edits one character at a time.
+    function scrollLessonIntoView(moduleId: number, lessonIndex: number) {
+      if (typeof document === "undefined") return;
+      const el = document.getElementById(`lesson-${moduleId}-${lessonIndex}`);
+      el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    function runEditQueue() {
+      if (editRunningRef.current) return;
+      editRunningRef.current = true;
+
+      // Working text per lesson persists for the whole drain so multiple edits
+      // to the same lesson stack correctly (and untouched text stays verbatim).
+      const workingByKey = new Map<string, string>();
+      const keyOf = (m: number, l: number) => `${m}:${l}`;
+
+      let toDelete = 0;
+      let toInsert = "";
+      let unitsPerTick = 1;
+
+      const seedText = (moduleId: number, lessonIndex: number): string => {
+        const k = keyOf(moduleId, lessonIndex);
+        const cached = workingByKey.get(k);
+        if (cached != null) return cached;
+        const mod = courseRef.current.modules.find((m) => m.id === moduleId);
+        const text = mod?.lessons[lessonIndex]?.content ?? "";
+        workingByKey.set(k, text);
+        return text;
+      };
+
+      const commitAll = () => {
+        if (workingByKey.size === 0) return;
+        setCourse((prev) => ({
+          ...prev,
+          modules: prev.modules.map((m) => {
+            let changed = false;
+            const lessons = m.lessons.map((l, i) => {
+              const v = workingByKey.get(keyOf(m.id, i));
+              if (v != null && v !== l.content) {
+                changed = true;
+                return { ...l, content: v };
+              }
+              return l;
+            });
+            return changed ? { ...m, lessons } : m;
+          }),
+        }));
+      };
+
+      const finishQueue = () => {
+        commitAll();
+        liveEditRef.current = null;
+        editRunningRef.current = false;
+        if (pendingFinalizeRef.current) {
+          const fn = pendingFinalizeRef.current;
+          pendingFinalizeRef.current = null;
+          fn();
+        }
+      };
+
+      const startNextChange = (): boolean => {
+        const next = editQueueRef.current.shift();
+        if (!next) return false;
+        const prev = liveEditRef.current;
+        const switching =
+          !prev ||
+          prev.moduleId !== next.moduleId ||
+          prev.lessonIndex !== next.lessonIndex;
+        const text = seedText(next.moduleId, next.lessonIndex);
+        const caret = Math.min(next.start, text.length);
+        liveEditRef.current = {
+          moduleId: next.moduleId,
+          lessonIndex: next.lessonIndex,
+          text,
+          caret,
+        };
+        if (switching) scrollLessonIntoView(next.moduleId, next.lessonIndex);
+        toDelete = Math.min(next.deleteLen, text.length - caret);
+        toInsert = next.insert;
+        const units = toDelete + toInsert.length;
+        // Pace it so short edits are clearly typed, long ones stay under ~3.5s.
+        const durationMs = Math.min(3500, Math.max(250, units * 14));
+        unitsPerTick = Math.max(1, Math.ceil(units / (durationMs / 16)));
+        return true;
+      };
+
+      const tick = () => {
+        if (toDelete === 0 && toInsert.length === 0) {
+          if (!startNextChange()) {
+            finishQueue();
+            return;
+          }
+        }
+        const w = liveEditRef.current!;
+        let budget = unitsPerTick;
+        while (budget > 0 && (toDelete > 0 || toInsert.length > 0)) {
+          if (toDelete > 0) {
+            w.text = w.text.slice(0, w.caret) + w.text.slice(w.caret + 1);
+            toDelete -= 1;
+          } else {
+            w.text =
+              w.text.slice(0, w.caret) + toInsert[0] + w.text.slice(w.caret);
+            w.caret += 1;
+            toInsert = toInsert.slice(1);
+          }
+          budget -= 1;
+        }
+        workingByKey.set(keyOf(w.moduleId, w.lessonIndex), w.text);
+        setLiveEdit({ ...w });
+        window.setTimeout(tick, 16);
+      };
+
+      tick();
+    }
+
+    function onApplyStart(ev: Event) {
+      const d = (ev as CustomEvent<ArosesCourseRefineApplyStartDetail>).detail;
+      if (!d || d.materialId !== materialId) return;
+      refineApplyingRef.current = true;
+      refineDidFocusRef.current = false;
+      typeDoneAtRef.current = 0;
+      morphingRef.current = true;
+      editQueueRef.current = [];
+      editRunningRef.current = false;
+      liveEditRef.current = null;
+      inPlaceModulesRef.current = new Set();
+      pendingFinalizeRef.current = null;
+      setLiveEdit(null);
+      setLiveMorphModuleId(null);
+      setPreviewEdits(null);
+      setRefineApplying(true);
+      // Don't flip live-typing yet — wait for edited content so we don't
+      // re-type the unchanged lesson. The floating pill shows progress.
+    }
+
+    function onPreview(ev: Event) {
+      const d = (ev as CustomEvent<ArosesCourseRefinePreviewDetail>).detail;
+      if (!d || d.materialId !== materialId) return;
+      if (!d.edits || d.edits.length === 0) {
+        setPreviewEdits(null);
+        return;
+      }
+      setPreviewEdits(d.edits);
+      // Jump to the module/lesson about to be edited so the caret is visible.
+      const first = d.edits[0];
+      if (first.moduleId !== activeModuleIdRef.current) {
+        activeModuleIdRef.current = first.moduleId;
+        setActiveModuleId(first.moduleId);
+        hasNavigatedRef.current = true;
+      }
+      window.setTimeout(
+        () => scrollLessonIntoView(first.moduleId, first.lessonIndex),
+        140
+      );
+    }
+
+    function onLessonEdit(ev: Event) {
+      const d = (ev as CustomEvent<ArosesCourseRefineLessonEditDetail>).detail;
+      if (!d || d.materialId !== materialId) return;
+
+      // Focus the edited module once; this is the surgical caret path.
+      inPlaceModulesRef.current.add(d.moduleId);
+      if (!refineDidFocusRef.current) focusModule(d.moduleId);
+      // Only animate the module the student is actually looking at.
+      if (d.moduleId !== activeModuleIdRef.current) return;
+
+      setRefineMorphingModuleId(d.moduleId);
+      editQueueRef.current.push({
+        moduleId: d.moduleId,
+        lessonIndex: d.lessonIndex,
+        start: d.start,
+        deleteLen: d.deleteLen,
+        insert: d.insert,
+      });
+      const units = d.deleteLen + d.insert.length;
+      typeDoneAtRef.current = Math.max(
+        typeDoneAtRef.current,
+        Date.now() + Math.min(3500, Math.max(250, units * 14)) + 250
+      );
+      runEditQueue();
+    }
+
     function onRefined(ev: Event) {
       const d = (ev as CustomEvent<ArosesCourseRefinedDetail>).detail;
       if (!d || d.materialId !== materialId) return;
-      setRefineApplyFlash(true);
-      router.refresh();
-      if (refineClearTimerRef.current) clearTimeout(refineClearTimerRef.current);
-      refineClearTimerRef.current = setTimeout(() => {
-        setRefineApplyFlash(false);
-        refineClearTimerRef.current = null;
-      }, 2200);
+      // The edited content is already in state. Let the typewriter finish
+      // revealing it, THEN drop the highlight / refresh so nothing is cut off.
+      const wait = Math.max(0, typeDoneAtRef.current - Date.now());
+      if (finalizeTimer) clearTimeout(finalizeTimer);
+      finalizeTimer = setTimeout(finalizeRefine, wait + 300);
     }
-    window.addEventListener(AROSES_COURSE_REFINED_EVENT, onRefined);
-    return () => {
-      window.removeEventListener(AROSES_COURSE_REFINED_EVENT, onRefined);
-      if (refineClearTimerRef.current) {
-        clearTimeout(refineClearTimerRef.current);
-        refineClearTimerRef.current = null;
+
+    function onCancelled(ev: Event) {
+      const d = (ev as CustomEvent<ArosesCourseRefineApplyCancelledDetail>)
+        .detail;
+      if (!d || d.materialId !== materialId) return;
+      finalizeRefine();
+    }
+
+    function onLessonDelta(ev: Event) {
+      const d = (ev as CustomEvent<ArosesCourseRefineLessonDeltaDetail>).detail;
+      if (!d || d.materialId !== materialId) return;
+      // Used only to jump to the module being edited early; the actual reveal
+      // is driven by the final module_patch below.
+      if (!refineDidFocusRef.current) focusModule(d.moduleId);
+    }
+
+    async function onPatch(ev: Event) {
+      const d = (ev as CustomEvent<ArosesCourseRefinePatchDetail>).detail;
+      if (!d || d.materialId !== materialId || !d.module) return;
+
+      const nextModule = d.module;
+      let isActive = nextModule.id === activeModuleIdRef.current;
+
+      // Focus the module being edited ONCE. After that, never yank the student
+      // to a different module: other modules update silently in the background
+      // so the open lesson isn't replaced by another module's content.
+      if (
+        !isActive &&
+        refineApplyingRef.current &&
+        !refineDidFocusRef.current
+      ) {
+        focusModule(nextModule.id);
+        isActive = true;
       }
+
+      const prevModule = courseRef.current.modules.find(
+        (m) => m.id === nextModule.id
+      );
+      // Structured-only edit (key terms / examples): lesson bodies are unchanged.
+      // Drop in immediately — never re-type the whole lesson body.
+      const structuredOnly =
+        !!prevModule &&
+        prevModule.lessons.length === nextModule.lessons.length &&
+        prevModule.lessons.every(
+          (l, i) => (l.content ?? "") === (nextModule.lessons[i]?.content ?? "")
+        );
+
+      // Surgical caret path already animated (and will commit) this module —
+      // just make sure the authoritative content lands, without re-typing.
+      if (inPlaceModulesRef.current.has(nextModule.id) || structuredOnly) {
+        const animating =
+          !structuredOnly &&
+          (liveEditRef.current?.moduleId === nextModule.id ||
+            editQueueRef.current.some((c) => c.moduleId === nextModule.id));
+        if (!animating) {
+          setCourse((prev) => ({
+            ...prev,
+            modules: prev.modules.map((m) =>
+              m.id === nextModule.id ? nextModule : m
+            ),
+          }));
+          if (isActive) {
+            setRefineMorphingModuleId(nextModule.id);
+            // Brief highlight so key-term / example adds are visible.
+            typeDoneAtRef.current = Math.max(
+              typeDoneAtRef.current,
+              Date.now() + 900
+            );
+            window.setTimeout(() => {
+              setRefineMorphingModuleId((cur) =>
+                cur === nextModule.id ? null : cur
+              );
+            }, 1200);
+          }
+        }
+        setPreviewEdits(null);
+        return;
+      }
+
+      // Drop the final edited module content into state.
+      setCourse((prev) => ({
+        ...prev,
+        modules: prev.modules.map((m) =>
+          m.id === nextModule.id ? nextModule : m
+        ),
+      }));
+      setPreviewEdits(null);
+
+      if (!isActive) return;
+
+      // Fallback reveal (streaming / whole-course / bulk): flip the open module
+      // into live-typing mode. LessonEditableBlocks reveals the new content
+      // character by character (same typewriter as course/notes generation).
+      morphingRef.current = true;
+      setRefineMorphingModuleId(nextModule.id);
+      setLiveMorphModuleId(nextModule.id);
+      const maxLen = nextModule.lessons.reduce(
+        (mx, l) => Math.max(mx, (l.content ?? "").length),
+        0
+      );
+      const typeMs = Math.ceil((maxLen / LIVE_CPS) * 1000) + 800;
+      typeDoneAtRef.current = Math.max(
+        typeDoneAtRef.current,
+        Date.now() + typeMs
+      );
+    }
+
+    window.addEventListener(AROSES_COURSE_REFINE_APPLY_START_EVENT, onApplyStart);
+    window.addEventListener(AROSES_COURSE_REFINED_EVENT, onRefined);
+    window.addEventListener(AROSES_COURSE_REFINE_APPLY_CANCELLED_EVENT, onCancelled);
+    window.addEventListener(
+      AROSES_COURSE_REFINE_LESSON_DELTA_EVENT,
+      onLessonDelta
+    );
+    window.addEventListener(
+      AROSES_COURSE_REFINE_LESSON_EDIT_EVENT,
+      onLessonEdit
+    );
+    window.addEventListener(AROSES_COURSE_REFINE_PREVIEW_EVENT, onPreview);
+    window.addEventListener(AROSES_COURSE_REFINE_PATCH_EVENT, onPatch);
+    return () => {
+      window.removeEventListener(
+        AROSES_COURSE_REFINE_APPLY_START_EVENT,
+        onApplyStart
+      );
+      window.removeEventListener(AROSES_COURSE_REFINED_EVENT, onRefined);
+      window.removeEventListener(
+        AROSES_COURSE_REFINE_APPLY_CANCELLED_EVENT,
+        onCancelled
+      );
+      window.removeEventListener(
+        AROSES_COURSE_REFINE_LESSON_DELTA_EVENT,
+        onLessonDelta
+      );
+      window.removeEventListener(
+        AROSES_COURSE_REFINE_LESSON_EDIT_EVENT,
+        onLessonEdit
+      );
+      window.removeEventListener(AROSES_COURSE_REFINE_PREVIEW_EVENT, onPreview);
+      window.removeEventListener(AROSES_COURSE_REFINE_PATCH_EVENT, onPatch);
+      if (finalizeTimer) clearTimeout(finalizeTimer);
     };
   }, [materialId, router]);
 
@@ -336,7 +811,13 @@ export function CoursePlayer({
 
   const scrollToLesson = useCallback(
     (lessonIndex: number, opts?: { persist?: boolean }) => {
-      const mod = course.modules.find((m) => m.id === activeModuleId);
+      // Read from the ref so this callback's identity stays stable while the
+      // course state mutates rapidly during a live refine — otherwise the
+      // scroll-restore effect below would re-run on every streamed character
+      // and yank the viewport back, blocking the user from scrolling.
+      const mod = courseRef.current.modules.find(
+        (m) => m.id === activeModuleId
+      );
       if (!mod) return;
       document
         .getElementById(`lesson-${mod.id}-${lessonIndex}`)
@@ -348,7 +829,7 @@ export function CoursePlayer({
         });
       }
     },
-    [activeModuleId, course.modules, courseId, materialId]
+    [activeModuleId, courseId, materialId]
   );
 
   useEffect(() => {
@@ -368,6 +849,8 @@ export function CoursePlayer({
     // dep) but must NOT fire, or it would drag the viewport back down using the
     // stale page-load position after we scrolled the new module to the top.
     if (hasNavigatedRef.current) return;
+    // Never restore/scroll while a refine is streaming into the page.
+    if (refineApplyingRef.current) return;
     const lesson =
       typeof initialLessonIndex === "number" ? initialLessonIndex : null;
     const scroll =
@@ -966,22 +1449,22 @@ export function CoursePlayer({
 
   return (
     <>
-      {refineApplyFlash && courseManageEnabled ? (
-        <div className="border-b border-zinc-200 bg-zinc-50/95 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/80">
-          <div className="mx-auto max-w-3xl">
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-              {t.study.updatingStudyContent}
-            </p>
-            <p className="mt-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">
-              {t.study.mergingEdits}
-            </p>
-            <div className="relative mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-              <div
-                className="absolute inset-y-0 w-[28%] rounded-full bg-brand/90 dark:bg-brand-soft animate-course-upload-indeterminate"
-                aria-hidden
-              />
-            </div>
-          </div>
+      {refineApplying && courseManageEnabled ? (
+        <div className="fixed bottom-5 left-5 z-[95] flex items-center gap-2.5 rounded-full border border-zinc-200 bg-white/95 py-1.5 pl-3 pr-1.5 shadow-lg backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
+          <span className="relative flex h-2 w-2" aria-hidden>
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand/60" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-brand" />
+          </span>
+          <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
+            {AI_ASSISTANT_NAME} is editing
+          </span>
+          <button
+            type="button"
+            onClick={() => stopRefineApplyJob(materialId)}
+            className="rounded-full border border-red-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-red-700 transition hover:bg-red-50 dark:border-red-900 dark:bg-zinc-950 dark:text-red-300 dark:hover:bg-red-950/40"
+          >
+            Stop
+          </button>
         </div>
       ) : null}
     <div
@@ -997,12 +1480,105 @@ export function CoursePlayer({
         } as CSSProperties
       }
     >
-      <aside className="border-b border-zinc-200/90 bg-gradient-to-b from-zinc-50 to-white lg:w-[22rem] lg:shrink-0 lg:border-r lg:border-b-0 dark:border-zinc-800 dark:from-zinc-950 dark:to-zinc-950">
-        <div className="sticky top-16 space-y-6 p-6 lg:top-0 lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto">
+      <aside
+        className={`border-zinc-200/90 bg-white transition-[width] duration-300 ease-out dark:border-zinc-800 dark:bg-zinc-950 ${
+          sidebarOpen
+            ? "w-full overflow-hidden border-b bg-gradient-to-b from-zinc-50 to-white lg:w-[22rem] lg:shrink-0 lg:border-b-0 lg:border-r dark:from-zinc-950 dark:to-zinc-950"
+            : // Sticky so the collapsed module dots follow scroll. (overflow-hidden
+              // on this aside used to break sticky and let the rail scroll away.)
+              "max-lg:hidden lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:w-14 lg:shrink-0 lg:self-start lg:overflow-y-auto lg:border-r"
+        }`}
+      >
+        {!sidebarOpen ? (
+          <div className="flex h-full w-14 flex-col items-center gap-1 py-3">
+            <button
+              type="button"
+              onClick={() => setSidebarOpenPersist(true)}
+              aria-expanded={false}
+              aria-label={t.study.showModules}
+              title={t.study.showModules}
+              className="mb-1 inline-flex h-10 w-10 items-center justify-center rounded-xl text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            >
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </button>
+            <nav
+              className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto px-1.5 pb-2"
+              aria-label={t.study.curriculum}
+            >
+              {course.modules.map((mod) => {
+                const done = completed.has(mod.id);
+                const active = mod.id === activeModuleId;
+                const title = moduleDisplayTitle(mod);
+                return (
+                  <button
+                    key={mod.id}
+                    type="button"
+                    onClick={() => syncModuleToUrl(mod.id)}
+                    aria-label={title}
+                    aria-current={active ? "true" : undefined}
+                    title={title}
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition ${
+                      active
+                        ? "bg-white shadow-sm ring-1 ring-brand-border dark:bg-zinc-900 dark:ring-brand-border/40"
+                        : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold ${
+                        done
+                          ? "bg-emerald-500 text-white"
+                          : active
+                            ? "border border-brand/40 bg-brand-blush text-brand dark:border-brand/50 dark:bg-[#1e1616] dark:text-brand-soft"
+                            : "border border-zinc-300 bg-white text-zinc-500 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-400"
+                      }`}
+                    >
+                      {done ? "✓" : mod.id}
+                    </span>
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+        ) : (
+        <div className="sticky top-16 w-full min-w-[min(100%,22rem)] space-y-6 p-6 lg:top-0 lg:max-h-[calc(100vh-4rem)] lg:w-[22rem] lg:overflow-y-auto">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-              {courseManageEnabled ? t.study.yourCourse : t.study.course}
-            </p>
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+                {courseManageEnabled ? t.study.yourCourse : t.study.course}
+              </p>
+              <button
+                type="button"
+                onClick={() => setSidebarOpenPersist(false)}
+                aria-expanded={sidebarOpen}
+                aria-label={t.study.hideModules}
+                title={t.study.hideModules}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-200/70 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+              >
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+              </button>
+            </div>
             <h1 className="mt-1 text-xl font-semibold leading-snug tracking-tight text-zinc-900 dark:text-zinc-50">
               {course.title}
             </h1>
@@ -1407,9 +1983,40 @@ export function CoursePlayer({
             </span>
           </p>
         </div>
+        )}
       </aside>
 
-      <div className="min-w-0 flex-1 bg-white dark:bg-zinc-950 xl:pr-[var(--rose-dock-rail)]">
+      <div
+        className={`relative min-w-0 flex-1 bg-white transition-[padding] duration-300 ease-out dark:bg-zinc-950 ${
+          askRoseOpen || refineOpen
+            ? "lg:pr-[min(100vw-16px,28rem)]"
+            : "xl:pr-[var(--rose-dock-rail)]"
+        }`}
+      >
+        {!sidebarOpen ? (
+          <button
+            type="button"
+            onClick={() => setSidebarOpenPersist(true)}
+            aria-expanded={false}
+            aria-label={t.study.showModules}
+            title={t.study.showModules}
+            className="absolute left-2 top-4 z-20 inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white/95 px-3 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm backdrop-blur transition hover:bg-zinc-50 lg:hidden dark:border-zinc-700 dark:bg-zinc-950/95 dark:text-zinc-200 dark:hover:bg-zinc-900"
+          >
+            <svg
+              className="h-3.5 w-3.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+            {t.study.showModules}
+          </button>
+        ) : null}
         <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6 lg:px-8">
           {mode === "quiz" ? (
             <div className="mb-3">
@@ -1507,7 +2114,12 @@ export function CoursePlayer({
                   <div
                     key={li}
                     id={`lesson-${activeModule.id}-${li}`}
-                    className="scroll-mt-24"
+                    className={`scroll-mt-24 ${
+                      refineMorphingModuleId === activeModule.id ||
+                      previewEdits?.[0]?.moduleId === activeModule.id
+                        ? "rounded-xl ring-2 ring-brand/40 ring-offset-2 ring-offset-white dark:ring-brand-soft/50 dark:ring-offset-zinc-950"
+                        : ""
+                    }`}
                   >
                     <LessonEditableBlocks
                       materialId={materialId}
@@ -1515,6 +2127,30 @@ export function CoursePlayer({
                       lessonIndex={li}
                       lesson={lesson}
                       readOnly={!courseManageEnabled}
+                      liveMorphing={liveMorphModuleId === activeModule.id}
+                      liveEditText={
+                        liveEdit &&
+                        liveEdit.moduleId === activeModule.id &&
+                        liveEdit.lessonIndex === li
+                          ? liveEdit.text
+                          : null
+                      }
+                      liveEditCaret={
+                        liveEdit &&
+                        liveEdit.moduleId === activeModule.id &&
+                        liveEdit.lessonIndex === li
+                          ? liveEdit.caret
+                          : null
+                      }
+                      previewEdits={
+                        previewEdits
+                          ? previewEdits.filter(
+                              (e) =>
+                                e.moduleId === activeModule.id &&
+                                e.lessonIndex === li
+                            )
+                          : null
+                      }
                     />
                     <LessonNotesCapture
                       materialId={materialId}
@@ -1883,10 +2519,6 @@ export function CoursePlayer({
       </div>
     </div>
     <div className="pointer-events-none fixed bottom-6 right-6 z-[100] flex flex-col items-end gap-3 pb-[max(1.25rem,env(safe-area-inset-bottom))] [&>*]:pointer-events-auto">
-      {courseManageEnabled ? (
-        <CourseRefineDrawer materialId={materialId} docked />
-      ) : null}
-
       {/* Compact trigger — below xl only, when the voice dock is closed. */}
       {!voiceDockOpen ? (
         <button
@@ -1937,15 +2569,46 @@ export function CoursePlayer({
         />
       </div>
 
-      <StudyChatDrawer
-        materialId={materialId}
-        moduleId={activeModuleId}
-        quizOpen={quizOpen}
-        courseId={courseId}
-        studyHrefBase={studyBase}
-        learnMode={learnMode}
-        docked
-      />
+      {/* Ask Rose + Refine sit together at the bottom of the dock. */}
+      <div className="flex flex-col items-end gap-2">
+        {courseManageEnabled ? (
+          <CourseRefineDrawer
+            materialId={materialId}
+            preferModuleId={activeModuleId}
+            docked
+            showLauncher={false}
+            open={refineOpen}
+            onOpenChange={(next) => {
+              setRefineOpen(next);
+              if (next) setAskRoseOpen(false);
+            }}
+            onSwitchToAsk={() => {
+              setRefineOpen(false);
+              setAskRoseOpen(true);
+            }}
+          />
+        ) : null}
+        <StudyChatDrawer
+          materialId={materialId}
+          moduleId={activeModuleId}
+          quizOpen={quizOpen}
+          courseId={courseId}
+          studyHrefBase={studyBase}
+          learnMode={learnMode}
+          docked
+          open={askRoseOpen}
+          onOpenChange={(next) => {
+            setAskRoseOpen(next);
+            if (next) setRefineOpen(false);
+          }}
+          canRefine={courseManageEnabled}
+          refineBusy={refineApplying}
+          onSwitchToRefine={() => {
+            setAskRoseOpen(false);
+            setRefineOpen(true);
+          }}
+        />
+      </div>
     </div>
 
     {mode === "quiz" ? (

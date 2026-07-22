@@ -33,6 +33,8 @@ export async function PATCH(request: Request, ctx: Params) {
     title?: string;
     description?: string;
     isPublic?: unknown;
+    schoolName?: unknown;
+    showSchoolLabel?: unknown;
   };
   const title =
     typeof b.title === "string" ? b.title.trim() : undefined;
@@ -40,6 +42,39 @@ export async function PATCH(request: Request, ctx: Params) {
     typeof b.description === "string" ? b.description.trim() : undefined;
   const isPublic =
     typeof b.isPublic === "boolean" ? b.isPublic : undefined;
+  const schoolNameProvided = Object.prototype.hasOwnProperty.call(
+    b,
+    "schoolName"
+  );
+  let schoolName: string | null | undefined;
+  if (schoolNameProvided) {
+    if (b.schoolName === null) {
+      schoolName = null;
+    } else if (typeof b.schoolName === "string") {
+      const t = b.schoolName.trim();
+      schoolName = t.length === 0 ? null : t.slice(0, 200);
+    } else {
+      return NextResponse.json(
+        { error: "schoolName must be a string or null." },
+        { status: 400 }
+      );
+    }
+  }
+  const showSchoolLabelProvided = Object.prototype.hasOwnProperty.call(
+    b,
+    "showSchoolLabel"
+  );
+  let showSchoolLabel: boolean | undefined;
+  if (showSchoolLabelProvided) {
+    if (typeof b.showSchoolLabel === "boolean") {
+      showSchoolLabel = b.showSchoolLabel;
+    } else {
+      return NextResponse.json(
+        { error: "showSchoolLabel must be a boolean." },
+        { status: 400 }
+      );
+    }
+  }
 
   if (isPublic === true) {
     const { data: listing } = await supabase
@@ -87,7 +122,9 @@ export async function PATCH(request: Request, ctx: Params) {
   if (
     title === undefined &&
     description === undefined &&
-    isPublic === undefined
+    isPublic === undefined &&
+    schoolName === undefined &&
+    showSchoolLabel === undefined
   ) {
     return NextResponse.json(
       { error: "Nothing to update." },
@@ -95,10 +132,12 @@ export async function PATCH(request: Request, ctx: Params) {
     );
   }
 
-  const patch: Record<string, string | boolean> = {};
+  const patch: Record<string, string | boolean | null> = {};
   if (title !== undefined) patch.title = title;
   if (description !== undefined) patch.description = description;
   if (isPublic !== undefined) patch.is_public = isPublic;
+  if (schoolName !== undefined) patch.school_name = schoolName;
+  if (showSchoolLabel !== undefined) patch.show_school_label = showSchoolLabel;
 
   const { data: updated, error } = await supabase
     .from("courses")
@@ -120,6 +159,19 @@ export async function PATCH(request: Request, ctx: Params) {
         {
           error:
             "Explore listing needs a one-time database update. In the Supabase SQL Editor, run `supabase/migrations/007_public_courses.sql` (adds the is_public column), then try again.",
+        },
+        { status: 503 }
+      );
+    }
+    const missingShowSchool =
+      showSchoolLabel !== undefined &&
+      (code === "42703" ||
+        /show_school_label|column .* does not exist|schema cache/i.test(msg));
+    if (missingShowSchool) {
+      return NextResponse.json(
+        {
+          error:
+            "School label toggle needs a database update. Run `supabase/migrations/096_course_show_school_label.sql`, then try again.",
         },
         { status: 503 }
       );

@@ -1,13 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { EditableSection } from "@/components/EditableSection";
 import { LessonMarkdownEditor } from "@/components/LessonMarkdownEditor";
 import { LessonQuoteCaptureRegion } from "@/components/LessonQuoteCaptureRegion";
 import { LessonSourceAttribution } from "@/components/LessonSourceAttribution";
 import { LessonRichContent } from "@/components/LessonRichContent";
 import { TypewriterText, useTypewriterString } from "@/components/TypewriterText";
+import type { ArosesCourseRefinePreviewEdit } from "@/lib/refine-course-events";
 import type { CourseLesson, KeyTerm } from "@/types/course";
 
 function KeyTermReadOnlyCard({
@@ -51,6 +52,107 @@ function KeyTermReadOnlyCard({
 
 type Section = "title" | "body" | "key_terms" | "examples" | null;
 
+/**
+ * Pre-confirm preview: shows the current lesson text with a blinking caret and
+ * a highlight over exactly the spans the pending edit will change — so the
+ * student can see the edit is surgical (not a full rewrite) before confirming.
+ */
+function LessonEditPreview({
+  content,
+  spans,
+}: {
+  content: string;
+  spans: { start: number; deleteLen: number; insert: string }[];
+}) {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  const nodes: ReactNode[] = [];
+  let pos = 0;
+
+  sorted.forEach((s, i) => {
+    const start = Math.max(pos, Math.min(s.start, content.length));
+    if (start > pos) {
+      nodes.push(<span key={`t${i}`}>{content.slice(pos, start)}</span>);
+    }
+    // The caret hovering right where the edit begins.
+    nodes.push(
+      <span
+        key={`c${i}`}
+        className="mx-px inline-block h-[1.15em] w-0.5 animate-pulse bg-brand align-text-bottom dark:bg-brand-soft"
+        aria-hidden
+      />
+    );
+    if (s.deleteLen > 0) {
+      const end = Math.min(start + s.deleteLen, content.length);
+      const replacing = s.insert.length > 0;
+      nodes.push(
+        <mark
+          key={`h${i}`}
+          className={
+            replacing
+              ? "rounded-sm bg-amber-300/40 text-inherit dark:bg-amber-400/25"
+              : "rounded-sm bg-red-300/40 text-inherit line-through decoration-red-500/60 dark:bg-red-500/25"
+          }
+        >
+          {content.slice(start, end)}
+        </mark>
+      );
+      pos = end;
+    } else {
+      // Pure insertion — mark the spot the new text will appear.
+      nodes.push(
+        <span
+          key={`i${i}`}
+          className="rounded-sm bg-emerald-300/40 px-0.5 text-[0.85em] font-semibold text-emerald-700 dark:bg-emerald-500/25 dark:text-emerald-300"
+        >
+          + add
+        </span>
+      );
+      pos = start;
+    }
+  });
+  nodes.push(<span key="tail">{content.slice(pos)}</span>);
+
+  return (
+    <div className="relative rounded-lg border border-brand/25 bg-brand-blush/30 px-3.5 py-3 dark:border-brand/30 dark:bg-[#1e1616]/40">
+      <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+        <span className="relative flex h-1.5 w-1.5" aria-hidden>
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
+        </span>
+        Rose will edit here — confirm to apply
+      </p>
+      <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-zinc-800 dark:text-zinc-200">
+        {nodes}
+      </div>
+    </div>
+  );
+}
+
+function StructuredPreviewBanner({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-brand/25 bg-brand-blush/30 px-3.5 py-3 dark:border-brand/30 dark:bg-[#1e1616]/40">
+      <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+        <span className="relative flex h-1.5 w-1.5" aria-hidden>
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
+        </span>
+        {label}
+        <span
+          className="ml-1 inline-block h-[1em] w-0.5 animate-pulse bg-brand align-middle dark:bg-brand-soft"
+          aria-hidden
+        />
+      </p>
+      {children}
+    </div>
+  );
+}
+
 export function LessonEditableBlocks({
   materialId,
   moduleId,
@@ -59,6 +161,10 @@ export function LessonEditableBlocks({
   readOnly = false,
   animateReveal = false,
   compactBuild = false,
+  liveMorphing = false,
+  liveEditText = null,
+  liveEditCaret = null,
+  previewEdits = null,
 }: {
   materialId: string;
   moduleId: number;
@@ -69,6 +175,14 @@ export function LessonEditableBlocks({
   animateReveal?: boolean;
   /** Tighter layout while the PDF build preview is streaming in. */
   compactBuild?: boolean;
+  /** Show raw streaming text with caret while Refine morphs this lesson. */
+  liveMorphing?: boolean;
+  /** Surgical in-place edit: full lesson text with a caret at `liveEditCaret`. */
+  liveEditText?: string | null;
+  /** Caret offset within `liveEditText` (a cursor deleting/typing in place). */
+  liveEditCaret?: number | null;
+  /** Pre-confirm preview: exact spans / key terms / examples about to change. */
+  previewEdits?: ArosesCourseRefinePreviewEdit[] | null;
 }) {
   const router = useRouter();
   const [section, setSection] = useState<Section>(null);
@@ -84,13 +198,31 @@ export function LessonEditableBlocks({
     ...lesson.examples,
   ]);
 
+  // Live Refine reveal for the course owner uses the SAME progressive
+  // typewriter as course/notes generation — just faster so long lessons don't
+  // crawl. This is what makes "Rose is editing" type out character by character.
+  const liveReveal = liveMorphing && !readOnly;
   const streamedBody = useTypewriterString(lesson.content ?? "", {
     mode: "chars",
-    charsPerTick: 1,
-    charDelayMs: 12,
+    charsPerTick: liveReveal ? 3 : 1,
+    charDelayMs: liveReveal ? 9 : 12,
     instantBelow:
-      readOnly && animateReveal ? 0 : 2_000_000_000,
+      (readOnly && animateReveal) || liveReveal ? 0 : 2_000_000_000,
   });
+
+  const contentPreviewSpans = (previewEdits ?? [])
+    .filter((e) => e.kind === "content")
+    .map((e) => ({
+      start: e.start ?? 0,
+      deleteLen: e.deleteLen ?? 0,
+      insert: e.insert ?? "",
+    }));
+  const keyTermPreviews = (previewEdits ?? []).filter(
+    (e) => e.kind === "key_term"
+  );
+  const examplePreviews = (previewEdits ?? []).filter(
+    (e) => e.kind === "example"
+  );
 
   useEffect(() => {
     setDraftTitle(lesson.title);
@@ -313,7 +445,51 @@ export function LessonEditableBlocks({
         isEditing={section === "body"}
         onEdit={() => setSection("body")}
         onCancel={cancel}
-        view={<LessonRichContent markdown={lesson.content} />}
+        view={
+          liveEditText != null ? (
+            <div className="relative rounded-lg border border-brand/25 bg-brand-blush/30 px-3.5 py-3 dark:border-brand/30 dark:bg-[#1e1616]/40">
+              <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+                <span className="relative flex h-1.5 w-1.5" aria-hidden>
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
+                </span>
+                Rose is editing…
+              </p>
+              <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-zinc-800 dark:text-zinc-200">
+                {liveEditText.slice(0, liveEditCaret ?? liveEditText.length)}
+                <span
+                  className="mx-px inline-block h-[1.15em] w-0.5 animate-pulse bg-brand align-text-bottom dark:bg-brand-soft"
+                  aria-hidden
+                />
+                {liveEditText.slice(liveEditCaret ?? liveEditText.length)}
+              </div>
+            </div>
+          ) : liveMorphing ? (
+            <div className="relative rounded-lg border border-brand/25 bg-brand-blush/30 px-3.5 py-3 dark:border-brand/30 dark:bg-[#1e1616]/40">
+              <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+                <span className="relative flex h-1.5 w-1.5" aria-hidden>
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
+                </span>
+                Rose is editing…
+              </p>
+              <LessonRichContent markdown={streamedBody} />
+              {streamedBody.length < (lesson.content ?? "").length ? (
+                <span
+                  className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-brand align-text-bottom dark:bg-brand-soft"
+                  aria-hidden
+                />
+              ) : null}
+            </div>
+          ) : contentPreviewSpans.length > 0 ? (
+            <LessonEditPreview
+              content={lesson.content ?? ""}
+              spans={contentPreviewSpans}
+            />
+          ) : (
+            <LessonRichContent markdown={lesson.content} />
+          )
+        }
         edit={
           <div className="space-y-3">
             <LessonMarkdownEditor
@@ -341,7 +517,62 @@ export function LessonEditableBlocks({
         onEdit={() => setSection("key_terms")}
         onCancel={cancel}
         view={
-          lesson.key_terms.length === 0 ? (
+          keyTermPreviews.length > 0 ? (
+            <StructuredPreviewBanner label="Rose will change key terms — confirm to apply">
+              <dl className="grid gap-3 sm:grid-cols-2">
+                {lesson.key_terms.map((kt, ki) => {
+                  const removing = keyTermPreviews.some(
+                    (p) =>
+                      p.action === "remove" &&
+                      p.term?.toLowerCase() === kt.term.toLowerCase()
+                  );
+                  const replacing = keyTermPreviews.find(
+                    (p) =>
+                      p.action === "replace" &&
+                      p.term?.toLowerCase() === kt.term.toLowerCase()
+                  );
+                  return (
+                    <div
+                      key={ki}
+                      className={`rounded-xl border px-4 py-3 ${
+                        removing
+                          ? "border-red-300 bg-red-50/80 line-through opacity-70 dark:border-red-900 dark:bg-red-950/40"
+                          : replacing
+                            ? "border-amber-300 bg-amber-50/80 dark:border-amber-800 dark:bg-amber-950/30"
+                            : "border-zinc-200 bg-white/90 dark:border-zinc-800 dark:bg-zinc-900/50"
+                      }`}
+                    >
+                      <dt className="font-medium text-zinc-900 dark:text-zinc-100">
+                        {kt.term}
+                      </dt>
+                      <dd className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                        {replacing?.definition ?? kt.definition}
+                      </dd>
+                    </div>
+                  );
+                })}
+                {keyTermPreviews
+                  .filter((p) => p.action === "add")
+                  .map((p, i) => (
+                    <div
+                      key={`add-${i}`}
+                      className="rounded-xl border border-emerald-300 bg-emerald-50/90 px-4 py-3 ring-2 ring-brand/30 dark:border-emerald-800 dark:bg-emerald-950/40"
+                    >
+                      <dt className="flex items-center gap-1.5 font-medium text-emerald-800 dark:text-emerald-200">
+                        <span
+                          className="inline-block h-[1em] w-0.5 animate-pulse bg-brand"
+                          aria-hidden
+                        />
+                        + {p.term}
+                      </dt>
+                      <dd className="mt-1 text-sm text-emerald-700 dark:text-emerald-300">
+                        {p.definition}
+                      </dd>
+                    </div>
+                  ))}
+              </dl>
+            </StructuredPreviewBanner>
+          ) : lesson.key_terms.length === 0 ? (
             <p className="text-sm italic text-zinc-500 dark:text-zinc-400">
               No key terms yet — edit to add cards like definitions and glossary
               entries.
@@ -438,7 +669,45 @@ export function LessonEditableBlocks({
         onEdit={() => setSection("examples")}
         onCancel={cancel}
         view={
-          lesson.examples.length === 0 ? (
+          examplePreviews.length > 0 ? (
+            <StructuredPreviewBanner label="Rose will change examples — confirm to apply">
+              <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+                {lesson.examples.map((ex, ei) => {
+                  const removing = examplePreviews.some(
+                    (p) =>
+                      p.action === "remove" &&
+                      ex.toLowerCase().includes((p.example ?? "").toLowerCase())
+                  );
+                  return (
+                    <li
+                      key={ei}
+                      className={
+                        removing
+                          ? "text-red-600 line-through opacity-70 dark:text-red-400"
+                          : undefined
+                      }
+                    >
+                      {ex}
+                    </li>
+                  );
+                })}
+                {examplePreviews
+                  .filter((p) => p.action === "add")
+                  .map((p, i) => (
+                    <li
+                      key={`add-ex-${i}`}
+                      className="font-medium text-emerald-700 dark:text-emerald-300"
+                    >
+                      <span
+                        className="mr-1 inline-block h-[1em] w-0.5 animate-pulse bg-brand align-middle"
+                        aria-hidden
+                      />
+                      + {p.example}
+                    </li>
+                  ))}
+              </ul>
+            </StructuredPreviewBanner>
+          ) : lesson.examples.length === 0 ? (
             <p className="text-sm italic text-zinc-500 dark:text-zinc-400">
               No examples yet — edit to add bullet-style examples.
             </p>
