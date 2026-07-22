@@ -164,6 +164,162 @@ function MetricCard({
   );
 }
 
+type AdminCourseSourceFile = {
+  jobId: string;
+  fileName: string;
+  kind: string;
+  label: string;
+  storagePath: string | null;
+  url: string | null;
+  missing: boolean;
+  retainStorage: boolean | null;
+  status: string | null;
+  transcriptPreview: string | null;
+};
+
+function CourseSourcesButton({
+  courseId,
+  courseTitle,
+}: {
+  courseId: string;
+  courseTitle: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [files, setFiles] = useState<AdminCourseSourceFile[] | null>(null);
+
+  const load = useCallback(async () => {
+    setOpen(true);
+    if (files) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/courses/${courseId}/sources`, {
+        credentials: "same-origin",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(
+          typeof body.error === "string" ? body.error : "Could not load sources."
+        );
+        setLoading(false);
+        return;
+      }
+      setFiles(Array.isArray(body.files) ? body.files : []);
+    } catch {
+      setError("Network error.");
+    }
+    setLoading(false);
+  }, [courseId, files]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => void load()}
+        className="inline-flex rounded-md border border-sky-200/90 bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-900 transition hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-200 dark:hover:bg-sky-900/60"
+      >
+        Files
+      </button>
+      {open ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-zinc-950/40 p-4 sm:items-center"
+          role="dialog"
+          aria-modal
+          aria-label={`Source files for ${courseTitle}`}
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="max-h-[min(32rem,80vh)] w-full max-w-lg overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                  Uploaded sources
+                </p>
+                <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
+                  {courseTitle}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="rounded-md px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                Close
+              </button>
+            </div>
+            <div className="max-h-[min(26rem,65vh)] overflow-y-auto px-4 py-3">
+              {loading ? (
+                <p className="text-xs text-zinc-500">Loading files…</p>
+              ) : error ? (
+                <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
+              ) : !files || files.length === 0 ? (
+                <p className="text-xs text-zinc-500">
+                  No ingest uploads recorded for this course.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {files.map((f, i) => (
+                    <li
+                      key={`${f.jobId}-${f.storagePath ?? f.fileName}-${i}`}
+                      className="rounded-xl border border-zinc-200/90 bg-zinc-50/80 px-3 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="inline-flex rounded-md bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-900 ring-1 ring-sky-600/15 dark:bg-sky-950/50 dark:text-sky-200 dark:ring-sky-500/25">
+                              {f.label}
+                            </span>
+                            {f.missing ? (
+                              <span className="text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                                Not in storage
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="mt-1 break-all text-xs font-medium text-zinc-800 dark:text-zinc-100">
+                            {f.fileName}
+                          </p>
+                          {f.transcriptPreview ? (
+                            <p className="mt-1 line-clamp-3 text-[10px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+                              {f.transcriptPreview}
+                            </p>
+                          ) : null}
+                        </div>
+                        {f.url ? (
+                          <a
+                            href={f.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="shrink-0 rounded-md bg-brand px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-brand-hover"
+                          >
+                            Open
+                          </a>
+                        ) : (
+                          <span className="shrink-0 text-[10px] text-zinc-400">
+                            —
+                          </span>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-3 text-[10px] leading-relaxed text-zinc-400 dark:text-zinc-500">
+                PDFs, audio, and video are usually kept after ingest. Word,
+                slides, images, and plain text are often deleted after
+                processing — those show as “Not in storage.”
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function CopyTextButton({
   text,
   label,
@@ -554,7 +710,9 @@ export function AdminDashboardClient({
             </div>
             <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
               Sources come from ingest jobs — PDF, images, links, live lecture
-              transcripts, notes, etc. Hover a Sources cell for file names.
+              transcripts, notes, etc. Use <span className="font-medium">Files</span>{" "}
+              to open retained uploads (PDFs/audio/video). Hover a Sources cell
+              for file names.
             </p>
             <div className="mt-3 overflow-hidden rounded-lg border border-zinc-200/90 bg-white shadow-sm dark:border-zinc-700/90 dark:bg-zinc-900/60 dark:shadow-black/30">
               <div className={TABLE_BODY_SCROLL}>
@@ -687,6 +845,10 @@ export function AdminDashboardClient({
                             </td>
                             <td className="border-t border-zinc-100/90 px-3 py-2 text-right dark:border-zinc-800 sm:px-3.5">
                               <div className="flex flex-wrap justify-end gap-1.5">
+                                <CourseSourcesButton
+                                  courseId={c.id}
+                                  courseTitle={c.title?.trim() || "Untitled"}
+                                />
                                 <Link
                                   href={`/dashboard/courses/${c.id}`}
                                   className="inline-flex rounded-md border border-zinc-200/90 bg-white px-2 py-1 text-[10px] font-semibold text-zinc-600 transition hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
