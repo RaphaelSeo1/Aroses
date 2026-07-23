@@ -1,50 +1,25 @@
 import { redirect } from "next/navigation";
-import { Suspense } from "react";
-import { AppHeader } from "@/components/AppHeader";
-import { BillingClient } from "@/components/billing/BillingClient";
-import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
-import { APP_NAME } from "@/lib/brand";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { reconcileUserSubscription } from "@/lib/billing/subscription";
-import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
-import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 
-export const metadata = {
-  title: `Plans & billing — ${APP_NAME}`,
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default async function BillingPage() {
+/** Billing lives under Profile → Plans & billing. Keep this route as a redirect. */
+export default async function BillingPage({ searchParams }: PageProps) {
   if (!isBillingUiEnabled()) {
     redirect("/");
   }
 
-  const { user } = await getServerAuth();
-  if (!user) {
-    redirect("/login?next=/dashboard/billing");
+  const sp = await searchParams;
+  const q = new URLSearchParams();
+  q.set("tab", "billing");
+  for (const [key, value] of Object.entries(sp)) {
+    if (key === "tab") continue;
+    if (typeof value === "string" && value) q.set(key, value);
+    else if (Array.isArray(value) && typeof value[0] === "string" && value[0]) {
+      q.set(key, value[0]);
+    }
   }
-
-  // Reconcile first so stale test-mode Stripe ids don't show a phantom paid plan.
-  const sub = await reconcileUserSubscription(user.id);
-  const usage = await checkVoiceAllowance(user.id);
-
-  return (
-    <>
-      <AppHeader right={<HeaderNavLoggedInServer />} />
-      <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-        <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
-          <Suspense fallback={null}>
-            <BillingClient
-              currentTier={sub.tier}
-              status={sub.status}
-              currentPeriodEnd={sub.currentPeriodEnd}
-              cancelAtPeriodEnd={sub.cancelAtPeriodEnd}
-              hasCustomer={Boolean(sub.stripeCustomerId)}
-              voiceUsedSeconds={usage.usedSeconds}
-              voiceCapSeconds={usage.capSeconds}
-            />
-          </Suspense>
-        </div>
-      </main>
-    </>
-  );
+  redirect(`/dashboard/profile?${q.toString()}`);
 }

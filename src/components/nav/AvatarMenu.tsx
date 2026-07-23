@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LanguageToggleRow } from "@/components/LanguageSwitcher";
 import { LogoutButton } from "@/components/LogoutButton";
-import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
@@ -16,10 +15,8 @@ import {
 } from "@/lib/social-badge";
 
 /**
- * Top-right account menu. Click the avatar to open Profile / Admin (admins
- * only) / Log out. Reuses the click-outside + Esc pattern from the tutor
- * dropdown. Admin gating is identical to before: the link only renders when
- * `adminHubHref` is provided (which upstream only sets for admin accounts).
+ * Top-right account menu. Click the avatar to open Profile / Social / Sales /
+ * Admin (admins only) / Log out. Plans & billing lives under Profile.
  */
 export function AvatarMenu({
   displayName,
@@ -74,7 +71,6 @@ export function AvatarMenu({
 
   const onAccountPage =
     pathname === "/dashboard/profile" ||
-    (isBillingUiEnabled() && pathname === "/dashboard/billing") ||
     (isMarketplaceUiEnabled() && pathname === "/dashboard/sales") ||
     pathname === "/dashboard/social" ||
     pathname.startsWith("/dashboard/admin");
@@ -189,29 +185,6 @@ export function AvatarMenu({
               </span>
             ) : null}
           </Link>
-          {isBillingUiEnabled() ? (
-            <Link
-              href="/dashboard/billing"
-              role="menuitem"
-              onClick={close}
-              className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:text-zinc-100 dark:hover:bg-zinc-800"
-            >
-              <svg
-                className="h-4 w-4 shrink-0 opacity-70"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden
-              >
-                <rect x="2" y="5" width="20" height="14" rx="2" />
-                <path d="M2 10h20" />
-              </svg>
-              {t.nav.plansBilling}
-            </Link>
-          ) : null}
           {isMarketplaceUiEnabled() ? (
             <Link
               href="/dashboard/sales"

@@ -7,6 +7,7 @@ const en = {
   navFriends: "Friends",
   navMessages: "Messages",
   navProgress: "Progress",
+  navBilling: "Plans & billing",
 
   // General panel
   generalTitle: "General",
@@ -107,6 +108,7 @@ const ko: typeof en = {
   navFriends: "친구",
   navMessages: "메시지",
   navProgress: "학습 현황",
+  navBilling: "요금제 및 결제",
 
   // General panel
   generalTitle: "일반",

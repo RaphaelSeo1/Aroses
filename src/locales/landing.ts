@@ -7,6 +7,9 @@ const en = {
   ctaGetStarted: "Get started free",
   ctaGoToWorkspace: "Go to workspace",
   browseCourses: "Browse courses",
+  socialProofPrefix: "Join ",
+  socialProofCount: "10,000+",
+  socialProofSuffix: " students already learning with Aroses",
 
   worksForAnyClass: "Works for any class",
   subject1: "Organic Chemistry",
@@ -139,6 +142,9 @@ const ko: typeof en = {
   ctaGetStarted: "무료로 시작하기",
   ctaGoToWorkspace: "워크스페이스로 가기",
   browseCourses: "코스 둘러보기",
+  socialProofPrefix: "",
+  socialProofCount: "10,000+",
+  socialProofSuffix: "명의 학생이 이미 Aroses로 공부하고 있어요",
 
   worksForAnyClass: "어떤 수업이든 OK",
   subject1: "유기화학",

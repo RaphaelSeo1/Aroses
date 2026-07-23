@@ -60,8 +60,8 @@ export async function POST(request: Request) {
       mode: "subscription",
       customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${origin}/dashboard/billing?status=success`,
-      cancel_url: `${origin}/dashboard/billing?status=cancel`,
+      success_url: `${origin}/dashboard/profile?tab=billing&status=success`,
+      cancel_url: `${origin}/dashboard/profile?tab=billing&status=cancel`,
       allow_promotion_codes: true,
       client_reference_id: user.id,
       // Stamp the user id everywhere the webhook might read it.

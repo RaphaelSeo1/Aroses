@@ -13,6 +13,7 @@ import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { LogoutButton } from "@/components/LogoutButton";
 import { SchoolNameAutocomplete } from "@/components/SchoolNameAutocomplete";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { isUiLocaleSwitcherEnabled } from "@/lib/i18n/config";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
@@ -22,7 +23,7 @@ import { replaceProfileUrl } from "@/lib/messaging/profile-url";
 import { parseUsername } from "@/lib/onboarding";
 import type { UserProfileRow } from "@/types/profile";
 
-type Panel = "general" | "account" | "progress";
+type Panel = "general" | "account" | "progress" | "billing";
 
 // Values are stored in the DB as-is; only display labels are translated.
 const STUDY_FOCUS_VALUES = [
@@ -68,6 +69,7 @@ async function fileToResizedJpegBlob(file: File, maxEdge: number): Promise<Blob>
 function tabToPanel(tab: string | null | undefined): Panel {
   if (tab === "progress") return "progress";
   if (tab === "account") return "account";
+  if (tab === "billing") return "billing";
   return "general";
 }
 
@@ -158,13 +160,33 @@ function IconChart({ className }: { className?: string }) {
   );
 }
 
+function IconCard({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="2.25" y="5.25" width="19.5" height="13.5" rx="2" />
+      <path d="M2.25 9.75h19.5" />
+    </svg>
+  );
+}
+
 type Props = {
   email: string;
   initial: UserProfileRow | null;
-  /** Open Progress / Account when landing with `?tab=` (server + client sync). */
+  /** Open Progress / Account / Billing when landing with `?tab=` (server + client sync). */
   initialPanel?: Panel;
   /** Profile → Progress panel (server-rendered slot). */
   progressPanel: ReactNode;
+  /** Profile → Plans & billing panel (server-rendered slot). */
+  billingPanel?: ReactNode;
 };
 
 export function ProfileSettingsForm({
@@ -172,15 +194,26 @@ export function ProfileSettingsForm({
   initial,
   initialPanel = "general",
   progressPanel,
+  billingPanel,
 }: Props) {
   const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [panel, setPanel] = useState<Panel>(initialPanel);
+  const showBilling = isBillingUiEnabled() && Boolean(billingPanel);
+  const [panel, setPanel] = useState<Panel>(() =>
+    initialPanel === "billing" && !(isBillingUiEnabled() && billingPanel)
+      ? "general"
+      : initialPanel
+  );
 
   useEffect(() => {
-    setPanel(tabToPanel(searchParams.get("tab")));
-  }, [searchParams]);
+    const next = tabToPanel(searchParams.get("tab"));
+    if (next === "billing" && !showBilling) {
+      setPanel("general");
+      return;
+    }
+    setPanel(next);
+  }, [searchParams, showBilling]);
 
   const [visitedPanels, setVisitedPanels] = useState<Set<Panel>>(
     () => new Set([initialPanel])
@@ -534,6 +567,16 @@ export function ProfileSettingsForm({
             <IconChart className="h-5 w-5 shrink-0 opacity-70" />
             {t.settings.navProgress}
           </button>
+          {showBilling ? (
+            <button
+              type="button"
+              onClick={() => goPanel("billing")}
+              className={`${navBtn} shrink-0 ${panel === "billing" ? navBtnActive : ""}`}
+            >
+              <IconCard className="h-5 w-5 shrink-0 opacity-70" />
+              {t.settings.navBilling}
+            </button>
+          ) : null}
         </nav>
       </aside>
 
@@ -883,6 +926,16 @@ export function ProfileSettingsForm({
             <div className="px-4 pb-8 pt-4 sm:px-6 sm:pb-10">{progressPanel}</div>
           )}
           </div>
+
+          {showBilling ? (
+            <div className={panel === "billing" ? undefined : "hidden"}>
+              {visitedPanels.has("billing") && billingPanel ? (
+                <div className="px-4 pb-8 pt-4 sm:px-6 sm:pb-10">
+                  {billingPanel}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

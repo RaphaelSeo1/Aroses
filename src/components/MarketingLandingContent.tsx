@@ -385,6 +385,17 @@ export async function MarketingLandingContent({
                 {l.browseCourses}
               </Link>
             </div>
+
+            <p
+              style={{ animationDelay: "0.3s" }}
+              className="animate-hero-rise mt-6 text-sm text-brand-muted dark:text-zinc-500"
+            >
+              {l.socialProofPrefix}
+              <span className="font-semibold text-brand-ink dark:text-zinc-200">
+                {l.socialProofCount}
+              </span>
+              {l.socialProofSuffix}
+            </p>
           </div>
 
           {/* product bento */}

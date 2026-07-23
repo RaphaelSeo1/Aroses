@@ -1,9 +1,13 @@
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
+import { BillingClient } from "@/components/billing/BillingClient";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { ProfileSettingsForm } from "@/components/ProfileSettingsForm";
 import { ProgressDashboardContent } from "@/components/progress/ProgressDashboardContent";
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
+import { reconcileUserSubscription } from "@/lib/billing/subscription";
+import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import type { UserProfileRow } from "@/types/profile";
@@ -44,12 +48,15 @@ export default async function ProfilePage({ searchParams }: PageProps) {
     );
   }
 
+  const billingEnabled = isBillingUiEnabled();
   const initialPanel =
     sp.tab === "progress"
       ? ("progress" as const)
       : sp.tab === "account"
         ? ("account" as const)
-        : ("general" as const);
+        : sp.tab === "billing" && billingEnabled
+          ? ("billing" as const)
+          : ("general" as const);
 
   return (
     <>
@@ -61,6 +68,7 @@ export default async function ProfilePage({ searchParams }: PageProps) {
               userEmail={user.email}
               userId={user.id}
               initialPanel={initialPanel}
+              includeBilling={billingEnabled}
             />
           </Suspense>
         </div>
@@ -83,15 +91,23 @@ async function ProfilePageBody({
   userEmail,
   userId,
   initialPanel,
+  includeBilling,
 }: {
   userEmail: string;
   userId: string;
-  initialPanel: "progress" | "account" | "general";
+  initialPanel: "progress" | "account" | "general" | "billing";
+  includeBilling: boolean;
 }) {
   const { supabase } = await getServerAuth();
-  const [selProfiles, progressData] = await Promise.all([
+  const [selProfiles, progressData, billingBundle] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
     loadDashboardProgress(supabase, userId),
+    includeBilling
+      ? Promise.all([
+          reconcileUserSubscription(userId),
+          checkVoiceAllowance(userId),
+        ])
+      : Promise.resolve(null),
   ]);
 
   const profileRow = selProfiles.data as ProfileFields | null;
@@ -113,6 +129,21 @@ async function ProfilePageBody({
     };
   }
 
+  const billingPanel =
+    billingBundle != null ? (
+      <Suspense fallback={null}>
+        <BillingClient
+          currentTier={billingBundle[0].tier}
+          status={billingBundle[0].status}
+          currentPeriodEnd={billingBundle[0].currentPeriodEnd}
+          cancelAtPeriodEnd={billingBundle[0].cancelAtPeriodEnd}
+          hasCustomer={Boolean(billingBundle[0].stripeCustomerId)}
+          voiceUsedSeconds={billingBundle[1].usedSeconds}
+          voiceCapSeconds={billingBundle[1].capSeconds}
+        />
+      </Suspense>
+    ) : undefined;
+
   return (
     <ProfileSettingsForm
       email={userEmail}
@@ -125,6 +156,7 @@ async function ProfilePageBody({
           layout="panel"
         />
       }
+      billingPanel={billingPanel}
     />
   );
 }

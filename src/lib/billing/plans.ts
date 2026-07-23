@@ -7,7 +7,7 @@
  * `feature-flag.ts` (`BILLING_UI_ENABLED`).
  *
  * Metered monthly: voice hours + lecture recordings (Live Notes).
- * Course creation is capped on Student (2); Free/Premium courses unlimited.
+ * Course creation is capped on Free (1) and Student (2); Premium unlimited.
  * Quizzes, SRS, and text tutoring stay unlimited.
  *
  * Stripe price IDs come from env so test/live keys swap without code changes,
@@ -48,13 +48,13 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     priceMonthly: 0,
     stripePriceId: null,
     voiceHours: 0.5,
-    maxCourses: null,
+    maxCourses: 1,
     maxLectureRecordingsPerMonth: 1,
     tagline: "Everything to start learning, on us.",
     highlights: [
       "30 minutes of voice tutoring / month",
-      "1 lecture recording / month",
-      "Course building, quizzes & spaced repetition",
+      "Build 1 course · 1 lecture recording / month",
+      "Quizzes & spaced repetition",
     ],
   },
   student: {
