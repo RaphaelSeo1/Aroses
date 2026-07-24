@@ -254,6 +254,13 @@ function parseUnifiedVisionJson(raw: string): UnifiedPageVisionResult {
   }
 }
 
+function imageMediaTypeFromBuffer(buf: Buffer): "image/png" | "image/jpeg" {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return "image/jpeg";
+  }
+  return "image/png";
+}
+
 /**
  * Single vision call per page: tables + figure bboxes/captions.
  */
@@ -264,10 +271,11 @@ export async function extractPageArtifactsFromPdfPagePng(input: {
 }): Promise<UnifiedPageVisionResult> {
   const empty: UnifiedPageVisionResult = { tables: [], figures: [], tableText: null };
   if (!isTableExtractionEnabled()) return empty;
-  if (!input.buffer || input.buffer.length < 4_000) return empty;
+  if (!input.buffer || input.buffer.length < 2_500) return empty;
 
   const apiKey = process.env.ANTHROPIC_API_KEY!.trim();
   const anthropic = new Anthropic({ apiKey, timeout: 90_000, maxRetries: 1 });
+  const mediaType = imageMediaTypeFromBuffer(input.buffer);
 
   const msg = await anthropic.messages.create({
     model: visionModel(),
@@ -281,7 +289,7 @@ export async function extractPageArtifactsFromPdfPagePng(input: {
             type: "image",
             source: {
               type: "base64",
-              media_type: "image/png",
+              media_type: mediaType,
               data: input.buffer.toString("base64"),
             },
           },
@@ -310,12 +318,13 @@ export async function extractTablesFromPdfPagePng(input: {
   sourceFileName: string;
 }): Promise<string | null> {
   if (!isTableExtractionEnabled()) return null;
-  if (!input.buffer || input.buffer.length < 4_000) return null;
+  if (!input.buffer || input.buffer.length < 2_500) return null;
 
   const apiKey = process.env.ANTHROPIC_API_KEY!.trim();
   const model =
     process.env.ANTHROPIC_FAST_MODEL?.trim() || "claude-haiku-4-5";
   const anthropic = new Anthropic({ apiKey, timeout: 90_000, maxRetries: 1 });
+  const mediaType = imageMediaTypeFromBuffer(input.buffer);
 
   const msg = await anthropic.messages.create({
     model,
@@ -329,7 +338,7 @@ export async function extractTablesFromPdfPagePng(input: {
             type: "image",
             source: {
               type: "base64",
-              media_type: "image/png",
+              media_type: mediaType,
               data: input.buffer.toString("base64"),
             },
           },
@@ -384,12 +393,13 @@ export async function extractFigureBboxesFromPdfPagePng(input: {
   sourceFileName: string;
 }): Promise<VisionFigureHit[]> {
   if (!isTableExtractionEnabled()) return [];
-  if (!input.buffer || input.buffer.length < 4_000) return [];
+  if (!input.buffer || input.buffer.length < 2_500) return [];
 
   const apiKey = process.env.ANTHROPIC_API_KEY!.trim();
   const model =
     process.env.ANTHROPIC_FAST_MODEL?.trim() || "claude-haiku-4-5";
   const anthropic = new Anthropic({ apiKey, timeout: 90_000, maxRetries: 1 });
+  const mediaType = imageMediaTypeFromBuffer(input.buffer);
 
   const msg = await anthropic.messages.create({
     model,
@@ -403,7 +413,7 @@ export async function extractFigureBboxesFromPdfPagePng(input: {
             type: "image",
             source: {
               type: "base64",
-              media_type: "image/png",
+              media_type: mediaType,
               data: input.buffer.toString("base64"),
             },
           },
@@ -473,8 +483,8 @@ export async function extractPageArtifactsFromRenderedPdfPages(
     12,
     Math.max(
       1,
-      Number.parseInt(process.env.PDF_INGEST_TABLE_VISION_CONCURRENCY ?? "8", 10) ||
-        8
+      Number.parseInt(process.env.PDF_INGEST_TABLE_VISION_CONCURRENCY ?? "3", 10) ||
+        3
     )
   );
 

@@ -3,9 +3,10 @@ import { pathToFileURL } from "url";
 import { createCanvas } from "@napi-rs/canvas";
 import type { RawSourceImage } from "@/lib/study-ingest/source-images/types";
 
-const MAX_RENDER_WIDTH_PX = 1_400;
-const DEFAULT_SCALE = 2.25;
-const MIN_PNG_BYTES = 4_000;
+const MAX_RENDER_WIDTH_PX = 1_100;
+/** Lower than historical 2.25 — canvas PNG encode dominates Vercel Active CPU. */
+const DEFAULT_SCALE = 1.5;
+const MIN_IMAGE_BYTES = 2_500;
 
 export type RenderedPdfPage = {
   pageNum: number;
@@ -108,13 +109,14 @@ export async function renderPdfPagesToPng(
           viewport,
         }).promise;
 
-        const png = canvas.toBuffer("image/png");
-        if (png.length < MIN_PNG_BYTES) continue;
+        // JPEG is much cheaper to encode than PNG for full-page screenshots.
+        const jpeg = canvas.toBuffer("image/jpeg", 78);
+        if (jpeg.length < MIN_IMAGE_BYTES) continue;
 
         out.push({
-          buffer: png,
-          mimeType: "image/png",
-          fileName: `page-${pageNum}-render.png`,
+          buffer: jpeg,
+          mimeType: "image/jpeg",
+          fileName: `page-${pageNum}-render.jpg`,
           sourceFileName,
           label: `Page ${pageNum}`,
           anchorType: "page",

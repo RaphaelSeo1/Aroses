@@ -174,7 +174,12 @@ export async function captionVisualAsset(input: {
                 type: "image",
                 source: {
                   type: "base64",
-                  media_type: "image/png",
+                  media_type:
+                    input.imagePng.length >= 3 &&
+                    input.imagePng[0] === 0xff &&
+                    input.imagePng[1] === 0xd8
+                      ? "image/jpeg"
+                      : "image/png",
                   data: input.imagePng.toString("base64"),
                 },
               },

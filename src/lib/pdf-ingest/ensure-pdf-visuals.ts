@@ -91,7 +91,17 @@ export async function ensurePdfVisualsAtFinalize(input: {
     };
   }
 
-  const maxPages = Math.min(pageCount, 120);
+  const maxPagesEnv = process.env.PDF_INGEST_FINALIZE_MAX_PAGES?.trim();
+  const maxPagesParsed = maxPagesEnv
+    ? Number.parseInt(maxPagesEnv, 10)
+    : Number.NaN;
+  // Hard cap — rendering 100+ pages with canvas is the #1 Vercel CPU spike.
+  const maxPages = Math.min(
+    pageCount,
+    Number.isFinite(maxPagesParsed) && maxPagesParsed >= 1
+      ? Math.min(maxPagesParsed, 32)
+      : 16
+  );
   const pageNumbers = Array.from({ length: maxPages }, (_, i) => i + 1);
   const rendered = await renderPdfPagesToPng(
     pdfBuffer,
@@ -138,7 +148,20 @@ export async function ensurePdfVisualsAtFinalize(input: {
     };
   }
 
-  // Delegate to full supplement path (handles multi-file + chunk hints).
+  // Delegate to full supplement path only for small decks — another full
+  // render pass on large PDFs blows Vercel Active CPU.
+  if (pageCount > 24) {
+    console.warn("[ensurePdfVisuals] skip supplement fallback on large PDF", {
+      jobId: input.jobId,
+      pageCount,
+    });
+    return {
+      pageArtifacts: input.pageArtifacts,
+      sourceImages: input.sourceImages,
+      manifest: null,
+    };
+  }
+
   const supplemented = await supplementPdfPageFigures({
     admin: input.admin,
     userId: input.userId,

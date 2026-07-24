@@ -192,8 +192,8 @@ export async function extractContentForIngestJob(input: {
     ? Number.parseInt(concurrencyEnv, 10)
     : Number.NaN;
   const EXTRACT_CONCURRENCY = Number.isFinite(concurrencyParsed)
-    ? Math.max(1, Math.min(8, concurrencyParsed))
-    : 4;
+    ? Math.max(1, Math.min(4, concurrencyParsed))
+    : 2;
 
   const results: (PerFileResult | undefined)[] = new Array(refs.length);
   let cursor = 0;

@@ -560,22 +560,17 @@ async function loadIngestAssetManifest(
 }
 
 /**
- * Cap finalize's optional visual-extraction step at ~150 s (override with
- * `PDF_INGEST_FINALIZE_VISUAL_BUDGET_MS`). When this fallback runs it can
- * render + vision-crop up to 120 PDF pages, which on big decks blows past the
- * 300 s function budget — the worker is killed before it can flip the job to
- * `complete`, so the UI sits stuck at "Saving your study set" / N/N forever.
- * The course body is already fully built by this point; figures are a
- * best-effort enhancement, so we time-box them and always proceed to the
- * insert-material + flip-to-complete critical path.
+ * Cap finalize's optional visual-extraction step (override with
+ * `PDF_INGEST_FINALIZE_VISUAL_BUDGET_MS`). Default is short — figures are
+ * best-effort and this path is the main Vercel Active-CPU spike.
  */
 function finalizeVisualBudgetMs(): number {
   const raw = process.env.PDF_INGEST_FINALIZE_VISUAL_BUDGET_MS?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  if (Number.isFinite(parsed) && parsed >= 10_000 && parsed <= 280_000) {
+  if (Number.isFinite(parsed) && parsed >= 5_000 && parsed <= 120_000) {
     return parsed;
   }
-  return 60_000;
+  return 20_000;
 }
 
 /**
@@ -673,8 +668,12 @@ async function finalizePdfIngest(
   const isPdfUpload =
     /\.pdf$/i.test(fallbackFileName) || /\.pdf$/i.test(primaryStoragePath);
 
+  // Finalize visual fallback re-renders + vision-crops the PDF (very CPU-heavy
+  // on Vercel). Only run when page-render figures are explicitly enabled —
+  // otherwise complete without figures rather than burning Active CPU.
   if (
     isPdfUpload &&
+    isPdfPageRenderEnabled() &&
     pageArtifacts.figures.filter((f) => f.url?.trim()).length === 0 &&
     primaryStoragePath
   ) {

@@ -298,7 +298,7 @@ export async function extractPdfPagesForIngest(
 
   const batchSize = envPositiveInt(
     "PDF_INGEST_FULL_RENDER_BATCH",
-    14,
+    6,
     RENDER_BATCH_SIZE
   );
 
@@ -369,7 +369,7 @@ export async function extractPdfTextFullDocument(
 
   const batchSize = envPositiveInt(
     "PDF_INGEST_FULL_RENDER_BATCH",
-    14,
+    6,
     RENDER_BATCH_SIZE
   );
 

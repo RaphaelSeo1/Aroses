@@ -64,7 +64,7 @@ function isDeepVisionEnabled(): boolean {
 function qualifyConcurrency(): number {
   const raw = process.env.PDF_INGEST_QUALIFY_CONCURRENCY?.trim();
   const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  return Number.isFinite(n) && n >= 1 ? Math.min(n, 12) : 8;
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 6) : 3;
 }
 
 async function qualifyCropForUpload(
@@ -238,8 +238,8 @@ export async function runCropFirstExtract(input: {
       if (pagesWithCrops.has(render.anchorIndex)) continue;
       snapshots.push({
         buffer: render.buffer,
-        mimeType: "image/png",
-        fileName: `page-${render.anchorIndex}-snapshot.png`,
+        mimeType: render.mimeType || "image/jpeg",
+        fileName: `page-${render.anchorIndex}-snapshot.jpg`,
         sourceFileName: fileName,
         label: `Snapshot (page ${render.anchorIndex})`,
         anchorType: "page",

@@ -27,18 +27,18 @@ function envPositiveInt(name: string, fallback: number, max: number): number {
 /** Default budgets cover full lecture PDFs with headroom. */
 const MAX_PAGES_RENDERED_PER_PDF = envPositiveInt(
   "PDF_INGEST_MAX_PAGE_RENDERS_PER_PDF",
-  80,
-  250
+  32,
+  80
 );
 const MAX_PAGES_RENDERED_PER_JOB = envPositiveInt(
   "PDF_INGEST_MAX_PAGE_RENDERS_PER_JOB",
-  150,
-  350
+  48,
+  120
 );
 const RENDER_BATCH_SIZE = envPositiveInt(
   "PDF_INGEST_PAGE_RENDER_BATCH_SIZE",
-  24,
-  40
+  8,
+  24
 );
 
 export type SupplementPdfPagesResult = {

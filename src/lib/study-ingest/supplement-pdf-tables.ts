@@ -73,8 +73,8 @@ export async function supplementPdfTablesOnly(input: {
     8,
     Math.max(
       1,
-      Number.parseInt(process.env.PDF_INGEST_TABLE_VISION_CONCURRENCY ?? "6", 10) ||
-        6
+      Number.parseInt(process.env.PDF_INGEST_TABLE_VISION_CONCURRENCY ?? "3", 10) ||
+        3
     )
   );
 
