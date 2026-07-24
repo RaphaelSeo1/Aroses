@@ -101,14 +101,24 @@ export async function POST(req: Request, ctx: Params) {
       err instanceof Error && err.message.trim()
         ? err.message.trim()
         : "Could not update subscription.";
-    const needsMigration = /admin_granted/i.test(message);
-    return NextResponse.json(
-      {
-        error: needsMigration
-          ? "Database is missing admin_granted. Run migration 099_admin_subscription_grant.sql in Supabase, then retry."
-          : message,
-      },
-      { status: 500 }
-    );
+    if (/admin_granted/i.test(message)) {
+      return NextResponse.json(
+        {
+          error:
+            "Database is missing admin_granted. Run migration 099 (or 100) in Supabase, then retry.",
+        },
+        { status: 500 }
+      );
+    }
+    if (/user_subscriptions_tier_check|tier_check/i.test(message)) {
+      return NextResponse.json(
+        {
+          error:
+            "Database tier check is out of date (rejects student/premium). Run migration 100_fix_subscription_tier_check.sql in the Supabase SQL editor, then retry.",
+        },
+        { status: 500 }
+      );
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
