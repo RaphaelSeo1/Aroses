@@ -218,22 +218,136 @@ function readLooseStringField(
   return undefined;
 }
 
+const TRIVIAL_KEY_TERMS = new Set([
+  "a",
+  "an",
+  "the",
+  "and",
+  "or",
+  "of",
+  "in",
+  "on",
+  "to",
+  "for",
+  "with",
+  "by",
+  "from",
+  "as",
+  "at",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "this",
+  "that",
+  "these",
+  "those",
+  "it",
+  "its",
+  "example",
+  "examples",
+  "overview",
+  "introduction",
+  "summary",
+  "conclusion",
+  "definition",
+  "note",
+  "notes",
+  "chapter",
+  "section",
+  "page",
+  "table",
+  "figure",
+  "image",
+  "slide",
+  "important",
+  "key",
+  "term",
+  "terms",
+  "concept",
+  "concepts",
+  "thing",
+  "stuff",
+  "basic",
+  "basics",
+  "general",
+  "other",
+  "misc",
+  "miscellaneous",
+]);
+
+/** Title-case Latin key terms; leave CJK/Hangul and mixed scientific casing alone. */
+function formatKeyTerm(term: string): string {
+  const t = term.trim().replace(/\s+/g, " ");
+  if (!t) return t;
+  // No Latin letters (e.g. Korean-only) — keep as authored.
+  if (!/[A-Za-z]/.test(t)) return t;
+  // Short all-caps / numeric acronyms: DNA, HIV, ATP, Na+, CO2
+  if (/^[A-Z0-9][A-Z0-9\-+/().]{0,14}$/.test(t)) return t;
+  // Already mixed case (mRNA, iPhone, pH) — capitalize first letter only.
+  if (/[A-Z]/.test(t) && /[a-z]/.test(t)) {
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+  // All-lowercase (or no uppercase): Title Case words.
+  return t.replace(/\b([a-z])([a-z']*)/g, (_, a: string, b: string) => {
+    return a.toUpperCase() + b;
+  });
+}
+
+function isTrivialKeyTerm(term: string, definition: string): boolean {
+  const t = term.trim();
+  if (t.length < 2) return true;
+  const lower = t.toLowerCase();
+  if (TRIVIAL_KEY_TERMS.has(lower)) return true;
+  if (/^[\d\s.%+\-–—/:]+$/.test(t)) return true;
+  // Single very short common Latin word without acronym shape.
+  if (
+    t.length <= 3 &&
+    /^[a-z]+$/i.test(t) &&
+    !/^[A-Z]{2,}$/.test(t) &&
+    !/[\uac00-\ud7af]/.test(t)
+  ) {
+    return true;
+  }
+  if (definition.trim().toLowerCase() === lower) return true;
+  // Definition is just "a/an/the <term>"
+  if (
+    new RegExp(
+      `^(a|an|the)\\s+${lower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      "i"
+    ).test(definition.trim())
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** Accepts `key_terms`, camelCase `keyTerms`, alternate keys, or `"term: def"` strings. */
 function normalizeKeyTerms(raw: unknown): KeyTerm[] {
   if (!Array.isArray(raw)) return [];
   const out: KeyTerm[] = [];
+  const seen = new Set<string>();
+  const push = (termRaw: string, definitionRaw: string) => {
+    const definition = definitionRaw.trim();
+    const term = formatKeyTerm(termRaw);
+    if (term.length < 2 || definition.length < 4) return;
+    if (isTrivialKeyTerm(term, definition)) return;
+    const key = term.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ term, definition });
+  };
+
   for (const x of raw) {
     if (typeof x === "string") {
       const s = x.trim();
       const idx = s.indexOf(":");
       if (idx > 0 && idx < s.length - 1) {
-        const term = stripStrikethroughCorrections(s.slice(0, idx).trim());
-        const definition = stripStrikethroughCorrections(
-          s.slice(idx + 1).trim()
+        push(
+          stripStrikethroughCorrections(s.slice(0, idx).trim()),
+          stripStrikethroughCorrections(s.slice(idx + 1).trim())
         );
-        if (term.length >= 2 && definition.length >= 4) {
-          out.push({ term, definition });
-        }
       }
       continue;
     }
@@ -259,11 +373,10 @@ function normalizeKeyTerms(raw: unknown): KeyTerm[] {
         "def",
       ]) ?? ""
     );
-    if (term.length >= 2 && definition.length >= 4) {
-      out.push({ term, definition });
-    }
+    push(term, definition);
   }
-  return out;
+  // Hard cap — prevents glossary dumps that bury real vocabulary.
+  return out.slice(0, 12);
 }
 
 /**

@@ -19,8 +19,8 @@ import { isDenseSectionedPharmacologyDeck } from "@/lib/study-ingest/pdf-section
 
 type CourseBuildProfile = "express" | "fast" | "balanced" | "full";
 
-const DENSE_MAX_LESSONS = 14;
-const DENSE_TARGET_LESSONS = 11;
+const DENSE_MAX_LESSONS = 10;
+const DENSE_TARGET_LESSONS = 8;
 const DENSE_MAX_MODULES = 6;
 
 const PHARM_TOPIC_KEY =
@@ -76,6 +76,8 @@ function capLessonGroups(
 export type StructurePlanTargets = {
   chunkCount: number;
   minLessons: number;
+  /** Soft ceiling for the planner — prefer fewer, longer lessons. */
+  maxLessons: number;
   minModules: number;
   maxModules: number;
 };
@@ -98,34 +100,42 @@ export function structurePlanTargets(
   profile: CourseBuildProfile
 ): StructurePlanTargets {
   if (chunkCount <= 0) {
-    return { chunkCount: 0, minLessons: 1, minModules: 1, maxModules: 2 };
+    return {
+      chunkCount: 0,
+      minLessons: 1,
+      maxLessons: 2,
+      minModules: 1,
+      maxModules: 2,
+    };
   }
 
   let minLessons: number;
+  let maxLessons: number;
   let maxModules: number;
 
   if (profile === "express") {
     minLessons =
-      chunkCount <= 2
-        ? 1
-        : clampInt(Math.ceil(chunkCount / 1.5), 2, 28);
+      chunkCount <= 2 ? 1 : clampInt(Math.ceil(chunkCount / 2.2), 2, 16);
+    maxLessons =
+      chunkCount <= 2 ? 2 : clampInt(Math.ceil(chunkCount / 1.6), minLessons, 20);
     if (chunkCount >= 60) maxModules = 8;
     else if (chunkCount >= 20) maxModules = 6;
     else if (chunkCount >= 10) maxModules = 6;
     else if (chunkCount >= 5) maxModules = 6;
     else maxModules = 4;
   } else if (profile === "fast") {
-    minLessons = clampInt(Math.ceil(chunkCount / 1.75), 2, 18);
+    // Prefer fewer, denser lessons (e.g. ~4–5 instead of ~7 for mid-size decks).
+    minLessons = clampInt(Math.ceil(chunkCount / 2.2), 2, 12);
+    maxLessons = clampInt(Math.ceil(chunkCount / 1.6), minLessons, 16);
     maxModules = 5;
   } else if (profile === "balanced") {
-    minLessons = clampInt(Math.ceil(chunkCount / 1.3), 2, 28);
+    minLessons = clampInt(Math.ceil(chunkCount / 2.0), 2, 16);
+    maxLessons = clampInt(Math.ceil(chunkCount / 1.5), minLessons, 20);
     maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
   } else {
     // full: deepest profile — more modules and more lessons per the source.
-    // Lesson floor scales ~1:1 with chunk count (each source section earns a
-    // lesson) and the upper clamp is generous so very large decks are not
-    // compressed into too few lessons (dropped coverage).
-    minLessons = clampInt(Math.ceil(chunkCount / 1.1), 3, 60);
+    minLessons = clampInt(Math.ceil(chunkCount / 1.3), 3, 48);
+    maxLessons = clampInt(Math.ceil(chunkCount / 1.05), minLessons, 60);
     maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
   }
 
@@ -138,7 +148,7 @@ export function structurePlanTargets(
           ? 2
           : 1;
 
-  return { chunkCount, minLessons, minModules, maxModules };
+  return { chunkCount, minLessons, maxLessons, minModules, maxModules };
 }
 
 export function collectPlanChunkIds(plan: CourseStructurePlan): Set<string> {
@@ -213,9 +223,10 @@ export function structurePlanCoveragePromptBlock(
 ): string {
   return `COVERAGE (critical — course quality):
 - You have ${targets.chunkCount} content chunk(s). **Every chunk id MUST appear in exactly one lesson's source_chunk_ids.** No orphan chunks.
-- Plan **at least ${targets.minLessons} lesson(s)** and **at least ${targets.minModules} module(s)** (at most ${targets.maxModules} modules).
+- Plan **${targets.minLessons}–${targets.maxLessons} lesson(s)** total and **${targets.minModules}–${targets.maxModules} module(s)**. Prefer the **lower** end of the lesson range when related chunks can share a lesson.
+- Prefer **fewer, longer lessons** that keep the same information: merge adjacent chunks on the same topic into one lesson with a richer body later — do NOT emit many thin 1-chunk lessons when 2–4 related chunks clearly belong together.
 - Map chunks in source order; each lesson should cover a coherent slice of the deck.
-- Do NOT collapse unrelated major topics into one lesson (e.g. homonuclear vs heteronuclear vs conjugation should be separate lessons when they appear as separate chunks).
+- Do NOT collapse **unrelated** major topics into one lesson (e.g. homonuclear vs heteronuclear vs conjugation stay separate when they are distinct topics).
 - Supplementary chunks (short examples) may attach to the nearest related lesson — but never drop teaching chunks.
 - The later writing step will teach **only** what you assign here; missing chunks = missing course content.`;
 }

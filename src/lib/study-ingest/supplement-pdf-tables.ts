@@ -12,7 +12,15 @@ import {
 import { pageTableKey } from "@/lib/study-ingest/source-images/page-table-keys";
 import { renderPdfPagesToPng } from "@/lib/study-ingest/source-images/render-pdf-page";
 
-const MAX_TABLE_VISION_PAGES = 6;
+/** Default 3 pages — each is a canvas raster + vision call (Vercel Active CPU). */
+const MAX_TABLE_VISION_PAGES = Math.min(
+  6,
+  Math.max(
+    1,
+    Number.parseInt(process.env.PDF_INGEST_TABLE_VISION_MAX_PAGES ?? "3", 10) ||
+      3
+  )
+);
 
 function chunkHasUsableTables(text: string): boolean {
   const blocks = extractMarkdownTableBlocks(text);
@@ -70,11 +78,11 @@ export async function supplementPdfTablesOnly(input: {
   if (rendered.length === 0) return [];
 
   const concurrency = Math.min(
-    8,
+    4,
     Math.max(
       1,
-      Number.parseInt(process.env.PDF_INGEST_TABLE_VISION_CONCURRENCY ?? "3", 10) ||
-        3
+      Number.parseInt(process.env.PDF_INGEST_TABLE_VISION_CONCURRENCY ?? "2", 10) ||
+        2
     )
   );
 

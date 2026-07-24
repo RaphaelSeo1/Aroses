@@ -92,7 +92,7 @@ export function AvatarMenu({
         }
         title={label}
         data-tour="nav-account"
-        className={`relative inline-flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-sm font-semibold transition ${
+        className={`relative inline-flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold transition ${
           onAccountPage
             ? "ring-2 ring-brand ring-offset-2 ring-offset-white dark:ring-brand-soft dark:ring-offset-[#141110]"
             : "ring-1 ring-brand-border hover:ring-brand/50 dark:ring-white/15 dark:hover:ring-white/30"
@@ -102,19 +102,24 @@ export function AvatarMenu({
             : "bg-brand-blush text-brand dark:bg-white/10 dark:text-white"
         }`}
       >
-        {avatarUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={avatarUrl}
-            alt=""
-            className="h-full w-full object-cover"
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          <span aria-hidden>{initials}</span>
-        )}
+        {/* Clip the photo/initials only — not the social badge that hangs off the corner. */}
+        <span className="absolute inset-0 overflow-hidden rounded-full">
+          {avatarUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={avatarUrl}
+              alt=""
+              className="h-full w-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <span className="flex h-full w-full items-center justify-center" aria-hidden>
+              {initials}
+            </span>
+          )}
+        </span>
         {socialTotal > 0 ? (
-          <span className="absolute -right-0.5 -top-0.5 inline-flex min-w-[1.05rem] items-center justify-center rounded-full bg-brand px-1 py-0.5 text-[9px] font-bold leading-none text-white tabular-nums ring-2 ring-white dark:ring-[#141110]">
+          <span className="absolute -right-0.5 -top-0.5 z-10 inline-flex min-w-[1.05rem] items-center justify-center rounded-full bg-brand px-1 py-0.5 text-[9px] font-bold leading-none text-white tabular-nums ring-2 ring-white dark:ring-[#141110]">
             {socialBadge}
           </span>
         ) : null}
