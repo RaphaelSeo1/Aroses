@@ -97,8 +97,17 @@ export async function POST(req: Request, ctx: Params) {
     return NextResponse.json({ ok: true, subscription });
   } catch (err) {
     console.error("[admin subscription]", err);
+    const message =
+      err instanceof Error && err.message.trim()
+        ? err.message.trim()
+        : "Could not update subscription.";
+    const needsMigration = /admin_granted/i.test(message);
     return NextResponse.json(
-      { error: "Could not update subscription." },
+      {
+        error: needsMigration
+          ? "Database is missing admin_granted. Run migration 099_admin_subscription_grant.sql in Supabase, then retry."
+          : message,
+      },
       { status: 500 }
     );
   }

@@ -116,6 +116,10 @@ export async function getUserSubscription(
   return rowToSubscription(data as SubscriptionRow);
 }
 
+function isMissingAdminGrantedColumn(err: { message?: string } | null): boolean {
+  return /admin_granted|schema cache/i.test(err?.message ?? "");
+}
+
 /** Reset local billing state to free (keeps optional live customer id). */
 async function writeFreeSubscription(
   userId: string,
@@ -123,20 +127,25 @@ async function writeFreeSubscription(
 ): Promise<void> {
   const admin = createAdminClient();
   if (!admin) return;
-  const { error } = await admin.from("user_subscriptions").upsert(
-    {
-      user_id: userId,
-      tier: "free",
-      status: "inactive",
-      stripe_customer_id: opts?.stripeCustomerId ?? null,
-      stripe_subscription_id: null,
-      current_period_start: null,
-      current_period_end: null,
-      cancel_at_period_end: false,
-      admin_granted: false,
-    },
+  const base = {
+    user_id: userId,
+    tier: "free" as const,
+    status: "inactive",
+    stripe_customer_id: opts?.stripeCustomerId ?? null,
+    stripe_subscription_id: null,
+    current_period_start: null,
+    current_period_end: null,
+    cancel_at_period_end: false,
+  };
+  let { error } = await admin.from("user_subscriptions").upsert(
+    { ...base, admin_granted: false },
     { onConflict: "user_id" }
   );
+  if (error && isMissingAdminGrantedColumn(error)) {
+    ({ error } = await admin
+      .from("user_subscriptions")
+      .upsert(base, { onConflict: "user_id" }));
+  }
   if (error) {
     console.error("[billing] reset to free failed", error);
     throw error;
@@ -329,10 +338,16 @@ export async function adminSetUserSubscription(opts: {
     await writeFreeSubscription(opts.userId, { stripeCustomerId: customerId });
     // Honor an explicit canceled/inactive status label when demoting.
     if (opts.status !== "inactive") {
-      await admin
+      const upd = await admin
         .from("user_subscriptions")
         .update({ status: opts.status, admin_granted: false })
         .eq("user_id", opts.userId);
+      if (upd.error && isMissingAdminGrantedColumn(upd.error)) {
+        await admin
+          .from("user_subscriptions")
+          .update({ status: opts.status })
+          .eq("user_id", opts.userId);
+      }
     }
     return getUserSubscription(opts.userId);
   }
@@ -341,26 +356,42 @@ export async function adminSetUserSubscription(opts: {
   const periodEnd = new Date(now);
   periodEnd.setUTCDate(periodEnd.getUTCDate() + 30);
 
-  const { error } = await admin.from("user_subscriptions").upsert(
-    {
-      user_id: opts.userId,
-      tier: opts.tier,
-      status: opts.status,
-      stripe_customer_id: customerId,
-      // Clear Stripe sub id so webhooks don't fight the admin grant until
-      // the user checks out again (checkout creates a fresh sub + sync).
-      stripe_subscription_id: null,
-      current_period_start: now.toISOString(),
-      current_period_end: periodEnd.toISOString(),
-      cancel_at_period_end: false,
-      admin_granted: true,
-    },
+  const payload = {
+    user_id: opts.userId,
+    tier: opts.tier,
+    status: opts.status,
+    stripe_customer_id: customerId,
+    // Clear Stripe sub id so webhooks don't fight the admin grant until
+    // the user checks out again (checkout creates a fresh sub + sync).
+    stripe_subscription_id: null,
+    current_period_start: now.toISOString(),
+    current_period_end: periodEnd.toISOString(),
+    cancel_at_period_end: false,
+  };
+
+  let { error } = await admin.from("user_subscriptions").upsert(
+    { ...payload, admin_granted: true },
     { onConflict: "user_id" }
   );
+  if (error && isMissingAdminGrantedColumn(error)) {
+    console.warn(
+      "[billing] admin_granted column missing — apply migration 099. Upserting without it."
+    );
+    ({ error } = await admin
+      .from("user_subscriptions")
+      .upsert(payload, { onConflict: "user_id" }));
+  }
 
   if (error) {
     console.error("[billing] admin set subscription failed", error);
-    throw error;
+    const msg =
+      typeof error === "object" &&
+      error &&
+      "message" in error &&
+      typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : "Could not update subscription.";
+    throw new Error(msg);
   }
 
   return getUserSubscription(opts.userId);
