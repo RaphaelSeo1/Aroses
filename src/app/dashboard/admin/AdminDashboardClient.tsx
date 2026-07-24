@@ -9,6 +9,7 @@ import {
   AdminPendingListings,
   type PendingListingRow,
 } from "@/components/admin/AdminPendingListings";
+import { AdminUserPlanEditor } from "@/components/admin/AdminUserPlanEditor";
 
 /** Bounded vertical scroll for large tables — keeps the admin page compact. */
 const TABLE_BODY_SCROLL =
@@ -379,6 +380,8 @@ export function AdminDashboardClient({
         u.id,
         u.displayName ?? "",
         u.username ?? "",
+        u.planTier,
+        u.planStatus,
       ]
         .join(" ")
         .toLowerCase();
@@ -514,8 +517,8 @@ export function AdminDashboardClient({
                   User directory
                 </h2>
                 <p className="mt-1 max-w-xl text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  Auth sign-in email and profile fields — separate from the activity
-                  feed below.
+                  Auth accounts, profiles, and subscription plan. Use Change plan to
+                  grant Student/Premium without Stripe.
                 </p>
               </div>
               <label className="block w-full sm:max-w-[14rem]">
@@ -550,6 +553,9 @@ export function AdminDashboardClient({
                       <th className="hidden px-3 py-2 font-semibold xl:table-cell xl:px-3.5">
                         Username
                       </th>
+                      <th className="px-3 py-2 font-semibold sm:px-3.5">
+                        Plan
+                      </th>
                       <th className="hidden px-3 py-2 font-semibold md:table-cell md:px-3.5">
                         User ID
                       </th>
@@ -571,7 +577,7 @@ export function AdminDashboardClient({
                     {filteredUsers.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={8}
+                          colSpan={9}
                           className="px-3 py-8 text-center text-xs text-zinc-500 dark:text-zinc-400"
                         >
                           {initialUsers.length === 0
@@ -629,6 +635,15 @@ export function AdminDashboardClient({
                             ) : (
                               "—"
                             )}
+                          </td>
+                          <td className="border-t border-zinc-100/90 px-3 py-2 dark:border-zinc-800 sm:px-3.5">
+                            <AdminUserPlanEditor
+                              userId={u.id}
+                              email={u.email}
+                              tier={u.planTier}
+                              status={u.planStatus}
+                              adminGranted={u.planAdminGranted}
+                            />
                           </td>
                           <td className="hidden border-t border-zinc-100/90 px-3 py-2 md:table-cell md:px-3.5 dark:border-zinc-800">
                             <div className="flex max-w-[11rem] items-center gap-1">

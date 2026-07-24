@@ -148,6 +148,8 @@ export async function syncStripeSubscription(
       current_period_start: startIso,
       current_period_end: endIso,
       cancel_at_period_end: sub.cancel_at_period_end ?? false,
+      // Real Stripe billing takes over any previous admin grant.
+      admin_granted: false,
     },
     { onConflict: "user_id" }
   );
@@ -191,6 +193,7 @@ export async function markSubscriptionCanceled(opts: {
       current_period_start: null,
       current_period_end: null,
       cancel_at_period_end: false,
+      admin_granted: false,
     },
     { onConflict: "user_id" }
   );

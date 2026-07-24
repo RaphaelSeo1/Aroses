@@ -13,6 +13,8 @@ export type UserSubscription = {
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
+  /** True when an app admin set tier/status (not Stripe). */
+  adminGranted: boolean;
 };
 
 const FREE_SUBSCRIPTION: UserSubscription = {
@@ -23,6 +25,7 @@ const FREE_SUBSCRIPTION: UserSubscription = {
   currentPeriodStart: null,
   currentPeriodEnd: null,
   cancelAtPeriodEnd: false,
+  adminGranted: false,
 };
 
 type SubscriptionRow = {
@@ -33,6 +36,7 @@ type SubscriptionRow = {
   current_period_start: string | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  admin_granted?: boolean | null;
 };
 
 function rowToSubscription(row: SubscriptionRow): UserSubscription {
@@ -44,8 +48,20 @@ function rowToSubscription(row: SubscriptionRow): UserSubscription {
     currentPeriodStart: row.current_period_start,
     currentPeriodEnd: row.current_period_end,
     cancelAtPeriodEnd: row.cancel_at_period_end ?? false,
+    adminGranted: Boolean(row.admin_granted),
   };
 }
+
+export const ADMIN_SUBSCRIPTION_STATUSES = [
+  "inactive",
+  "active",
+  "trialing",
+  "past_due",
+  "canceled",
+] as const;
+
+export type AdminSubscriptionStatus =
+  (typeof ADMIN_SUBSCRIPTION_STATUSES)[number];
 
 function isStripeResourceMissing(err: unknown): boolean {
   return (
@@ -77,11 +93,26 @@ export async function getUserSubscription(
   const { data, error } = await admin
     .from("user_subscriptions")
     .select(
-      "tier, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, cancel_at_period_end"
+      "tier, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, cancel_at_period_end, admin_granted"
     )
     .eq("user_id", userId)
     .maybeSingle();
-  if (error || !data) return FREE_SUBSCRIPTION;
+  if (error) {
+    // Pre-migration DBs may lack admin_granted — fall back without it.
+    if (/admin_granted|schema cache/i.test(error.message ?? "")) {
+      const legacy = await admin
+        .from("user_subscriptions")
+        .select(
+          "tier, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, cancel_at_period_end"
+        )
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (legacy.error || !legacy.data) return FREE_SUBSCRIPTION;
+      return rowToSubscription(legacy.data as SubscriptionRow);
+    }
+    return FREE_SUBSCRIPTION;
+  }
+  if (!data) return FREE_SUBSCRIPTION;
   return rowToSubscription(data as SubscriptionRow);
 }
 
@@ -102,6 +133,7 @@ async function writeFreeSubscription(
       current_period_start: null,
       current_period_end: null,
       cancel_at_period_end: false,
+      admin_granted: false,
     },
     { onConflict: "user_id" }
   );
@@ -122,6 +154,10 @@ export async function reconcileUserSubscription(
 ): Promise<UserSubscription> {
   const local = await getUserSubscription(userId);
   if (!isStripeConfigured()) return local;
+
+  // Admin-granted tiers are intentional and must not be wiped when Stripe
+  // has no matching subscription.
+  if (local.adminGranted) return local;
 
   const needsCheck =
     Boolean(local.stripeCustomerId) ||
@@ -262,4 +298,70 @@ export async function getOrCreateStripeCustomer(opts: {
     );
 
   return customer.id;
+}
+
+/**
+ * Admin override: set a user's plan tier/status in `user_subscriptions`.
+ * Paid tiers are marked `admin_granted` so Stripe reconcile won't reset them.
+ * Does not create or cancel Stripe subscriptions.
+ */
+export async function adminSetUserSubscription(opts: {
+  userId: string;
+  tier: PlanTier;
+  status: AdminSubscriptionStatus;
+}): Promise<UserSubscription> {
+  const admin = createAdminClient();
+  if (!admin) {
+    throw new Error("Service role key not configured — cannot update subscription.");
+  }
+
+  const { data: existing } = await admin
+    .from("user_subscriptions")
+    .select("stripe_customer_id")
+    .eq("user_id", opts.userId)
+    .maybeSingle();
+  const customerId =
+    typeof existing?.stripe_customer_id === "string"
+      ? existing.stripe_customer_id
+      : null;
+
+  if (opts.tier === "free") {
+    await writeFreeSubscription(opts.userId, { stripeCustomerId: customerId });
+    // Honor an explicit canceled/inactive status label when demoting.
+    if (opts.status !== "inactive") {
+      await admin
+        .from("user_subscriptions")
+        .update({ status: opts.status, admin_granted: false })
+        .eq("user_id", opts.userId);
+    }
+    return getUserSubscription(opts.userId);
+  }
+
+  const now = new Date();
+  const periodEnd = new Date(now);
+  periodEnd.setUTCDate(periodEnd.getUTCDate() + 30);
+
+  const { error } = await admin.from("user_subscriptions").upsert(
+    {
+      user_id: opts.userId,
+      tier: opts.tier,
+      status: opts.status,
+      stripe_customer_id: customerId,
+      // Clear Stripe sub id so webhooks don't fight the admin grant until
+      // the user checks out again (checkout creates a fresh sub + sync).
+      stripe_subscription_id: null,
+      current_period_start: now.toISOString(),
+      current_period_end: periodEnd.toISOString(),
+      cancel_at_period_end: false,
+      admin_granted: true,
+    },
+    { onConflict: "user_id" }
+  );
+
+  if (error) {
+    console.error("[billing] admin set subscription failed", error);
+    throw error;
+  }
+
+  return getUserSubscription(opts.userId);
 }

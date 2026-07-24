@@ -16,6 +16,7 @@ export type AdminActivityKind =
   | "listing_approved"
   | "listing_rejected"
   | "course_purchased"
+  | "subscription_admin_updated"
   | "other";
 
 export type AdminActivityItem = {
@@ -45,6 +46,7 @@ const EVENT_LABELS: Record<string, string> = {
   listing_approved: "Approved marketplace listing",
   listing_rejected: "Rejected marketplace listing",
   course_purchased: "Purchased a course",
+  subscription_admin_updated: "Admin updated subscription",
 };
 
 function labelForEvent(type: string): string {
@@ -206,6 +208,9 @@ export type AdminUserRow = {
   displayName: string | null;
   username: string | null;
   onboardingCompletedAt: string | null;
+  planTier: "free" | "student" | "premium";
+  planStatus: string;
+  planAdminGranted: boolean;
 };
 
 type ProfileDirRow = {
@@ -238,6 +243,13 @@ export async function fetchAdminUserDirectory(
   }
 
   const profileMap = new Map<string, ProfileDirRow>();
+  type SubDirRow = {
+    user_id: string;
+    tier: string | null;
+    status: string | null;
+    admin_granted?: boolean | null;
+  };
+  const subMap = new Map<string, SubDirRow>();
   const ids = allAuth.map((u) => u.id);
   const chunkSize = 150;
 
@@ -274,11 +286,42 @@ export async function fetchAdminUserDirectory(
     for (const row of rows ?? []) {
       if (row?.id) profileMap.set(row.id, row);
     }
+
+    const subsFull = await admin
+      .from("user_subscriptions")
+      .select("user_id, tier, status, admin_granted")
+      .in("user_id", chunk);
+    if (
+      subsFull.error &&
+      /admin_granted|schema cache/i.test(subsFull.error.message ?? "")
+    ) {
+      const subsLegacy = await admin
+        .from("user_subscriptions")
+        .select("user_id, tier, status")
+        .in("user_id", chunk);
+      if (subsLegacy.error) {
+        console.error("[admin] subscriptions directory chunk", subsLegacy.error);
+      } else {
+        for (const row of (subsLegacy.data ?? []) as SubDirRow[]) {
+          if (row?.user_id) subMap.set(row.user_id, row);
+        }
+      }
+    } else if (subsFull.error) {
+      console.error("[admin] subscriptions directory chunk", subsFull.error);
+    } else {
+      for (const row of (subsFull.data ?? []) as SubDirRow[]) {
+        if (row?.user_id) subMap.set(row.user_id, row);
+      }
+    }
   }
 
   const users: AdminUserRow[] = allAuth.map((u) => {
     const pr = profileMap.get(u.id);
+    const sub = subMap.get(u.id);
     const email = typeof u.email === "string" ? u.email.trim() : "";
+    const tierRaw = (sub?.tier ?? "free").toLowerCase();
+    const planTier =
+      tierRaw === "student" || tierRaw === "premium" ? tierRaw : "free";
     return {
       id: u.id,
       email: email.length > 0 ? email : "—",
@@ -288,6 +331,9 @@ export async function fetchAdminUserDirectory(
       displayName: pr?.display_name ?? null,
       username: pr?.username ?? null,
       onboardingCompletedAt: pr?.onboarding_completed_at ?? null,
+      planTier,
+      planStatus: (sub?.status ?? "inactive").toLowerCase(),
+      planAdminGranted: Boolean(sub?.admin_granted),
     };
   });
 
