@@ -1483,7 +1483,10 @@ export function CoursePlayer({
       <aside
         className={`border-zinc-200/90 bg-white transition-[width] duration-300 ease-out dark:border-zinc-800 dark:bg-zinc-950 ${
           sidebarOpen
-            ? "w-full overflow-hidden border-b bg-gradient-to-b from-zinc-50 to-white lg:w-[22rem] lg:shrink-0 lg:border-b-0 lg:border-r dark:from-zinc-950 dark:to-zinc-950"
+            ? // Sticky viewport-height column + inner scroll — do NOT put
+              // overflow-hidden on this aside alone or expanded modules get
+              // clipped mid-card with no way to reach the rest.
+              "w-full border-b bg-gradient-to-b from-zinc-50 to-white lg:sticky lg:top-14 lg:flex lg:h-[calc(100vh-3.5rem)] lg:w-[22rem] lg:shrink-0 lg:flex-col lg:self-start lg:overflow-hidden lg:border-b-0 lg:border-r dark:from-zinc-950 dark:to-zinc-950"
             : // Sticky so the collapsed module dots follow scroll. (overflow-hidden
               // on this aside used to break sticky and let the rail scroll away.)
               "max-lg:hidden lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:w-14 lg:shrink-0 lg:self-start lg:overflow-y-auto lg:border-r"
@@ -1551,7 +1554,7 @@ export function CoursePlayer({
             </nav>
           </div>
         ) : (
-        <div className="sticky top-16 w-full min-w-[min(100%,22rem)] space-y-6 p-6 lg:top-0 lg:max-h-[calc(100vh-4rem)] lg:w-[22rem] lg:overflow-y-auto">
+        <div className="w-full min-w-[min(100%,22rem)] space-y-6 p-6 lg:min-h-0 lg:w-[22rem] lg:flex-1 lg:overflow-y-auto lg:overscroll-contain">
           <div>
             <div className="flex items-start justify-between gap-2">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
