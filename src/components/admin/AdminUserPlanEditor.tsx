@@ -3,8 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { alertDialog } from "@/components/AppDialogs";
-
-type PlanTier = "free" | "student" | "premium";
+import type { PlanTier } from "@/lib/billing/plans";
 
 type Props = {
   userId: string;
@@ -17,6 +16,7 @@ type Props = {
 const TIER_OPTIONS: { value: PlanTier; label: string }[] = [
   { value: "free", label: "Free" },
   { value: "student", label: "Student" },
+  { value: "advanced", label: "Advanced" },
   { value: "premium", label: "Premium" },
 ];
 
@@ -31,6 +31,9 @@ const STATUS_OPTIONS = [
 function tierBadgeClass(tier: PlanTier): string {
   if (tier === "premium") {
     return "bg-violet-50 text-violet-800 ring-violet-600/15 dark:bg-violet-950/50 dark:text-violet-200 dark:ring-violet-500/30";
+  }
+  if (tier === "advanced") {
+    return "bg-amber-50 text-amber-900 ring-amber-600/15 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-500/30";
   }
   if (tier === "student") {
     return "bg-sky-50 text-sky-800 ring-sky-600/15 dark:bg-sky-950/50 dark:text-sky-200 dark:ring-sky-500/30";

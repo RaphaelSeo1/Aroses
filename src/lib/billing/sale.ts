@@ -3,8 +3,12 @@ import { PLANS } from "@/lib/billing/plans";
 
 /**
  * Cosmetic subscription sale display.
- * Charged price stays `PLANS[tier].priceMonthly` ($29 / $59).
+ * Charged price stays `PLANS[tier].priceMonthly`.
  * UI shows a strikethrough “compare-at” list price so it looks like X% off.
+ *
+ * Plans may set `compareAtMonthly` for a fixed was→now display
+ * (e.g. Advanced ~~$65~~ $5). Otherwise a percent-based inflate is used
+ * when the sale flag is on.
  */
 export function subscriptionSalePercent(): number {
   const raw = process.env.NEXT_PUBLIC_SUBSCRIPTION_SALE_PERCENT?.trim()
@@ -26,12 +30,27 @@ export function salePriceMonthly(tier: PlanTier): number {
 }
 
 /**
- * Inflated “was” price for display only.
- * e.g. $29 at 30% off → compare-at $41.
+ * “Was” price for display, or null when no strikethrough should show.
  */
-export function compareAtPriceMonthly(tier: PlanTier): number {
+export function compareAtPriceMonthly(tier: PlanTier): number | null {
   const sale = PLANS[tier].priceMonthly;
-  if (sale <= 0) return 0;
+  if (sale <= 0) return null;
+
+  const fixed = PLANS[tier].compareAtMonthly;
+  if (typeof fixed === "number" && fixed > sale) {
+    return Math.round(fixed);
+  }
+
+  if (!isSubscriptionSaleActive()) return null;
+
   const pct = subscriptionSalePercent();
   return Math.max(sale + 1, Math.round(sale / (1 - pct / 100)));
+}
+
+/** Percent off shown on the pricing badge for a tier. */
+export function salePercentForTier(tier: PlanTier): number {
+  const sale = salePriceMonthly(tier);
+  const was = compareAtPriceMonthly(tier);
+  if (was == null || was <= sale || sale <= 0) return subscriptionSalePercent();
+  return Math.max(1, Math.round((1 - sale / was) * 100));
 }

@@ -59,9 +59,13 @@ export async function assertCanCreateCourse(
       status: 402,
       code: COURSE_CAP_CODE,
       error:
-        tier === "student"
-          ? `Your ${planName} plan includes up to ${cap} courses. Upgrade to Premium for unlimited course building.`
-          : `Your ${planName} plan includes up to ${cap} courses. Delete a course or upgrade to create another.`,
+        tier === "premium"
+          ? `Your ${planName} plan includes up to ${cap} courses.`
+          : tier === "advanced"
+            ? `Your ${planName} plan includes up to ${cap} courses. Upgrade to Premium for unlimited course building.`
+            : tier === "student"
+              ? `Your ${planName} plan includes up to ${cap} courses. Upgrade to Advanced for 5 courses, or Premium for unlimited.`
+              : `Free includes ${cap} course. Upgrade to Student for 2, Advanced for 5, or Premium for unlimited.`,
       tier,
       used,
       cap,

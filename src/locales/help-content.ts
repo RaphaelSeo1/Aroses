@@ -343,7 +343,7 @@ const en = {
     appSubtitle:
       "How features in Aroses fit together — see the sections above for walkthroughs.",
     pricingParagraph:
-      "You're not paying for access to AI — that's commoditized. You're paying for the parts that turn AI into a study routine you'll actually follow: course-structured lessons, persistent spaced repetition, progress tracking, and not having to engineer prompts. **Free** includes {freeHighlight} plus unlimited text tutoring, course building, quizzes, SRS, and 1 lecture recording / month. **Student** is ${studentPrice}/month ({studentVoiceHours} hours of voice/month, up to 2 courses, 5 lecture recordings / month). **Premium** is ${premiumPrice}/month ({premiumVoiceHours} hours of voice/month, unlimited courses, 20 lecture recordings / month). Voice caps switch you to text — never a hard block mid-study. Optional voice top-ups are planned (~$8/hour). If you have the discipline to rebuild all of this yourself with free tools every session, you may not need us. Most people don't, and that's who Aroses is for.",
+      "You're not paying for access to AI — that's commoditized. You're paying for the parts that turn AI into a study routine you'll actually follow: course-structured lessons, persistent spaced repetition, progress tracking, and not having to engineer prompts. **Free** includes {freeHighlight} plus unlimited text tutoring, quizzes, SRS, **1 course**, and 1 lecture recording / month. **Student** is ${studentPrice}/month ({studentVoiceHours} hours of voice/month, up to 2 courses, 5 lecture recordings / month). **Advanced** is ${advancedPrice}/month ({advancedVoiceHours} hours of voice/month, up to 5 courses, 10 lecture recordings / month). **Premium** is ${premiumPrice}/month ({premiumVoiceHours} hours of voice/month, unlimited courses, 20 lecture recordings / month). Voice caps switch you to text — never a hard block mid-study. Optional voice top-ups are planned (~$8/hour). If you have the discipline to rebuild all of this yourself with free tools every session, you may not need us. Most people don't, and that's who Aroses is for.",
     honestItems: [
       {
         id: "vs-chatgpt",
@@ -796,7 +796,7 @@ const ko: typeof en = {
     appSubtitle:
       "Aroses 기능이 어떻게 맞물리는지 — 위 섹션에서 자세한 안내를 확인하세요.",
     pricingParagraph:
-      "AI 접근권에 돈을 내는 게 아니에요 — 그건 이미 흔해졌죠. 돈을 내는 이유는 AI를 실제로 지킬 학습 루틴으로 바꿔 주는 부분이에요: 코스 구조 레슨, 지속적인 간격 반복, 진행 추적, 매번 프롬프트를 설계하지 않아도 되는 것. **무료**에는 {freeHighlight}와 무제한 텍스트 튜터링, 코스 빌드, 퀴즈, SRS가 포함돼요. **Student**는 월 ${studentPrice} ({studentVoiceHours}시간 음성/월, 코스 최대 2개). **Premium**은 월 ${premiumPrice} ({premiumVoiceHours}시간 음성/월, 무제한 코스). 음성 한도에 도달하면 텍스트로 전환돼요 — 학습 중 갑자기 막히지 않아요. 선택적 음성 추가 구매도 계획 중이에요 (약 $8/시간). 매 세션마다 무료 도구로 이걸 전부 직접 만들 자신이 있다면 우리가 필요 없을 수도 있어요. 대부분은 그렇지 않고, 그게 Aroses가 있는 이유예요.",
+      "AI 접근권에 돈을 내는 게 아니에요 — 그건 이미 흔해졌죠. 돈을 내는 이유는 AI를 실제로 지킬 학습 루틴으로 바꿔 주는 부분이에요: 코스 구조 레슨, 지속적인 간격 반복, 진행 추적, 매번 프롬프트를 설계하지 않아도 되는 것. **무료**에는 {freeHighlight}와 무제한 텍스트 튜터링, 퀴즈, SRS, **코스 1개**, 월 강의 녹음 1회가 포함돼요. **Student**는 월 ${studentPrice} ({studentVoiceHours}시간 음성/월, 코스 최대 2개, 녹음 5회). **Advanced**는 월 ${advancedPrice} ({advancedVoiceHours}시간 음성/월, 코스 최대 5개, 녹음 10회). **Premium**은 월 ${premiumPrice} ({premiumVoiceHours}시간 음성/월, 무제한 코스, 녹음 20회). 음성 한도에 도달하면 텍스트로 전환돼요 — 학습 중 갑자기 막히지 않아요. 선택적 음성 추가 구매도 계획 중이에요 (약 $8/시간). 매 세션마다 무료 도구로 이걸 전부 직접 만들 자신이 있다면 우리가 필요 없을 수도 있어요. 대부분은 그렇지 않고, 그게 Aroses가 있는 이유예요.",
     honestItems: [
       {
         id: "vs-chatgpt",

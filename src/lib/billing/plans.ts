@@ -7,20 +7,25 @@
  * `feature-flag.ts` (`BILLING_UI_ENABLED`).
  *
  * Metered monthly: voice hours + lecture recordings (Live Notes).
- * Course creation is capped on Free (1) and Student (2); Premium unlimited.
- * Quizzes, SRS, and text tutoring stay unlimited.
+ * Course creation is capped on Free (1), Student (2), and Advanced (5);
+ * Premium unlimited. Quizzes, SRS, and text tutoring stay unlimited.
  *
  * Stripe price IDs come from env so test/live keys swap without code changes,
  * but the mapping + limits live ONLY in this file.
  */
 
-export type PlanTier = "free" | "student" | "premium";
+export type PlanTier = "free" | "student" | "advanced" | "premium";
 
 export type PlanConfig = {
   tier: PlanTier;
   name: string;
-  /** Display price in USD per month (informational; Stripe is the source of charge). */
+  /** Display / charged price in USD per month (Stripe is the source of charge). */
   priceMonthly: number;
+  /**
+   * Optional “was” price for UI strikethrough. When set, billing cards show
+   * ~~compareAt~~ priceMonthly (e.g. Advanced ~~$65~~ $5).
+   */
+  compareAtMonthly?: number;
   /** Stripe recurring Price ID. Null for free / when the env var is unset. */
   stripePriceId: string | null;
   /** Monthly voice-tutoring allowance, in hours. */
@@ -72,6 +77,22 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
       "Unlimited quizzes, SRS & text tutoring",
     ],
   },
+  advanced: {
+    tier: "advanced",
+    name: "Advanced",
+    priceMonthly: 5,
+    compareAtMonthly: 65,
+    stripePriceId: process.env.STRIPE_PRICE_ADVANCED ?? null,
+    voiceHours: 10,
+    maxCourses: 5,
+    maxLectureRecordingsPerMonth: 10,
+    tagline: "More voice and courses for serious study.",
+    highlights: [
+      "10 hours of voice tutoring / month",
+      "Build up to 5 courses · 10 lecture recordings / month",
+      "Unlimited quizzes, SRS & text tutoring",
+    ],
+  },
   premium: {
     tier: "premium",
     name: "Premium",
@@ -90,7 +111,7 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
 };
 
 /** Display / iteration order, cheapest first. */
-export const PLAN_ORDER: PlanTier[] = ["free", "student", "premium"];
+export const PLAN_ORDER: PlanTier[] = ["free", "student", "advanced", "premium"];
 
 /**
  * À-la-carte voice top-up (placeholder). The purchase flow is a follow-up; the

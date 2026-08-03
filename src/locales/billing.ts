@@ -22,6 +22,8 @@ const en = {
   planFreeTag: "Everything to start learning, on us.",
   planStudent: "Student",
   planStudentTag: "For daily, voice-first studying.",
+  planAdvanced: "Advanced",
+  planAdvancedTag: "More voice and courses for serious study.",
   planPremium: "Premium",
   planPremiumTag: "For power users who live in voice.",
   planFreeHighlight1: "30 minutes of voice tutoring / month",
@@ -30,12 +32,15 @@ const en = {
   planStudentHighlight1: "5 hours of voice tutoring / month",
   planStudentHighlight2: "Build up to 2 courses · 5 lecture recordings / month",
   planStudentHighlight3: "Unlimited quizzes, SRS & text tutoring",
+  planAdvancedHighlight1: "10 hours of voice tutoring / month",
+  planAdvancedHighlight2: "Build up to 5 courses · 10 lecture recordings / month",
+  planAdvancedHighlight3: "Unlimited quizzes, SRS & text tutoring",
   planPremiumHighlight1: "15 hours of voice tutoring / month",
   planPremiumHighlight2: "Unlimited courses · 20 lecture recordings / month",
   planPremiumHighlight3: "Priority features (coming soon)",
   perMonthLabel: "/ month",
   subtitleLong:
-    "Voice tutoring and lecture recordings are metered monthly. Free includes 1 course and 1 lecture recording; Student up to 2 courses and 5 recordings; Premium unlimited courses and 20 recordings. Quizzes, spaced repetition, and text tutoring stay unlimited. When voice hours run out, voice switches to free text mode — you're never blocked mid-study.",
+    "Voice tutoring and lecture recordings are metered monthly. Free includes 1 course and 1 lecture recording; Student up to 2 courses and 5 recordings; Advanced up to 5 courses and 10 recordings; Premium unlimited courses and 20 recordings. Quizzes, spaced repetition, and text tutoring stay unlimited. When voice hours run out, voice switches to free text mode — you're never blocked mid-study.",
   lectureCapBanner:
     "You've used all lecture recordings on your plan for this period ({used} / {cap}). Upgrade for more, or wait until your next billing period.",
   checkoutSuccessLong:
@@ -82,6 +87,8 @@ const ko: typeof en = {
   planFreeTag: "학습을 시작하기에 충분한 무료 플랜이에요.",
   planStudent: "스튜던트",
   planStudentTag: "매일 음성 중심으로 공부하는 분께.",
+  planAdvanced: "어드밴스드",
+  planAdvancedTag: "본격적으로 공부할 때 더 많은 음성과 코스.",
   planPremium: "프리미엄",
   planPremiumTag: "음성으로 학습하는 파워 유저를 위해.",
   planFreeHighlight1: "월 30분 음성 튜터링",
@@ -90,12 +97,15 @@ const ko: typeof en = {
   planStudentHighlight1: "월 5시간 음성 튜터링",
   planStudentHighlight2: "코스 최대 2개 · 월 강의 녹음 5회",
   planStudentHighlight3: "무제한 퀴즈, SRS 및 텍스트 튜터링",
+  planAdvancedHighlight1: "월 10시간 음성 튜터링",
+  planAdvancedHighlight2: "코스 최대 5개 · 월 강의 녹음 10회",
+  planAdvancedHighlight3: "무제한 퀴즈, SRS 및 텍스트 튜터링",
   planPremiumHighlight1: "월 15시간 음성 튜터링",
   planPremiumHighlight2: "무제한 코스 · 월 강의 녹음 20회",
   planPremiumHighlight3: "우선 기능 (곧 제공)",
   perMonthLabel: "/ 월",
   subtitleLong:
-    "음성 튜터링과 강의 녹음은 월간으로 제한돼요. 무료는 코스 1개·녹음 1회, 스튜던트는 코스 최대 2개·녹음 5회, 프리미엄은 무제한 코스·녹음 20회예요. 퀴즈·간격 반복·텍스트 튜터링은 무제한이며, 음성을 다 쓰면 무료 텍스트 모드로 전환돼요 — 학습이 중단되지는 않아요.",
+    "음성 튜터링과 강의 녹음은 월간으로 제한돼요. 무료는 코스 1개·녹음 1회, 스튜던트는 코스 최대 2개·녹음 5회, 어드밴스드는 코스 최대 5개·녹음 10회, 프리미엄은 무제한 코스·녹음 20회예요. 퀴즈·간격 반복·텍스트 튜터링은 무제한이며, 음성을 다 쓰면 무료 텍스트 모드로 전환돼요 — 학습이 중단되지는 않아요.",
   lectureCapBanner:
     "이번 기간 강의 녹음 한도를 모두 사용했어요 ({used} / {cap}). 업그레이드하거나 다음 결제주기가 될 때까지 기다려 주세요.",
   checkoutSuccessLong:

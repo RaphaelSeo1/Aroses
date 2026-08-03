@@ -36,7 +36,7 @@ export async function POST(request: Request) {
   }
 
   const tier = (body as { tier?: unknown }).tier as PlanTier;
-  if (tier !== "student" && tier !== "premium") {
+  if (tier !== "student" && tier !== "advanced" && tier !== "premium") {
     return NextResponse.json({ error: "Choose a paid plan." }, { status: 400 });
   }
 

@@ -106,6 +106,17 @@ export async function POST(request: Request) {
 
     if (!isSchemaErr) {
       console.error("[POST /api/courses]", errFull);
+      const msg = errFull.message ?? "";
+      if (/course_cap_reached/i.test(msg)) {
+        return NextResponse.json(
+          {
+            error:
+              "You've reached your plan's course limit. Delete a course or upgrade to create another.",
+            code: "course_cap_reached",
+          },
+          { status: 402 }
+        );
+      }
       return NextResponse.json(
         { error: "Could not create course." },
         { status: 500 }

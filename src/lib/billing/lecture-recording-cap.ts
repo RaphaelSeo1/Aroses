@@ -99,9 +99,11 @@ export async function assertCanStartLectureRecording(
     const upgradeHint =
       tier === "premium"
         ? "You've used all lecture recordings for this billing period."
-        : tier === "student"
+        : tier === "advanced"
           ? `Your ${planName} plan includes ${cap} lecture recordings per month. Upgrade to Premium for 20 / month.`
-          : `Free includes ${cap} lecture recording per month. Upgrade to Student for 5 / month or Premium for 20 / month.`;
+          : tier === "student"
+            ? `Your ${planName} plan includes ${cap} lecture recordings per month. Upgrade to Advanced for 10 / month or Premium for 20 / month.`
+            : `Free includes ${cap} lecture recording per month. Upgrade to Student for 5, Advanced for 10, or Premium for 20 / month.`;
     return {
       ok: false,
       status: 402,

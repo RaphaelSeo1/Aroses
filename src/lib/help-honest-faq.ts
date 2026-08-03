@@ -31,6 +31,8 @@ function resolveHonestItem(
           freeHighlight: PLANS.free.highlights[0].toLowerCase(),
           studentPrice: String(PLANS.student.priceMonthly),
           studentVoiceHours: String(PLANS.student.voiceHours),
+          advancedPrice: String(PLANS.advanced.priceMonthly),
+          advancedVoiceHours: String(PLANS.advanced.voiceHours),
           premiumPrice: String(PLANS.premium.priceMonthly),
           premiumVoiceHours: String(PLANS.premium.voiceHours),
         }),

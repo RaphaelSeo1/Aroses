@@ -9,10 +9,9 @@ import {
   type PlanTier,
 } from "@/lib/billing/plans";
 import {
-  isSubscriptionSaleActive,
   compareAtPriceMonthly,
   salePriceMonthly,
-  subscriptionSalePercent,
+  salePercentForTier,
 } from "@/lib/billing/sale";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
@@ -22,11 +21,13 @@ function planStrings(t: Dictionary["billing"], tier: PlanTier) {
   const names: Record<PlanTier, string> = {
     free: t.planFree,
     student: t.planStudent,
+    advanced: t.planAdvanced,
     premium: t.planPremium,
   };
   const taglines: Record<PlanTier, string> = {
     free: t.planFreeTag,
     student: t.planStudentTag,
+    advanced: t.planAdvancedTag,
     premium: t.planPremiumTag,
   };
   const highlights: Record<PlanTier, string[]> = {
@@ -35,6 +36,11 @@ function planStrings(t: Dictionary["billing"], tier: PlanTier) {
       t.planStudentHighlight1,
       t.planStudentHighlight2,
       t.planStudentHighlight3,
+    ],
+    advanced: [
+      t.planAdvancedHighlight1,
+      t.planAdvancedHighlight2,
+      t.planAdvancedHighlight3,
     ],
     premium: [
       t.planPremiumHighlight1,
@@ -252,16 +258,16 @@ export function BillingClient({
       </div>
 
       {/* Plan cards */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {PLAN_ORDER.map((tier) => {
           const plan = planStrings(t.billing, tier);
           const price = PLANS[tier].priceMonthly;
           const isCurrent = tier === currentTier;
+          const wasPrice = compareAtPriceMonthly(tier);
           const showSale =
-            isSubscriptionSaleActive() && isPaidTier(tier) && price > 0;
+            isPaidTier(tier) && price > 0 && wasPrice != null && wasPrice > price;
           const salePrice = showSale ? salePriceMonthly(tier) : price;
-          const wasPrice = showSale ? compareAtPriceMonthly(tier) : price;
-          const salePercent = subscriptionSalePercent();
+          const salePercent = showSale ? salePercentForTier(tier) : 0;
           return (
             <div
               key={tier}

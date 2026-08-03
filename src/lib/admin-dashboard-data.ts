@@ -208,7 +208,7 @@ export type AdminUserRow = {
   displayName: string | null;
   username: string | null;
   onboardingCompletedAt: string | null;
-  planTier: "free" | "student" | "premium";
+  planTier: "free" | "student" | "advanced" | "premium";
   planStatus: string;
   planAdminGranted: boolean;
 };
@@ -321,7 +321,11 @@ export async function fetchAdminUserDirectory(
     const email = typeof u.email === "string" ? u.email.trim() : "";
     const tierRaw = (sub?.tier ?? "free").toLowerCase();
     const planTier =
-      tierRaw === "student" || tierRaw === "premium" ? tierRaw : "free";
+      tierRaw === "student" ||
+      tierRaw === "advanced" ||
+      tierRaw === "premium"
+        ? tierRaw
+        : "free";
     return {
       id: u.id,
       email: email.length > 0 ? email : "—",
