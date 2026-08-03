@@ -62,7 +62,7 @@ export default async function ProfilePage({ searchParams }: PageProps) {
     <>
       <AppHeader right={<HeaderNavLoggedInServer />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-        <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-12 lg:py-14">
+        <div className="mx-auto w-full max-w-screen-2xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8 lg:py-12">
           <Suspense fallback={<ProfileBodySkeleton />}>
             <ProfilePageBody
               userEmail={user.email}
@@ -153,7 +153,7 @@ async function ProfilePageBody({
         <ProgressDashboardContent
           data={progressData}
           showTopActions
-          layout="panel"
+          layout="page"
         />
       }
       billingPanel={billingPanel}

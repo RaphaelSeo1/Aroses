@@ -36,10 +36,10 @@ const STUDY_FOCUS_VALUES = [
 ] as const;
 
 const FIELD =
-  "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-800/80 sm:max-w-xs md:max-w-sm";
+  "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-800/80 sm:max-w-sm md:max-w-md";
 
 const FIELD_WIDE =
-  "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-800/80 md:max-w-lg";
+  "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 shadow-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-800/80 md:max-w-xl lg:max-w-2xl";
 
 const SELECT_CHEVRON =
   "appearance-none bg-[length:1rem] bg-[right_0.65rem_center] bg-no-repeat pr-9 dark:bg-[length:1rem]";
@@ -88,7 +88,7 @@ function SettingsRow({
     <div
       className={`flex flex-col gap-3 py-5 sm:flex-row sm:justify-between sm:gap-10 ${alignTop ? "sm:items-start" : "sm:items-center"}`}
     >
-      <div className="min-w-0 shrink-0 sm:w-[min(40%,14rem)]">
+      <div className="min-w-0 shrink-0 sm:w-[min(42%,18rem)]">
         <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
           {label}
         </p>
@@ -537,8 +537,8 @@ export function ProfileSettingsForm({
   };
 
   return (
-    <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:gap-10">
-      <aside className="shrink-0 lg:w-56 lg:pt-1">
+    <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:gap-12">
+      <aside className="shrink-0 lg:w-60 lg:pt-1">
         <nav
           className="flex flex-row gap-1 overflow-x-auto rounded-2xl border border-zinc-200/90 bg-white/90 p-1.5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90 lg:flex-col lg:overflow-visible lg:p-2 lg:shadow-md lg:shadow-zinc-900/5 dark:lg:shadow-black/40"
           aria-label={t.settings.settingsSections}
@@ -585,8 +585,8 @@ export function ProfileSettingsForm({
           <div className={panel === "general" ? undefined : "hidden"}>
           {visitedPanels.has("general") && (
             <>
-              <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
-                <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+              <header className="border-b border-zinc-100 px-6 py-6 sm:px-8 sm:py-7 dark:border-zinc-800">
+                <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
                   {t.settings.generalTitle}
                 </h1>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
@@ -594,7 +594,7 @@ export function ProfileSettingsForm({
                 </p>
               </header>
 
-              <div className="px-6">
+              <div className="px-6 sm:px-8">
                 <h2 className="pt-6 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                   {t.settings.sectionProfile}
                 </h2>
@@ -675,7 +675,7 @@ export function ProfileSettingsForm({
                     label={t.settings.usernameLabel}
                     hint={t.settings.usernameHint}
                   >
-                    <div className="relative w-full sm:max-w-xs md:max-w-sm">
+                    <div className="relative w-full sm:max-w-sm md:max-w-md">
                       <input
                         id="profile_username"
                         type="text"
@@ -778,7 +778,7 @@ export function ProfileSettingsForm({
                     hint={t.settings.bioHint}
                     alignTop
                   >
-                    <div className="w-full md:max-w-lg">
+                    <div className="w-full md:max-w-xl lg:max-w-2xl">
                       <textarea
                         id="bio"
                         rows={5}
@@ -821,7 +821,7 @@ export function ProfileSettingsForm({
                 </div>
               </div>
 
-              <footer className="sticky bottom-0 mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-100 bg-white/95 px-6 py-4 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95">
+              <footer className="sticky bottom-0 mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-100 bg-white/95 px-6 py-4 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/95 sm:px-8">
                 <div className="min-w-0">
                   {message ? (
                     <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
@@ -859,8 +859,8 @@ export function ProfileSettingsForm({
           <div className={panel === "account" ? undefined : "hidden"}>
           {visitedPanels.has("account") && (
             <>
-              <header className="border-b border-zinc-100 px-6 py-6 dark:border-zinc-800">
-                <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+              <header className="border-b border-zinc-100 px-6 py-6 sm:px-8 sm:py-7 dark:border-zinc-800">
+                <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-2xl">
                   {t.settings.accountTitle}
                 </h1>
                 <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
@@ -868,7 +868,7 @@ export function ProfileSettingsForm({
                 </p>
               </header>
 
-              <div className="divide-y divide-zinc-100 px-6 dark:divide-zinc-800">
+              <div className="divide-y divide-zinc-100 px-6 sm:px-8 dark:divide-zinc-800">
                 <SettingsRow label={t.settings.emailLabel}>
                   <p className="text-sm text-zinc-700 dark:text-zinc-300 sm:text-right">
                     {email}
@@ -923,14 +923,16 @@ export function ProfileSettingsForm({
 
           <div className={panel === "progress" ? undefined : "hidden"}>
           {visitedPanels.has("progress") && (
-            <div className="px-4 pb-8 pt-4 sm:px-6 sm:pb-10">{progressPanel}</div>
+            <div className="px-5 pb-10 pt-5 sm:px-8 sm:pb-12 sm:pt-6">
+              {progressPanel}
+            </div>
           )}
           </div>
 
           {showBilling ? (
             <div className={panel === "billing" ? undefined : "hidden"}>
               {visitedPanels.has("billing") && billingPanel ? (
-                <div className="px-4 pb-8 pt-4 sm:px-6 sm:pb-10">
+                <div className="px-5 pb-10 pt-5 sm:px-8 sm:pb-12 sm:pt-6">
                   {billingPanel}
                 </div>
               ) : null}

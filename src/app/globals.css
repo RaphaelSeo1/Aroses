@@ -456,8 +456,65 @@ html.dark .bg-app-gradient {
   animation: onboardingFade 0.38s ease-out;
 }
 
+/* Featured “BEST” plan card — soft purple glow */
+@keyframes planBestGlow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(168, 85, 247, 0.45),
+      0 0 18px rgba(168, 85, 247, 0.35),
+      0 0 40px rgba(147, 51, 234, 0.18);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(192, 132, 252, 0.65),
+      0 0 28px rgba(168, 85, 247, 0.5),
+      0 0 56px rgba(147, 51, 234, 0.28);
+  }
+}
+
+.plan-card-best {
+  border-color: rgb(192 132 252 / 0.7);
+  background:
+    linear-gradient(
+      165deg,
+      rgb(250 245 255 / 0.95) 0%,
+      rgb(255 255 255 / 0.98) 45%,
+      rgb(245 243 255 / 0.9) 100%
+    );
+  animation: planBestGlow 2.8s ease-in-out infinite;
+}
+
+html.dark .plan-card-best {
+  border-color: rgb(192 132 252 / 0.55);
+  background:
+    linear-gradient(
+      165deg,
+      rgb(46 16 74 / 0.55) 0%,
+      rgb(9 9 11 / 0.95) 50%,
+      rgb(24 16 48 / 0.7) 100%
+    );
+}
+
+.plan-best-badge {
+  background: linear-gradient(135deg, #a855f7 0%, #7c3aed 55%, #9333ea 100%);
+  box-shadow:
+    0 0 12px rgba(168, 85, 247, 0.65),
+    0 0 24px rgba(147, 51, 234, 0.35);
+  color: white;
+  text-shadow: 0 0 8px rgba(255, 255, 255, 0.35);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-onboarding-step {
     animation: none;
   }
+
+  .plan-card-best {
+    animation: none;
+    box-shadow:
+      0 0 0 1px rgba(168, 85, 247, 0.45),
+      0 0 22px rgba(168, 85, 247, 0.4);
+  }
 }
+

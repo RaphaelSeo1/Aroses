@@ -258,7 +258,7 @@ export function BillingClient({
       </div>
 
       {/* Plan cards */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {PLAN_ORDER.map((tier) => {
           const plan = planStrings(t.billing, tier);
           const price = PLANS[tier].priceMonthly;
@@ -268,15 +268,23 @@ export function BillingClient({
             isPaidTier(tier) && price > 0 && wasPrice != null && wasPrice > price;
           const salePrice = showSale ? salePriceMonthly(tier) : price;
           const salePercent = showSale ? salePercentForTier(tier) : 0;
+          const isBest = tier === "advanced";
           return (
             <div
               key={tier}
-              className={`flex flex-col rounded-2xl border p-5 ${
-                isCurrent
-                  ? "border-brand bg-brand/[0.04] dark:border-brand-soft dark:bg-brand-soft/[0.06]"
-                  : "border-zinc-200/90 bg-white/95 dark:border-zinc-800 dark:bg-zinc-950/90"
+              className={`relative flex flex-col rounded-2xl border p-5 ${
+                isBest
+                  ? "plan-card-best"
+                  : isCurrent
+                    ? "border-brand bg-brand/[0.04] dark:border-brand-soft dark:bg-brand-soft/[0.06]"
+                    : "border-zinc-200/90 bg-white/95 dark:border-zinc-800 dark:bg-zinc-950/90"
               }`}
             >
+              {isBest ? (
+                <span className="plan-best-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-3 py-0.5 text-[10px] font-bold tracking-[0.14em]">
+                  {t.billing.bestBadge}
+                </span>
+              ) : null}
               <div className="flex items-baseline justify-between gap-2">
                 <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                   {plan.name}

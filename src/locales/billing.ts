@@ -61,6 +61,7 @@ const en = {
   saleBadge: "{percent}% off",
   saleWas: "Was ${price}",
   salePriceNote: "Limited-time sale price",
+  bestBadge: "BEST",
 };
 
 const ko: typeof en = {
@@ -126,6 +127,7 @@ const ko: typeof en = {
   saleBadge: "{percent}% 할인",
   saleWas: "정가 ${price}",
   salePriceNote: "한정 세일가",
+  bestBadge: "BEST",
 };
 
 export const billing = { en, ko };
