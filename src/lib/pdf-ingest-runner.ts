@@ -2511,14 +2511,15 @@ async function runPdfIngestOutlinePhase(
 
   // STRUCTURE_PLANNING routing: use the content planner when the global flag
   // is on, the job combines more than one source file (a manually grouped
-  // "lecture"), or a SINGLE file is larger than the shared material excerpt.
+  // "lecture"), or a SINGLE file is larger than the shared *outline* excerpt.
   // The last case is a fidelity guard: on the plain outline path every module
-  // writer sees the same head/tail excerpt, so a document past the profile's
-  // material cap silently loses its MIDDLE chapters from all module prompts.
+  // writer sees the same head/tail excerpt, so a document past the outline
+  // budget silently loses its MIDDLE chapters from planning + prompts.
   // The planner instead maps lessons to chunk ids and each module expands from
-  // its own chunk-aligned source. Small single files keep the cheap outline
-  // path (short, pedagogical titles; no extra plan call). Visual enrichment
-  // and per-lesson source attribution still run for BOTH paths below.
+  // its own chunk-aligned source (fair-truncated per chunk so middle slides
+  // are never wholly omitted). Small single files keep the cheap outline
+  // path. Visual enrichment and per-lesson source attribution still run for
+  // BOTH paths below.
   const distinctSourceFiles = new Set(
     chunks.map((c) => c.sourceFileName).filter((n) => Boolean(n))
   ).size;

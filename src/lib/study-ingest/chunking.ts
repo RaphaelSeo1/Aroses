@@ -150,6 +150,13 @@ function mergeAdjacentChunksByTitle(chunks: IngestChunk[]): IngestChunk[] {
     const prev = out[out.length - 1];
     if (prev && title.length > 0 && normalizeIngestDisplayTitle(prev.title) === title) {
       const mergedText = `${prev.text}\n\n${chunk.text}`;
+      // Never grow past the per-chunk cap — mega-chunks from condensed slide
+      // decks with repeated titles used to swallow many pages, then get
+      // head+tail truncated as one blob (silent middle omission).
+      if (mergedText.length > MAX_CHUNK_CHARS) {
+        out.push(chunk);
+        continue;
+      }
       out[out.length - 1] = {
         ...prev,
         text: mergedText,
