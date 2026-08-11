@@ -11,6 +11,7 @@ import {
 } from "@/lib/home-preview-data";
 import { profileNeedsOnboarding } from "@/lib/onboarding-gate";
 import { fetchSrsDueCountsForUser } from "@/lib/srs-due-counts-server";
+import { getPlanUsageSummary } from "@/lib/billing/plan-usage-summary";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import { redirect } from "next/navigation";
 
@@ -38,13 +39,19 @@ async function HomeContent() {
     redirect("/onboarding");
   }
 
-  const [{ owned, studying, sharedWithMe }, progress, previews, dueCounts] =
-    await Promise.all([
-      loadDashboardCourseLists(supabase, user.id),
-      loadDashboardProgress(supabase, user.id),
-      loadHomePreviews(supabase, user.id),
-      fetchSrsDueCountsForUser(supabase, user.id),
-    ]);
+  const [
+    { owned, studying, sharedWithMe },
+    progress,
+    previews,
+    dueCounts,
+    planUsage,
+  ] = await Promise.all([
+    loadDashboardCourseLists(supabase, user.id),
+    loadDashboardProgress(supabase, user.id),
+    loadHomePreviews(supabase, user.id),
+    fetchSrsDueCountsForUser(supabase, user.id),
+    getPlanUsageSummary(user.id, { email: user.email }),
+  ]);
 
   return (
     <DashboardHomeContent
@@ -57,6 +64,7 @@ async function HomeContent() {
       progress={progress}
       recentActivity={previews.recentActivity}
       initialDueCounts={dueCounts}
+      planUsage={planUsage}
     />
   );
 }

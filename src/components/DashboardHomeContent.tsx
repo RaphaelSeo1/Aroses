@@ -13,6 +13,7 @@ import type { DashboardProgressPayload } from "@/lib/dashboard-progress-data";
 import type { HomeActivityPreview } from "@/lib/home-preview-data";
 import { resolveHomeResumeTarget } from "@/lib/home-resume-target";
 import type { SharedCourse, StudyingCourse } from "@/lib/load-dashboard-courses";
+import type { PlanUsageSummary } from "@/lib/billing/plan-usage-types";
 import { getT } from "@/lib/i18n/server";
 import type { SrsDueCounts } from "@/lib/srs-due";
 
@@ -24,6 +25,7 @@ export async function DashboardHomeContent({
   progress,
   recentActivity = [],
   initialDueCounts = null,
+  planUsage = null,
   omitHeader = false,
 }: {
   greetingName: string;
@@ -34,6 +36,7 @@ export async function DashboardHomeContent({
   progress: DashboardProgressPayload;
   recentActivity?: HomeActivityPreview[];
   initialDueCounts?: SrsDueCounts | null;
+  planUsage?: PlanUsageSummary | null;
   /** When true, only render main workspace (parent supplies `<AppHeader />`). */
   omitHeader?: boolean;
 }) {
@@ -298,6 +301,7 @@ export async function DashboardHomeContent({
                 reviewDueTotal={reviewDueTotal}
                 resumeTitle={resumeTarget?.title ?? null}
                 resumeHref={resumeHref}
+                planUsage={planUsage}
               />
             </div>
           </div>
