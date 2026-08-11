@@ -147,7 +147,7 @@ export function HomeRightSidebar({
   return (
     <aside className="space-y-4 lg:sticky lg:top-[5.5rem]">
       {showPlanUsage && planUsage ? (
-        <section className="overflow-visible rounded-3xl border border-zinc-200/90 bg-white/95 p-5 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-950/80 dark:ring-zinc-700/30">
+        <section className="overflow-visible rounded-3xl border border-violet-200/70 bg-gradient-to-br from-sky-50 via-violet-50 to-indigo-100/90 p-5 shadow-lg shadow-violet-900/[0.06] ring-1 ring-violet-200/50 backdrop-blur-md dark:border-violet-500/25 dark:bg-gradient-to-br dark:from-violet-950/50 dark:via-indigo-950/40 dark:to-sky-950/30 dark:shadow-violet-950/40 dark:ring-violet-400/15">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
