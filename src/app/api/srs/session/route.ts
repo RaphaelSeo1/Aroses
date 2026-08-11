@@ -117,10 +117,9 @@ export async function GET(request: Request) {
   const moduleDue: SessionCard[] = [];
   const moduleNew: SessionCard[] = [];
 
-  // Fetch the user's accessible materials in one shot. For an authenticated
-  // owner this is rows in study_materials where user_id = me. Cross-user
-  // access (e.g. public courses) is intentionally out of scope for the
-  // global review dashboard — your shared decks stay tied to your account.
+  // Owned materials power the global module bank. Focus/personal cards may
+  // also live on materials the user can access but does not own (Explore,
+  // shared, course-owner ≠ material.user_id) — those are loaded below by id.
   const { data: ownedMaterials } = await supabase
     .from("study_materials")
     .select(
@@ -128,22 +127,17 @@ export async function GET(request: Request) {
     )
     .eq("user_id", user.id);
 
-  type MaterialRow = {
-    id: string;
-    course_id: string | null;
-    file_name: string | null;
-    course_payload: CoursePayload | null;
-    courses: { id: string; title: string | null } | { id: string; title: string | null }[] | null;
-  };
-
   const materials = (ownedMaterials ?? [])
     .map((m) => m as unknown as MaterialRow)
     .filter((m) => {
-      if (allowedMaterialIds && !allowedMaterialIds.has(m.id)) return false;
+      if (allowedMaterialIds && !allowedMaterialIds.has(normId(m.id))) {
+        return false;
+      }
       return true;
     });
 
-  const materialById = new Map<string, MaterialRow>(materials.map((m) => [m.id, m]));
+  const materialById = new Map<string, MaterialRow>();
+  for (const m of materials) materialById.set(normId(m.id), m);
 
   // -- Due module cards (existing SRS state, due_at <= now)
   if (scope !== "personal") {
@@ -167,7 +161,7 @@ export async function GET(request: Request) {
 
     const { data: dueRows } = await dueQuery;
     for (const row of dueRows ?? []) {
-      const mat = materialById.get(row.material_id as string);
+      const mat = materialById.get(normId(row.material_id as string));
       if (!mat) continue;
       const { moduleId, quizIndex } = decodeQuestionIndex(
         row.question_index as number
@@ -231,10 +225,33 @@ export async function GET(request: Request) {
     }
 
     const { data: personalRows } = await personalQuery;
+
+    // Hydrate materials for personal cards that aren't in the owned map
+    // (shared / Explore / legacy course-owner rows). Never drop a user's own
+    // focus card just because they don't own the underlying study_materials row.
+    const missingMaterialIds = new Set<string>();
     for (const row of personalRows ?? []) {
-      const mat = materialById.get(row.material_id as string);
-      if (!mat) continue;
-      if (moduleIdFilter != null && row.module_id !== moduleIdFilter) continue;
+      const mid = normId(row.material_id as string);
+      if (mid && !materialById.has(mid)) missingMaterialIds.add(mid);
+    }
+    if (missingMaterialIds.size > 0) {
+      const { data: extraMats } = await supabase
+        .from("study_materials")
+        .select(
+          "id, course_id, file_name, course_payload, courses ( id, title )"
+        )
+        .in("id", [...missingMaterialIds]);
+      for (const raw of extraMats ?? []) {
+        const m = raw as unknown as MaterialRow;
+        materialById.set(normId(m.id), m);
+      }
+    }
+
+    for (const row of personalRows ?? []) {
+      const mid = normId(row.material_id as string);
+      const mat = materialById.get(mid) ?? stubMaterial(mid);
+      const rowModuleId = Number(row.module_id);
+      if (moduleIdFilter != null && rowModuleId !== moduleIdFilter) continue;
       const question = row.item as CourseQuizItem;
       if (!question || typeof question !== "object") continue;
 
@@ -255,8 +272,8 @@ export async function GET(request: Request) {
         fileName: mat.file_name ?? "Untitled upload",
         courseId: deriveCourseId(mat),
         courseTitle: deriveCourseTitle(mat),
-        moduleId: row.module_id as number,
-        moduleTitle: lookupModuleTitle(mat.course_payload, row.module_id as number),
+        moduleId: rowModuleId,
+        moduleTitle: lookupModuleTitle(mat.course_payload, rowModuleId),
         question,
         srs: {
           ease: Number(row.srs_ease) || 2.5,
@@ -328,13 +345,27 @@ function parseScope(v: string | null): Scope | null {
   return null;
 }
 
+function normId(id: string | null | undefined): string {
+  return (id ?? "").trim().toLowerCase();
+}
+
+function stubMaterial(id: string): MaterialRow {
+  return {
+    id,
+    course_id: null,
+    file_name: "Focus cards",
+    course_payload: null,
+    courses: null,
+  };
+}
+
 function collectMaterialIds(
   single: string,
   many: string
 ): Set<string> | null {
   const ids = new Set<string>();
   const candidate = (s: string) => {
-    const t = s.trim().toLowerCase();
+    const t = normId(s);
     if (t && UUID_RE.test(t)) ids.add(t);
   };
   if (single) candidate(single);

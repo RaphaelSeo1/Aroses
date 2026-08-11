@@ -775,6 +775,16 @@ export function OnboardingClient() {
                       } catch {
                         /* still leave onboarding */
                       }
+                      // Surface the post-setup upgrade popup on home (same as
+                      // finishing/skipping the product tour).
+                      try {
+                        sessionStorage.setItem(
+                          "aroses_product_tour_celebrate",
+                          "1"
+                        );
+                      } catch {
+                        /* ignore private mode */
+                      }
                       router.replace("/");
                       router.refresh();
                     })();

@@ -68,18 +68,38 @@ export async function GET() {
     .select("id, file_name, course_id, course_payload, courses ( id, title )")
     .eq("user_id", user.id);
 
-  const materials = (matsRaw ?? []) as unknown as MaterialRow[];
+  const materialById = new Map<string, MaterialRow>();
+  for (const raw of matsRaw ?? []) {
+    const m = raw as unknown as MaterialRow;
+    materialById.set(m.id.toLowerCase(), m);
+  }
 
-  // Focus-card counts per material.
+  // Focus-card counts per material (may include non-owned materials).
   const personalByMaterial = new Map<string, number>();
   const { data: personalRows } = await supabase
     .from("user_personal_quiz_items")
     .select("material_id")
     .eq("user_id", user.id);
   for (const row of personalRows ?? []) {
-    const id = row.material_id as string;
+    const id = (row.material_id as string).toLowerCase();
     personalByMaterial.set(id, (personalByMaterial.get(id) ?? 0) + 1);
   }
+
+  const missingPersonalMats = [...personalByMaterial.keys()].filter(
+    (id) => !materialById.has(id)
+  );
+  if (missingPersonalMats.length > 0) {
+    const { data: extraMats } = await supabase
+      .from("study_materials")
+      .select("id, file_name, course_id, course_payload, courses ( id, title )")
+      .in("id", missingPersonalMats);
+    for (const raw of extraMats ?? []) {
+      const m = raw as unknown as MaterialRow;
+      materialById.set(m.id.toLowerCase(), m);
+    }
+  }
+
+  const materials = [...materialById.values()];
 
   // "Tried before" module questions: union of quiz attempts and SRS-reviewed
   // cards, keyed by material → set of question_index.
@@ -120,7 +140,8 @@ export async function GET() {
           if (valid.has(qi)) moduleQuestions += 1;
         }
       }
-      const personalQuestions = personalByMaterial.get(m.id) ?? 0;
+      const personalQuestions =
+        personalByMaterial.get(m.id.toLowerCase()) ?? 0;
       return {
         materialId: m.id,
         fileName: m.file_name ?? "Untitled upload",

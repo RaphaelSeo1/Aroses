@@ -14,6 +14,10 @@ type MaterialRow = {
     | null;
 };
 
+function normId(id: string | null | undefined): string {
+  return (id ?? "").trim().toLowerCase();
+}
+
 function deriveCourseId(m: MaterialRow): string | null {
   if (m.course_id) return m.course_id;
   const c = m.courses;
@@ -29,6 +33,28 @@ function deriveCourseTitle(m: MaterialRow): string | null {
   return c.title ?? null;
 }
 
+function ensureBucket(
+  byMaterial: Map<string, SrsDueCounts["byMaterial"][number]>,
+  materialId: string,
+  meta?: MaterialRow | null
+): SrsDueCounts["byMaterial"][number] {
+  const key = normId(materialId);
+  let bucket = byMaterial.get(key);
+  if (!bucket) {
+    bucket = {
+      materialId: meta?.id ?? materialId,
+      fileName: meta?.file_name ?? "Focus cards",
+      courseId: meta ? deriveCourseId(meta) : null,
+      courseTitle: meta ? deriveCourseTitle(meta) : null,
+      module: 0,
+      personal: 0,
+      total: 0,
+    };
+    byMaterial.set(key, bucket);
+  }
+  return bucket;
+}
+
 /** Server-side due-card rollup — shared by the API route and nav SSR. */
 export async function fetchSrsDueCountsForUser(
   supabase: SupabaseClient,
@@ -36,8 +62,8 @@ export async function fetchSrsDueCountsForUser(
   materialId?: string | null
 ): Promise<SrsDueCounts> {
   const materialFilter =
-    materialId && UUID_RE.test(materialId.toLowerCase())
-      ? materialId.toLowerCase()
+    materialId && UUID_RE.test(normId(materialId))
+      ? normId(materialId)
       : null;
 
   const nowIso = new Date().toISOString();
@@ -56,15 +82,7 @@ export async function fetchSrsDueCountsForUser(
     SrsDueCounts["byMaterial"][number]
   >();
   for (const m of materials) {
-    byMaterial.set(m.id, {
-      materialId: m.id,
-      fileName: m.file_name ?? "Untitled upload",
-      courseId: deriveCourseId(m),
-      courseTitle: deriveCourseTitle(m),
-      module: 0,
-      personal: 0,
-      total: 0,
-    });
+    ensureBucket(byMaterial, m.id, m);
   }
 
   let modQ = supabase
@@ -75,7 +93,7 @@ export async function fetchSrsDueCountsForUser(
   if (materialFilter) modQ = modQ.eq("material_id", materialFilter);
   const { data: modRows } = await modQ;
   for (const row of modRows ?? []) {
-    const bucket = byMaterial.get(row.material_id as string);
+    const bucket = byMaterial.get(normId(row.material_id as string));
     if (bucket) bucket.module += 1;
   }
 
@@ -86,9 +104,29 @@ export async function fetchSrsDueCountsForUser(
     .lte("due_at", nowIso);
   if (materialFilter) perQ = perQ.eq("material_id", materialFilter);
   const { data: perRows } = await perQ;
+
+  // Personal focus cards can sit on materials the user doesn't own (Explore /
+  // shared / legacy). Hydrate those materials so due counts aren't silently 0.
+  const missingIds = new Set<string>();
   for (const row of perRows ?? []) {
-    const bucket = byMaterial.get(row.material_id as string);
-    if (bucket) bucket.personal += 1;
+    const mid = normId(row.material_id as string);
+    if (mid && !byMaterial.has(mid)) missingIds.add(mid);
+  }
+  if (missingIds.size > 0) {
+    const { data: extraMats } = await supabase
+      .from("study_materials")
+      .select("id, file_name, course_id, courses ( id, title )")
+      .in("id", [...missingIds]);
+    for (const raw of extraMats ?? []) {
+      const m = raw as unknown as MaterialRow;
+      ensureBucket(byMaterial, m.id, m);
+    }
+  }
+
+  for (const row of perRows ?? []) {
+    const mid = normId(row.material_id as string);
+    const bucket = ensureBucket(byMaterial, mid, null);
+    bucket.personal += 1;
   }
 
   let totalModule = 0;
