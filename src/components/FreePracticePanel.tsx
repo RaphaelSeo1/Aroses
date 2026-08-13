@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
+import { deleteReviewMaterials } from "@/lib/review-delete-materials";
 
 type ScopeMaterial = {
   materialId: string;
@@ -31,10 +35,14 @@ export function FreePracticePanel({
   onStart: (materialIds: string[]) => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const [data, setData] = useState<ScopeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingDelete, setPendingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,7 +55,6 @@ export function FreePracticePanel({
         const json = (await res.json()) as ScopeResponse;
         if (cancelled) return;
         setData(json);
-        // Default: everything selected.
         setSelected(new Set(json.materials.map((m) => m.materialId)));
       } catch (e) {
         if (!cancelled) setError("Could not load your courses. Try again.");
@@ -80,6 +87,40 @@ export function FreePracticePanel({
     [selectedList]
   );
   const allSelected = materials.length > 0 && selected.size === materials.length;
+
+  const confirmDeleteSelected = async () => {
+    const items = materials.filter((m) => selected.has(m.materialId));
+    if (items.length === 0) {
+      setPendingDelete(false);
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const result = await deleteReviewMaterials(
+        items.map((m) => ({
+          materialId: m.materialId,
+          courseId: m.courseId,
+        }))
+      );
+      if (result.failed > 0) {
+        setDeleteError(t.review.deleteSelectedError);
+      }
+      setPendingDelete(false);
+      setLoading(true);
+      const res = await fetch("/api/srs/practice-scope");
+      if (res.ok) {
+        const json = (await res.json()) as ScopeResponse;
+        setData(json);
+        setSelected(new Set(json.materials.map((m) => m.materialId)));
+      }
+    } catch {
+      setDeleteError(t.review.deleteSelectedError);
+    } finally {
+      setDeleting(false);
+      setLoading(false);
+    }
+  };
 
   return (
     <section className="space-y-5">
@@ -119,25 +160,44 @@ export function FreePracticePanel({
         </div>
       ) : (
         <>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
               {materials.length} course{materials.length === 1 ? "" : "s"} ·{" "}
               {data?.totals.total ?? 0} questions total
             </span>
-            <button
-              type="button"
-              onClick={() =>
-                setSelected(
-                  allSelected
-                    ? new Set()
-                    : new Set(materials.map((m) => m.materialId))
-                )
-              }
-              className="text-xs font-medium text-brand hover:text-brand-hover dark:text-brand-soft"
-            >
-              {allSelected ? "Clear all" : "Select all"}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  setSelected(
+                    allSelected
+                      ? new Set()
+                      : new Set(materials.map((m) => m.materialId))
+                  )
+                }
+                className="text-xs font-medium text-brand hover:text-brand-hover dark:text-brand-soft"
+              >
+                {allSelected ? t.review.clearAll : t.review.selectAll}
+              </button>
+              <button
+                type="button"
+                disabled={selected.size === 0 || deleting}
+                onClick={() => {
+                  setDeleteError(null);
+                  setPendingDelete(true);
+                }}
+                className="text-xs font-medium text-red-600 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-red-400 dark:hover:text-red-300"
+              >
+                {t.review.deleteSelected}
+              </button>
+            </div>
           </div>
+
+          {deleteError ? (
+            <p className="text-xs font-medium text-red-600 dark:text-red-400">
+              {deleteError}
+            </p>
+          ) : null}
 
           <ul className="max-h-[22rem] overflow-y-auto rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
             {materials.map((m, idx) => {
@@ -207,6 +267,23 @@ export function FreePracticePanel({
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={pendingDelete}
+        title={
+          selected.size === 1
+            ? t.review.deleteSelectedTitleOne
+            : tf(t.review.deleteSelectedTitle, { count: selected.size })
+        }
+        confirmLabel={t.review.deleteSelected}
+        confirmBusy={deleting}
+        onCancel={() => {
+          if (!deleting) setPendingDelete(false);
+        }}
+        onConfirm={() => void confirmDeleteSelected()}
+      >
+        {t.review.deleteSelectedWarning}
+      </ConfirmDialog>
     </section>
   );
 }

@@ -80,6 +80,12 @@ const en = {
   focusCard: "Focus card",
   newCard: "New",
   pauseExit: "Pause & exit",
+  deleteSelected: "Delete selected",
+  deleteSelectedTitle: "Delete {count} courses?",
+  deleteSelectedTitleOne: "Delete this course?",
+  deleteSelectedWarning:
+    "This permanently deletes the selected courses, including uploads, lessons, quizzes, and review cards. This cannot be undone.",
+  deleteSelectedError: "Could not delete some courses. Try again.",
 };
 
 const ko: typeof en = {
@@ -164,6 +170,12 @@ const ko: typeof en = {
   focusCard: "포커스 카드",
   newCard: "새 카드",
   pauseExit: "일시정지 및 나가기",
+  deleteSelected: "선택 삭제",
+  deleteSelectedTitle: "코스 {count}개를 삭제할까요?",
+  deleteSelectedTitleOne: "이 코스를 삭제할까요?",
+  deleteSelectedWarning:
+    "선택한 코스와 업로드, 레슨, 퀴즈, 복습 카드가 영구적으로 삭제돼요. 되돌릴 수 없어요.",
+  deleteSelectedError: "일부 코스를 삭제하지 못했어요. 다시 시도해 주세요.",
 };
 
 export const review = { en, ko };

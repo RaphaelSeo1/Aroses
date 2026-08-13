@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { FreePracticePanel } from "@/components/FreePracticePanel";
 import { ReviewSettingsPanel } from "@/components/ReviewSettingsPanel";
 import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
+import { deleteReviewMaterials } from "@/lib/review-delete-materials";
 import { useSrsDueCounts, type SrsDueByMaterial } from "@/lib/srs-due";
 
 /**
@@ -36,8 +38,10 @@ export function ReviewDashboardClient() {
   });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [kind, setKind] = useState<ReviewKind>("both");
-  // When true, show the free-practice course chooser instead of the dashboard.
   const [choosingPractice, setChoosingPractice] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   // When true, we are inside a launched session and hide the picker.
   const [sessionMode, setSessionMode] = useState<
     null | {
@@ -87,6 +91,37 @@ export function ReviewDashboardClient() {
       return next;
     });
   }, []);
+
+  const allSelected =
+    materials.length > 0 && selectedIds.size === materials.length;
+
+  const confirmDeleteSelected = useCallback(async () => {
+    const items = materials.filter((m) => selectedIds.has(m.materialId));
+    if (items.length === 0) {
+      setPendingDelete(false);
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const result = await deleteReviewMaterials(
+        items.map((m) => ({
+          materialId: m.materialId,
+          courseId: m.courseId,
+        }))
+      );
+      if (result.failed > 0) {
+        setDeleteError(t.review.deleteSelectedError);
+      }
+      setSelectedIds(new Set());
+      setPendingDelete(false);
+      refresh();
+    } catch {
+      setDeleteError(t.review.deleteSelectedError);
+    } finally {
+      setDeleting(false);
+    }
+  }, [materials, selectedIds, refresh, t.review.deleteSelectedError]);
 
   const startReview = useCallback(
     (overrides?: { all?: boolean }) => {
@@ -179,8 +214,8 @@ export function ReviewDashboardClient() {
     );
   }
 
-  // ----------- empty state (nothing due AND no cards anywhere yet) -----------
-  if (counts && totalDue === 0) {
+  // ----------- empty state (no decks at all) -----------
+  if (counts && materials.length === 0) {
     return (
       <section className="space-y-6">
         <header>
@@ -294,22 +329,43 @@ export function ReviewDashboardClient() {
 
       {/* Course selection ------------------------------------------ */}
       <div className="space-y-3">
-        <div className="flex items-baseline justify-between">
+        <div className="flex items-baseline justify-between gap-3">
           <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
             {t.review.orChooseCourses}
           </h3>
-          <button
-            type="button"
-            onClick={() =>
-              setSelectedIds(
-                new Set(materials.filter((m) => m.total > 0).map((m) => m.materialId))
-              )
-            }
-            className="text-xs font-medium text-brand hover:text-brand-hover dark:text-brand-soft"
-          >
-            {t.review.selectAll}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() =>
+                setSelectedIds(
+                  allSelected
+                    ? new Set()
+                    : new Set(materials.map((m) => m.materialId))
+                )
+              }
+              className="text-xs font-medium text-brand hover:text-brand-hover dark:text-brand-soft"
+            >
+              {allSelected ? t.review.clearAll : t.review.selectAll}
+            </button>
+            <button
+              type="button"
+              disabled={selectedIds.size === 0 || deleting}
+              onClick={() => {
+                setDeleteError(null);
+                setPendingDelete(true);
+              }}
+              className="text-xs font-medium text-red-600 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40 dark:text-red-400 dark:hover:text-red-300"
+            >
+              {t.review.deleteSelected}
+            </button>
+          </div>
         </div>
+
+        {deleteError ? (
+          <p className="text-xs font-medium text-red-600 dark:text-red-400">
+            {deleteError}
+          </p>
+        ) : null}
 
         <ul className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
           {materials.length === 0 ? (
@@ -322,7 +378,8 @@ export function ReviewDashboardClient() {
                 key={m.materialId}
                 material={m}
                 checked={selectedIds.has(m.materialId)}
-                disabled={m.total === 0}
+                disabled={false}
+                caughtUp={m.total === 0}
                 onToggle={() => toggleMaterial(m.materialId)}
                 isLast={idx === materials.length - 1}
               />
@@ -382,6 +439,23 @@ export function ReviewDashboardClient() {
           </span>
         </button>
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete}
+        title={
+          selectedIds.size === 1
+            ? t.review.deleteSelectedTitleOne
+            : tf(t.review.deleteSelectedTitle, { count: selectedIds.size })
+        }
+        confirmLabel={t.review.deleteSelected}
+        confirmBusy={deleting}
+        onCancel={() => {
+          if (!deleting) setPendingDelete(false);
+        }}
+        onConfirm={() => void confirmDeleteSelected()}
+      >
+        {t.review.deleteSelectedWarning}
+      </ConfirmDialog>
     </section>
   );
 }
@@ -390,12 +464,14 @@ function CourseRow({
   material,
   checked,
   disabled,
+  caughtUp,
   onToggle,
   isLast,
 }: {
   material: SrsDueByMaterial;
   checked: boolean;
   disabled: boolean;
+  caughtUp: boolean;
   onToggle: () => void;
   isLast: boolean;
 }) {
@@ -404,7 +480,7 @@ function CourseRow({
     <li
       className={`flex items-center gap-3 px-4 py-3 sm:px-5 ${
         isLast ? "" : "border-b border-zinc-100 dark:border-zinc-900"
-      } ${disabled ? "bg-zinc-50/50 dark:bg-zinc-900/30" : ""}`}
+      } ${caughtUp ? "bg-zinc-50/50 dark:bg-zinc-900/30" : ""}`}
     >
       <input
         type="checkbox"
@@ -416,7 +492,7 @@ function CourseRow({
       <div className="min-w-0 flex-1">
         <p
           className={`truncate text-sm font-medium ${
-            disabled
+            caughtUp
               ? "text-zinc-500 dark:text-zinc-500"
               : "text-zinc-900 dark:text-zinc-100"
           }`}
@@ -430,7 +506,7 @@ function CourseRow({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2 text-xs tabular-nums">
-        {disabled ? (
+        {caughtUp ? (
           <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
             {t.review.allCaughtUpPill}
           </span>
