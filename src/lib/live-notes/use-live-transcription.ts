@@ -585,14 +585,24 @@ export function useLiveLectureTranscription(options: {
       throw new Error("No audio track available for transcription.");
     }
     const mimeType = pickMimeType();
+    // 128 kbps keeps quiet far-field speech above Opus DTX / comfort-noise
+    // gates that a default low-bitrate lecture recording would drop.
+    const recorderOpts: MediaRecorderOptions = {
+      audioBitsPerSecond: 128_000,
+      ...(mimeType ? { mimeType } : {}),
+    };
     let recorder: MediaRecorder;
     try {
-      recorder = new MediaRecorder(
-        audioStream,
-        mimeType ? { mimeType } : undefined
-      );
+      recorder = new MediaRecorder(audioStream, recorderOpts);
     } catch {
-      recorder = new MediaRecorder(audioStream);
+      try {
+        recorder = new MediaRecorder(
+          audioStream,
+          mimeType ? { mimeType } : undefined
+        );
+      } catch {
+        recorder = new MediaRecorder(audioStream);
+      }
     }
     recorderRef.current = recorder;
     recorderSocketRef.current = ws;
