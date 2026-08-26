@@ -10,11 +10,16 @@ import {
 } from "react";
 import type { NotesPanelHandle } from "@/components/immersive/NotesPanel";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
+import {
+  splitStudentFacingReply,
+  visibleReplyForStream,
+} from "@/lib/live-notes/lecture-chat-protocol";
 
 type ChatTurn = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  thoughts?: string[];
 };
 
 type NoteOp =
@@ -57,6 +62,16 @@ function loadTurns(sessionId: string): ChatTurn[] {
           typeof t.content === "string" &&
           typeof t.id === "string"
       )
+      .map((t) => ({
+        id: t.id,
+        role: t.role,
+        content: t.content,
+        thoughts: Array.isArray(t.thoughts)
+          ? t.thoughts
+              .filter((x): x is string => typeof x === "string" && Boolean(x.trim()))
+              .slice(0, 24)
+          : undefined,
+      }))
       .slice(-40);
   } catch {
     return [];
@@ -117,18 +132,36 @@ export function LiveNotesChat({
       const run = async () => {
         notesRef.current?.setStreamingIndicator(true);
         let opValid = false;
+        let applied = 0;
+        let failed = 0;
         for (const item of ops) {
           if (item.kind === "delete") {
             writer.finishOp();
             opValid = false;
-            writer.deleteSection(item.sectionId);
+            if (
+              writer.deleteSection(item.sectionId, {
+                evenIfStudentEdited: true,
+              })
+            ) {
+              applied += 1;
+            } else {
+              failed += 1;
+            }
           } else if (item.kind === "highlight") {
             writer.finishOp();
             opValid = false;
-            writer.highlightSection(item.sectionId, item.color);
+            if (writer.highlightSection(item.sectionId, item.color)) {
+              applied += 1;
+            } else {
+              failed += 1;
+            }
           } else if (item.kind === "revise") {
             writer.finishOp();
-            opValid = await writer.beginRevision(item.sectionId);
+            opValid = await writer.beginRevision(item.sectionId, {
+              evenIfStudentEdited: true,
+            });
+            if (opValid) applied += 1;
+            else failed += 1;
           } else if (item.kind === "append") {
             writer.finishOp();
             writer.beginAppend({
@@ -136,6 +169,7 @@ export function LiveNotesChat({
               dividerBefore: item.dividerBefore,
             });
             opValid = true;
+            applied += 1;
           } else if (item.kind === "notes" && opValid && item.text) {
             const step = Math.max(1, Math.round((TYPE_CPS * TYPE_TICK_MS) / 1000));
             for (let i = 0; i < item.text.length; i += step) {
@@ -146,11 +180,19 @@ export function LiveNotesChat({
         }
         writer.finishOp();
         notesRef.current?.setStreamingIndicator(false);
+        if (failed > 0 && applied === 0) {
+          onActivity(
+            "error",
+            "I couldn't change that section in the notes. Select it and ask again."
+          );
+        } else if (failed > 0) {
+          onActivity("error", "Some of those note edits didn't apply.");
+        }
       };
 
       enqueueWriterJob(run);
     },
-    [enqueueWriterJob, notesRef]
+    [enqueueWriterJob, notesRef, onActivity]
   );
 
   const send = useCallback(
@@ -179,7 +221,7 @@ export function LiveNotesChat({
       setStreamingId(assistantId);
 
       const writer = notesRef.current?.getStreamWriter();
-      const sections = writer?.listRevisableSections(40) ?? [];
+      const sections = writer?.listAllSections(60) ?? [];
       const selectedText = notesRef.current?.getSelectedText() ?? "";
       const hasNotes = Boolean(writer && sections.length > 0);
 
@@ -187,9 +229,38 @@ export function LiveNotesChat({
       let appendStarted = false;
       let noteOpCount = 0;
       let pendingReply = "";
+      let fallbackReply: string | null = null;
       let revealed = 0;
       let sseDone = false;
       let cancelled = false;
+      const thoughtAcc: string[] = [];
+      const seenThoughts = new Set<string>();
+
+      const visibleSource = () =>
+        fallbackReply ?? visibleReplyForStream(pendingReply, sseDone);
+
+      const syncThoughts = () => {
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantId ? { ...t, thoughts: [...thoughtAcc] } : t
+          )
+        );
+      };
+
+      const pushThought = (message: string, toActivity: boolean) => {
+        const msg = message.trim();
+        if (!msg || seenThoughts.has(msg)) return;
+        seenThoughts.add(msg);
+        thoughtAcc.push(msg);
+        if (toActivity) onActivity("thought", msg);
+        syncThoughts();
+      };
+
+      const harvestLeaks = () => {
+        for (const leak of splitStudentFacingReply(pendingReply).leaked) {
+          pushThought(leak, false);
+        }
+      };
 
       const revealReply = (next: string) => {
         setTurns((prev) =>
@@ -201,7 +272,13 @@ export function LiveNotesChat({
 
       const pumpReply = async () => {
         while (!cancelled) {
-          const leftover = pendingReply.slice(revealed);
+          harvestLeaks();
+          const source = visibleSource();
+          if (revealed > source.length) {
+            revealed = source.length;
+            revealReply(source);
+          }
+          const leftover = source.slice(revealed);
           if (!leftover) {
             if (sseDone) break;
             await sleep(REPLY_TICK_MS);
@@ -218,7 +295,7 @@ export function LiveNotesChat({
             Math.round((cps * REPLY_TICK_MS) / 1000)
           );
           revealed += Math.min(step, leftover.length);
-          revealReply(pendingReply.slice(0, revealed));
+          revealReply(source.slice(0, revealed));
           await sleep(REPLY_TICK_MS);
         }
       };
@@ -253,7 +330,7 @@ export function LiveNotesChat({
         const handleEvent = (event: string, parsed: Record<string, unknown>) => {
           if (event === "thought") {
             if (typeof parsed.message === "string" && parsed.message.trim()) {
-              onActivity("thought", parsed.message.trim());
+              pushThought(parsed.message, true);
             }
           } else if (event === "text") {
             const delta = typeof parsed.delta === "string" ? parsed.delta : "";
@@ -318,10 +395,24 @@ export function LiveNotesChat({
           }
         }
 
-        if (!pendingReply.trim()) {
-          pendingReply = noteOpCount
+        harvestLeaks();
+        if (!visibleReplyForStream(pendingReply, true).trim()) {
+          fallbackReply = noteOpCount
             ? "Updated your notes."
             : "I didn't have a reply for that — try asking again.";
+        }
+        const looksLikeEdit =
+          /\b(fix the wording|reword|rewrite|rephrase|change (that|this|it) to|make (it|this|that) (simpler|shorter|clearer|better)|add (that|this|it|more) (to|detail)|put that in the notes|take (that|this) out|delete (that|this|the)|highlight (that|this|the)|expand (that|this|the))\b/i.test(
+            message
+          ) ||
+          /^(please\s+)?((can|could)\s+you\s+)?(fix|change|reword|rewrite|rephrase|simplify|shorten|expand|delete|remove|highlight)\b/i.test(
+            message.trim()
+          );
+        if (!failed && noteOpCount === 0 && looksLikeEdit) {
+          onActivity(
+            "error",
+            "I didn't apply that to the notes. Try again, or select the section first."
+          );
         }
       } catch (e) {
         failed = true;
@@ -341,6 +432,11 @@ export function LiveNotesChat({
       } finally {
         sseDone = true;
         await pump;
+        if (!failed) {
+          harvestLeaks();
+          const final = visibleSource();
+          if (final.trim()) revealReply(final);
+        }
         setStreamingId(null);
         setBusy(false);
         inputRef.current?.focus();
@@ -405,31 +501,46 @@ export function LiveNotesChat({
               key={t.id}
               className={t.role === "user" ? "flex justify-end" : "flex justify-start"}
             >
-              <div
-                className={
-                  t.role === "user"
-                    ? "max-w-[92%] rounded-xl rounded-br-sm bg-zinc-800 px-3 py-2 text-[12px] leading-snug text-white"
-                    : "max-w-[92%] rounded-xl rounded-bl-sm border border-fuchsia-200/55 bg-fuchsia-50/90 px-3 py-2 text-[12px] leading-snug text-zinc-800 dark:border-fuchsia-900/40 dark:bg-fuchsia-950/40 dark:text-zinc-100"
-                }
-              >
-                <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] opacity-70">
-                  {t.role === "user" ? "You" : "Rose"}
-                  {t.id === streamingId ? " · …" : ""}
-                </p>
-                {t.role === "assistant" && t.id === streamingId ? (
-                  <p className="whitespace-pre-wrap">
-                    {t.content}
-                    <span
-                      aria-hidden
-                      className="ml-0.5 inline-block h-[0.85em] w-[0.08em] translate-y-[0.12em] animate-pulse rounded-sm bg-fuchsia-500 align-baseline"
-                    />
+              <div className="max-w-[92%]">
+                <div
+                  className={
+                    t.role === "user"
+                      ? "rounded-xl rounded-br-sm bg-zinc-800 px-3 py-2 text-[12px] leading-snug text-white"
+                      : "rounded-xl rounded-bl-sm border border-fuchsia-200/55 bg-fuchsia-50/90 px-3 py-2 text-[12px] leading-snug text-zinc-800 dark:border-fuchsia-900/40 dark:bg-fuchsia-950/40 dark:text-zinc-100"
+                  }
+                >
+                  <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] opacity-70">
+                    {t.role === "user" ? "You" : "Rose"}
+                    {t.id === streamingId ? " · …" : ""}
                   </p>
-                ) : t.content.trim() ? (
-                  t.role === "assistant" ? (
-                    <StudyChatMessageMarkdown source={t.content} />
-                  ) : (
-                    <p className="whitespace-pre-wrap">{t.content}</p>
-                  )
+                  {t.role === "assistant" ? (
+                    <div className="text-[12px] leading-snug">
+                      {t.content.trim() ? (
+                        <StudyChatMessageMarkdown source={t.content} compact />
+                      ) : null}
+                      {t.id === streamingId ? (
+                        <span
+                          aria-hidden
+                          className="ml-0.5 inline-block h-[0.85em] w-[0.08em] translate-y-[0.12em] animate-pulse rounded-sm bg-fuchsia-500 align-baseline"
+                        />
+                      ) : null}
+                    </div>
+                  ) : t.content.trim() ? (
+                    <p className="whitespace-pre-wrap text-[12px] leading-snug">
+                      {t.content}
+                    </p>
+                  ) : null}
+                </div>
+                {t.role === "assistant" &&
+                (t.thoughts?.length ?? 0) > 0 ? (
+                  <details className="mt-1 px-0.5">
+                    <summary className="cursor-pointer select-none text-[10px] font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200">
+                      Thinking…
+                    </summary>
+                    <p className="mt-1 whitespace-pre-wrap text-[10px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+                      {t.thoughts!.join("\n")}
+                    </p>
+                  </details>
                 ) : null}
               </div>
             </div>

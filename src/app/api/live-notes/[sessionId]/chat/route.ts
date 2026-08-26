@@ -14,7 +14,7 @@ type Params = { params: Promise<{ sessionId: string }> };
 
 const MAX_MESSAGE = 4_000;
 const MAX_HISTORY = 12;
-const MAX_SECTIONS = 40;
+const MAX_SECTIONS = 60;
 
 /**
  * POST /api/live-notes/[sessionId]/chat — SSE.
@@ -116,7 +116,10 @@ export async function POST(request: Request, ctx: Params) {
         .slice(0, MAX_SECTIONS)
         .map((s) => ({
           sectionId: s.sectionId,
-          markdown: s.markdown.slice(0, 2_400),
+          markdown: s.markdown.slice(0, 4_000),
+          studentEdited: Boolean(
+            (s as { studentEdited?: unknown }).studentEdited
+          ),
         }))
     : [];
 

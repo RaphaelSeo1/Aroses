@@ -100,7 +100,11 @@ type ActiveOp = {
   wroteAnything: boolean;
 };
 
-export type StreamedSection = { sectionId: string; markdown: string };
+export type StreamedSection = {
+  sectionId: string;
+  markdown: string;
+  studentEdited?: boolean;
+};
 
 export class StreamingNotesWriter {
   private op: ActiveOp | null = null;
@@ -196,15 +200,20 @@ export class StreamingNotesWriter {
    * blocks (~350ms), snapshot + delete them, and point the stream at a
    * placeholder so the replacement types into the same spot. If the
    * revision streams nothing useful, `finishOp` restores the snapshot.
-   * Returns false when the section doesn't exist or was student-edited.
+   * Returns false when the section doesn't exist. Student-edited sections
+   * are skipped unless `evenIfStudentEdited` is set (chat-driven edits).
    */
-  async beginRevision(sectionId: string): Promise<boolean> {
+  async beginRevision(
+    sectionId: string,
+    opts?: { evenIfStudentEdited?: boolean }
+  ): Promise<boolean> {
     if (this.destroyed || this.editor.isDestroyed) return false;
     this.finishOp();
 
     const blocks = this.sectionBlocks(sectionId);
     if (blocks.length === 0) return false;
     if (
+      !opts?.evenIfStudentEdited &&
       blocks.some(
         (b) =>
           b.node.attrs?.provenance !== "ai" &&
@@ -416,14 +425,51 @@ export class StreamingNotesWriter {
   }
 
   /**
-   * Remove a fully-AI section. Returns false if missing or student-edited.
+   * All sections with an id (including student-edited). Chat uses this so
+   * "fix the wording" still has a target after the student has typed in a
+   * section. Oldest first.
    */
-  deleteSection(sectionId: string): boolean {
+  listAllSections(limit: number): StreamedSection[] {
+    if (this.editor.isDestroyed) return [];
+    const order: string[] = [];
+    const groups = new Map<string, NoteNodeJson[]>();
+    const studentEdited = new Set<string>();
+    this.editor.state.doc.forEach((node) => {
+      const sid = node.attrs?.sectionId;
+      if (typeof sid !== "string" || !sid) return;
+      const prov = node.attrs?.provenance;
+      if (prov !== "ai" && prov !== "ai-context") studentEdited.add(sid);
+      if (!groups.has(sid)) {
+        groups.set(sid, []);
+        order.push(sid);
+      }
+      groups.get(sid)!.push(node.toJSON() as NoteNodeJson);
+    });
+    const active = this.op?.sectionId;
+    return order
+      .filter((id) => id !== active)
+      .slice(-limit)
+      .map((id) => ({
+        sectionId: id,
+        markdown: noteNodesToMarkdown(groups.get(id)!),
+        studentEdited: studentEdited.has(id),
+      }))
+      .filter((s) => s.markdown.trim().length > 0);
+  }
+
+  /**
+   * Remove a section. Student-edited blocks are skipped unless `force`.
+   */
+  deleteSection(
+    sectionId: string,
+    opts?: { evenIfStudentEdited?: boolean }
+  ): boolean {
     if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
     if (this.op?.sectionId === sectionId) this.finishOp();
     const blocks = this.sectionBlocks(sectionId);
     if (blocks.length === 0) return false;
     if (
+      !opts?.evenIfStudentEdited &&
       blocks.some(
         (b) =>
           b.node.attrs?.provenance !== "ai" &&

@@ -20,6 +20,7 @@ import { TableHeader } from "@tiptap/extension-table-header";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
 import { NotesFormatToolbar } from "./notes/NotesFormatToolbar";
+import { NotesTableHoverControls } from "./notes/NotesTableHoverControls";
 import { LectureSummaryButton } from "./notes/LectureSummaryButton";
 import { AI_APPEND_META, Provenance } from "./notes/Provenance";
 import { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
@@ -1775,7 +1776,10 @@ export function NotesPanel({
             </BubbleMenu>
           ) : null}
           {editor ? (
-            <EditorContent editor={editor} />
+            <>
+              <EditorContent editor={editor} />
+              <NotesTableHoverControls editor={editor} />
+            </>
           ) : initialContentJson ? (
             <div
               className="tn-prose max-w-none min-h-[6rem] whitespace-pre-wrap text-zinc-700"
@@ -2082,8 +2086,10 @@ export function NotesPanel({
         /* Tables — extra columns scroll instead of being crushed to 3-wide. */
         .tn-prose .tableWrapper {
           overflow-x: auto;
+          overflow-y: visible;
           max-width: 100%;
           margin: 0.9rem 0;
+          padding: 0.35rem 0.15rem 0.55rem;
         }
         .tn-prose table.tn-table,
         .tn-prose table {

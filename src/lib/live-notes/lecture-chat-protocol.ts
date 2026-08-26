@@ -3,13 +3,15 @@
  *
  *   @@thought <text>              optional — activity-log line, not the reply
  *   @@reply                       student-facing answer (markdown)
- *   @@delete <sectionId>          drop an AI note section (no body)
+ *   @@delete <sectionId>          drop a note section (no body)
  *   @@highlight <sectionId> [color]
  *   @@revise <sectionId>          replacement notes markdown follows
  *   @@append                      new notes section follows
  *
- * Reply text is forwarded as `channel: "reply"`. Revise/append bodies use
- * `channel: "notes"`. Instant commands emit `op` events with no body.
+ * Reply text is forwarded as `channel: "reply"` only after `@@reply`.
+ * Unmarked preamble is emitted as `thought`, never as the student bubble.
+ * Revise/append bodies use `channel: "notes"`. Instant commands emit `op`
+ * events with no body.
  */
 
 export const HIGHLIGHT_COLOR_HEX: Record<string, string> = {
@@ -33,9 +35,93 @@ export type LectureChatStreamEvent =
     }
   | { type: "text"; channel: "reply" | "notes"; delta: string };
 
+export type LectureChatParserSection = {
+  sectionId: string;
+  markdown: string;
+};
+
+/**
+ * Map a model-supplied @@revise/@@delete/@@highlight target onto a real
+ * section id. Exact ids, leftover tokens on the marker line, and heading
+ * text ("scarcity") all resolve; an empty target falls back to the last
+ * section so "change that" still lands.
+ */
+export function resolveLectureChatSectionId(
+  raw: string,
+  allowed: Set<string>,
+  sections: LectureChatParserSection[]
+): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    const last = sections[sections.length - 1];
+    return last && allowed.has(last.sectionId) ? last.sectionId : null;
+  }
+  const token = trimmed.split(/\s+/)[0] ?? "";
+  if (allowed.has(token)) return token;
+  for (const id of allowed) {
+    if (trimmed.includes(id)) return id;
+  }
+  const q = trimmed.toLowerCase();
+  for (const s of sections) {
+    if (!allowed.has(s.sectionId)) continue;
+    const heading = s.markdown
+      .match(/^#{1,3}\s+(.+)$/m)?.[1]
+      ?.trim()
+      .toLowerCase();
+    if (heading && (q.includes(heading) || heading.includes(q))) {
+      return s.sectionId;
+    }
+  }
+  if (sections.length === 1 && allowed.has(sections[0]!.sectionId)) {
+    return sections[0]!.sectionId;
+  }
+  return null;
+}
+
+const PROTOCOL_LEAK_LINE =
+  /@@(?:revise|append|delete|highlight|thought|reply)\b|sectionId/i;
+const MIGHT_LEAK_RE = /@@|sectionId/i;
+
+export function isProtocolLeakLine(line: string): boolean {
+  return PROTOCOL_LEAK_LINE.test(line);
+}
+
+/**
+ * Split a model @@reply body into student-visible text vs protocol/CoT leaks.
+ * Leaked lines should be shown under Thinking…, never in the chat bubble.
+ */
+export function splitStudentFacingReply(text: string): {
+  visible: string;
+  leaked: string[];
+} {
+  if (!text) return { visible: "", leaked: [] };
+  const leaked: string[] = [];
+  const visible: string[] = [];
+  for (const line of text.split("\n")) {
+    if (isProtocolLeakLine(line)) leaked.push(line.trim());
+    else visible.push(line);
+  }
+  return {
+    visible: visible.join("\n").replace(/\n{3,}/g, "\n\n").trim(),
+    leaked: leaked.filter(Boolean),
+  };
+}
+
+/** While streaming, hold an incomplete last line that may still become a leak. */
+export function visibleReplyForStream(raw: string, complete: boolean): string {
+  if (complete) return splitStudentFacingReply(raw).visible;
+  const nl = raw.lastIndexOf("\n");
+  if (nl < 0) return MIGHT_LEAK_RE.test(raw) ? "" : raw;
+  const { visible } = splitStudentFacingReply(raw.slice(0, nl));
+  const tail = raw.slice(nl + 1);
+  if (!tail || MIGHT_LEAK_RE.test(tail)) return visible;
+  return visible ? `${visible}\n${tail}` : tail;
+}
+
 export function createLectureChatParser(
   allowedIds: Set<string>,
-  appendSectionId: string
+  appendSectionId: string,
+  sections: LectureChatParserSection[] = []
 ): {
   push: (deltaText: string) => LectureChatStreamEvent[];
   flush: () => LectureChatStreamEvent[];
@@ -46,6 +132,7 @@ export function createLectureChatParser(
   let forwarded = 0;
   let deletes = 0;
   let highlights = 0;
+  let revises = 0;
 
   const notesBody = () => mode === "append" || mode === "revise";
   const replyBody = () => mode === "reply";
@@ -54,32 +141,64 @@ export function createLectureChatParser(
   const completeLine = (out: LectureChatStreamEvent[]) => {
     if (forwarded === 0 && line.startsWith("@@")) {
       const trimmed = line.trim();
-      if (trimmed === "@@reply") {
+      if (trimmed === "@@reply" || trimmed.startsWith("@@reply ")) {
         mode = "reply";
+        const rest = trimmed.slice("@@reply".length).trim();
+        if (rest) {
+          if (isProtocolLeakLine(rest)) {
+            out.push({ type: "thought", message: rest });
+          } else {
+            out.push({
+              type: "text",
+              channel: "reply",
+              delta: `${rest}\n`,
+            });
+          }
+        }
       } else if (trimmed === "@@append") {
         mode = "append";
         out.push({ type: "op", op: "append", sectionId: appendSectionId });
       } else if (trimmed.startsWith("@@revise")) {
-        const id = trimmed.slice("@@revise".length).trim();
-        if (id && allowedIds.has(id)) {
+        const raw = trimmed.slice("@@revise".length).trim();
+        const id = resolveLectureChatSectionId(raw, allowedIds, sections);
+        if (id && revises < 4) {
+          revises += 1;
           mode = "revise";
           out.push({ type: "op", op: "revise", sectionId: id });
+          const leftover = raw.startsWith(id)
+            ? raw.slice(id.length).trim()
+            : "";
+          if (leftover && /^[#\-*>\d]/.test(leftover)) {
+            out.push({
+              type: "text",
+              channel: "notes",
+              delta: `${leftover}\n`,
+            });
+          }
         } else {
           mode = "skip";
         }
       } else if (trimmed.startsWith("@@delete")) {
-        const id = trimmed.slice("@@delete".length).trim();
-        if (id && allowedIds.has(id) && deletes < 4) {
+        const raw = trimmed.slice("@@delete".length).trim();
+        const id = resolveLectureChatSectionId(raw, allowedIds, sections);
+        if (id && deletes < 4) {
           deletes += 1;
           out.push({ type: "op", op: "delete", sectionId: id });
         }
       } else if (trimmed.startsWith("@@highlight")) {
         const rest = trimmed.slice("@@highlight".length).trim();
         const parts = rest.split(/\s+/);
-        const id = parts[0] ?? "";
-        const colorName = (parts[1] ?? "yellow").toLowerCase();
-        const color = HIGHLIGHT_COLOR_HEX[colorName] ?? HIGHLIGHT_COLOR_HEX.yellow;
-        if (id && allowedIds.has(id) && highlights < 6) {
+        let colorName = "yellow";
+        let idRaw = rest;
+        const last = (parts[parts.length - 1] ?? "").toLowerCase();
+        if (HIGHLIGHT_COLOR_HEX[last]) {
+          colorName = last;
+          idRaw = parts.slice(0, -1).join(" ");
+        }
+        const id = resolveLectureChatSectionId(idRaw, allowedIds, sections);
+        const color =
+          HIGHLIGHT_COLOR_HEX[colorName] ?? HIGHLIGHT_COLOR_HEX.yellow;
+        if (id && highlights < 6) {
           highlights += 1;
           out.push({ type: "op", op: "highlight", sectionId: id, color });
         }
@@ -100,13 +219,8 @@ export function createLectureChatParser(
         delta: `${line.slice(forwarded)}\n`,
       });
     } else if (mode === "preamble" && line.trim()) {
-      // Model skipped @@reply — treat leftover prose as the student answer.
-      mode = "reply";
-      out.push({
-        type: "text",
-        channel: "reply",
-        delta: `${line.slice(forwarded)}\n`,
-      });
+      // Prose before @@reply is internal narration, never the student bubble.
+      out.push({ type: "thought", message: line.trim() });
     }
     line = "";
     forwarded = 0;

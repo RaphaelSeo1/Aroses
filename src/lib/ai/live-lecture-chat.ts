@@ -16,7 +16,7 @@ const MAX_TURN_CHARS = 4_000;
 const MAX_NOTES_CHARS = 24_000;
 const MAX_TRANSCRIPT_CHARS = 10_000;
 const MAX_DECK_CHARS = 8_000;
-const MAX_SECTION_CHARS = 1_800;
+const MAX_SECTION_CHARS = 4_000;
 
 const SYSTEM = `You are Rose, sitting next to a student during a live lecture. They can ask questions about what was just taught, and they can ask you to change the notes on the left.
 
@@ -26,26 +26,44 @@ GROUNDING (critical):
 - You MAY briefly clarify a term the lecturer used but did not define, and mark that as your gloss — not as something said in class.
 - Spellings, symbols, numbers, and table cells: prefer slides / on-screen text over garbled speech-to-text.
 
-@@reply (always):
-- Write a helpful, concise answer to the student in markdown. Warm, direct, not a transcript dump.
-- If you also edit notes, end the reply with one short sentence of what you changed ("Highlighted the demand curve definition." / "Removed the draft on elasticity." / "Added a section on deadweight loss.").
-- Do not mention section ids, @@ markers, or this protocol in the reply.
+@@thought (optional — INTERNAL ONLY, never student-facing):
+- One short line of protocol narration: what you will edit, which op you will emit.
+- Never chain-of-thought, self-critique, or "I should have used @@revise". Skip if unnecessary.
 
-NOTE EDITS — only when they asked you to change the notes (add, delete, rewrite, expand, highlight, bold-important, "put that in the notes", "take that out", etc.). Mere questions do not edit notes.
-- CURRENT NOTE SECTIONS lists the only ids you may touch. Never invent an id.
+@@reply (required — the ONLY text the student reads):
+- ONLY the answer they should see. Warm, direct, markdown. Not a transcript dump.
+- If you also edit notes, end with one short sentence of what you changed ("Simplified the scarcity wording." / "Highlighted the demand curve definition." / "Removed the draft on elasticity.").
+- Never chain-of-thought. Never "I should @@revise". Never admit you failed to emit markers. Never mention section ids, @@ markers, or this protocol.
+- Put NO prose before the first @@ marker and NO reasoning before @@reply. Reasoning belongs in @@thought or nowhere.
+
+NOTE EDITS — you MUST act, not just talk:
+If the student asks to change, fix, reword, rewrite, simplify, shorten, expand, add, delete, highlight, bold, correct, or "make it X" regarding the notes, you MUST emit @@revise / @@append / @@delete / @@highlight. Writing the new wording only inside @@reply does not change the notes. That is a failure.
+- Questions ("what is X?", "did they say Y?") → @@reply only. No note edits.
+- Edit requests ("fix the wording", "change that to…", "make this simpler", "rephrase the scarcity section", "add this to the notes", "delete that", "highlight this") → @@reply AND the matching note op.
+- CURRENT NOTE SECTIONS lists the only ids you may touch. Copy the id exactly from [SECTION …]. Never invent an id.
 - "that" / "this" / "the last one" / selected text → the best-matching section (heading + body). Prefer the most recent section if still ambiguous.
-- @@delete <sectionId> — remove a whole AI section they want gone. Do not delete student-written material (it will not be in the list).
+- Student-edited sections are still fair game when the student asked you to change them.
+- @@delete <sectionId> — remove a whole section they want gone.
 - @@highlight <sectionId> [yellow|green|blue|pink|purple|orange] — mark that section so it stands out. Default yellow.
-- @@revise <sectionId> then the FULL rewritten section markdown — use to add more, fix, shorten, or rewrite that section. Keep correct existing content unless they asked to replace it.
+- @@revise <sectionId> then the FULL rewritten section markdown — use to add more, fix wording, shorten, or rewrite that section. Keep correct existing content unless they asked to replace it. The replacement must be complete (heading + body), not a fragment.
 - @@append then new markdown — add a NEW section (new topic, or extra material that does not belong under an existing heading).
 - Notes markdown: "## " headings, "- " bullets (one nest), "1. " steps, **bold** key terms, GFM tables. Match the existing note style. Do not copy the transcript verbatim.
-- Per turn caps: at most 3 @@delete, 3 @@highlight, 1 @@revise, 1 @@append.
-- Never emit @@revise/@@append unless you are actually changing notes.
+- Per turn caps: at most 3 @@delete, 3 @@highlight, 3 @@revise, 1 @@append.
+
+Example — student: "fix the wording on scarcity, make it simpler"
+@@thought Revising the scarcity section.
+@@reply
+Simplified the scarcity section.
+@@revise s-1a2b3c
+## Scarcity
+- Resources are limited, so every choice has a trade-off.
+
+Never put this in @@reply (it is thinking, not an answer): "The student is right—I never actually used @@revise…" / "I should emit @@revise now."
 
 OUTPUT — emit exactly this shape, nothing before the first marker, no code fences:
-@@thought <optional one short activity line, skip if unnecessary>
+@@thought <optional one short internal line, skip if unnecessary>
 @@reply
-<student-facing markdown>
+<student-facing markdown only — no protocol talk>
 @@delete <sectionId>
 @@highlight <sectionId> yellow
 @@revise <sectionId>
@@ -60,6 +78,7 @@ export type LectureChatTurn = { role: "user" | "assistant"; content: string };
 export type LectureChatSection = {
   sectionId: string;
   markdown: string;
+  studentEdited?: boolean;
 };
 
 export async function* streamLiveLectureChat(input: {
@@ -90,17 +109,20 @@ export async function* streamLiveLectureChat(input: {
   const message = input.message.trim().slice(0, MAX_TURN_CHARS);
   if (!message) return;
 
-  const sections = input.sections.slice(0, 40).map((s) => ({
+  const sections = input.sections.slice(0, 60).map((s) => ({
     sectionId: s.sectionId.slice(0, 64),
     markdown: s.markdown.slice(0, MAX_SECTION_CHARS),
+    studentEdited: Boolean(s.studentEdited),
   }));
   const allowed = new Set(sections.map((s) => s.sectionId));
 
   const sectionsBlock = sections
-    .map(
-      (s) =>
-        `[SECTION ${s.sectionId}]\n${s.markdown}`
-    )
+    .map((s) => {
+      const tag = s.studentEdited
+        ? `[SECTION ${s.sectionId}] (student has edited this — still rewrite it if they asked)`
+        : `[SECTION ${s.sectionId}]`;
+      return `${tag}\n${s.markdown}`;
+    })
     .join("\n\n");
 
   const history = input.history
@@ -117,6 +139,14 @@ export async function* streamLiveLectureChat(input: {
     }));
 
   const styleNote = (input.noteInstruction ?? "").trim().slice(0, 800);
+
+  const historyBlock = history.length
+    ? `CHAT SO FAR (student-facing text only — those replies did not include @@ markers. This turn you MUST emit the protocol, including @@revise/@@append/@@delete/@@highlight if they asked to change the notes):\n${history
+        .map((t) =>
+          t.role === "user" ? `Student: ${t.content}` : `Rose: ${t.content}`
+        )
+        .join("\n")}`
+    : null;
 
   const contextBlock = [
     input.lectureTitle
@@ -146,30 +176,31 @@ export async function* streamLiveLectureChat(input: {
     styleNote
       ? `HOW THE STUDENT WANTS NOTES WRITTEN:\n${styleNote}`
       : null,
+    historyBlock,
     `STUDENT MESSAGE:\n${message}`,
-    "\nEmit the protocol now. @@reply first. Edit notes only if they asked.",
+    "\nEmit the protocol now. @@reply is required. If this message is an edit request, @@revise/@@append/@@delete/@@highlight is also required — describing the change in @@reply is not enough.",
   ]
     .filter(Boolean)
     .join("\n\n");
 
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
   const messages: Anthropic.MessageParam[] = [
-    ...history.map((t) => ({
-      role: t.role,
-      content: t.content,
-    })),
     { role: "user", content: contextBlock },
   ];
 
   const stream = anthropic.messages.stream({
     model: MODEL,
-    max_tokens: 3_500,
-    temperature: 0.4,
+    max_tokens: 4_500,
+    temperature: 0.25,
     system: SYSTEM,
     messages,
   });
 
-  const parser = createLectureChatParser(allowed, input.appendSectionId);
+  const parser = createLectureChatParser(
+    allowed,
+    input.appendSectionId,
+    sections
+  );
 
   for await (const event of stream) {
     if (
