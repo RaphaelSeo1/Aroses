@@ -467,6 +467,8 @@ export function NotesPanel({
       }),
       Table.configure({
         resizable: true,
+        lastColumnResizable: true,
+        handleWidth: 10,
         cellMinWidth: 96,
         HTMLAttributes: { class: "tn-table" },
       }),
@@ -2122,14 +2124,19 @@ export function NotesPanel({
           background: rgba(139, 92, 246, 0.12);
           pointer-events: none;
         }
+        .tn-prose.resize-cursor,
+        .tn-prose.resize-cursor * {
+          cursor: col-resize !important;
+        }
         .tn-prose .column-resize-handle {
           position: absolute;
-          right: -1px;
+          right: -2px;
           top: 0;
           bottom: 0;
-          width: 3px;
+          width: 5px;
           background: #a78bfa;
           pointer-events: none;
+          z-index: 4;
         }
 
         /* Text align */
