@@ -466,6 +466,7 @@ export function NotesPanel({
       }),
       Table.configure({
         resizable: true,
+        cellMinWidth: 96,
         HTMLAttributes: { class: "tn-table" },
       }),
       TableRow,
@@ -2078,14 +2079,20 @@ export function NotesPanel({
           background: #fafafa;
         }
 
-        /* Tables */
+        /* Tables — extra columns scroll instead of being crushed to 3-wide. */
+        .tn-prose .tableWrapper {
+          overflow-x: auto;
+          max-width: 100%;
+          margin: 0.9rem 0;
+        }
         .tn-prose table.tn-table,
         .tn-prose table {
-          width: 100%;
+          width: max-content;
+          min-width: 100%;
           border-collapse: collapse;
-          margin: 0.9rem 0;
-          table-layout: fixed;
-          overflow: hidden;
+          margin: 0;
+          table-layout: auto;
+          overflow: visible;
           border-radius: 0.5rem;
           border: 1px solid #e4e4e7;
         }
@@ -2094,7 +2101,7 @@ export function NotesPanel({
           border: 1px solid #e4e4e7;
           padding: 0.45rem 0.65rem;
           vertical-align: top;
-          min-width: 1em;
+          min-width: 6rem;
           position: relative;
         }
         .tn-prose th {

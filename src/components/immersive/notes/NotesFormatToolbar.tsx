@@ -1,6 +1,7 @@
 "use client";
 
 import type { Editor } from "@tiptap/react";
+import { useEditorState } from "@tiptap/react";
 
 function ToolBtn({
   label,
@@ -48,6 +49,11 @@ export function NotesFormatToolbar({
   uploadingImage?: boolean;
   onPickImage: () => void;
 }) {
+  const inTable = useEditorState({
+    editor,
+    selector: ({ editor: ed }) => ed.isActive("table"),
+  });
+
   return (
     <div className="sticky top-0 z-20 -mx-1 mb-3 flex flex-wrap items-center gap-0.5 rounded-xl border border-zinc-200/90 bg-white/95 px-1.5 py-1 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-950/95">
       <ToolBtn
@@ -155,26 +161,52 @@ export function NotesFormatToolbar({
         disabled={uploadingImage}
         onClick={onPickImage}
       />
-      {editor.isActive("table") ? (
+      {inTable ? (
         <>
           <Divider />
           <ToolBtn
-            label="+R"
-            title="Add row"
+            label="+ Row"
+            title="Add a row below"
             onClick={() => editor.chain().focus().addRowAfter().run()}
           />
           <ToolBtn
-            label="+C"
-            title="Add column"
+            label="+ Col"
+            title="Add a column to the right"
             onClick={() => editor.chain().focus().addColumnAfter().run()}
           />
           <ToolBtn
-            label="⌫T"
+            label="− Row"
+            title="Delete this row"
+            onClick={() => editor.chain().focus().deleteRow().run()}
+          />
+          <ToolBtn
+            label="− Col"
+            title="Delete this column"
+            onClick={() => editor.chain().focus().deleteColumn().run()}
+          />
+          <ToolBtn
+            label="⌫ Table"
             title="Delete table"
             onClick={() => editor.chain().focus().deleteTable().run()}
           />
         </>
-      ) : null}
+      ) : (
+        <>
+          <Divider />
+          <ToolBtn
+            label="+ Row"
+            title="Click inside a table, then add a row"
+            disabled
+            onClick={() => {}}
+          />
+          <ToolBtn
+            label="+ Col"
+            title="Click inside a table, then add a column"
+            disabled
+            onClick={() => {}}
+          />
+        </>
+      )}
     </div>
   );
 }

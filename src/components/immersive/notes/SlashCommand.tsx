@@ -110,7 +110,7 @@ function buildCommands(options: SlashOptions): Command[] {
     },
     {
       title: "Table",
-      description: "Insert a 3×3 table",
+      description: "Insert a table — add more rows and columns from the toolbar",
       icon: "▦",
       keywords: ["table", "grid", "spreadsheet"],
       run: ({ editor, range }) =>
