@@ -13,6 +13,19 @@
 
 export const LECTURE_PCM_SAMPLE_RATE = 16_000;
 
+/** Start already hot so the first words aren't lost while AGC ramps. */
+const AGC_INITIAL_GAIN = 64;
+/** Never sit at "close-talk" gain — lecture halls stay boosted. */
+const AGC_MIN_GAIN = 24;
+/**
+ * ~52 dB. Past this you only amplify the laptop's own hiss; Deepgram starts
+ * inventing words from HVAC / keyboard. This is the practical floor.
+ */
+const AGC_MAX_GAIN = 400;
+const AGC_TARGET_RMS = 0.18;
+/** Skip AGC math only for true digital silence (divide-by-zero), not speech. */
+const AGC_SILENCE = 1e-6;
+
 type PcmTap = {
   sampleRate: typeof LECTURE_PCM_SAMPLE_RATE;
   stop: () => void;
@@ -24,10 +37,10 @@ const WORKLET_SOURCE = `
 class LectureMicPcmProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this._gain = 20;
-    this._minGain = 4;
-    this._maxGain = 80;
-    this._target = 0.14;
+    this._gain = ${AGC_INITIAL_GAIN};
+    this._minGain = ${AGC_MIN_GAIN};
+    this._maxGain = ${AGC_MAX_GAIN};
+    this._target = ${AGC_TARGET_RMS};
     this._frac = 0;
     this._pending = [];
     this._pendingSamples = 0;
@@ -44,10 +57,10 @@ class LectureMicPcmProcessor extends AudioWorkletProcessor {
       sum += v * v;
     }
     const rms = Math.sqrt(sum / input.length);
-    if (rms > 0.0004) {
+    if (rms > ${AGC_SILENCE}) {
       const desired = this._target / rms;
       const clamped = Math.max(this._minGain, Math.min(this._maxGain, desired));
-      this._gain = this._gain * 0.92 + clamped * 0.08;
+      this._gain = this._gain * 0.85 + clamped * 0.15;
     }
 
     const step = sampleRate / ${LECTURE_PCM_SAMPLE_RATE};
@@ -96,19 +109,16 @@ function downsampleAndBoost(
   inRate: number,
   state: { gain: number; frac: number }
 ): Int16Array {
-  const minGain = 4;
-  const maxGain = 80;
-  const target = 0.14;
   let sum = 0;
   for (let i = 0; i < input.length; i++) {
     const v = input[i]!;
     sum += v * v;
   }
   const rms = Math.sqrt(sum / input.length);
-  if (rms > 0.0004) {
-    const desired = target / rms;
-    const clamped = Math.max(minGain, Math.min(maxGain, desired));
-    state.gain = state.gain * 0.92 + clamped * 0.08;
+  if (rms > AGC_SILENCE) {
+    const desired = AGC_TARGET_RMS / rms;
+    const clamped = Math.max(AGC_MIN_GAIN, Math.min(AGC_MAX_GAIN, desired));
+    state.gain = state.gain * 0.85 + clamped * 0.15;
   }
 
   const step = inRate / LECTURE_PCM_SAMPLE_RATE;
@@ -190,7 +200,7 @@ export async function startLectureMicPcmTap(
     // AudioWorklet unavailable (older Safari) — ScriptProcessor on the main
     // thread is deprecated but keeps a 90-minute lecture working.
     const processor = ctx.createScriptProcessor(4096, 1, 1);
-    const state = { gain: 20, frac: 0 };
+    const state = { gain: AGC_INITIAL_GAIN, frac: 0 };
     processor.onaudioprocess = (ev) => {
       if (stopped) return;
       const input = ev.inputBuffer.getChannelData(0);
