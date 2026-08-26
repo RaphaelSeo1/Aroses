@@ -93,6 +93,15 @@ function pickStatusLine(pool: string[], salt: number): string {
   const idx = Math.abs(salt) % pool.length;
   return pool[idx] ?? pool[0]!;
 }
+
+function headingForSection(
+  writer: { listAllSections: (n: number) => Array<{ sectionId: string; markdown: string }> } | null | undefined,
+  sectionId: string
+): string | undefined {
+  if (!writer) return undefined;
+  const s = writer.listAllSections(80).find((x) => x.sectionId === sectionId);
+  return s?.markdown.match(/^#{1,3}\s+(.+)$/m)?.[1]?.trim();
+}
 const SYNTH_CHECK_INTERVAL_MS = 3 * 1000;
 
 /**
@@ -329,7 +338,11 @@ export function LiveNotesSurface({
   );
 
   const pushAiActivity = useCallback(
-    (kind: AiActivityEntry["kind"], message: string) => {
+    (
+      kind: AiActivityEntry["kind"],
+      message: string,
+      loc?: { sectionId?: string; sectionLabel?: string }
+    ) => {
       aiActivitySeqRef.current += 1;
       setAiActivity((prev) =>
         [
@@ -339,6 +352,8 @@ export function LiveNotesSurface({
             at: Date.now(),
             kind,
             message,
+            sectionId: loc?.sectionId,
+            sectionLabel: loc?.sectionLabel,
           },
         ].slice(-40)
       );
@@ -447,7 +462,8 @@ export function LiveNotesSurface({
                 ? APPEND_WITH_SCREEN_LINES
                 : APPEND_STATUS_LINES,
             Date.now() + pendingAppend.sectionId.length
-          )
+          ),
+          { sectionId: pendingAppend.sectionId }
         );
         writer.finishOp();
         writer.beginAppend({
@@ -600,7 +616,11 @@ export function LiveNotesSurface({
                 pickStatusLine(
                   hasScreen ? REVISE_WITH_SCREEN_LINES : REVISE_STATUS_LINES,
                   Date.now() + sectionId.length * 3
-                )
+                ),
+                {
+                  sectionId,
+                  sectionLabel: headingForSection(writer, sectionId),
+                }
               );
               queue.push({ kind: "revise", sectionId });
             }
@@ -1416,6 +1436,15 @@ export function LiveNotesSurface({
             active={aiWriting}
             open={aiLogOpen}
             onOpenChange={setAiLogOpen}
+            onJumpToSection={(sectionId) => {
+              const ok = notesRef.current?.revealSection(sectionId);
+              if (!ok) {
+                pushAiActivity(
+                  "error",
+                  "Could not find that section in the notes."
+                );
+              }
+            }}
           />
           {visionActive || visionCalls > 0 ? (
             <p className="border-t border-zinc-200 px-4 py-1.5 text-[10px] text-zinc-400 dark:border-zinc-800 dark:text-zinc-500">
@@ -1613,7 +1642,9 @@ export function LiveNotesSurface({
                 noteInstruction={noteInstruction}
                 notesRef={notesRef}
                 enqueueWriterJob={enqueueWriterJob}
-                onActivity={(kind, message) => pushAiActivity(kind, message)}
+                onActivity={(kind, message, loc) =>
+                  pushAiActivity(kind, message, loc)
+                }
               />
             </div>
           </aside>

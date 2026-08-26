@@ -22,7 +22,7 @@ import { Callout } from "./notes/Callout";
 import { NotesFormatToolbar } from "./notes/NotesFormatToolbar";
 import { NotesTableHoverControls } from "./notes/NotesTableHoverControls";
 import { LectureSummaryButton } from "./notes/LectureSummaryButton";
-import { AI_APPEND_META, Provenance } from "./notes/Provenance";
+import { AI_APPEND_META, Provenance, REVISION_DECO_META } from "./notes/Provenance";
 import { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
 import { promptDialog, alertDialog } from "@/components/AppDialogs";
 import { EmojiPickerButton } from "@/components/EmojiPickerButton";
@@ -156,6 +156,8 @@ export type NotesPanelHandle = {
   setStreamingIndicator: (on: boolean) => void;
   /** Plain text of the current editor selection, or "" if nothing selected. */
   getSelectedText: () => string;
+  /** Scroll a live-notes section into view and flash it. */
+  revealSection: (sectionId: string) => boolean;
   /** True when the editor has any saved note content. */
   hasContent: () => boolean;
   /** True when this chunk was already auto-appended (in doc metadata or heading). */
@@ -1031,6 +1033,34 @@ export function NotesPanel({
         const { from, to } = editor.state.selection;
         if (from === to) return "";
         return editor.state.doc.textBetween(from, to, "\n").trim();
+      },
+      revealSection: (sectionId: string) => {
+        if (!editor || editor.isDestroyed || !sectionId) return false;
+        const root = editor.view.dom;
+        let el: Element | null = null;
+        try {
+          el = root.querySelector(
+            `[data-section-id="${CSS.escape(sectionId)}"]`
+          );
+        } catch {
+          el = root.querySelector(`[data-section-id="${sectionId}"]`);
+        }
+        if (!el) return false;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        const tr = editor.state.tr;
+        tr.setMeta(REVISION_DECO_META, {
+          set: { [sectionId]: "rose-note-jump" },
+        });
+        tr.setMeta(AI_APPEND_META, true);
+        editor.view.dispatch(tr);
+        window.setTimeout(() => {
+          if (editor.isDestroyed) return;
+          const clear = editor.state.tr;
+          clear.setMeta(REVISION_DECO_META, { clear: [sectionId] });
+          clear.setMeta(AI_APPEND_META, true);
+          editor.view.dispatch(clear);
+        }, 2_200);
+        return true;
       },
       hasContent: () => {
         if (!editor || editor.isDestroyed) return false;
@@ -2178,9 +2208,23 @@ export function NotesPanel({
           animation: roseNoteRevised 1.1s ease;
           border-radius: 0.35rem;
         }
+        .tn-prose .rose-note-jump {
+          animation: roseNoteJump 2.2s ease;
+          border-radius: 0.4rem;
+          outline: 2px solid rgba(139, 92, 246, 0.7);
+          outline-offset: 3px;
+        }
         @keyframes roseNoteRevised {
           0% {
             background: rgba(199, 210, 254, 0.55);
+          }
+          100% {
+            background: transparent;
+          }
+        }
+        @keyframes roseNoteJump {
+          0% {
+            background: rgba(167, 139, 250, 0.45);
           }
           100% {
             background: transparent;

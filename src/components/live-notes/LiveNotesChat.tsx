@@ -104,7 +104,11 @@ export function LiveNotesChat({
   noteInstruction: string;
   notesRef: RefObject<NotesPanelHandle | null>;
   enqueueWriterJob: (job: () => Promise<void>) => void;
-  onActivity: (kind: "thought" | "status" | "error", message: string) => void;
+  onActivity: (
+    kind: "thought" | "status" | "error",
+    message: string,
+    loc?: { sectionId?: string; sectionLabel?: string }
+  ) => void;
 }) {
   const [turns, setTurns] = useState<ChatTurn[]>(() => loadTurns(sessionId));
   const [draft, setDraft] = useState("");
@@ -246,10 +250,19 @@ export function LiveNotesChat({
         }
 
         notesRef.current?.setStreamingIndicator(false);
+        let jumpId: string | undefined;
+        for (const item of coalesced) {
+          if ("sectionId" in item) jumpId = item.sectionId;
+        }
         if (applied > 0 && failed === 0) {
-          onActivity("status", "Updated your notes.");
+          onActivity("status", "Updated your notes.", {
+            sectionId: jumpId,
+          });
+          if (jumpId) notesRef.current?.revealSection(jumpId);
         } else if (applied > 0) {
-          onActivity("error", "Some of those note edits didn't apply.");
+          onActivity("error", "Some of those note edits didn't apply.", {
+            sectionId: jumpId,
+          });
         } else {
           onActivity(
             "error",

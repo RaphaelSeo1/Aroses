@@ -7,6 +7,8 @@ export type AiActivityEntry = {
   at: number;
   kind: "thought" | "append" | "revise" | "status" | "error";
   message: string;
+  sectionId?: string;
+  sectionLabel?: string;
 };
 
 const HEIGHT_KEY = "aroses.liveNotes.aiLogHeight";
@@ -16,7 +18,7 @@ const MAX_H = 360;
 
 function kindLabel(kind: AiActivityEntry["kind"]): string {
   switch (kind) {
-            case "thought":
+    case "thought":
       return "Noticing";
     case "append":
       return "Writing";
@@ -44,16 +46,39 @@ function kindDotClass(kind: AiActivityEntry["kind"]): string {
   }
 }
 
+function JumpBtn({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className="shrink-0 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-800 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-950/70 dark:text-violet-200 dark:hover:bg-violet-900/80"
+    >
+      {label}
+    </button>
+  );
+}
+
 export function LiveNotesAiActivity({
   entries,
   active,
   open,
   onOpenChange,
+  onJumpToSection,
 }: {
   entries: AiActivityEntry[];
   active: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onJumpToSection?: (sectionId: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{
@@ -62,6 +87,8 @@ export function LiveNotesAiActivity({
     origH: number;
   } | null>(null);
   const [height, setHeight] = useState(DEFAULT_H);
+
+  const latestJump = [...entries].reverse().find((e) => e.sectionId);
 
   useEffect(() => {
     try {
@@ -100,7 +127,6 @@ export function LiveNotesAiActivity({
   const onResizeMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
     if (!d || d.pointerId !== e.pointerId) return;
-    // Drag handle sits above the log — dragging up grows height.
     const next = Math.min(
       MAX_H,
       Math.max(MIN_H, d.origH - (e.clientY - d.startY))
@@ -142,29 +168,41 @@ export function LiveNotesAiActivity({
         </div>
       ) : null}
 
-      <button
-        type="button"
-        onClick={() => onOpenChange(!open)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-zinc-50 dark:hover:bg-zinc-900/60 sm:px-5"
-        aria-expanded={open}
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          {active ? (
-            <span className="relative flex h-2 w-2 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-500 opacity-50" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-500" />
+      <div className="flex w-full items-center gap-2 px-4 py-2.5 sm:px-5">
+        <button
+          type="button"
+          onClick={() => onOpenChange(!open)}
+          className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left hover:opacity-80"
+          aria-expanded={open}
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            {active ? (
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-500 opacity-50" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-500" />
+              </span>
+            ) : (
+              <span className="h-2 w-2 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+            )}
+            <span className="truncate text-xs font-semibold text-zinc-800 dark:text-zinc-100">
+              {active ? "Rose is working on your notes" : "Rose's note-taking log"}
             </span>
-          ) : (
-            <span className="h-2 w-2 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600" />
-          )}
-          <span className="truncate text-xs font-semibold text-zinc-800 dark:text-zinc-100">
-            {active ? "Rose is working on your notes" : "Rose's note-taking log"}
           </span>
-        </span>
-        <span className="shrink-0 text-[11px] font-medium text-zinc-400">
-          {open ? "Minimize" : "Expand"}
-        </span>
-      </button>
+          <span className="shrink-0 text-[11px] font-medium text-zinc-400">
+            {open ? "Minimize" : "Expand"}
+          </span>
+        </button>
+        {latestJump && onJumpToSection ? (
+          <JumpBtn
+            label={
+              latestJump.kind === "revise" || active
+                ? "Show edit"
+                : "Show in notes"
+            }
+            onClick={() => onJumpToSection(latestJump.sectionId!)}
+          />
+        ) : null}
+      </div>
 
       {open ? (
         <div
@@ -185,12 +223,25 @@ export function LiveNotesAiActivity({
                   aria-hidden
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                    {kindLabel(entry.kind)}
-                  </p>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                      {kindLabel(entry.kind)}
+                    </p>
+                    {entry.sectionId && onJumpToSection ? (
+                      <JumpBtn
+                        label="Show"
+                        onClick={() => onJumpToSection(entry.sectionId!)}
+                      />
+                    ) : null}
+                  </div>
                   <p className="text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
                     {entry.message}
                   </p>
+                  {entry.sectionLabel ? (
+                    <p className="mt-0.5 truncate text-[10px] text-zinc-400 dark:text-zinc-500">
+                      {entry.sectionLabel}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             ))
