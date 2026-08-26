@@ -26,6 +26,9 @@ type NoteOp =
 
 const TYPE_CPS = 110;
 const TYPE_TICK_MS = 24;
+const REPLY_TICK_MS = 16;
+const REPLY_CPS = 68;
+const REPLY_CPS_CATCHUP = 170;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const SUGGESTIONS = [
@@ -82,12 +85,14 @@ export function LiveNotesChat({
   const [turns, setTurns] = useState<ChatTurn[]>(() => loadTurns(sessionId));
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
 
   useEffect(() => {
+    if (busy) return;
     try {
       sessionStorage.setItem(
         storageKey(sessionId),
@@ -96,7 +101,7 @@ export function LiveNotesChat({
     } catch {
       /* ignore */
     }
-  }, [sessionId, turns]);
+  }, [sessionId, turns, busy]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -171,6 +176,7 @@ export function LiveNotesChat({
         userTurn,
         { id: assistantId, role: "assistant", content: "" },
       ]);
+      setStreamingId(assistantId);
 
       const writer = notesRef.current?.getStreamWriter();
       const sections = writer?.listRevisableSections(40) ?? [];
@@ -180,7 +186,45 @@ export function LiveNotesChat({
       const noteOps: NoteOp[] = [];
       let appendStarted = false;
       let noteOpCount = 0;
+      let pendingReply = "";
+      let revealed = 0;
+      let sseDone = false;
+      let cancelled = false;
 
+      const revealReply = (next: string) => {
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantId ? { ...t, content: next } : t
+          )
+        );
+      };
+
+      const pumpReply = async () => {
+        while (!cancelled) {
+          const leftover = pendingReply.slice(revealed);
+          if (!leftover) {
+            if (sseDone) break;
+            await sleep(REPLY_TICK_MS);
+            continue;
+          }
+          const cps =
+            leftover.length > 320
+              ? REPLY_CPS_CATCHUP
+              : leftover.length > 90
+                ? 110
+                : REPLY_CPS;
+          const step = Math.max(
+            1,
+            Math.round((cps * REPLY_TICK_MS) / 1000)
+          );
+          revealed += Math.min(step, leftover.length);
+          revealReply(pendingReply.slice(0, revealed));
+          await sleep(REPLY_TICK_MS);
+        }
+      };
+
+      const pump = pumpReply();
+      let failed = false;
       try {
         const res = await fetch(`/api/live-notes/${sessionId}/chat`, {
           method: "POST",
@@ -217,13 +261,7 @@ export function LiveNotesChat({
             if (parsed.channel === "notes") {
               noteOps.push({ kind: "notes", text: delta });
             } else {
-              setTurns((prev) =>
-                prev.map((t) =>
-                  t.id === assistantId
-                    ? { ...t, content: t.content + delta }
-                    : t
-                )
-              );
+              pendingReply += delta;
             }
           } else if (event === "op") {
             const sectionId =
@@ -280,29 +318,14 @@ export function LiveNotesChat({
           }
         }
 
-        setTurns((prev) =>
-          prev.map((t) =>
-            t.id === assistantId && !t.content.trim()
-              ? {
-                  ...t,
-                  content: noteOpCount
-                    ? "Updated your notes."
-                    : "I didn't have a reply for that — try asking again.",
-                }
-              : t
-          )
-        );
-
-        if (noteOps.length > 0) {
-          onActivity(
-            "status",
-            noteOpCount === 1
-              ? "Updating your notes from chat…"
-              : "Applying those note edits…"
-          );
-          void applyNoteOps(noteOps);
+        if (!pendingReply.trim()) {
+          pendingReply = noteOpCount
+            ? "Updated your notes."
+            : "I didn't have a reply for that — try asking again.";
         }
       } catch (e) {
+        failed = true;
+        cancelled = true;
         const msg =
           e instanceof Error && e.message
             ? e.message
@@ -316,8 +339,21 @@ export function LiveNotesChat({
           )
         );
       } finally {
+        sseDone = true;
+        await pump;
+        setStreamingId(null);
         setBusy(false);
         inputRef.current?.focus();
+      }
+
+      if (!failed && noteOps.length > 0) {
+        onActivity(
+          "status",
+          noteOpCount === 1
+            ? "Updating your notes from chat…"
+            : "Applying those note edits…"
+        );
+        void applyNoteOps(noteOps);
       }
     },
     [
@@ -378,18 +414,22 @@ export function LiveNotesChat({
               >
                 <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] opacity-70">
                   {t.role === "user" ? "You" : "Rose"}
-                  {busy && t.role === "assistant" && t === turns[turns.length - 1]
-                    ? " · …"
-                    : ""}
+                  {t.id === streamingId ? " · …" : ""}
                 </p>
-                {t.content.trim() ? (
+                {t.role === "assistant" && t.id === streamingId ? (
+                  <p className="whitespace-pre-wrap">
+                    {t.content}
+                    <span
+                      aria-hidden
+                      className="ml-0.5 inline-block h-[0.85em] w-[0.08em] translate-y-[0.12em] animate-pulse rounded-sm bg-fuchsia-500 align-baseline"
+                    />
+                  </p>
+                ) : t.content.trim() ? (
                   t.role === "assistant" ? (
                     <StudyChatMessageMarkdown source={t.content} />
                   ) : (
                     <p className="whitespace-pre-wrap">{t.content}</p>
                   )
-                ) : busy && t.role === "assistant" ? (
-                  <span className="text-zinc-400">…</span>
                 ) : null}
               </div>
             </div>
@@ -433,7 +473,11 @@ export function LiveNotesChat({
             disabled={busy || !draft.trim()}
             className="rounded-full bg-rose-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
           >
-            {busy ? "Thinking…" : "Send"}
+            {busy
+              ? turns.some((t) => t.id === streamingId && t.content)
+                ? "Writing…"
+                : "Thinking…"
+              : "Send"}
           </button>
         </div>
       </form>
