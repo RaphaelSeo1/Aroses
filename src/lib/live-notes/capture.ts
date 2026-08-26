@@ -74,124 +74,90 @@ export function detectCapturePlatform(): CapturePlatform {
 export class LectureCaptureError extends Error {}
 
 /**
- * Close-talk presets (echo cancel + noise suppress) are for a student
- * speaking into the laptop. A lecture hall is the opposite: the voice is
- * quiet and far-field, so those filters treat it as room noise and mute it
- * before Deepgram ever sees a frame. Auto-gain + no isolation keeps the
- * room mic open; `enhanceLectureMicStream` then boosts (and peak-limits)
- * so Deepgram's VAD and Opus DTX still register speech.
+ * Close-talk processing (AEC / NS / browser AGC / voice isolation) is for a
+ * student speaking into the laptop. In a lecture hall it treats the
+ * lecturer — and the PA coming out of room speakers — as noise or echo and
+ * mutes it. Ideal:false so we never OverconstrainedError into Chrome's
+ * default close-talk profile (`audio: true`).
  */
-const LECTURE_MIC_CONSTRAINTS = {
-  channelCount: 1,
-  echoCancellation: false,
-  noiseSuppression: false,
-  autoGainControl: true,
-  // Chrome: near-talker isolation would kill the lecturer. Unknown to the
-  // current DOM typings — getUserMedia ignores unsupported keys.
-  voiceIsolation: false,
-} as MediaTrackConstraints;
+const FAR_FIELD_AUDIO: MediaTrackConstraints = {
+  echoCancellation: { ideal: false },
+  noiseSuppression: { ideal: false },
+  autoGainControl: { ideal: false },
+};
 
-/** Linear makeup (~15.5 dB) so a quiet lecturer crosses Deepgram / Opus gates. */
-const LECTURE_MIC_MAKEUP_GAIN = 6;
-
-/**
- * Boost the mic, then limit peaks so a quiet lecturer is audible without
- * clipping if someone talks close to the laptop. Original getUserMedia
- * tracks stay live (required by the Web Audio graph) and are stopped when
- * the processed track is stopped — pause/finish still release the mic
- * indicator.
- */
-function enhanceLectureMicStream(raw: MediaStream): MediaStream {
-  const Ctor =
-    window.AudioContext ||
-    (
-      window as unknown as {
-        webkitAudioContext?: typeof AudioContext;
-      }
-    ).webkitAudioContext;
-  if (!Ctor) return raw;
-
-  let ctx: AudioContext;
-  try {
-    ctx = new Ctor();
-  } catch {
-    return raw;
+function stopTracks(stream: MediaStream) {
+  for (const t of stream.getTracks()) {
+    try {
+      t.stop();
+    } catch {
+      /* ignore */
+    }
   }
-  void ctx.resume();
+}
 
+function scoreLectureMicLabel(label: string): number {
+  const l = label.toLowerCase();
+  if (
+    /airpods|airpod|headphone|headset|earbud|earphone|earbuds|\bbuds\b|beats |bluetooth|hands-?free/.test(
+      l
+    )
+  ) {
+    return -100;
+  }
+  if (/built-?in|internal|macbook|imac|array|laptop/.test(l)) return 100;
+  if (/usb|yeti|rode|samson|fifine|snowball|hyperx|elgato/.test(l)) return 40;
+  return 10;
+}
+
+async function preferRoomMicrophone(
+  current: MediaStream
+): Promise<MediaStream> {
   try {
-    const source = ctx.createMediaStreamSource(raw);
-    const gain = ctx.createGain();
-    gain.gain.value = LECTURE_MIC_MAKEUP_GAIN;
-
-    const limiter = ctx.createDynamicsCompressor();
-    limiter.threshold.value = -8;
-    limiter.knee.value = 4;
-    limiter.ratio.value = 20;
-    limiter.attack.value = 0.003;
-    limiter.release.value = 0.12;
-
-    const dest = ctx.createMediaStreamDestination();
-    source.connect(gain);
-    gain.connect(limiter);
-    limiter.connect(dest);
-
-    const processed = dest.stream;
-    if (processed.getAudioTracks().length === 0) {
-      void ctx.close();
-      return raw;
-    }
-
-    let tornDown = false;
-    const teardown = () => {
-      if (tornDown) return;
-      tornDown = true;
-      for (const t of raw.getTracks()) {
-        try {
-          t.stop();
-        } catch {
-          /* ignore */
-        }
-      }
-      void ctx.close();
-    };
-
-    for (const t of processed.getAudioTracks()) {
-      const origStop = t.stop.bind(t);
-      t.stop = () => {
-        origStop();
-        teardown();
-      };
-      t.addEventListener("ended", teardown);
-    }
-    for (const t of raw.getAudioTracks()) {
-      t.addEventListener("ended", () => {
-        for (const p of processed.getAudioTracks()) {
-          try {
-            p.stop();
-          } catch {
-            /* ignore */
-          }
-        }
-      });
-    }
-
-    return processed;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter((d) => d.kind === "audioinput" && d.deviceId);
+    if (inputs.length === 0) return current;
+    const best = [...inputs].sort(
+      (a, b) => scoreLectureMicLabel(b.label) - scoreLectureMicLabel(a.label)
+    )[0];
+    if (!best || scoreLectureMicLabel(best.label) < 0) return current;
+    const currentId = current.getAudioTracks()[0]?.getSettings().deviceId;
+    if (best.deviceId === currentId) return current;
+    const switched = await navigator.mediaDevices.getUserMedia({
+      audio: { ...FAR_FIELD_AUDIO, deviceId: { exact: best.deviceId } },
+    });
+    stopTracks(current);
+    return switched;
   } catch {
-    void ctx.close();
-    return raw;
+    return current;
+  }
+}
+
+async function disableCloseTalkProcessing(stream: MediaStream) {
+  for (const track of stream.getAudioTracks()) {
+    try {
+      await track.applyConstraints(FAR_FIELD_AUDIO);
+    } catch {
+      /* device cannot disable AEC/NS — software AGC still runs */
+    }
+    try {
+      await track.applyConstraints({
+        voiceIsolation: { ideal: false },
+      } as MediaTrackConstraints);
+    } catch {
+      /* unsupported */
+    }
   }
 }
 
 async function acquireLectureMicStream(): Promise<MediaStream> {
-  try {
-    return await navigator.mediaDevices.getUserMedia({
-      audio: LECTURE_MIC_CONSTRAINTS,
-    });
-  } catch {
-    // Some devices reject exact AEC/NS-off; fall back to whatever they allow.
-    return await navigator.mediaDevices.getUserMedia({ audio: true });
-  }
+  // Never fall back to `{ audio: true }` — that turns close-talk filters on.
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: FAR_FIELD_AUDIO,
+  });
+  const preferred = await preferRoomMicrophone(stream);
+  await disableCloseTalkProcessing(preferred);
+  return preferred;
 }
 
 export function sharedSurfaceOf(display: MediaStream): SharedSurface {
@@ -250,7 +216,7 @@ export async function acquireLectureCaptureStream(
 ): Promise<LectureCaptureResult> {
   if (source === "mic") {
     try {
-      const stream = enhanceLectureMicStream(await acquireLectureMicStream());
+      const stream = await acquireLectureMicStream();
       return { stream, hasVideo: false, surface: "unknown" };
     } catch {
       throw new LectureCaptureError(

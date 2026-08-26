@@ -8,6 +8,10 @@ import {
   type LiveCaptureSource,
   type SharedSurface,
 } from "@/lib/live-notes/capture";
+import {
+  LECTURE_PCM_SAMPLE_RATE,
+  startLectureMicPcmTap,
+} from "@/lib/live-notes/lecture-mic-pcm";
 
 export type { LiveCaptureSource } from "@/lib/live-notes/capture";
 
@@ -160,6 +164,8 @@ export function useLiveLectureTranscription(options: {
   const recorderRef = useRef<MediaRecorder | null>(null);
   /** Which socket the current recorder feeds (recorder/socket pairing). */
   const recorderSocketRef = useRef<WebSocket | null>(null);
+  /** Mic path: raw PCM tap (no MediaRecorder / Opus DTX). */
+  const pcmTapRef = useRef<{ stop: () => void } | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   /** Last chosen source — Resume re-acquires from it after "Stop sharing". */
   const lastSourceRef = useRef<LiveCaptureSource>("tab");
@@ -314,7 +320,18 @@ export function useLiveLectureTranscription(options: {
     }
   }, []);
 
+  const stopPcmTap = useCallback(() => {
+    const tap = pcmTapRef.current;
+    pcmTapRef.current = null;
+    try {
+      tap?.stop();
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const stopRecorderAndStream = useCallback(() => {
+    stopPcmTap();
     const recorder = recorderRef.current;
     recorderRef.current = null;
     recorderSocketRef.current = null;
@@ -339,7 +356,7 @@ export function useLiveLectureTranscription(options: {
         }
       }
     }
-  }, []);
+  }, [stopPcmTap]);
 
   /**
    * Pause when the user ends the share from the browser's own UI (Chrome's
@@ -481,6 +498,12 @@ export function useLiveLectureTranscription(options: {
       utterance_end_ms: String(Math.max(1000, ENDPOINTING_MS)),
       vad_events: "true",
     });
+    // Mic: raw PCM. Containerized Opus DTX drops quiet far-field speech.
+    if (lastSourceRef.current === "mic") {
+      qs.set("encoding", "linear16");
+      qs.set("sample_rate", String(LECTURE_PCM_SAMPLE_RATE));
+      qs.set("channels", "1");
+    }
     const ws = new WebSocket(
       `wss://api.deepgram.com/v1/listen?${qs.toString()}`,
       ["bearer", accessToken]
@@ -560,72 +583,84 @@ export function useLiveLectureTranscription(options: {
   }, [fetchDeepgramAccessToken, commitUtterance]);
 
   /**
-   * (Re)create the MediaRecorder for a FRESH socket. The WebM container
-   * header lives only in the first chunk a recorder emits, so this must
-   * never be called for a socket that has already received audio.
+   * Pair a FRESH audio pump with a FRESH socket. Mic uses linear16 PCM (no
+   * WebM header). Tab/system still use MediaRecorder, whose container header
+   * lives only in the first chunk — never reuse a recorder across sockets.
    */
-  const startRecorderForSocket = useCallback((ws: WebSocket) => {
-    const old = recorderRef.current;
-    recorderRef.current = null;
-    recorderSocketRef.current = null;
-    if (old && old.state !== "inactive") {
-      try {
-        old.stop();
-      } catch {
-        /* ignore */
-      }
-    }
-    const stream = streamRef.current;
-    if (!stream) {
-      throw new Error("No capture stream available for transcription.");
-    }
-    // Deepgram must receive audio-only — never mux the video track.
-    const audioStream = audioOnlyStream(stream);
-    if (audioStream.getAudioTracks().length === 0) {
-      throw new Error("No audio track available for transcription.");
-    }
-    const mimeType = pickMimeType();
-    // 128 kbps keeps quiet far-field speech above Opus DTX / comfort-noise
-    // gates that a default low-bitrate lecture recording would drop.
-    const recorderOpts: MediaRecorderOptions = {
-      audioBitsPerSecond: 128_000,
-      ...(mimeType ? { mimeType } : {}),
-    };
-    let recorder: MediaRecorder;
-    try {
-      recorder = new MediaRecorder(audioStream, recorderOpts);
-    } catch {
-      try {
-        recorder = new MediaRecorder(
-          audioStream,
-          mimeType ? { mimeType } : undefined
-        );
-      } catch {
-        recorder = new MediaRecorder(audioStream);
-      }
-    }
-    recorderRef.current = recorder;
-    recorderSocketRef.current = ws;
-    recorder.ondataavailable = (ev) => {
-      if (ev.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-        ws.send(ev.data);
-      }
-    };
-    recorder.onerror = () => {
-      onErrorRef.current?.(
-        "Audio recording failed. Press Resume to reconnect, or Finish to save what you have."
-      );
-    };
-    try {
-      recorder.start(RECORDER_TIMESLICE_MS);
-    } catch (e) {
+  const startAudioForSocket = useCallback(
+    async (ws: WebSocket) => {
+      stopPcmTap();
+      const old = recorderRef.current;
       recorderRef.current = null;
       recorderSocketRef.current = null;
-      throw e instanceof Error
-        ? e
-        : new Error("Could not start audio recording for transcription.");
-    }
-  }, []);
+      if (old && old.state !== "inactive") {
+        try {
+          old.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      const stream = streamRef.current;
+      if (!stream) {
+        throw new Error("No capture stream available for transcription.");
+      }
+      const audioStream = audioOnlyStream(stream);
+      if (audioStream.getAudioTracks().length === 0) {
+        throw new Error("No audio track available for transcription.");
+      }
+
+      if (lastSourceRef.current === "mic") {
+        const tap = await startLectureMicPcmTap(audioStream, (chunk) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(chunk);
+          }
+        });
+        pcmTapRef.current = tap;
+        return;
+      }
+
+      const mimeType = pickMimeType();
+      const recorderOpts: MediaRecorderOptions = {
+        audioBitsPerSecond: 128_000,
+        ...(mimeType ? { mimeType } : {}),
+      };
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(audioStream, recorderOpts);
+      } catch {
+        try {
+          recorder = new MediaRecorder(
+            audioStream,
+            mimeType ? { mimeType } : undefined
+          );
+        } catch {
+          recorder = new MediaRecorder(audioStream);
+        }
+      }
+      recorderRef.current = recorder;
+      recorderSocketRef.current = ws;
+      recorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+          ws.send(ev.data);
+        }
+      };
+      recorder.onerror = () => {
+        onErrorRef.current?.(
+          "Audio recording failed. Press Resume to reconnect, or Finish to save what you have."
+        );
+      };
+      try {
+        recorder.start(RECORDER_TIMESLICE_MS);
+      } catch (e) {
+        recorderRef.current = null;
+        recorderSocketRef.current = null;
+        throw e instanceof Error
+          ? e
+          : new Error("Could not start audio recording for transcription.");
+      }
+    },
+    [stopPcmTap]
+  );
 
   /** Defined via ref to avoid a circular useCallback dependency with connectSocket. */
   const scheduleReconnectRef = useRef<(() => void) | null>(null);
@@ -651,7 +686,7 @@ export function useLiveLectureTranscription(options: {
         socketRef.current = ws;
         // Fresh socket needs a fresh recorder (WebM header). While paused we
         // leave the recorder alone — resume() creates one.
-        if (!wasPaused) startRecorderForSocket(ws);
+        if (!wasPaused) await startAudioForSocket(ws);
         reconnectAttemptRef.current = 0;
         setStatusBoth(wasPaused ? "paused" : "recording");
       } catch {
@@ -705,8 +740,8 @@ export function useLiveLectureTranscription(options: {
         const ws = await connectSocket();
         socketRef.current = ws;
 
-        // 3. Recorder (paired to this socket).
-        startRecorderForSocket(ws);
+        // 3. Audio pump (PCM for mic, MediaRecorder for tab/system).
+        await startAudioForSocket(ws);
 
         // 4. Timers.
         runningSinceRef.current = Date.now();
@@ -756,7 +791,7 @@ export function useLiveLectureTranscription(options: {
       prefetchToken,
       watchTrackEnded,
       connectSocket,
-      startRecorderForSocket,
+      startAudioForSocket,
       currentElapsedMs,
       flushSegments,
       ensureElapsedTimer,
@@ -813,6 +848,7 @@ export function useLiveLectureTranscription(options: {
 
       lastSourceRef.current = source;
       setActiveSource(source);
+      stopPcmTap();
       const old = streamRef.current;
       streamRef.current = fresh;
       setMediaStream(fresh);
@@ -850,7 +886,7 @@ export function useLiveLectureTranscription(options: {
         closeSocket();
         const ws = await connectSocket();
         socketRef.current = ws;
-        startRecorderForSocket(ws);
+        await startAudioForSocket(ws);
         reconnectAttemptRef.current = 0;
         setStatusBoth("recording");
         return true;
@@ -870,7 +906,8 @@ export function useLiveLectureTranscription(options: {
       setStatusBoth,
       closeSocket,
       connectSocket,
-      startRecorderForSocket,
+      startAudioForSocket,
+      stopPcmTap,
     ]
   );
 
@@ -878,6 +915,7 @@ export function useLiveLectureTranscription(options: {
     if (statusRef.current !== "recording" && statusRef.current !== "reconnecting") {
       return;
     }
+    stopPcmTap();
     const recorder = recorderRef.current;
     if (recorder && recorder.state === "recording") {
       try {
@@ -933,7 +971,7 @@ export function useLiveLectureTranscription(options: {
         durationSeconds: Math.round(currentElapsedMs() / 1000),
       }),
     }).catch(() => {});
-  }, [sessionId, setStatusBoth, saveTranscriptNow, currentElapsedMs]);
+  }, [sessionId, setStatusBoth, saveTranscriptNow, currentElapsedMs, stopPcmTap]);
 
   const pauseRef = useRef<typeof pause | null>(null);
   pauseRef.current = pause;
@@ -1018,7 +1056,7 @@ export function useLiveLectureTranscription(options: {
       closeSocket();
       const ws = await connectSocket();
       socketRef.current = ws;
-      startRecorderForSocket(ws);
+      await startAudioForSocket(ws);
       reconnectAttemptRef.current = 0;
       markRecording();
     } catch (e) {
@@ -1033,7 +1071,7 @@ export function useLiveLectureTranscription(options: {
     watchTrackEnded,
     closeSocket,
     connectSocket,
-    startRecorderForSocket,
+    startAudioForSocket,
     ensureElapsedTimer,
     currentElapsedMs,
   ]);

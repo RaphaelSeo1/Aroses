@@ -44,7 +44,7 @@ export function ShareGuideModal({
           </h2>
           <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
             {isMic
-              ? "Next you’ll see a quick browser permission — tap Allow so Rose can hear the lecture."
+              ? "Next you’ll see a quick browser permission — tap Allow so Rose can hear the lecture. Unplug headphones if you can: headset mics ignore the room, even when you can hear the speaker clearly."
               : "Rose will open your browser’s share picker next (required for privacy). Here’s exactly what to choose."}
           </p>
         </div>

@@ -1475,7 +1475,8 @@ export function LiveNotesSurface({
                 >
                   Use the microphone
                   <span className="mt-0.5 block text-xs font-normal text-zinc-500 dark:text-zinc-400">
-                    In-person lecture — capture the room through your mic.
+                    In-person lecture — uses your laptop mic (not headphones)
+                    and boosts quiet room audio.
                   </span>
                 </button>
               </div>
