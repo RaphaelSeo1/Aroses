@@ -415,6 +415,62 @@ export class StreamingNotesWriter {
       .filter((s) => s.markdown.trim().length > 0);
   }
 
+  /**
+   * Remove a fully-AI section. Returns false if missing or student-edited.
+   */
+  deleteSection(sectionId: string): boolean {
+    if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
+    if (this.op?.sectionId === sectionId) this.finishOp();
+    const blocks = this.sectionBlocks(sectionId);
+    if (blocks.length === 0) return false;
+    if (
+      blocks.some(
+        (b) =>
+          b.node.attrs?.provenance !== "ai" &&
+          b.node.attrs?.provenance !== "ai-context"
+      )
+    ) {
+      return false;
+    }
+    this.dispatchDoc((tr) => {
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const b = blocks[i]!;
+        tr.delete(b.pos, b.pos + b.node.nodeSize);
+      }
+    });
+    return true;
+  }
+
+  /**
+   * Apply a highlight mark across every text node in an AI section.
+   */
+  highlightSection(sectionId: string, color = "#fde68a"): boolean {
+    if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
+    const markType = this.editor.schema.marks.highlight;
+    if (!markType) return false;
+    const blocks = this.sectionBlocks(sectionId);
+    if (blocks.length === 0) return false;
+    let marked = false;
+    this.dispatchDoc((tr) => {
+      for (const b of blocks) {
+        const from = b.pos + 1;
+        const to = b.pos + b.node.nodeSize - 1;
+        if (to <= from) continue;
+        tr.addMark(from, to, markType.create({ color }));
+        marked = true;
+      }
+    });
+    if (marked) {
+      this.dispatchDeco({ set: { [sectionId]: "rose-note-revised" } });
+      window.setTimeout(() => {
+        if (!this.destroyed && !this.editor.isDestroyed) {
+          this.dispatchDeco({ clear: [sectionId] });
+        }
+      }, REVISION_HIGHLIGHT_MS);
+    }
+    return marked;
+  }
+
   // ── Streaming core ───────────────────────────────────────────────────────
 
   private freshOp(kind: ActiveOp["kind"], sectionId: string): ActiveOp {

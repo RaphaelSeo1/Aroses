@@ -23,7 +23,11 @@ import {
 } from "@/components/live-notes/LiveNotesAiActivity";
 import { LecturePreviewPanel } from "@/components/live-notes/LecturePreviewPanel";
 import { ShareGuideModal } from "@/components/live-notes/ShareGuideModal";
+import { SlideDeckAttach } from "@/components/live-notes/SlideDeckAttach";
+import { LiveNotesChat } from "@/components/live-notes/LiveNotesChat";
 import { useScreenVision } from "@/lib/live-notes/use-screen-vision";
+import { pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-pages";
+import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 
 /**
  * Live Notes — full-page live lecture capture surface.
@@ -63,11 +67,18 @@ const APPEND_WITH_SCREEN_LINES = [
   "Noticing something useful on-screen — weaving it in…",
 ];
 
+const SEED_APPEND_LINES = [
+  "Drafting notes from the uploaded slides…",
+  "Turning the deck into a first pass of notes…",
+  "Sketching sections from the slides — speech will refine them…",
+];
+
 const REVISE_STATUS_LINES = [
   "Earlier line didn’t hold up — fixing that section…",
   "Caught a mismatch — rewriting the shaky part…",
   "Updating a prior note so it matches what was just said…",
   "Tightening an older section after a correction…",
+  "Updating the slide draft so it matches what was just said…",
 ];
 
 const REVISE_WITH_SCREEN_LINES = [
@@ -111,6 +122,8 @@ export type LiveNotesInitialSession = {
   lastSegmentSeq: number;
   /** Per-session "tell the AI how to write these notes" free text. */
   noteInstruction?: string;
+  slidesFileName?: string | null;
+  slidesPageCount?: number;
 };
 
 function formatElapsed(ms: number): string {
@@ -178,7 +191,8 @@ export function LiveNotesSurface({
   const [voiceCapped, setVoiceCapped] = useState(false);
   const [autoGenerate, setAutoGenerate] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
-  const [railWidth, setRailWidth] = useState(300);
+  const [railWidth, setRailWidth] = useState(320);
+  const [railTab, setRailTab] = useState<"transcript" | "chat">("transcript");
   const [finishing, setFinishing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmFinish, setConfirmFinish] = useState(false);
@@ -210,6 +224,12 @@ export function LiveNotesSurface({
   // synthesize call so edits apply to the very next slice.
   const [noteInstruction, setNoteInstruction] = useState(
     session.noteInstruction ?? ""
+  );
+  const [slidesFileName, setSlidesFileName] = useState<string | null>(
+    session.slidesFileName ?? null
+  );
+  const [slidesPageCount, setSlidesPageCount] = useState(
+    session.slidesPageCount ?? 0
   );
   const noteInstructionRef = useRef(noteInstruction);
   const handleNoteInstructionChange = useCallback((value: string) => {
@@ -253,12 +273,14 @@ export function LiveNotesSurface({
       if (raw) {
         const n = Number(raw);
         if (Number.isFinite(n)) {
-          setRailWidth(Math.min(520, Math.max(200, n)));
+          setRailWidth(Math.min(560, Math.max(220, n)));
         }
       }
       const openRaw = localStorage.getItem("aroses.liveNotes.railOpen");
       if (openRaw === "0") setRailOpen(false);
       if (openRaw === "1") setRailOpen(true);
+      const tabRaw = localStorage.getItem("aroses.liveNotes.railTab");
+      if (tabRaw === "chat" || tabRaw === "transcript") setRailTab(tabRaw);
     } catch {
       /* ignore */
     }
@@ -271,6 +293,8 @@ export function LiveNotesSurface({
   const unsynthesizedRef = useRef("");
   const synthInFlightRef = useRef(false);
   const blockCountRef = useRef(0);
+  const seedWriterRetryRef = useRef(0);
+  const pendingSeedRef = useRef(false);
   /**
    * Ring buffer: transcript excerpt each AI section was written from —
    * the ground truth the model checks its own notes against when deciding
@@ -288,6 +312,21 @@ export function LiveNotesSurface({
     setAiWriting(busy);
     notesRef.current?.setStreamingIndicator(busy);
   }, []);
+
+  const enqueueWriterJob = useCallback(
+    (job: () => Promise<void>) => {
+      pumpJobsRef.current += 1;
+      syncAiWritingUi();
+      pumpTailRef.current = pumpTailRef.current
+        .then(() => job())
+        .catch(() => {})
+        .finally(() => {
+          pumpJobsRef.current -= 1;
+          syncAiWritingUi();
+        });
+    },
+    [syncAiWritingUi]
+  );
 
   const pushAiActivity = useCallback(
     (kind: AiActivityEntry["kind"], message: string) => {
@@ -308,9 +347,13 @@ export function LiveNotesSurface({
   );
 
   const maybeSynthesize = useCallback(
-    async (force: boolean) => {
+    async (force: boolean, opts?: { seedFromDeck?: boolean }) => {
       if (!autoGenerateRef.current) return;
-      if (synthInFlightRef.current) return;
+      if (synthInFlightRef.current) {
+        if (opts?.seedFromDeck) pendingSeedRef.current = true;
+        return;
+      }
+      const seedFromDeck = opts?.seedFromDeck === true;
       const pending = unsynthesizedRef.current.trim();
       // The first section should appear fast (proof the AI is listening);
       // after that, batch to keep call counts and costs sane.
@@ -319,28 +362,42 @@ export function LiveNotesSurface({
         : blockCountRef.current === 0
           ? SYNTH_FIRST_SECTION_CHARS
           : SYNTH_TARGET_CHARS;
-      if (pending.length < threshold) return;
+      if (!seedFromDeck && pending.length < threshold) return;
 
       const writer = notesRef.current?.getStreamWriter();
-      if (!writer) return;
+      if (!writer) {
+        if (seedFromDeck && seedWriterRetryRef.current < 20) {
+          seedWriterRetryRef.current += 1;
+          window.setTimeout(() => {
+            void maybeSynthesize(false, { seedFromDeck: true });
+          }, 300);
+        }
+        return;
+      }
+      seedWriterRetryRef.current = 0;
 
       synthInFlightRef.current = true;
-      unsynthesizedRef.current = "";
+      if (!seedFromDeck) unsynthesizedRef.current = "";
       setAiWriting(true);
       pushAiActivity(
         "status",
-        "Reading the latest slice of the lecture…"
+        seedFromDeck
+          ? "Drafting notes from your uploaded slides…"
+          : "Reading the latest slice of the lecture…"
       );
       notesRef.current?.setStreamingIndicator(true);
       syncAiWritingUi();
 
-      // Revisable = last few fully-AI sections INCLUDING the newest, so a
-      // continuing topic can @@revise/extend the section just written instead
-      // of spawning a half-baked duplicate. Cap at 3. Student-edited sections
-      // are excluded by the writer.
+      // Revisable = AI sections the new speech might belong to. Match by
+      // overlap so a late mention can still @@revise an early slide draft,
+      // not only the last 3 sections. Cap at 4 for the model.
       const excerpts = sectionExcerptsRef.current;
-      const allSections = writer.listRevisableSections(5);
-      const revisable = allSections.slice(-3).map((s) => ({
+      const allSections = writer.listRevisableSections(80);
+      const revisable = (
+        seedFromDeck
+          ? []
+          : pickRevisableByTranscript(allSections, pending, 4)
+      ).map((s) => ({
         sectionId: s.sectionId,
         markdown: s.markdown,
         transcriptExcerpt: excerpts.get(s.sectionId),
@@ -351,7 +408,9 @@ export function LiveNotesSurface({
         .slice(-5);
 
       let appendSectionId: string | null = null;
+      let revisedSectionId: string | null = null;
       let gotContent = false;
+      let seedAgain = false;
       let pendingAppend: {
         sectionId: string;
         dividerBefore: boolean;
@@ -382,7 +441,11 @@ export function LiveNotesSurface({
         pushAiActivity(
           "append",
           pickStatusLine(
-            hasScreen ? APPEND_WITH_SCREEN_LINES : APPEND_STATUS_LINES,
+            seedFromDeck
+              ? SEED_APPEND_LINES
+              : hasScreen
+                ? APPEND_WITH_SCREEN_LINES
+                : APPEND_STATUS_LINES,
             Date.now() + pendingAppend.sectionId.length
           )
         );
@@ -414,6 +477,7 @@ export function LiveNotesSurface({
           } else if (item.kind === "revise") {
             pendingAppend = null;
             writer.finishOp();
+            revisedSectionId = item.sectionId;
             opValid = await writer.beginRevision(item.sectionId);
             // Failed revise (missing/student-edited id): drop only that
             // revise body's text; the next @@append must still be allowed.
@@ -441,16 +505,24 @@ export function LiveNotesSurface({
           .then(() => {
             if (appendSectionId && gotContent) {
               blockCountRef.current += 1;
-              excerpts.set(appendSectionId, pending.slice(0, 3_000));
+              excerpts.set(
+                appendSectionId,
+                seedFromDeck ? DECK_DRAFT_EXCERPT : pending.slice(0, 3_000)
+              );
               pushAiActivity(
                 "status",
-                "Finished this batch — still listening for more…"
+                seedFromDeck
+                  ? "Slide draft is in — listening will refine it…"
+                  : "Finished this batch — still listening for more…"
               );
-              while (excerpts.size > 6) {
+              while (excerpts.size > 48) {
                 const oldest = excerpts.keys().next().value;
                 if (oldest === undefined) break;
                 excerpts.delete(oldest);
               }
+            }
+            if (revisedSectionId && gotContent && !seedFromDeck) {
+              excerpts.set(revisedSectionId, pending.slice(0, 3_000));
             }
           })
           .catch(() => {})
@@ -465,10 +537,13 @@ export function LiveNotesSurface({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            newSegmentText: pending,
+            newSegmentText: seedFromDeck ? "" : pending,
+            seedFromDeck: seedFromDeck || undefined,
             recentHeadings,
             revisable,
-            screenContext: screenContextRef.current || undefined,
+            screenContext: seedFromDeck
+              ? undefined
+              : screenContextRef.current || undefined,
             // Always a string — sending "" clears an instruction in-flight.
             noteInstruction: noteInstructionRef.current,
           }),
@@ -479,7 +554,18 @@ export function LiveNotesSurface({
           // slice back — the next cadence tick retries with it).
           const data = (await res
             .json()
-            .catch(() => ({}))) as { capped?: boolean };
+            .catch(() => ({}))) as {
+            capped?: boolean;
+            seedDone?: boolean;
+            error?: string;
+          };
+          if (seedFromDeck) {
+            if (data.seedDone) return;
+            if (typeof data.error === "string" && data.error.trim()) {
+              pushAiActivity("error", data.error.trim());
+            }
+            return;
+          }
           if (!data.capped) {
             unsynthesizedRef.current =
               `${pending} ${unsynthesizedRef.current}`.trim();
@@ -534,6 +620,13 @@ export function LiveNotesSurface({
                 ? parsed.message
                 : "Synthesis failed."
             );
+          } else if (event === "done") {
+            if (
+              typeof parsed.seedRemaining === "number" &&
+              parsed.seedRemaining > 0
+            ) {
+              seedAgain = true;
+            }
           }
         };
 
@@ -557,22 +650,49 @@ export function LiveNotesSurface({
         }
         queueClosed = true;
       } catch {
-        unsynthesizedRef.current =
-          `${pending} ${unsynthesizedRef.current}`.trim();
-        pushAiActivity("error", "Note update failed — will retry on the next slice.");
+        if (!seedFromDeck) {
+          unsynthesizedRef.current =
+            `${pending} ${unsynthesizedRef.current}`.trim();
+        }
+        pushAiActivity(
+          "error",
+          seedFromDeck
+            ? "Could not draft notes from the slides — try uploading again."
+            : "Note update failed — will retry on the next slice."
+        );
       } finally {
         queueClosed = true;
         synthInFlightRef.current = false;
         syncAiWritingUi();
         schedulePump();
+        if (seedAgain || pendingSeedRef.current) {
+          pendingSeedRef.current = false;
+          void maybeSynthesize(false, { seedFromDeck: true });
+        }
       }
     },
     [sessionId, pushAiActivity, syncAiWritingUi]
   );
 
-  // Cadence heartbeat: attempt a synthesis every 5s. The char thresholds
-  // and the in-flight/typing guard inside maybeSynthesize decide whether
-  // one actually fires, so this is cheap to run constantly.
+  const handleSlidesChange = useCallback(
+    (next: { fileName: string | null; pageCount: number }) => {
+      setSlidesFileName(next.fileName);
+      setSlidesPageCount(next.pageCount);
+      if (next.pageCount > 0) {
+        void maybeSynthesize(false, { seedFromDeck: true });
+      }
+    },
+    [maybeSynthesize]
+  );
+
+  // Resume seeding if this session already has a deck (reload / reopen).
+  const initialDeckSeedRef = useRef(false);
+  useEffect(() => {
+    if (initialDeckSeedRef.current) return;
+    if ((session.slidesPageCount ?? 0) <= 0) return;
+    initialDeckSeedRef.current = true;
+    void maybeSynthesize(false, { seedFromDeck: true });
+  }, [maybeSynthesize, session.slidesPageCount]);
   useEffect(() => {
     const t = window.setInterval(() => {
       void maybeSynthesize(false);
@@ -655,9 +775,10 @@ export function LiveNotesSurface({
 
   // Keep the transcript rail pinned to the newest line.
   useEffect(() => {
+    if (railTab !== "transcript") return;
     const el = railScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [segments, partialText]);
+  }, [segments, partialText, railTab]);
 
   // Warn before closing the tab mid-recording (transcript autosaves on each
   // utterance + every ~5s, but a tab kill can still race the last flush).
@@ -1025,6 +1146,14 @@ export function LiveNotesSurface({
           <span className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-semibold tabular-nums text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
             {formatElapsed(elapsedMs)}
           </span>
+          <SlideDeckAttach
+            sessionId={sessionId}
+            fileName={slidesFileName}
+            pageCount={slidesPageCount}
+            compact
+            onChange={handleSlidesChange}
+            disabled={finishing || deleting}
+          />
         </div>
 
         {/* Controls */}
@@ -1189,7 +1318,28 @@ export function LiveNotesSurface({
             className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
             aria-pressed={railOpen}
           >
-            {railOpen ? "Hide transcript" : "Show transcript"}
+            {railOpen ? "Hide sidebar" : "Show sidebar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setRailTab("chat");
+              setRailOpen(true);
+              try {
+                localStorage.setItem("aroses.liveNotes.railTab", "chat");
+                localStorage.setItem("aroses.liveNotes.railOpen", "1");
+              } catch {
+                /* ignore */
+              }
+            }}
+            className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+              railOpen && railTab === "chat"
+                ? "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-200"
+                : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            }`}
+            aria-pressed={railOpen && railTab === "chat"}
+          >
+            Chat
           </button>
 
           <button
@@ -1284,7 +1434,7 @@ export function LiveNotesSurface({
             <div
               role="separator"
               aria-orientation="vertical"
-              aria-label="Resize transcript"
+              aria-label="Resize sidebar"
               title="Drag to resize"
               className="absolute inset-y-0 -left-1 z-10 w-2 cursor-ew-resize hover:bg-rose-500/15"
               onPointerDown={(e) => {
@@ -1302,8 +1452,8 @@ export function LiveNotesSurface({
                 if (!d || d.pointerId !== e.pointerId) return;
                 // Dragging left grows the rail.
                 const next = Math.min(
-                  520,
-                  Math.max(200, d.origW - (e.clientX - d.startX))
+                  560,
+                  Math.max(220, d.origW - (e.clientX - d.startX))
                 );
                 setRailWidth(next);
               }}
@@ -1338,7 +1488,60 @@ export function LiveNotesSurface({
                 }
               }}
             />
-            <div className="flex items-start justify-between gap-2 border-b border-zinc-200 px-4 py-2.5 dark:border-zinc-800">
+            <div className="flex items-center gap-1 border-b border-zinc-200 px-2 pt-2 dark:border-zinc-800">
+              {(
+                [
+                  ["transcript", "Transcript"],
+                  ["chat", "Chat"],
+                ] as const
+              ).map(([id, label]) => {
+                const active = railTab === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => {
+                      setRailTab(id);
+                      try {
+                        localStorage.setItem("aroses.liveNotes.railTab", id);
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                    aria-pressed={active}
+                    className={`flex-1 rounded-t-lg px-2 py-1.5 text-[11px] font-semibold ${
+                      active
+                        ? "bg-white text-zinc-800 ring-1 ring-zinc-200 dark:bg-zinc-950 dark:text-zinc-100 dark:ring-zinc-700"
+                        : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => {
+                  setRailOpen(false);
+                  try {
+                    localStorage.setItem("aroses.liveNotes.railOpen", "0");
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                className="shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+              >
+                Hide
+              </button>
+            </div>
+            <div
+              className={
+                railTab === "transcript"
+                  ? "flex min-h-0 flex-1 flex-col"
+                  : "hidden"
+              }
+            >
+            <div className="flex items-start justify-between gap-2 border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
               <div className="min-w-0">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                   Live transcript
@@ -1362,20 +1565,6 @@ export function LiveNotesSurface({
                   )}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setRailOpen(false);
-                  try {
-                    localStorage.setItem("aroses.liveNotes.railOpen", "0");
-                  } catch {
-                    /* ignore */
-                  }
-                }}
-                className="shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
-              >
-                Minimize
-              </button>
             </div>
             <div
               ref={railScrollRef}
@@ -1403,6 +1592,29 @@ export function LiveNotesSurface({
                   {partialText}…
                 </p>
               ) : null}
+            </div>
+            </div>
+            <div
+              className={
+                railTab === "chat" ? "flex min-h-0 flex-1 flex-col" : "hidden"
+              }
+            >
+              <LiveNotesChat
+                sessionId={sessionId}
+                lectureTitle={liveTitle}
+                recentTranscript={[
+                  ...segments.slice(-50).map((s) => s.text),
+                  partialText,
+                ]
+                  .filter(Boolean)
+                  .join(" ")
+                  .slice(-10_000)}
+                screenContext={screenContextText}
+                noteInstruction={noteInstruction}
+                notesRef={notesRef}
+                enqueueWriterJob={enqueueWriterJob}
+                onActivity={(kind, message) => pushAiActivity(kind, message)}
+              />
             </div>
           </aside>
         ) : null}
@@ -1433,12 +1645,22 @@ export function LiveNotesSurface({
                 {liveTitle.trim() || "Untitled lecture"}
               </h1>
               <p className="mt-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
-                Rose listens to the lecture, reads the shared screen when slides
-                change, builds running notes beside a live preview, and turns
-                everything into a full course when you finish. Pick a source to
-                start — share the <strong>lecture</strong> tab, not this Rose page.
+                Upload the lecture slides and Rose drafts notes from them right
+                away. As the lecturer talks, those drafts get edited — wrong
+                slide claims dropped, spoken detail folded in. Pick a source to
+                start — share the <strong>lecture</strong> tab, not this Rose
+                page.
               </p>
-              <div className="mt-5 grid gap-2">
+              <div className="mt-4">
+                <SlideDeckAttach
+                  sessionId={sessionId}
+                  fileName={slidesFileName}
+                  pageCount={slidesPageCount}
+                  onChange={handleSlidesChange}
+                  disabled={status === "connecting"}
+                />
+              </div>
+              <div className="mt-4 grid gap-2">
                 <button
                   type="button"
                   onClick={() => void handleStart("tab")}

@@ -153,6 +153,8 @@ export type NotesPanelHandle = {
   getStreamWriter: () => StreamingNotesWriter | null;
   /** Toggle the "Rose is writing notes…" status line. */
   setStreamingIndicator: (on: boolean) => void;
+  /** Plain text of the current editor selection, or "" if nothing selected. */
+  getSelectedText: () => string;
   /** True when the editor has any saved note content. */
   hasContent: () => boolean;
   /** True when this chunk was already auto-appended (in doc metadata or heading). */
@@ -1020,6 +1022,12 @@ export function NotesPanel({
       },
       getStreamWriter: () => streamWriterRef.current,
       setStreamingIndicator: (on: boolean) => setStreamingNotes(on),
+      getSelectedText: () => {
+        if (!editor || editor.isDestroyed) return "";
+        const { from, to } = editor.state.selection;
+        if (from === to) return "";
+        return editor.state.doc.textBetween(from, to, "\n").trim();
+      },
       hasContent: () => {
         if (!editor || editor.isDestroyed) return false;
         return docToPlainText(editor.getJSON()).trim().length > 0;

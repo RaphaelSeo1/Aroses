@@ -8,6 +8,7 @@ import {
   type LiveNotesStreamEvent,
 } from "@/lib/live-notes/marker-protocol";
 import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
+import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 
 export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
 
@@ -50,8 +51,10 @@ export const ROLLING_SUMMARY_MAX_CHARS = 1_600;
 const MAX_SEGMENT_INPUT_CHARS = 12_000;
 /** Self-revision context caps (cost bound: ~4 sections/call). */
 export const MAX_REVISABLE_SECTIONS = 4;
-const MAX_SECTION_MARKDOWN_CHARS = 1_600;
+const MAX_SECTION_MARKDOWN_CHARS = 4_000;
 const MAX_SECTION_EXCERPT_CHARS = 2_400;
+const MAX_DECK_LIVE_CHARS = 2_400;
+const MAX_DECK_SEED_CHARS = 7_000;
 
 const NOTE_STYLE_RULES = `You write structured STUDY NOTES — useful to reread later, not a transcript and not a re-narration of the lecture. Aim for the old thorough default, cleaned up: keep the substance, drop the noise.
 
@@ -68,21 +71,27 @@ const NOTE_STYLE_RULES = `You write structured STUDY NOTES — useful to reread 
 DO NOT under-write: if a definition, number, named study/person, result, or worked step was taught, it must appear. Condensing means clearer prose and fewer redundant bullets — not omitting teachable content.
 
 GROUNDING (critical — overrides everything else on conflict):
-- You may receive TWO sources: NEW TRANSCRIPT SLICE (speech-to-text) and ON-SCREEN CONTENT (OCR/vision from the shared lecture display).
-- Screen text is AUTHORITATIVE for: spellings, symbols, drug/chemical names, numbers, units, table cells, equation symbols, and slide titles — when the conflict is clearly an STT mishear / typo.
-- Transcript is AUTHORITATIVE for: spoken explanation, emphasis, worked examples walked verbally, and asides not visible on screen.
-- CONTRADICTIONS (do not silently overwrite): If the new slice or screen conflicts with what a recent note already said — or speech and screen disagree on a substantive claim (not just spelling) — do NOT delete or rewrite the prior note away. Instead @@append a short open question so the student can decide, using exactly this shape on its own line:
+- You may receive THREE sources: NEW TRANSCRIPT SLICE (speech-to-text), ON-SCREEN CONTENT (OCR/vision from the shared lecture display), and DECK SLIDES (pre-uploaded lecture deck pages matched to this slice).
+- Screen text is AUTHORITATIVE for: spellings, symbols, drug/chemical names, numbers, units, table cells, equation symbols, and slide titles — when the conflict is clearly an STT mishear / typo AND the extract is from the current frame.
+- DECK SLIDES (matched pages only): use as the lecture's written reference for this topic. Include definitions, formulas, tables, labels, and load-bearing bullets that are on those pages even if the lecturer only gestured at them or the STT garbled them. Do NOT copy slides that are not in DECK SLIDES. Do NOT add textbook knowledge that is not on the matched pages or in the transcript/screen.
+- Transcript is AUTHORITATIVE for: spoken explanation, emphasis, worked examples walked verbally, and asides not visible on screen or deck.
+- CONTRADICTIONS (do not silently overwrite): If the lecturer says two incompatible things, or live screen and speech disagree on a substantive claim, do NOT invent a winner — @@append:
   - **Open question:** Notes had <prior claim>; just said/shown <new claim>. Which is right?
-  Keep both claims visible in that question. Never invent a third "resolved" answer.
+  Keep both claims visible in that question.
+- SLIDE DRAFTS vs SPEECH: Sections drafted from the uploaded deck (transcript excerpt "${DECK_DRAFT_EXCERPT}" or empty excerpt) are provisional. When this slice of speech covers that topic, @@revise the matching section:
+  - Lecturer CONTRADICTS the draft → delete the wrong slide claim and write what was taught.
+  - Lecturer ADDS explanation, examples, or emphasis → keep correct slide facts and fold the spoken detail in.
+  - Lecturer SKIPPED / "ignore this slide" → drop those bullets.
+  Do not leave a known-wrong slide claim sitting next to the correction. Open questions are only for unclear speech, not for a clear override of a draft.
 - Clear STT/spelling fixes only (e.g. slide shows the correct drug name, transcript garbled it): you may fix that token via a minimal @@revise, or write the correct spelling in the new append without wiping the section.
-- If ON-SCREEN CONTENT is missing or empty, every fact must come from the transcript alone (legacy behavior).
+- If ON-SCREEN CONTENT is missing or empty, prefer DECK SLIDES for spellings/numbers of the current topic; if both are missing, every fact must come from the transcript alone.
 - No outside knowledge, no invented examples, no invented figures (doses, percentages, dates, totals).
 - If you add clarifying context the lecturer did NOT say or show (an analogy, a definition they skipped), it MUST be on its own line formatted exactly as:
   > (AI) <one or two sentences>
   Never blend added context into normal notes.
 - If a passage is garbled or ambiguous in BOTH sources, omit it. Never guess.`;
 
-const SYSTEM = `You are a meticulous note-taker sitting in a live lecture. You receive: the NEWEST slice of the lecture transcript (raw speech-to-text), optional ON-SCREEN CONTENT extracted from the shared display, a rolling summary of everything covered before it, and YOUR RECENT NOTE SECTIONS with the raw transcript excerpts they were written from.
+const SYSTEM = `You are a meticulous note-taker sitting in a live lecture. You receive: the NEWEST slice of the lecture transcript (raw speech-to-text), optional ON-SCREEN CONTENT extracted from the shared display, optional DECK SLIDES (pre-uploaded pages matched to this slice), a rolling summary of everything covered before it, and YOUR RECENT NOTE SECTIONS with the raw transcript excerpts they were written from.
 
 ${NOTE_STYLE_RULES}
 
@@ -95,7 +104,8 @@ Before writing, check whether the NEW TRANSCRIPT SLICE continues, completes, or 
 - If it INTRODUCES a genuinely new topic → @@append under a new heading. Prefer a more specific facet heading over a near-duplicate H2 for the same topic.
 - If it only REPEATS already-captured material → leave @@append empty (still emit the marker).
 - For a narrow factual/spelling fix only (STT error, wrong number the lecturer clearly corrected, invented content outside "> (AI)" / "**Open question:**"): @@revise with the full section, changing only what is wrong.
-- Substantive contradictions: do NOT pick a winner — @@append an **Open question:** line instead.
+- Slide DRAFTS (transcript excerpt is "${DECK_DRAFT_EXCERPT}"): when this speech covers that topic, prefer @@revise. Speech that clearly overrides the draft wins — delete the wrong bullets and write what was taught. Do NOT leave the stale draft claim next to the correction, and do NOT use an Open question for a clear spoken override of a draft.
+- Other substantive contradictions (two incompatible things the lecturer said, or live screen vs speech): do NOT pick a winner — @@append an **Open question:** line instead.
 
 Only sections in YOUR RECENT NOTE SECTIONS may be revised. Never touch older/unshown sections. At most one @@revise per call.
 
@@ -118,16 +128,42 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 @@summary
 <updated rolling summary: compressed record of EVERYTHING covered so far (previous summary + this slice), max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown — re-compress aggressively, keep topic names and key terms, drop detail>`;
 
+const SEED_SYSTEM = `You are drafting study notes from a pre-uploaded lecture slide deck BEFORE any speech has been transcribed. There is no lecture audio yet.
+
+${NOTE_STYLE_RULES}
+
+${voiceRules()}
+
+SEED RULES (override live-lecture habits):
+- Source of truth is DECK SLIDES only. Cover every slide in that block. Do not skip a slide because it looks like an agenda or recap — capture the teachable content.
+- Do NOT use outside/textbook knowledge. If a slide is sparse, write a short heading + the bullets that are actually there; do not invent explanations.
+- Do NOT emit @@revise. Always @@append (notes for this batch of slides).
+- Structure with "## " headings per topic (not automatically one heading per slide). Include formulas, definitions, tables, and load-bearing labels from the slides.
+- If RECENT HEADINGS already cover a topic from an earlier seed batch, do not repeat that H2 — continue under a more specific facet heading only when this batch adds a distinct idea.
+- @@thought: one short line that you are drafting from the uploaded slides (mention slide numbers if present).
+- @@summary: compressed record of topics drafted so far (previous summary + these slides).
+
+OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
+@@thought <one short sentence>
+@@append
+<markdown study notes for these slides>
+@@summary
+<updated rolling summary, max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown>`;
+
 /**
  * Layer the student's per-session note request directly under the base style
  * rules (still above grounding/marker sections, which always win). Empty
  * instruction ⇒ the exact base SYSTEM, byte-for-byte. REVIEW_SYSTEM is
  * intentionally never modified — the wrap-up review is factual/structural.
  */
-function liveNotesSystem(noteInstruction: string | undefined): string {
+function liveNotesSystem(
+  noteInstruction: string | undefined,
+  mode: "live" | "seed"
+): string {
+  const base = mode === "seed" ? SEED_SYSTEM : SYSTEM;
   const modifier = buildNoteInstructionModifier(noteInstruction);
-  if (!modifier) return SYSTEM;
-  return SYSTEM.replace(NOTE_STYLE_RULES, `${NOTE_STYLE_RULES}${modifier}`);
+  if (!modifier) return base;
+  return base.replace(NOTE_STYLE_RULES, `${NOTE_STYLE_RULES}${modifier}`);
 }
 
 export type RevisableSection = {
@@ -153,8 +189,12 @@ export async function* streamLiveLectureNotes(input: {
   userId?: string;
   /** Recent on-screen extracts (slide OCR) — authoritative for spellings/numbers. */
   screenContext?: string;
+  /** Matched pages from a pre-uploaded deck (not the whole file). */
+  deckContext?: string;
   /** Per-session free-text style request. Empty/missing ⇒ base SYSTEM unchanged. */
   noteInstruction?: string;
+  /** Draft notes from the uploaded deck before any speech. */
+  mode?: "live" | "seed";
 }): AsyncGenerator<LiveNotesStreamEvent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -162,9 +202,14 @@ export async function* streamLiveLectureNotes(input: {
     return;
   }
 
+  const mode = input.mode === "seed" ? "seed" : "live";
   const slice = input.newSegmentText.trim().slice(0, MAX_SEGMENT_INPUT_CHARS);
-  // Lower floor so smaller, more frequent batches still synthesize.
-  if (slice.length < 80) {
+  // Seed drafts from slides with no speech. Live calls still need a real slice.
+  if (mode !== "seed" && slice.length < 80) {
+    yield { type: "summary", summary: input.rollingSummary };
+    return;
+  }
+  if (mode === "seed" && !(input.deckContext ?? "").trim()) {
     yield { type: "summary", summary: input.rollingSummary };
     return;
   }
@@ -174,9 +219,14 @@ export async function* streamLiveLectureNotes(input: {
     .map((h) => h.trim())
     .filter(Boolean)
     .slice(-5);
-  const revisable = input.revisable.slice(-MAX_REVISABLE_SECTIONS);
+  const revisable =
+    mode === "seed" ? [] : input.revisable.slice(-MAX_REVISABLE_SECTIONS);
   // Keep screen context tight — large dumps encourage unnecessary rewrites.
-  const screenContext = (input.screenContext ?? "").trim().slice(0, 1_800);
+  const screenContext =
+    mode === "seed" ? "" : (input.screenContext ?? "").trim().slice(0, 1_800);
+  const deckRaw = (input.deckContext ?? "").trim();
+  const deckCap = mode === "seed" ? MAX_DECK_SEED_CHARS : MAX_DECK_LIVE_CHARS;
+  const deckText = deckRaw.slice(0, deckCap);
 
   const sectionsBlock = revisable
     .map((s) => {
@@ -194,32 +244,62 @@ export async function* streamLiveLectureNotes(input: {
     })
     .join("\n\n");
 
-  const userPrompt = [
-    input.lectureTitle ? `LECTURE: ${input.lectureTitle.slice(0, 200)}` : null,
-    summary
-      ? `ROLLING SUMMARY OF THE LECTURE SO FAR:\n${summary}`
-      : "ROLLING SUMMARY OF THE LECTURE SO FAR: (lecture just started)",
-    headings.length > 0
-      ? `RECENT HEADINGS (avoid near-duplicate H2s for the same topic — append a more specific facet heading instead of revising the old section):\n${headings.map((h) => `- ${h}`).join("\n")}`
-      : null,
-    sectionsBlock
-      ? `YOUR RECENT NOTE SECTIONS (the only sections you may @@revise):\n\n${sectionsBlock}`
-      : "YOUR RECENT NOTE SECTIONS: (none yet — no @@revise operations possible)",
-    screenContext
-      ? `ON-SCREEN CONTENT (authoritative for spellings/symbols/numbers/tables — use for grounding; do NOT revise prior notes merely because the screen changed):\n${screenContext}`
-      : null,
-    `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
-    "\nEmit the protocol now. Prefer @@append (including **Open question:** for contradictions). Use @@revise only for a minimal spelling/genuine-error fix.",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const hasDraft =
+    revisable.some((s) =>
+      (s.transcriptExcerpt ?? "").includes(DECK_DRAFT_EXCERPT)
+    );
+
+  const userPrompt =
+    mode === "seed"
+      ? [
+          input.lectureTitle
+            ? `LECTURE: ${input.lectureTitle.slice(0, 200)}`
+            : null,
+          summary
+            ? `ROLLING SUMMARY OF TOPICS DRAFTED SO FAR:\n${summary}`
+            : "ROLLING SUMMARY OF TOPICS DRAFTED SO FAR: (none yet)",
+          headings.length > 0
+            ? `RECENT HEADINGS already drafted (do not repeat these H2s):\n${headings.map((h) => `- ${h}`).join("\n")}`
+            : null,
+          `DECK SLIDES (draft study notes covering ALL of these pages; no outside knowledge):\n${deckText}`,
+          "NO SPEECH YET. Draft from the slides only.",
+          "\nEmit the protocol now. @@append notes for this batch. Do not @@revise.",
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : [
+          input.lectureTitle
+            ? `LECTURE: ${input.lectureTitle.slice(0, 200)}`
+            : null,
+          summary
+            ? `ROLLING SUMMARY OF THE LECTURE SO FAR:\n${summary}`
+            : "ROLLING SUMMARY OF THE LECTURE SO FAR: (lecture just started)",
+          headings.length > 0
+            ? `RECENT HEADINGS (avoid near-duplicate H2s for the same topic — append a more specific facet heading instead of revising the old section):\n${headings.map((h) => `- ${h}`).join("\n")}`
+            : null,
+          sectionsBlock
+            ? `YOUR RECENT NOTE SECTIONS (the only sections you may @@revise):\n\n${sectionsBlock}`
+            : "YOUR RECENT NOTE SECTIONS: (none yet — no @@revise operations possible)",
+          screenContext
+            ? `ON-SCREEN CONTENT (authoritative for spellings/symbols/numbers/tables — use for grounding; do NOT revise prior notes merely because the screen changed):\n${screenContext}`
+            : null,
+          deckText
+            ? `DECK SLIDES (pre-uploaded pages matched to this slice — fill in formulas, definitions, tables, and labels from THESE pages even if only half-said; do not copy other slides; no outside knowledge):\n${deckText}`
+            : null,
+          `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
+          hasDraft
+            ? "\nEmit the protocol now. If this speech covers a slide-drafted section (excerpt says it was drafted from uploaded slides), prefer @@revise: delete claims the lecturer contradicted, keep correct slide facts, and fold in spoken detail. @@append only for topics that have no matching draft. Open questions are for unclear speech — not for a clear override of a draft."
+            : "\nEmit the protocol now. Prefer @@append for genuinely new topics. Use @@revise to continue/complete a recent section or to fix a genuine error. **Open question:** only for unclear contradictions in speech/screen.",
+        ]
+          .filter(Boolean)
+          .join("\n\n");
 
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
   const stream = anthropic.messages.stream({
     model: MODEL,
-    max_tokens: 4_000,
+    max_tokens: mode === "seed" ? 5_000 : 4_000,
     temperature: 0.35,
-    system: liveNotesSystem(input.noteInstruction),
+    system: liveNotesSystem(input.noteInstruction, mode),
     messages: [{ role: "user", content: userPrompt }],
   });
 
@@ -260,9 +340,9 @@ export async function* streamLiveLectureNotes(input: {
 
 // ── Wrap-up consistency review (once, on Finish) ─────────────────────────────
 
-const REVIEW_SYSTEM = `You are reviewing AI-generated live-lecture study notes against the full lecture transcript AND optional on-screen extracts before they are archived.
+const REVIEW_SYSTEM = `You are reviewing AI-generated live-lecture study notes against the full lecture transcript AND optional on-screen extracts AND optional pre-uploaded deck text before they are archived.
 
-Priority for clear STT/spelling issues: screen text wins for spellings, symbols, proper names, and table cells. Transcript wins for spoken explanation and emphasis.
+Priority for clear STT/spelling issues: current-frame screen text wins for spellings, symbols, proper names, and table cells. Pre-uploaded deck text may supply the same for the topic being discussed. Transcript wins for spoken explanation and emphasis.
 
 Do TWO jobs:
 
@@ -303,6 +383,8 @@ export async function reviewLiveLectureNotes(input: {
   transcript: string;
   /** Optional concatenated on-screen extracts. */
   screenContent?: string;
+  /** Optional pre-uploaded deck text. */
+  deckContent?: string;
   lectureTitle?: string;
   userId?: string;
 }): Promise<LiveNotesReviewResult | null> {
@@ -318,11 +400,15 @@ export async function reviewLiveLectureNotes(input: {
     .join("\n\n");
 
   const screen = (input.screenContent ?? "").trim();
+  const deck = (input.deckContent ?? "").trim();
   const userPrompt = [
     input.lectureTitle ? `LECTURE: ${input.lectureTitle.slice(0, 200)}` : null,
     `NOTE SECTIONS TO VERIFY (document order — earliest first):\n\n${sectionsBlock}`,
     screen
       ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
+      : null,
+    deck
+      ? `DECK SLIDES (pre-uploaded lecture deck — spellings/formulas/tables for topics that were discussed):\n${deck.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
       : null,
     `FULL LECTURE TRANSCRIPT:\n${input.transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
     "\nReturn the JSON now. When merging, keep the earliest sectionId and list absorbed ids in removeSectionIds.",
@@ -395,11 +481,11 @@ export async function reviewLiveLectureNotes(input: {
 
 // ── End-of-lecture recap (once, on Finish) — same shape as tutor-session recaps ─
 
-const LECTURE_RECAP_SYSTEM = `You generate a polished, study-ready RECAP from a live lecture transcript (and optional on-screen extracts). Output MARKDOWN — proper headings, bullets, callouts, bold for key terms, and GFM pipe tables when the lecture showed comparison grids or charts.
+const LECTURE_RECAP_SYSTEM = `You generate a polished, study-ready RECAP from a live lecture transcript (and optional on-screen extracts and a pre-uploaded slide deck). Output MARKDOWN — proper headings, bullets, callouts, bold for key terms, and GFM pipe tables when the lecture showed comparison grids or charts.
 
 ${TUTOR_NOTES_QUALITY_RULES}
 
-This is a LECTURE (spoken teaching + slides), not a 1:1 tutor chat. Ground every claim in the transcript and/or on-screen content — no outside knowledge, no invented facts/numbers/names.
+This is a LECTURE (spoken teaching + slides), not a 1:1 tutor chat. Ground every claim in the transcript, on-screen content, and/or uploaded deck pages that were taught — no outside textbook knowledge, no invented facts/numbers/names. Deck pages may fill in formulas/definitions the lecturer pointed at but did not fully read aloud. Do not recap slides that were never discussed.
 
 STRUCTURE (use this EXACTLY):
 
@@ -443,6 +529,7 @@ STYLE RULES:
 export async function summarizeLiveLecture(input: {
   transcript: string;
   screenContent?: string;
+  deckContent?: string;
   lectureTitle?: string;
   /** Optional existing note markdown — coverage guide only, not a new fact source. */
   notesOutline?: string;
@@ -471,16 +558,20 @@ export async function summarizeLiveLecture(input: {
       });
 
   const screen = (input.screenContent ?? "").trim();
+  const deck = (input.deckContent ?? "").trim();
   const outline = (input.notesOutline ?? "").trim();
   const userPrompt = [
     `TITLE HINT: ${input.lectureTitle?.trim() || "Live lecture"}`,
     `DURATION: ${duration}`,
     `DATE: ${dateStr}`,
     outline
-      ? `EXISTING LIVE NOTES (coverage guide only — do not invent beyond transcript/screen):\n"""\n${outline.slice(0, 6_000)}\n"""`
+      ? `EXISTING LIVE NOTES (coverage guide only — do not invent beyond transcript/screen/deck):\n"""\n${outline.slice(0, 6_000)}\n"""`
       : null,
     screen
       ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n"""\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}\n"""`
+      : null,
+    deck
+      ? `DECK SLIDES (pre-uploaded lecture deck — fill in formulas/definitions for topics that were taught):\n"""\n${deck.slice(0, MAX_REVIEW_SCREEN_CHARS)}\n"""`
       : null,
     `FULL LECTURE TRANSCRIPT:\n"""\n${transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}\n"""`,
     "\nGenerate the recap now. Start with the H1 title.",

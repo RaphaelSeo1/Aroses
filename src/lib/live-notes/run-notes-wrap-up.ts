@@ -18,6 +18,7 @@ export async function runLiveNotesWrapUp(input: {
   notesJson: unknown;
   transcript: string;
   screenContent?: string;
+  deckContent?: string;
   lectureTitle?: string;
   durationSeconds?: number | null;
   startedAt?: string | null;
@@ -32,6 +33,7 @@ export async function runLiveNotesWrapUp(input: {
         sections,
         transcript: input.transcript,
         screenContent: input.screenContent,
+        deckContent: input.deckContent,
         lectureTitle: input.lectureTitle,
         userId: input.userId,
       });
@@ -57,6 +59,7 @@ export async function runLiveNotesWrapUp(input: {
     const recapMd = await summarizeLiveLecture({
       transcript: input.transcript,
       screenContent: input.screenContent,
+      deckContent: input.deckContent,
       lectureTitle: input.lectureTitle,
       notesOutline: outline || undefined,
       durationSeconds: input.durationSeconds,

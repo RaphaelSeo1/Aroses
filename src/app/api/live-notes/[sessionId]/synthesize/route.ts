@@ -6,6 +6,12 @@ import {
   type RevisableSection,
 } from "@/lib/ai/live-lecture-notes";
 import { clampNoteInstruction } from "@/lib/ai/note-instruction";
+import { pickRelevantSlidePages } from "@/lib/live-notes/pick-relevant-slide-pages";
+import {
+  isSlideDeckSchemaError,
+  loadSessionDeckPages,
+  takeDeckSeedBatch,
+} from "@/lib/live-notes/slide-pages";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -17,7 +23,7 @@ export const maxDuration = 60;
 type Params = { params: Promise<{ sessionId: string }> };
 
 const MAX_INPUT_CHARS = 12_000;
-const MAX_SECTION_CHARS = 2_000;
+const MAX_SECTION_CHARS = 5_000;
 const MAX_EXCERPT_CHARS = 3_000;
 /**
  * Hard per-session cap on Haiku note calls (runaway guard). The client
@@ -31,7 +37,8 @@ const MAX_SYNTHESIZE_CALLS = 200;
  * POST /api/live-notes/[sessionId]/synthesize — SSE.
  *
  * Body: {
- *   newSegmentText: string,
+ *   newSegmentText?: string,          // required unless seedFromDeck
+ *   seedFromDeck?: boolean,           // draft notes from the next unseeded slides
  *   recentHeadings?: string[],
  *   revisable?: [{ sectionId, markdown, transcriptExcerpt? }]  // last ≤4
  * }
@@ -40,7 +47,7 @@ const MAX_SYNTHESIZE_CALLS = 200;
  *   event: thought data: { "message": string }
  *   event: op    data: { "op": "revise"|"append", "sectionId": string }
  *   event: text  data: { "delta": string }        // body of the active op
- *   event: done  data: { "appendSectionId": string }
+   *   event: done  data: { "appendSectionId": string, "seedRemaining"?: number, "seededThrough"?: number }
  *   event: error data: { "message": string }
  *
  * Everything after the model's @@summary marker is withheld from the client
@@ -76,8 +83,13 @@ export async function POST(request: Request, ctx: Params) {
     revisable?: unknown;
     screenContext?: unknown;
     noteInstruction?: unknown;
+    seedFromDeck?: unknown;
   };
-  if (typeof b.newSegmentText !== "string" || !b.newSegmentText.trim()) {
+  const seedFromDeck = b.seedFromDeck === true;
+  if (
+    !seedFromDeck &&
+    (typeof b.newSegmentText !== "string" || !b.newSegmentText.trim())
+  ) {
     return NextResponse.json({ error: "newSegmentText required" }, { status: 400 });
   }
   const screenContext =
@@ -111,16 +123,48 @@ export async function POST(request: Request, ctx: Params) {
         }))
     : [];
 
-  const { data: session } = await supabase
+  const sessionSelect =
+    "id, title, status, rolling_summary, synthesize_calls, slides_seeded_through_page";
+  let { data: session, error: sessLoadErr } = await supabase
     .from("live_lecture_sessions")
-    .select("id, title, status, rolling_summary, synthesize_calls")
+    .select(sessionSelect)
     .eq("id", sessionId)
     .maybeSingle();
+  if (sessLoadErr && isSlideDeckSchemaError(sessLoadErr.message)) {
+    if (seedFromDeck) {
+      return NextResponse.json(
+        {
+          error:
+            "Slide notes need a database update. Apply migrations 102 and 103 in Supabase, then try again.",
+        },
+        { status: 503 }
+      );
+    }
+    const retry = await supabase
+      .from("live_lecture_sessions")
+      .select("id, title, status, rolling_summary, synthesize_calls")
+      .eq("id", sessionId)
+      .maybeSingle();
+    session = retry.data as typeof session;
+    sessLoadErr = retry.error;
+  }
   if (!session) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
   if (session.status === "completed" || session.status === "failed") {
     return NextResponse.json({ error: "This session has ended." }, { status: 409 });
+  }
+
+  const deckPages = await loadSessionDeckPages(supabase, sessionId);
+  const seededThrough =
+    typeof session.slides_seeded_through_page === "number"
+      ? session.slides_seeded_through_page
+      : 0;
+  const seedBatch = seedFromDeck
+    ? takeDeckSeedBatch(deckPages, seededThrough)
+    : null;
+  if (seedFromDeck && (!seedBatch || seedBatch.pages.length === 0)) {
+    return NextResponse.json({ seedDone: true });
   }
 
   const calls =
@@ -144,7 +188,10 @@ export async function POST(request: Request, ctx: Params) {
   const rollingSummary =
     typeof session.rolling_summary === "string" ? session.rolling_summary : "";
   const appendSectionId = `s-${crypto.randomUUID().slice(0, 8)}`;
-  const newSegmentText = b.newSegmentText.slice(0, MAX_INPUT_CHARS);
+  const newSegmentText =
+    typeof b.newSegmentText === "string"
+      ? b.newSegmentText.slice(0, MAX_INPUT_CHARS)
+      : "";
   const lectureTitle =
     typeof session.title === "string" ? session.title : undefined;
 
@@ -160,6 +207,15 @@ export async function POST(request: Request, ctx: Params) {
             user_id: user.id,
           })
         );
+
+  const deckContext = seedFromDeck
+    ? seedBatch!.text
+    : pickRelevantSlidePages({
+        pages: deckPages,
+        transcriptSlice: newSegmentText,
+        rollingSummary,
+        recentHeadings,
+      }).text || undefined;
 
   const encoder = new TextEncoder();
   const sseLine = (event: string, data: unknown): string =>
@@ -177,15 +233,19 @@ export async function POST(request: Request, ctx: Params) {
       try {
         let summary: string | null = null;
         for await (const ev of streamLiveLectureNotes({
-          newSegmentText,
+          newSegmentText: seedFromDeck
+            ? "NO SPEECH YET. Draft notes from the DECK SLIDES."
+            : newSegmentText,
           rollingSummary,
           recentHeadings,
-          revisable,
+          revisable: seedFromDeck ? [] : revisable,
           appendSectionId,
           lectureTitle,
           userId: user.id,
-          screenContext: screenContext || undefined,
+          screenContext: seedFromDeck ? undefined : screenContext || undefined,
+          deckContext,
           noteInstruction: noteInstruction || undefined,
+          mode: seedFromDeck ? "seed" : "live",
         })) {
           if (ev.type === "thought") {
             send("thought", { message: ev.message });
@@ -198,31 +258,61 @@ export async function POST(request: Request, ctx: Params) {
           }
         }
 
+        const sessionPatch: {
+          rolling_summary?: string;
+          slides_seeded_through_page?: number;
+          updated_at: string;
+        } = { updated_at: new Date().toISOString() };
         if (
           typeof summary === "string" &&
           summary.trim() &&
           summary !== rollingSummary
         ) {
-          await supabase
+          sessionPatch.rolling_summary = summary
+            .trim()
+            .slice(0, ROLLING_SUMMARY_MAX_CHARS);
+        }
+        if (seedFromDeck && seedBatch) {
+          sessionPatch.slides_seeded_through_page = seedBatch.throughPage;
+        }
+        if (
+          sessionPatch.rolling_summary !== undefined ||
+          sessionPatch.slides_seeded_through_page !== undefined
+        ) {
+          const { error: patchErr } = await supabase
             .from("live_lecture_sessions")
-            .update({
-              rolling_summary: summary
-                .trim()
-                .slice(0, ROLLING_SUMMARY_MAX_CHARS),
-              updated_at: new Date().toISOString(),
-            })
+            .update(sessionPatch)
             .eq("id", sessionId)
             .eq("user_id", user.id);
+          if (patchErr && isSlideDeckSchemaError(patchErr.message)) {
+            send("error", {
+              message:
+                "Slide notes need a database update. Apply migration 103_live_lecture_slides_seeded.sql in Supabase, then try again.",
+            });
+            return;
+          }
         }
 
-        send("done", { appendSectionId });
+        send("done", {
+          appendSectionId,
+          ...(seedFromDeck && seedBatch
+            ? {
+                seedRemaining: seedBatch.remaining,
+                seededThrough: seedBatch.throughPage,
+              }
+            : {}),
+        });
       } catch (e) {
         console.error("[live-notes/synthesize]", e);
         void report("live-notes.synthesize_failed", e, {
           userId: user.id,
           detail: { sessionId },
         });
-        send("error", { message: "Could not synthesize notes for this slice." });
+        send("error", {
+          message: seedFromDeck
+            ? "Could not draft notes from the uploaded slides."
+            : "Could not synthesize notes for this slice.",
+        });
       } finally {
         try {
           controller.close();

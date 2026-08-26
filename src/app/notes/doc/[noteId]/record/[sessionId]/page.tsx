@@ -4,6 +4,7 @@ import {
   type LiveNotesInitialSession,
 } from "@/components/live-notes/LiveNotesSurface";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
+import { loadSessionDeckMeta } from "@/lib/live-notes/slide-pages";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
@@ -98,6 +99,10 @@ export default async function StandaloneNoteRecordPage({ params }: Props) {
       "live_lecture_sessions",
       { id: sessionId, user_id: user.id }
     ),
+    ...(await loadSessionDeckMeta(supabase, sessionId).then((m) => ({
+      slidesFileName: m.fileName,
+      slidesPageCount: m.pageCount,
+    }))),
   };
 
   return (

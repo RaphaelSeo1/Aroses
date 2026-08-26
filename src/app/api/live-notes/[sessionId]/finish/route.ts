@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { runLiveNotesWrapUp } from "@/lib/live-notes/run-notes-wrap-up";
 import { syncLiveSessionToStandaloneNote } from "@/lib/live-notes/sync-standalone-note";
+import {
+  formatDeckForWrapUp,
+  loadSessionDeckPages,
+} from "@/lib/live-notes/slide-pages";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
@@ -110,11 +114,16 @@ export async function POST(_request: Request, ctx: Params) {
     /* migration not applied */
   }
 
+  const deckContent = formatDeckForWrapUp(
+    await loadSessionDeckPages(supabase, sessionId)
+  );
+
   try {
     const next = await runLiveNotesWrapUp({
       notesJson: session.notes_json,
       transcript: transcriptOnly,
       screenContent: screenContent || undefined,
+      deckContent: deckContent || undefined,
       lectureTitle: title,
       durationSeconds:
         typeof session.duration_seconds === "number"

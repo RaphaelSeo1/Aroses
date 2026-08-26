@@ -5,6 +5,10 @@ import {
   extractLiveNotesEmphasis,
 } from "@/lib/live-notes/notes-emphasis";
 import { runLiveNotesWrapUp } from "@/lib/live-notes/run-notes-wrap-up";
+import {
+  formatDeckForWrapUp,
+  loadSessionDeckPages,
+} from "@/lib/live-notes/slide-pages";
 import { report } from "@/lib/report-error";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -147,11 +151,20 @@ export async function POST(_request: Request, ctx: Params) {
     /* migration not applied — transcript-only wrap-up */
   }
 
-  // Combined ingest blob: screen first (spellings/numbers), then transcript.
+  const deckContent = formatDeckForWrapUp(
+    await loadSessionDeckPages(supabase, sessionId)
+  );
+
+  // Combined ingest blob: screen first (spellings/numbers), then uploaded
+  // deck, then transcript.
   const transcript = (
-    screenContent
-      ? `[from ${title} screen]\n${screenContent}\n\n${transcriptOnly}`
-      : transcriptOnly
+    [
+      screenContent ? `[from ${title} screen]\n${screenContent}` : null,
+      deckContent ? `[from ${title} slides]\n${deckContent}` : null,
+      transcriptOnly,
+    ]
+      .filter(Boolean)
+      .join("\n\n")
   ).slice(0, 500_000);
 
   // Mirrors the confirm-transcript minimum — below this, generation would
@@ -260,6 +273,7 @@ export async function POST(_request: Request, ctx: Params) {
       notesJson,
       transcript: transcriptOnly,
       screenContent: screenContent || undefined,
+      deckContent: deckContent || undefined,
       lectureTitle: title,
       durationSeconds:
         typeof session.duration_seconds === "number"
