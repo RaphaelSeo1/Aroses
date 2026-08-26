@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
 import { ingestStoragePathForFile } from "@/lib/study-ingest/client-upload";
 import { detectIngestFormat, MAX_INGEST_DOCUMENT_BYTES } from "@/lib/study-ingest/formats";
@@ -30,7 +31,12 @@ export function SlideDeckAttach({
   const [busy, setBusy] = useState<"uploading" | "removing" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const dragDepth = useRef(0);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const ready = Boolean(fileName) && pageCount > 0;
 
@@ -49,6 +55,8 @@ export function SlideDeckAttach({
 
   useEffect(() => {
     if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && busy !== "uploading") {
         setOpen(false);
@@ -57,7 +65,10 @@ export function SlideDeckAttach({
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
   }, [open, busy]);
 
   const onFile = async (file: File | undefined) => {
@@ -191,9 +202,10 @@ export function SlideDeckAttach({
   );
 
   const modal =
-    open ? (
+    open && mounted
+      ? createPortal(
       <div
-        className="fixed inset-0 z-[70] flex items-center justify-center bg-zinc-950/50 p-4 backdrop-blur-sm"
+        className="fixed inset-0 z-[200] flex items-center justify-center bg-zinc-950/55 p-4 backdrop-blur-sm"
         onClick={(e) => {
           if (e.target === e.currentTarget) closeModal();
         }}
@@ -202,7 +214,7 @@ export function SlideDeckAttach({
           role="dialog"
           aria-modal="true"
           aria-labelledby="slide-upload-title"
-          className="w-full max-w-lg overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-950"
+          className="max-h-[min(90dvh,40rem)] w-full max-w-lg overflow-y-auto overflow-x-hidden rounded-3xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-950"
         >
           <div className="border-b border-rose-100 bg-gradient-to-br from-rose-50 to-white px-6 py-5 dark:border-rose-950/40 dark:from-rose-950/40 dark:to-zinc-950">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-rose-600 dark:text-rose-400">
@@ -289,8 +301,10 @@ export function SlideDeckAttach({
             </button>
           </div>
         </div>
-      </div>
-    ) : null;
+      </div>,
+          document.body
+        )
+    : null;
 
   if (compact) {
     return (
