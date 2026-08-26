@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { ingestStoragePathForFile } from "@/lib/study-ingest/client-upload";
 import { detectIngestFormat, MAX_INGEST_DOCUMENT_BYTES } from "@/lib/study-ingest/formats";
@@ -8,7 +8,7 @@ import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { describePdfIngestUploadFailure } from "@/lib/storage-upload-errors";
 
 const ACCEPT =
-  ".pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  ".pdf,.pptx,.key,.odp,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
 export function SlideDeckAttach({
   sessionId,
@@ -26,26 +26,52 @@ export function SlideDeckAttach({
   disabled?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<"uploading" | "removing" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
 
   const ready = Boolean(fileName) && pageCount > 0;
 
-  const pick = () => {
+  const openModal = () => {
     if (disabled || busy) return;
-    inputRef.current?.click();
+    setError(null);
+    setOpen(true);
   };
+
+  const closeModal = () => {
+    if (busy === "uploading") return;
+    setOpen(false);
+    setDragOver(false);
+    dragDepth.current = 0;
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && busy !== "uploading") {
+        setOpen(false);
+        setDragOver(false);
+        dragDepth.current = 0;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, busy]);
 
   const onFile = async (file: File | undefined) => {
     if (!file) return;
     setError(null);
     const kind = detectIngestFormat(file.name, file.type);
     if (kind !== "pdf" && kind !== "slides") {
-      setError("Upload a PDF or PowerPoint (.pptx).");
+      setError(
+        "Use a PDF or PowerPoint (.pptx). Export Google Slides or Keynote as PDF first."
+      );
       return;
     }
     if (file.name.toLowerCase().endsWith(".ppt")) {
-      setError("Save as .pptx or export a PDF, then upload again.");
+      setError("Save as .pptx or export a PDF, then drop it here.");
       return;
     }
     if (file.size > MAX_INGEST_DOCUMENT_BYTES) {
@@ -66,7 +92,9 @@ export function SlideDeckAttach({
       }
       const pathInfo = ingestStoragePathForFile(user.id, file);
       if (!pathInfo) {
-        setError("Upload a PDF or PowerPoint (.pptx).");
+        setError(
+          "Use a PDF or PowerPoint (.pptx). Export Google Slides or Keynote as PDF first."
+        );
         return;
       }
       const { error: upErr } = await supabase.storage
@@ -110,12 +138,25 @@ export function SlideDeckAttach({
         fileName: body.fileName ?? file.name,
         pageCount: typeof body.pageCount === "number" ? body.pageCount : 0,
       });
+      setOpen(false);
+      setDragOver(false);
+      dragDepth.current = 0;
     } catch {
       setError("Could not upload the slides. Check your connection and retry.");
     } finally {
       setBusy(null);
       if (inputRef.current) inputRef.current.value = "";
     }
+  };
+
+  const takeDroppedFiles = (list: FileList | File[] | null) => {
+    if (!list || list.length === 0) return;
+    const files = Array.from(list);
+    if (files.length > 1) {
+      setError("Drop one deck at a time (PDF or .pptx).");
+      return;
+    }
+    void onFile(files[0]);
   };
 
   const remove = async () => {
@@ -139,19 +180,125 @@ export function SlideDeckAttach({
     }
   };
 
+  const fileInput = (
+    <input
+      ref={inputRef}
+      type="file"
+      accept={ACCEPT}
+      className="sr-only"
+      onChange={(e) => void onFile(e.target.files?.[0])}
+    />
+  );
+
+  const modal =
+    open ? (
+      <div
+        className="fixed inset-0 z-[70] flex items-center justify-center bg-zinc-950/50 p-4 backdrop-blur-sm"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) closeModal();
+        }}
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="slide-upload-title"
+          className="w-full max-w-lg overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-950"
+        >
+          <div className="border-b border-rose-100 bg-gradient-to-br from-rose-50 to-white px-6 py-5 dark:border-rose-950/40 dark:from-rose-950/40 dark:to-zinc-950">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-rose-600 dark:text-rose-400">
+              Aroses · Live notes
+            </p>
+            <h2
+              id="slide-upload-title"
+              className="mt-1.5 text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
+            >
+              {ready ? "Replace lecture slides" : "Add lecture slides"}
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+              Drop a PDF or PowerPoint here. Google Slides and Keynote work if
+              you export them as PDF first. Rose drafts notes from the deck,
+              then edits them as the lecture is spoken.
+            </p>
+          </div>
+
+          <div className="px-6 py-5">
+            <button
+              type="button"
+              disabled={disabled || busy !== null}
+              onClick={() => inputRef.current?.click()}
+              onDragEnter={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragDepth.current += 1;
+                setDragOver(true);
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragDepth.current = Math.max(0, dragDepth.current - 1);
+                if (dragDepth.current === 0) setDragOver(false);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = "copy";
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragDepth.current = 0;
+                setDragOver(false);
+                takeDroppedFiles(e.dataTransfer.files);
+              }}
+              className={`flex w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-all disabled:opacity-60 ${
+                dragOver
+                  ? "scale-[1.01] border-rose-400 bg-rose-50 shadow-lg shadow-rose-500/10 dark:border-rose-500 dark:bg-rose-950/40"
+                  : "border-zinc-200 bg-zinc-50/80 hover:border-rose-300 hover:bg-white dark:border-zinc-700 dark:bg-zinc-900/50 dark:hover:border-rose-800 dark:hover:bg-zinc-900"
+              }`}
+            >
+              <span className="pointer-events-none text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                {busy === "uploading"
+                  ? "Reading slides…"
+                  : dragOver
+                    ? "Drop to upload"
+                    : "Drag & drop your slides here"}
+              </span>
+              <span className="pointer-events-none mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                PDF or .pptx · up to{" "}
+                {Math.round(MAX_INGEST_DOCUMENT_BYTES / (1024 * 1024))}MB
+              </span>
+              <span className="pointer-events-none mt-4 rounded-full bg-white px-4 py-1.5 text-xs font-semibold text-zinc-800 ring-1 ring-zinc-200 dark:bg-zinc-950 dark:text-zinc-100 dark:ring-zinc-700">
+                {busy === "uploading" ? "Uploading…" : "Choose a file"}
+              </span>
+            </button>
+            {error ? (
+              <p className="mt-3 text-[13px] leading-relaxed text-rose-700 dark:text-rose-300">
+                {error}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex items-center justify-end gap-2 border-t border-zinc-100 px-6 py-4 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={closeModal}
+              disabled={busy === "uploading"}
+              className="rounded-full px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            >
+              {busy === "uploading" ? "Uploading…" : "Cancel"}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null;
+
   if (compact) {
     return (
       <div className="flex min-w-0 items-center gap-1.5">
-        <input
-          ref={inputRef}
-          type="file"
-          accept={ACCEPT}
-          className="sr-only"
-          onChange={(e) => void onFile(e.target.files?.[0])}
-        />
+        {fileInput}
         <button
           type="button"
-          onClick={pick}
+          onClick={openModal}
           disabled={disabled || busy !== null}
           title={
             ready
@@ -166,8 +313,11 @@ export function SlideDeckAttach({
               ? `${pageCount} slide${pageCount === 1 ? "" : "s"}`
               : "Add slides"}
         </button>
-        {error ? (
-          <p className="max-w-[10rem] truncate text-[10px] text-rose-600 dark:text-rose-300" title={error}>
+        {error && !open ? (
+          <p
+            className="max-w-[10rem] truncate text-[10px] text-rose-600 dark:text-rose-300"
+            title={error}
+          >
             {error}
           </p>
         ) : null}
@@ -182,19 +332,14 @@ export function SlideDeckAttach({
             ×
           </button>
         ) : null}
+        {modal}
       </div>
     );
   }
 
   return (
     <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/80 px-4 py-3 dark:border-zinc-700 dark:bg-zinc-900/50">
-      <input
-        ref={inputRef}
-        type="file"
-        accept={ACCEPT}
-        className="sr-only"
-        onChange={(e) => void onFile(e.target.files?.[0])}
-      />
+      {fileInput}
       <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-100">
         Lecture slides (optional)
       </p>
@@ -206,7 +351,7 @@ export function SlideDeckAttach({
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
           type="button"
-          onClick={pick}
+          onClick={openModal}
           disabled={disabled || busy !== null}
           className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 ring-1 ring-zinc-200 hover:bg-zinc-50 disabled:opacity-60 dark:bg-zinc-950 dark:text-zinc-100 dark:ring-zinc-700"
         >
@@ -232,11 +377,12 @@ export function SlideDeckAttach({
           </>
         ) : null}
       </div>
-      {error ? (
+      {error && !open ? (
         <p className="mt-2 text-[11px] leading-relaxed text-rose-700 dark:text-rose-300">
           {error}
         </p>
       ) : null}
+      {modal}
     </div>
   );
 }
