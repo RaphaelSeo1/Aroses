@@ -67,15 +67,11 @@ test("revise by heading still lands on a real section", () => {
   );
 });
 
-test("unknown revise id is skipped instead of inventing", () => {
+test("unknown revise id falls back to the last section", () => {
   const events = collect("@@revise s-zzzz\n## Ghost\n- nope\n");
-  assert.equal(
-    events.filter((e) => e.type === "op").length,
-    0
-  );
-  assert.equal(
-    events.filter((e) => e.type === "text" && e.channel === "notes").length,
-    0
+  assert.deepEqual(
+    events.filter((e) => e.type === "op"),
+    [{ type: "op", op: "revise", sectionId: "s-bbb" }]
   );
 });
 

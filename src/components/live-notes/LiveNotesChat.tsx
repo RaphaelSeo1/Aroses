@@ -11,6 +11,7 @@ import {
 import type { NotesPanelHandle } from "@/components/immersive/NotesPanel";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
 import {
+  sanitizeChatNotesMarkdown,
   splitStudentFacingReply,
   visibleReplyForStream,
 } from "@/lib/live-notes/lecture-chat-protocol";
@@ -29,8 +30,6 @@ type NoteOp =
   | { kind: "append"; sectionId: string; dividerBefore: boolean }
   | { kind: "notes"; text: string };
 
-const TYPE_CPS = 110;
-const TYPE_TICK_MS = 24;
 const REPLY_TICK_MS = 16;
 const REPLY_CPS = 68;
 const REPLY_CPS_CATCHUP = 170;
@@ -42,6 +41,16 @@ const SUGGESTIONS = [
   "Highlight the key definition",
   "Delete the draft that looks wrong",
 ];
+
+function looksLikeNotesBody(md: string): boolean {
+  const t = md.trim();
+  if (!t) return false;
+  if (/^#{1,3}\s/m.test(t)) return true;
+  if (/^\s*[-*]\s/m.test(t)) return true;
+  if (/^\s*\d+\.\s/m.test(t)) return true;
+  if (/^\|.+\|/m.test(t)) return true;
+  return t.split("\n").filter((l) => l.trim()).length >= 3;
+}
 
 function storageKey(sessionId: string) {
   return `aroses.liveNotes.chat.${sessionId}`;
@@ -125,68 +134,127 @@ export function LiveNotesChat({
   }, [turns, busy]);
 
   const applyNoteOps = useCallback(
-    async (ops: NoteOp[]) => {
-      const writer = notesRef.current?.getStreamWriter();
-      if (!writer || ops.length === 0) return;
-
+    async (ops: NoteOp[], fallbackMarkdown = "") => {
       const run = async () => {
+        const writer = notesRef.current?.getStreamWriter();
+        if (!writer) {
+          onActivity(
+            "error",
+            "Could not reach the notes editor to apply that change."
+          );
+          return;
+        }
+
+        type Applied = {
+          kind: "revise" | "append";
+          sectionId: string;
+          markdown: string;
+          dividerBefore?: boolean;
+        };
+        const coalesced: Array<
+          | Applied
+          | { kind: "delete"; sectionId: string }
+          | { kind: "highlight"; sectionId: string; color: string }
+        > = [];
+        for (const item of ops) {
+          if (item.kind === "notes") {
+            const last = coalesced[coalesced.length - 1];
+            if (last && (last.kind === "revise" || last.kind === "append")) {
+              last.markdown += item.text;
+            }
+            continue;
+          }
+          if (item.kind === "revise") {
+            coalesced.push({
+              kind: "revise",
+              sectionId: item.sectionId,
+              markdown: "",
+            });
+          } else if (item.kind === "append") {
+            coalesced.push({
+              kind: "append",
+              sectionId: item.sectionId,
+              markdown: "",
+              dividerBefore: item.dividerBefore,
+            });
+          } else if (item.kind === "delete") {
+            coalesced.push({ kind: "delete", sectionId: item.sectionId });
+          } else if (item.kind === "highlight") {
+            coalesced.push({
+              kind: "highlight",
+              sectionId: item.sectionId,
+              color: item.color,
+            });
+          }
+        }
+
+        const fallbackRaw = sanitizeChatNotesMarkdown(fallbackMarkdown);
+        const fallback = looksLikeNotesBody(fallbackRaw) ? fallbackRaw : "";
         notesRef.current?.setStreamingIndicator(true);
-        let opValid = false;
+        writer.finishOp();
         let applied = 0;
         let failed = 0;
-        for (const item of ops) {
+
+        for (const item of coalesced) {
           if (item.kind === "delete") {
-            writer.finishOp();
-            opValid = false;
             if (
-              writer.deleteSection(item.sectionId, {
-                evenIfStudentEdited: true,
-              })
+              writer.deleteSection(item.sectionId, { evenIfStudentEdited: true })
             ) {
               applied += 1;
             } else {
               failed += 1;
             }
           } else if (item.kind === "highlight") {
-            writer.finishOp();
-            opValid = false;
             if (writer.highlightSection(item.sectionId, item.color)) {
               applied += 1;
             } else {
               failed += 1;
             }
           } else if (item.kind === "revise") {
-            writer.finishOp();
-            opValid = await writer.beginRevision(item.sectionId, {
-              evenIfStudentEdited: true,
-            });
-            if (opValid) applied += 1;
-            else failed += 1;
+            let md = sanitizeChatNotesMarkdown(item.markdown);
+            if (!md) md = fallback;
+            const ok = md
+              ? writer.replaceSectionMarkdown(item.sectionId, md, {
+                  evenIfStudentEdited: true,
+                })
+              : false;
+            if (ok) {
+              applied += 1;
+            } else if (md) {
+              const appended = writer.appendMarkdown(item.sectionId, md, {
+                dividerBefore: true,
+              });
+              if (appended) applied += 1;
+              else failed += 1;
+            } else {
+              failed += 1;
+            }
           } else if (item.kind === "append") {
-            writer.finishOp();
-            writer.beginAppend({
-              sectionId: item.sectionId,
-              dividerBefore: item.dividerBefore,
-            });
-            opValid = true;
-            applied += 1;
-          } else if (item.kind === "notes" && opValid && item.text) {
-            const step = Math.max(1, Math.round((TYPE_CPS * TYPE_TICK_MS) / 1000));
-            for (let i = 0; i < item.text.length; i += step) {
-              writer.write(item.text.slice(i, i + step));
-              await sleep(TYPE_TICK_MS);
+            let md = sanitizeChatNotesMarkdown(item.markdown);
+            if (!md) md = fallback;
+            if (
+              md &&
+              writer.appendMarkdown(item.sectionId, md, {
+                dividerBefore: item.dividerBefore,
+              })
+            ) {
+              applied += 1;
+            } else {
+              failed += 1;
             }
           }
         }
-        writer.finishOp();
+
         notesRef.current?.setStreamingIndicator(false);
-        if (failed > 0 && applied === 0) {
+        if (applied > 0 && failed === 0) {
+          onActivity("status", "Updated your notes.");
+        } else if (applied > 0) {
+          onActivity("error", "Some of those note edits didn't apply.");
+        } else {
           onActivity(
             "error",
             "I couldn't change that section in the notes. Select it and ask again."
           );
-        } else if (failed > 0) {
-          onActivity("error", "Some of those note edits didn't apply.");
         }
       };
 
@@ -449,7 +517,10 @@ export function LiveNotesChat({
             ? "Updating your notes from chat…"
             : "Applying those note edits…"
         );
-        void applyNoteOps(noteOps);
+        void applyNoteOps(
+          noteOps,
+          visibleReplyForStream(pendingReply, true)
+        );
       }
     },
     [

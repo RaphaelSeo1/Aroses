@@ -457,6 +457,99 @@ export class StreamingNotesWriter {
       .filter((s) => s.markdown.trim().length > 0);
   }
 
+  private pmNodesFromMarkdown(
+    markdown: string,
+    sectionId: string
+  ): PmNode[] {
+    const nodes = markdownToNoteNodes(markdown, {
+      sectionId,
+      provenance: "ai",
+    });
+    const out: PmNode[] = [];
+    for (const json of nodes) {
+      try {
+        out.push(this.editor.schema.nodeFromJSON(json));
+      } catch {
+        /* skip malformed node */
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Instantly replace a section with markdown (chat edits). Avoids the
+   * streaming placeholder path, which rolled back empty/truncated revises.
+   */
+  replaceSectionMarkdown(
+    sectionId: string,
+    markdown: string,
+    opts?: { evenIfStudentEdited?: boolean }
+  ): boolean {
+    if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
+    const body = markdown.trim();
+    if (!body) return false;
+    this.finishOp();
+    const blocks = this.sectionBlocks(sectionId);
+    if (blocks.length === 0) return false;
+    if (
+      !opts?.evenIfStudentEdited &&
+      blocks.some(
+        (b) =>
+          b.node.attrs?.provenance !== "ai" &&
+          b.node.attrs?.provenance !== "ai-context"
+      )
+    ) {
+      return false;
+    }
+    const pmNodes = this.pmNodesFromMarkdown(body, sectionId);
+    if (pmNodes.length === 0) return false;
+    const firstPos = blocks[0]!.pos;
+    this.dispatchDoc((tr) => {
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const b = blocks[i]!;
+        tr.delete(b.pos, b.pos + b.node.nodeSize);
+      }
+      tr.insert(Math.min(firstPos, tr.doc.content.size), Fragment.from(pmNodes));
+    });
+    this.dispatchDeco({ set: { [sectionId]: "rose-note-revised" } });
+    window.setTimeout(() => {
+      if (!this.destroyed && !this.editor.isDestroyed) {
+        this.dispatchDeco({ clear: [sectionId] });
+      }
+    }, REVISION_HIGHLIGHT_MS);
+    return true;
+  }
+
+  /**
+   * Instantly append a new markdown section (chat @@append).
+   */
+  appendMarkdown(
+    sectionId: string,
+    markdown: string,
+    opts?: { dividerBefore?: boolean }
+  ): boolean {
+    if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
+    const body = markdown.trim();
+    if (!body) return false;
+    this.finishOp();
+    const pmNodes = this.pmNodesFromMarkdown(body, sectionId);
+    if (pmNodes.length === 0) return false;
+    this.dispatchDoc((tr) => {
+      let pos = tr.doc.content.size;
+      if (opts?.dividerBefore) {
+        const hr = this.editor.schema.nodes.horizontalRule?.create({
+          provenance: "ai",
+        });
+        if (hr) {
+          tr.insert(pos, hr);
+          pos += hr.nodeSize;
+        }
+      }
+      tr.insert(pos, Fragment.from(pmNodes));
+    });
+    return true;
+  }
+
   /**
    * Remove a section. Student-edited blocks are skipped unless `force`.
    */

@@ -107,7 +107,19 @@ export function splitStudentFacingReply(text: string): {
   };
 }
 
-/** While streaming, hold an incomplete last line that may still become a leak. */
+/** Drop fences and @@ protocol lines from a chat-notes body. */
+export function sanitizeChatNotesMarkdown(markdown: string): string {
+  const unfenced = markdown
+    .replace(/```(?:markdown|md)?\s*\n?([\s\S]*?)```/gi, "$1")
+    .replace(/```/g, "");
+  return unfenced
+    .split("\n")
+    .filter((line) => !isProtocolLeakLine(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function visibleReplyForStream(raw: string, complete: boolean): string {
   if (complete) return splitStudentFacingReply(raw).visible;
   const nl = raw.lastIndexOf("\n");
@@ -176,7 +188,21 @@ export function createLectureChatParser(
             });
           }
         } else {
-          mode = "skip";
+          const fallbackId = sections[sections.length - 1]?.sectionId;
+          if (fallbackId && allowedIds.has(fallbackId) && revises < 4) {
+            revises += 1;
+            mode = "revise";
+            out.push({ type: "op", op: "revise", sectionId: fallbackId });
+            if (raw && /^[#\-*>\d]/.test(raw)) {
+              out.push({
+                type: "text",
+                channel: "notes",
+                delta: `${raw}\n`,
+              });
+            }
+          } else {
+            mode = "skip";
+          }
         }
       } else if (trimmed.startsWith("@@delete")) {
         const raw = trimmed.slice("@@delete".length).trim();
