@@ -1645,6 +1645,7 @@ export function LiveNotesSurface({
                 onActivity={(kind, message, loc) =>
                   pushAiActivity(kind, message, loc)
                 }
+                active={railOpen && railTab === "chat"}
               />
             </div>
           </aside>

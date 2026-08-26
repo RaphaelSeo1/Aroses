@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -96,6 +97,7 @@ export function LiveNotesChat({
   notesRef,
   enqueueWriterJob,
   onActivity,
+  active = true,
 }: {
   sessionId: string;
   lectureTitle: string;
@@ -109,6 +111,8 @@ export function LiveNotesChat({
     message: string,
     loc?: { sectionId?: string; sectionLabel?: string }
   ) => void;
+  /** When the chat tab is shown — re-pin to the latest turn. */
+  active?: boolean;
 }) {
   const [turns, setTurns] = useState<ChatTurn[]>(() => loadTurns(sessionId));
   const [draft, setDraft] = useState("");
@@ -118,6 +122,40 @@ export function LiveNotesChat({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
+
+  const stickToLatest = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!active) return;
+    stickToLatest();
+    const id = window.requestAnimationFrame(() => {
+      stickToLatest();
+      window.requestAnimationFrame(stickToLatest);
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [turns, busy, streamingId, active, stickToLatest]);
+
+  useEffect(() => {
+    if (!active) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const stick = () => stickToLatest();
+    const ro =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(stick) : null;
+    ro?.observe(el);
+    const inner = el.firstElementChild;
+    if (inner) ro?.observe(inner);
+    const mo = new MutationObserver(stick);
+    mo.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => {
+      ro?.disconnect();
+      mo.disconnect();
+    };
+  }, [active, stickToLatest, turns.length]);
 
   useEffect(() => {
     if (busy) return;
@@ -130,12 +168,6 @@ export function LiveNotesChat({
       /* ignore */
     }
   }, [sessionId, turns, busy]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [turns, busy]);
 
   const applyNoteOps = useCallback(
     async (ops: NoteOp[], fallbackMarkdown = "") => {
@@ -630,6 +662,7 @@ export function LiveNotesChat({
             </div>
           ))
         )}
+        <div aria-hidden className="h-px w-full" />
       </div>
 
       <form
