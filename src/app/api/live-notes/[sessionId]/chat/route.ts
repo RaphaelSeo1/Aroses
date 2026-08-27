@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { streamLiveLectureChat } from "@/lib/ai/live-lecture-chat";
 import { clampNoteInstruction } from "@/lib/ai/note-instruction";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
+import { MAX_CHAT_PDF_CHARS } from "@/lib/live-notes/extract-chat-pdf";
 import { formatDeckForWrapUp, loadSessionDeckPages } from "@/lib/live-notes/slide-pages";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -26,7 +27,9 @@ const MAX_SECTIONS = 60;
  *   transcript?: string,
  *   screenContext?: string,
  *   selectedText?: string,
- *   noteInstruction?: string
+ *   noteInstruction?: string,
+ *   attachedPdfText?: string,
+ *   attachedPdfName?: string
  * }
  *
  *   event: thought data: { message }
@@ -63,11 +66,22 @@ export async function POST(request: Request, ctx: Params) {
     screenContext?: unknown;
     selectedText?: unknown;
     noteInstruction?: unknown;
+    attachedPdfText?: unknown;
+    attachedPdfName?: unknown;
   };
-  if (typeof b.message !== "string" || !b.message.trim()) {
+  const attachedPdfText =
+    typeof b.attachedPdfText === "string" ? b.attachedPdfText.trim() : "";
+  const attachedPdfName =
+    typeof b.attachedPdfName === "string"
+      ? b.attachedPdfName.trim().slice(0, 200)
+      : "";
+  const rawMessage = typeof b.message === "string" ? b.message.trim() : "";
+  if (!rawMessage && !attachedPdfText) {
     return NextResponse.json({ error: "message required" }, { status: 400 });
   }
-  const message = b.message.trim().slice(0, MAX_MESSAGE);
+  const message =
+    rawMessage.slice(0, MAX_MESSAGE) ||
+    `Look at this PDF${attachedPdfName ? ` (${attachedPdfName})` : ""}.`;
 
   const { data: session } = await supabase
     .from("live_lecture_sessions")
@@ -199,6 +213,10 @@ export async function POST(request: Request, ctx: Params) {
               ? b.selectedText.trim().slice(0, 2_000)
               : undefined,
           noteInstruction: noteInstruction || undefined,
+          attachedPdfText: attachedPdfText
+            ? attachedPdfText.slice(0, MAX_CHAT_PDF_CHARS)
+            : undefined,
+          attachedPdfName: attachedPdfName || undefined,
           appendSectionId,
           userId: user.id,
         })) {

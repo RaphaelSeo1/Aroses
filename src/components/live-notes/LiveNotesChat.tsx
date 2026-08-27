@@ -16,12 +16,18 @@ import {
   splitStudentFacingReply,
   visibleReplyForStream,
 } from "@/lib/live-notes/lecture-chat-protocol";
+import { describePdfIngestUploadFailure } from "@/lib/storage-upload-errors";
+import { ingestStoragePathForFile } from "@/lib/study-ingest/client-upload";
+import { detectIngestFormat, MAX_INGEST_DOCUMENT_BYTES } from "@/lib/study-ingest/formats";
+import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
+import { createClient } from "@/lib/supabase/client";
 
 type ChatTurn = {
   id: string;
   role: "user" | "assistant";
   content: string;
   thoughts?: string[];
+  attachmentName?: string;
 };
 
 type NoteOp =
@@ -57,6 +63,34 @@ function storageKey(sessionId: string) {
   return `aroses.liveNotes.chat.${sessionId}`;
 }
 
+function pdfStorageKey(sessionId: string) {
+  return `aroses.liveNotes.chatPdf.${sessionId}`;
+}
+
+type PendingPdf = { fileName: string; text: string };
+
+function loadPendingPdf(sessionId: string): PendingPdf | null {
+  try {
+    const raw = sessionStorage.getItem(pdfStorageKey(sessionId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof (parsed as PendingPdf).fileName !== "string" ||
+      typeof (parsed as PendingPdf).text !== "string"
+    ) {
+      return null;
+    }
+    const fileName = (parsed as PendingPdf).fileName.trim().slice(0, 200);
+    const text = (parsed as PendingPdf).text.trim();
+    if (!fileName || text.length < 12) return null;
+    return { fileName, text: text.slice(0, 16_000) };
+  } catch {
+    return null;
+  }
+}
+
 function loadTurns(sessionId: string): ChatTurn[] {
   try {
     const raw = sessionStorage.getItem(storageKey(sessionId));
@@ -81,6 +115,10 @@ function loadTurns(sessionId: string): ChatTurn[] {
               .filter((x): x is string => typeof x === "string" && Boolean(x.trim()))
               .slice(0, 24)
           : undefined,
+        attachmentName:
+          typeof t.attachmentName === "string" && t.attachmentName.trim()
+            ? t.attachmentName.trim().slice(0, 200)
+            : undefined,
       }))
       .slice(-40);
   } catch {
@@ -118,10 +156,19 @@ export function LiveNotesChat({
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
+  const [pendingPdf, setPendingPdf] = useState<PendingPdf | null>(() =>
+    loadPendingPdf(sessionId)
+  );
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
+  const pendingPdfRef = useRef(pendingPdf);
+  pendingPdfRef.current = pendingPdf;
 
   const stickToLatest = useCallback(() => {
     const el = scrollRef.current;
@@ -168,6 +215,21 @@ export function LiveNotesChat({
       /* ignore */
     }
   }, [sessionId, turns, busy]);
+
+  useEffect(() => {
+    try {
+      if (pendingPdf) {
+        sessionStorage.setItem(
+          pdfStorageKey(sessionId),
+          JSON.stringify(pendingPdf)
+        );
+      } else {
+        sessionStorage.removeItem(pdfStorageKey(sessionId));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [sessionId, pendingPdf]);
 
   const applyNoteOps = useCallback(
     async (ops: NoteOp[], fallbackMarkdown = "") => {
@@ -308,17 +370,105 @@ export function LiveNotesChat({
     [enqueueWriterJob, notesRef, onActivity]
   );
 
+  const attachPdf = useCallback(
+    async (file: File | undefined) => {
+      if (!file || busy || attaching) return;
+      setAttachError(null);
+      const kind = detectIngestFormat(file.name, file.type);
+      if (kind !== "pdf") {
+        setAttachError("Attach a PDF.");
+        return;
+      }
+      if (file.size > MAX_INGEST_DOCUMENT_BYTES) {
+        const maxMb = Math.round(MAX_INGEST_DOCUMENT_BYTES / (1024 * 1024));
+        setAttachError(`That PDF is too large (max ${maxMb}MB).`);
+        return;
+      }
+
+      setAttaching(true);
+      try {
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user?.id) {
+          setAttachError("Sign in again, then retry the upload.");
+          return;
+        }
+        const pathInfo = ingestStoragePathForFile(user.id, file);
+        if (!pathInfo) {
+          setAttachError("Attach a PDF.");
+          return;
+        }
+        const { error: upErr } = await supabase.storage
+          .from(STUDY_PDF_INGEST_BUCKET)
+          .upload(pathInfo.storagePath, file, {
+            contentType: pathInfo.contentType,
+            cacheControl: "3600",
+            upsert: false,
+          });
+        if (upErr) {
+          setAttachError(
+            describePdfIngestUploadFailure(
+              typeof upErr.message === "string" ? upErr.message : String(upErr)
+            )
+          );
+          return;
+        }
+
+        const res = await fetch(`/api/live-notes/${sessionId}/chat-pdf`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storagePath: pathInfo.storagePath,
+            fileName: file.name,
+          }),
+        });
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          fileName?: string;
+          text?: string;
+        };
+        if (!res.ok || typeof body.text !== "string" || !body.text.trim()) {
+          await supabase.storage
+            .from(STUDY_PDF_INGEST_BUCKET)
+            .remove([pathInfo.storagePath])
+            .catch(() => {});
+          setAttachError(body.error || "Could not read that PDF.");
+          return;
+        }
+        setPendingPdf({
+          fileName: (body.fileName ?? file.name).slice(0, 200),
+          text: body.text.trim().slice(0, 16_000),
+        });
+      } catch {
+        setAttachError("Could not attach that PDF. Try again.");
+      } finally {
+        setAttaching(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    },
+    [attaching, busy, sessionId]
+  );
+
   const send = useCallback(
     async (text: string) => {
-      const message = text.trim();
-      if (!message || busy) return;
+      const pdf = pendingPdfRef.current;
+      const typed = text.trim();
+      if ((!typed && !pdf) || busy || attaching) return;
+      const message = typed || `Look at this PDF (${pdf!.fileName}).`;
       setDraft("");
       setBusy(true);
 
       const userTurn: ChatTurn = {
         id: `u-${Date.now()}`,
         role: "user",
-        content: message,
+        content: typed
+          ? pdf
+            ? `${typed}\n\n📎 ${pdf.fileName}`
+            : typed
+          : `📎 ${pdf!.fileName}`,
+        attachmentName: pdf?.fileName,
       };
       const assistantId = `a-${Date.now()}`;
       const history = turnsRef.current
@@ -427,6 +577,8 @@ export function LiveNotesChat({
             screenContext: screenContext || undefined,
             selectedText: selectedText || undefined,
             noteInstruction,
+            attachedPdfText: pdf?.text,
+            attachedPdfName: pdf?.fileName,
           }),
         });
         const contentType = res.headers.get("content-type") ?? "";
@@ -570,6 +722,7 @@ export function LiveNotesChat({
     },
     [
       applyNoteOps,
+      attaching,
       busy,
       noteInstruction,
       notesRef,
@@ -594,15 +747,15 @@ export function LiveNotesChat({
         {turns.length === 0 ? (
           <div className="space-y-3">
             <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
-              Ask about this lecture, or tell Rose to edit the notes — add,
-              delete, expand, or highlight a section.
+              Ask about this lecture, drop a PDF (worksheet, problem set), or
+              tell Rose to edit the notes.
             </p>
             <div className="flex flex-col gap-1.5">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
                   type="button"
-                  disabled={busy}
+                  disabled={busy || attaching}
                   onClick={() => void send(s)}
                   className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-left text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
                 >
@@ -667,8 +820,67 @@ export function LiveNotesChat({
 
       <form
         onSubmit={onSubmit}
-        className="border-t border-zinc-200 p-2.5 dark:border-zinc-800"
+        onDragEnter={(e) => {
+          e.preventDefault();
+          if (busy || attaching) return;
+          setDragOver(true);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (busy || attaching) return;
+          setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setDragOver(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const file = e.dataTransfer.files?.[0];
+          void attachPdf(file);
+        }}
+        className={`border-t p-2.5 dark:border-zinc-800 ${
+          dragOver
+            ? "border-rose-300 bg-rose-50/70 dark:border-rose-800 dark:bg-rose-950/30"
+            : "border-zinc-200"
+        }`}
       >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,application/pdf"
+          className="sr-only"
+          disabled={busy || attaching}
+          onChange={(e) => void attachPdf(e.target.files?.[0])}
+        />
+        {pendingPdf ? (
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
+              <span className="truncate" title={pendingPdf.fileName}>
+                📎 {pendingPdf.fileName}
+              </span>
+              <button
+                type="button"
+                disabled={busy || attaching}
+                onClick={() => {
+                  setPendingPdf(null);
+                  setAttachError(null);
+                }}
+                className="ml-0.5 shrink-0 rounded-full px-1 text-zinc-400 hover:text-zinc-700 disabled:opacity-50 dark:hover:text-zinc-200"
+                aria-label="Remove PDF"
+              >
+                ×
+              </button>
+            </span>
+          </div>
+        ) : null}
+        {attachError ? (
+          <p className="mb-1.5 text-[10px] leading-snug text-red-600 dark:text-red-400">
+            {attachError}
+          </p>
+        ) : null}
         <label className="sr-only" htmlFor="live-notes-chat-input">
           Ask Rose about the lecture
         </label>
@@ -677,7 +889,7 @@ export function LiveNotesChat({
           ref={inputRef}
           rows={2}
           value={draft}
-          disabled={busy}
+          disabled={busy || attaching}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -686,19 +898,62 @@ export function LiveNotesChat({
             }
           }}
           placeholder={
-            lectureTitle.trim()
-              ? `Ask about ${lectureTitle.trim()}…`
-              : "Ask about the lecture, or edit the notes…"
+            pendingPdf
+              ? `Ask about ${pendingPdf.fileName}…`
+              : lectureTitle.trim()
+                ? `Ask about ${lectureTitle.trim()}…`
+                : "Ask about the lecture, attach a PDF, or edit the notes…"
           }
           className="w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs leading-relaxed text-zinc-800 placeholder:text-zinc-400 focus:border-rose-300 focus:outline-none focus:ring-2 focus:ring-rose-100 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-rose-800 dark:focus:ring-rose-950/80"
         />
         <div className="mt-1.5 flex items-center justify-between gap-2">
-          <p className="text-[10px] text-zinc-400 dark:text-zinc-500">
-            Enter to send · Shift+Enter for a new line
-          </p>
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || attaching}
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Attach a PDF"
+              title="Attach a PDF"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 hover:border-rose-300 hover:text-rose-700 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-rose-800 dark:hover:text-rose-300"
+            >
+              {attaching ? (
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-3.5 w-3.5 animate-spin"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  aria-hidden
+                >
+                  <circle cx="12" cy="12" r="9" opacity="0.25" />
+                  <path d="M21 12a9 9 0 0 1-9 9" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 1 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 1 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              )}
+            </button>
+            <p className="truncate text-[10px] text-zinc-400 dark:text-zinc-500">
+              {attaching
+                ? "Reading PDF…"
+                : dragOver
+                  ? "Drop PDF to attach"
+                  : "PDF · Enter to send"}
+            </p>
+          </div>
           <button
             type="submit"
-            disabled={busy || !draft.trim()}
+            disabled={busy || attaching || (!draft.trim() && !pendingPdf)}
             className="rounded-full bg-rose-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
           >
             {busy

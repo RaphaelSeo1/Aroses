@@ -16,15 +16,17 @@ const MAX_TURN_CHARS = 4_000;
 const MAX_NOTES_CHARS = 24_000;
 const MAX_TRANSCRIPT_CHARS = 10_000;
 const MAX_DECK_CHARS = 8_000;
+const MAX_ATTACHED_PDF_CHARS = 16_000;
 const MAX_SECTION_CHARS = 4_000;
 
 const SYSTEM = `You are Rose, sitting next to a student during a live lecture. They can ask questions about what was just taught, and they can ask you to change the notes on the left.
 
 GROUNDING (critical):
-- Answer from CURRENT NOTES, LECTURE TRANSCRIPT, optional DECK SLIDES, and optional ON-SCREEN CONTENT.
-- If the lecture has not covered it, say so. Do not invent textbook chapters, citations, or formulas that are not in those sources.
+- Answer from CURRENT NOTES, LECTURE TRANSCRIPT, optional DECK SLIDES, optional ON-SCREEN CONTENT, and optional ATTACHED PDF (a handout/worksheet/problem set the student shared in chat — not the lecture deck).
+- Prefer the attached PDF when they ask about that file, a worksheet, problems, or "this PDF".
+- If the lecture has not covered it and it is not in the attached PDF, say so. Do not invent textbook chapters, citations, or formulas that are not in those sources.
 - You MAY briefly clarify a term the lecturer used but did not define, and mark that as your gloss — not as something said in class.
-- Spellings, symbols, numbers, and table cells: prefer slides / on-screen text over garbled speech-to-text.
+- Spellings, symbols, numbers, and table cells: prefer slides / on-screen text / attached PDF over garbled speech-to-text.
 
 @@thought (optional — INTERNAL ONLY, never student-facing):
 - One short line of protocol narration: what you will edit, which op you will emit.
@@ -39,7 +41,7 @@ GROUNDING (critical):
 NOTE EDITS — you MUST act, not just talk:
 If the student asks to change, fix, reword, rewrite, simplify, shorten, expand, add, delete, highlight, bold, correct, or "make it X" regarding the notes, you MUST emit @@revise / @@append / @@delete / @@highlight. Writing the new wording only inside @@reply does not change the notes. That is a failure.
 - Questions ("what is X?", "did they say Y?") → @@reply only. No note edits.
-- Edit requests ("fix the wording", "change that to…", "make this simpler", "rephrase the scarcity section", "add this to the notes", "delete that", "highlight this") → @@reply AND the matching note op.
+- Edit requests ("fix the wording", "change that to…", "make this simpler", "rephrase the scarcity section", "add this to the notes", "add this PDF / these problems", "delete that", "highlight this") → @@reply AND the matching note op.
 - CURRENT NOTE SECTIONS lists the only ids you may touch. Copy the id exactly from [SECTION …]. Never invent an id.
 - "that" / "this" / "the last one" / selected text → the best-matching section (heading + body). Prefer the most recent section if still ambiguous.
 - Student-edited sections are still fair game when the student asked you to change them.
@@ -93,6 +95,8 @@ export async function* streamLiveLectureChat(input: {
   screenContext?: string;
   selectedText?: string;
   noteInstruction?: string;
+  attachedPdfText?: string;
+  attachedPdfName?: string;
   appendSectionId: string;
   userId?: string;
 }): AsyncGenerator<LectureChatStreamEvent> {
@@ -106,7 +110,13 @@ export async function* streamLiveLectureChat(input: {
     return;
   }
 
-  const message = input.message.trim().slice(0, MAX_TURN_CHARS);
+  const attachedPdfText = (input.attachedPdfText ?? "").trim();
+  const attachedPdfName = (input.attachedPdfName ?? "").trim().slice(0, 200);
+  const message =
+    input.message.trim().slice(0, MAX_TURN_CHARS) ||
+    (attachedPdfText
+      ? `Look at this PDF${attachedPdfName ? ` (${attachedPdfName})` : ""}.`
+      : "");
   if (!message) return;
 
   const sections = input.sections.slice(0, 60).map((s) => ({
@@ -166,6 +176,9 @@ export async function* streamLiveLectureChat(input: {
       : "LECTURE TRANSCRIPT: (nothing captured yet)",
     (input.deckText ?? "").trim()
       ? `DECK SLIDES:\n${input.deckText!.trim().slice(0, MAX_DECK_CHARS)}`
+      : null,
+    attachedPdfText
+      ? `ATTACHED PDF${attachedPdfName ? ` (${attachedPdfName})` : ""}:\n${attachedPdfText.slice(0, MAX_ATTACHED_PDF_CHARS)}`
       : null,
     (input.screenContext ?? "").trim()
       ? `ON-SCREEN CONTENT:\n${input.screenContext!.trim().slice(0, 1_800)}`
