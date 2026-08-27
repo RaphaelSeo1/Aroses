@@ -330,15 +330,11 @@ export class StreamingNotesWriter {
       // so a truncated or aborted revise never wipes a finished section.
       if (op.pendingPlaceholder || !op.wroteAnything) {
         this.restoreRevisionBackup(op.sectionId);
+      } else if (this.revisionLooksLikeWipe(op.sectionId)) {
+        this.mergeTruncatedRevision(op.sectionId);
       } else {
         this.revisionBackup = null;
-        const id = op.sectionId;
-        this.dispatchDeco({ set: { [id]: "rose-note-revised" } });
-        window.setTimeout(() => {
-          if (!this.destroyed && !this.editor.isDestroyed) {
-            this.dispatchDeco({ clear: [id] });
-          }
-        }, REVISION_HIGHLIGHT_MS);
+        this.flashRevision(op.sectionId);
       }
     }
     this.op = null;
@@ -379,6 +375,79 @@ export class StreamingNotesWriter {
         clear: [sectionId],
       } as RevisionDecoMeta);
     });
+  }
+
+  /**
+   * Haiku often "corrects" a section by replacing a long draft with only the
+   * newest slice. Treat a much-shorter rewrite as a wipe, not a real revision.
+   */
+  private revisionLooksLikeWipe(sectionId: string): boolean {
+    const backup = this.revisionBackup;
+    if (!backup || backup.sectionId !== sectionId) return false;
+    const previous = noteNodesToMarkdown(backup.nodes).trim();
+    if (previous.length < 180) return false;
+    const next = noteNodesToMarkdown(
+      this.sectionBlocks(sectionId).map((b) => b.node.toJSON() as NoteNodeJson)
+    ).trim();
+    return next.length < previous.length * 0.6;
+  }
+
+  /** Restore the pre-revise section, then append the short rewrite as extra detail. */
+  private mergeTruncatedRevision(sectionId: string): void {
+    const backup = this.revisionBackup;
+    if (!backup || backup.sectionId !== sectionId) {
+      this.revisionBackup = null;
+      return;
+    }
+    const incoming = this.sectionBlocks(sectionId).map(
+      (b) => b.node.toJSON() as NoteNodeJson
+    );
+    const previousMd = noteNodesToMarkdown(backup.nodes);
+    const extraBody = noteNodesToMarkdown(incoming)
+      .trim()
+      .replace(/^#{1,3}\s.+\n?/, "")
+      .trim();
+    const alreadyPresent =
+      extraBody.length > 0 &&
+      previousMd.includes(extraBody.slice(0, Math.min(80, extraBody.length)));
+
+    this.restoreRevisionBackup(sectionId);
+    this.flashRevision(sectionId);
+
+    if (alreadyPresent || extraBody.length === 0) return;
+
+    const extraNodes = incoming
+      .filter((n) => n.type !== "heading")
+      .map((json) => {
+        try {
+          return this.editor.schema.nodeFromJSON(json);
+        } catch {
+          return null;
+        }
+      })
+      .filter((n): n is PmNode => Boolean(n));
+    if (extraNodes.length === 0) return;
+
+    const blocks = this.sectionBlocks(sectionId);
+    const last = blocks[blocks.length - 1];
+    const insertPos = last
+      ? last.pos + last.node.nodeSize
+      : this.editor.state.doc.content.size;
+    this.dispatchDoc((tr) => {
+      tr.insert(
+        Math.min(insertPos, tr.doc.content.size),
+        Fragment.from(extraNodes)
+      );
+    });
+  }
+
+  private flashRevision(sectionId: string): void {
+    this.dispatchDeco({ set: { [sectionId]: "rose-note-revised" } });
+    window.setTimeout(() => {
+      if (!this.destroyed && !this.editor.isDestroyed) {
+        this.dispatchDeco({ clear: [sectionId] });
+      }
+    }, REVISION_HIGHLIGHT_MS);
   }
 
   /**

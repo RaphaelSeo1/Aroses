@@ -74,17 +74,15 @@ const SEED_APPEND_LINES = [
 ];
 
 const REVISE_STATUS_LINES = [
-  "Earlier line didn’t hold up — fixing that section…",
-  "Caught a mismatch — rewriting the shaky part…",
-  "Updating a prior note so it matches what was just said…",
-  "Tightening an older section after a correction…",
-  "Updating the slide draft so it matches what was just said…",
+  "Adding what they just said to an earlier section…",
+  "Folding this into the notes on that topic…",
+  "Updating a prior section with the new detail…",
+  "Keeping the earlier notes and adding this point…",
 ];
 
 const REVISE_WITH_SCREEN_LINES = [
-  "Slide spelling beats the transcript here — correcting…",
-  "Screen had the clearer number — fixing the earlier note…",
-  "Display and speech disagreed — trusting the slide…",
+  "Matching a spelling/number to the slide — keeping the rest of the section…",
+  "Folding what’s on screen into the existing notes…",
   "Updating a prior section with what the board just showed…",
 ];
 
