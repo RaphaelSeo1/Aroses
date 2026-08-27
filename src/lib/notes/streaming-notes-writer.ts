@@ -68,10 +68,45 @@ type BlockTarget = {
  * placeholder FIRST (deleting after inserting at its boundary would swallow
  * the new node in the position mapping), then return the insertion point.
  */
+function isEmptyParagraph(node: PmNode): boolean {
+  if (node.type.name !== "paragraph") return false;
+  if (node.textContent.trim().length > 0) return false;
+  let hasAtom = false;
+  node.forEach((child) => {
+    if (child.type.name !== "hardBreak" && !child.isText) hasAtom = true;
+  });
+  return !hasAtom;
+}
+
+function trailingEmptyParagraphRange(
+  doc: PmNode
+): { from: number; to: number } | null {
+  const ranges: Array<{ from: number; to: number }> = [];
+  doc.forEach((node, offset) => {
+    ranges.push({ from: offset, to: offset + node.nodeSize });
+  });
+  let i = ranges.length - 1;
+  let from: number | null = null;
+  const to = doc.content.size;
+  while (i >= 0) {
+    const node = doc.child(i);
+    if (!isEmptyParagraph(node)) break;
+    from = ranges[i]!.from;
+    i -= 1;
+  }
+  if (from == null || from >= to) return null;
+  return { from, to };
+}
+
 function insertionPoint(tr: Transaction, target: BlockTarget): number {
   if (target.deletePlaceholder) {
     tr.delete(target.deletePlaceholder.from, target.deletePlaceholder.to);
     return target.deletePlaceholder.from;
+  }
+  const trail = trailingEmptyParagraphRange(tr.doc);
+  if (trail && trail.to === target.pos) {
+    tr.delete(trail.from, trail.to);
+    return trail.from;
   }
   return target.pos;
 }
@@ -192,7 +227,12 @@ export class StreamingNotesWriter {
     });
     if (!hr) return;
     const pos = this.editor.state.doc.content.size;
-    this.dispatchDoc((tr) => tr.insert(pos, hr));
+    this.dispatchDoc((tr) => {
+      const trail = trailingEmptyParagraphRange(tr.doc);
+      const at = trail ? trail.from : pos;
+      if (trail) tr.delete(trail.from, trail.to);
+      tr.insert(at, hr);
+    });
   }
 
   /**
@@ -535,7 +575,12 @@ export class StreamingNotesWriter {
     const pmNodes = this.pmNodesFromMarkdown(body, sectionId);
     if (pmNodes.length === 0) return false;
     this.dispatchDoc((tr) => {
+      const trail = trailingEmptyParagraphRange(tr.doc);
       let pos = tr.doc.content.size;
+      if (trail) {
+        tr.delete(trail.from, trail.to);
+        pos = trail.from;
+      }
       if (opts?.dividerBefore) {
         const hr = this.editor.schema.nodes.horizontalRule?.create({
           provenance: "ai",
@@ -772,7 +817,12 @@ export class StreamingNotesWriter {
     const op = this.op!;
     const blocks = this.sectionBlocks(op.sectionId);
     if (blocks.length === 0) {
-      return { pos: this.editor.state.doc.content.size, deletePlaceholder: null };
+      const trail = trailingEmptyParagraphRange(this.editor.state.doc);
+      const pos = this.editor.state.doc.content.size;
+      if (trail) {
+        return { pos, deletePlaceholder: trail };
+      }
+      return { pos, deletePlaceholder: null };
     }
     const last = blocks[blocks.length - 1];
     const pos = last.pos + last.node.nodeSize;

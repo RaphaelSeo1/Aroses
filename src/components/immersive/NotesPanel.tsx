@@ -1911,26 +1911,34 @@ export function NotesPanel({
           color: #1a1a1c;
           line-height: 1.25;
         }
-        /* Headings must beat the universal sibling rule or section titles look cramped. */
         .tn-prose h1 {
           font-size: 30px;
           font-weight: 700;
-          margin-top: 2.25rem !important;
-          margin-bottom: 0.45rem !important;
+          margin-top: 1.15rem !important;
+          margin-bottom: 0.35rem !important;
         }
         .tn-prose h2 {
           font-size: 24px;
           font-weight: 700;
-          margin-top: 1.75rem !important;
-          margin-bottom: 0.35rem !important;
+          margin-top: 0.9rem !important;
+          margin-bottom: 0.3rem !important;
         }
         .tn-prose h3 {
           font-size: 19px;
           font-weight: 600;
-          margin-top: 1.35rem !important;
-          margin-bottom: 0.25rem !important;
+          margin-top: 0.7rem !important;
+          margin-bottom: 0.2rem !important;
         }
-        .tn-prose > :first-child {
+        .tn-prose > :first-child,
+        .tn-prose hr + h1,
+        .tn-prose hr + h2,
+        .tn-prose hr + h3,
+        .tn-prose p.is-empty + h1,
+        .tn-prose p.is-empty + h2,
+        .tn-prose p.is-empty + h3,
+        .tn-prose p.is-editor-empty + h1,
+        .tn-prose p.is-editor-empty + h2,
+        .tn-prose p.is-editor-empty + h3 {
           margin-top: 0 !important;
         }
         .tn-prose h1 + p,
@@ -2078,7 +2086,7 @@ export function NotesPanel({
         /* Horizontal rule — section boundaries between AI note blocks */
         .tn-prose hr {
           border: none;
-          margin: 1.35rem 0 0.85rem;
+          margin: 0.55rem 0 0.15rem;
           height: 0;
           border-top: 1px solid #d4d3cf;
           background: transparent;
@@ -2086,7 +2094,23 @@ export function NotesPanel({
         .tn-prose hr + h1,
         .tn-prose hr + h2,
         .tn-prose hr + h3 {
-          margin-top: 0.85rem !important;
+          margin-top: 0 !important;
+        }
+        /* Trailing/leading empty paragraphs from generation — don't show as
+           blank lines above a heading. Keep a lone empty p so the student
+           can still type into a blank doc. */
+        .tn-prose > p.is-empty:not(:only-child),
+        .tn-prose > p.is-editor-empty:not(:only-child) {
+          margin: 0 !important;
+          padding: 0 !important;
+          min-height: 0 !important;
+          height: 0 !important;
+          overflow: hidden;
+          border: 0;
+        }
+        .tn-prose > p.is-empty:not(:only-child) br,
+        .tn-prose > p.is-editor-empty:not(:only-child) br {
+          display: none;
         }
 
         /* Lecture summary jump highlight */
