@@ -1,27 +1,31 @@
 "use client";
 
 /**
- * Far-field lecture mic → Deepgram.
+ * Lecture audio → Deepgram as raw linear16 PCM.
  *
- * MediaRecorder/Opus is the wrong pipe: DTX treats quiet classroom speech as
- * silence, and a MediaStreamDestination tap can emit an empty WebM stream if
- * the AudioContext isn't fully running. Raw linear16 PCM has no silence gate.
- *
- * Adaptive AGC lives in the audio thread so a lecturer across the room still
- * crosses Deepgram's energy floor without clipping a close talker.
+ * MediaRecorder/Opus is the wrong pipe: DTX treats quiet (and sometimes
+ * not-so-quiet) classroom / tab-share speech as silence. Raw PCM has no
+ * silence gate. Tab/system capture is already a digital mix — pass it
+ * through. The mic path uses adaptive AGC so a lecturer across the room
+ * still crosses Deepgram's energy floor without clipping a loud PA.
  */
 
 export const LECTURE_PCM_SAMPLE_RATE = 16_000;
 
-/** Start already hot so the first words aren't lost while AGC ramps. */
-const AGC_INITIAL_GAIN = 64;
-/** Never sit at "close-talk" gain — lecture halls stay boosted. */
-const AGC_MIN_GAIN = 24;
+export type LecturePcmBoost = "lecture-mic" | "none";
+
+/** Start already a bit hot so the first quiet words aren't lost. */
+const AGC_INITIAL_GAIN = 8;
 /**
- * ~52 dB. Past this you only amplify the laptop's own hiss; Deepgram starts
- * inventing words from HVAC / keyboard. This is the practical floor.
+ * Allow attenuation: a loud, clear lecture must be able to go below 1×
+ * or the samples clip and Deepgram drops words.
  */
-const AGC_MAX_GAIN = 400;
+const AGC_MIN_GAIN = 0.35;
+/**
+ * ~46 dB. Past this you only amplify the laptop's own hiss; Deepgram starts
+ * inventing words from HVAC / keyboard.
+ */
+const AGC_MAX_GAIN = 200;
 const AGC_TARGET_RMS = 0.18;
 /** Skip AGC math only for true digital silence (divide-by-zero), not speech. */
 const AGC_SILENCE = 1e-6;
@@ -35,9 +39,12 @@ const WORKLET_NAME = "lecture-mic-pcm";
 
 const WORKLET_SOURCE = `
 class LectureMicPcmProcessor extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
-    this._gain = ${AGC_INITIAL_GAIN};
+    const mode =
+      options && options.processorOptions && options.processorOptions.mode;
+    this._agc = mode !== "passthrough";
+    this._gain = this._agc ? ${AGC_INITIAL_GAIN} : 1;
     this._minGain = ${AGC_MIN_GAIN};
     this._maxGain = ${AGC_MAX_GAIN};
     this._target = ${AGC_TARGET_RMS};
@@ -51,16 +58,18 @@ class LectureMicPcmProcessor extends AudioWorkletProcessor {
     const input = inputs[0] && inputs[0][0];
     if (!input || input.length === 0) return true;
 
-    let sum = 0;
-    for (let i = 0; i < input.length; i++) {
-      const v = input[i];
-      sum += v * v;
-    }
-    const rms = Math.sqrt(sum / input.length);
-    if (rms > ${AGC_SILENCE}) {
-      const desired = this._target / rms;
-      const clamped = Math.max(this._minGain, Math.min(this._maxGain, desired));
-      this._gain = this._gain * 0.85 + clamped * 0.15;
+    if (this._agc) {
+      let sum = 0;
+      for (let i = 0; i < input.length; i++) {
+        const v = input[i];
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / input.length);
+      if (rms > ${AGC_SILENCE}) {
+        const desired = this._target / rms;
+        const clamped = Math.max(this._minGain, Math.min(this._maxGain, desired));
+        this._gain = this._gain * 0.85 + clamped * 0.15;
+      }
     }
 
     const step = sampleRate / ${LECTURE_PCM_SAMPLE_RATE};
@@ -104,21 +113,23 @@ function audioContextCtor(): typeof AudioContext | undefined {
   );
 }
 
-function downsampleAndBoost(
+function downsample(
   input: Float32Array,
   inRate: number,
-  state: { gain: number; frac: number }
+  state: { gain: number; frac: number; agc: boolean }
 ): Int16Array {
-  let sum = 0;
-  for (let i = 0; i < input.length; i++) {
-    const v = input[i]!;
-    sum += v * v;
-  }
-  const rms = Math.sqrt(sum / input.length);
-  if (rms > AGC_SILENCE) {
-    const desired = AGC_TARGET_RMS / rms;
-    const clamped = Math.max(AGC_MIN_GAIN, Math.min(AGC_MAX_GAIN, desired));
-    state.gain = state.gain * 0.85 + clamped * 0.15;
+  if (state.agc) {
+    let sum = 0;
+    for (let i = 0; i < input.length; i++) {
+      const v = input[i]!;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / input.length);
+    if (rms > AGC_SILENCE) {
+      const desired = AGC_TARGET_RMS / rms;
+      const clamped = Math.max(AGC_MIN_GAIN, Math.min(AGC_MAX_GAIN, desired));
+      state.gain = state.gain * 0.85 + clamped * 0.15;
+    }
   }
 
   const step = inRate / LECTURE_PCM_SAMPLE_RATE;
@@ -146,17 +157,23 @@ function downsampleAndBoost(
 }
 
 /**
- * Tap `stream`'s audio, AGC + resample to 16 kHz linear16, and invoke `onPcm`
+ * Tap `stream`'s audio, resample to 16 kHz linear16, and invoke `onPcm`
  * with transferable ArrayBuffers (~100 ms each). Does not play through
  * speakers (that would feedback). Call `stop()` on pause/finish.
+ *
+ * `boost: "lecture-mic"` — adaptive AGC for a laptop mic in a room.
+ * `boost: "none"` — digital tab/system audio, already at the right level.
  */
-export async function startLectureMicPcmTap(
+export async function startLecturePcmTap(
   stream: MediaStream,
-  onPcm: (chunk: ArrayBuffer) => void
+  onPcm: (chunk: ArrayBuffer) => void,
+  opts?: { boost?: LecturePcmBoost }
 ): Promise<PcmTap> {
+  const boost = opts?.boost ?? "lecture-mic";
+  const agc = boost !== "none";
   const Ctor = audioContextCtor();
   if (!Ctor) {
-    throw new Error("This browser cannot process microphone audio.");
+    throw new Error("This browser cannot process lecture audio.");
   }
   const ctx = new Ctor();
   await ctx.resume();
@@ -188,6 +205,7 @@ export async function startLectureMicPcmTap(
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [1],
+      processorOptions: { mode: agc ? "agc" : "passthrough" },
     });
     node.port.onmessage = (ev: MessageEvent<ArrayBuffer>) => {
       if (stopped) return;
@@ -200,11 +218,15 @@ export async function startLectureMicPcmTap(
     // AudioWorklet unavailable (older Safari) — ScriptProcessor on the main
     // thread is deprecated but keeps a 90-minute lecture working.
     const processor = ctx.createScriptProcessor(4096, 1, 1);
-    const state = { gain: AGC_INITIAL_GAIN, frac: 0 };
+    const state = {
+      gain: agc ? AGC_INITIAL_GAIN : 1,
+      frac: 0,
+      agc,
+    };
     processor.onaudioprocess = (ev) => {
       if (stopped) return;
       const input = ev.inputBuffer.getChannelData(0);
-      const pcm = downsampleAndBoost(input, ctx.sampleRate, state);
+      const pcm = downsample(input, ctx.sampleRate, state);
       if (pcm.length === 0) return;
       onPcm(new Int16Array(pcm).buffer);
     };
@@ -212,4 +234,12 @@ export async function startLectureMicPcmTap(
     processor.connect(sink);
     return { sampleRate: LECTURE_PCM_SAMPLE_RATE, stop };
   }
+}
+
+/** @deprecated Use startLecturePcmTap — kept as a thin alias. */
+export async function startLectureMicPcmTap(
+  stream: MediaStream,
+  onPcm: (chunk: ArrayBuffer) => void
+): Promise<PcmTap> {
+  return startLecturePcmTap(stream, onPcm, { boost: "lecture-mic" });
 }

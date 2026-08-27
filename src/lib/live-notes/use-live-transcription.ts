@@ -35,6 +35,8 @@ export type { LiveCaptureSource } from "@/lib/live-notes/capture";
  *     joins mid-recording would get headerless Opus clusters it cannot
  *     decode. Invariant: every new socket gets a brand-new recorder, and a
  *     recorder only ever feeds the socket it was created for.
+ *   - MIC PCM: laptop mic uses 16 kHz linear16 with AGC that can turn down
+ *     for a loud room (share-screen still uses MediaRecorder/Opus).
  */
 
 export type LiveTranscriptSegment = {
@@ -195,6 +197,8 @@ export function useLiveLectureTranscription(options: {
   const flushQueuedRef = useRef(false);
   /** Last time Deepgram delivered transcript text (final or interim). */
   const lastTranscriptAtRef = useRef(Date.now());
+  /** Latest non-final transcript — banked on disconnect so the sentence isn't lost. */
+  const interimTailRef = useRef("");
 
   const syncPendingCount = useCallback(() => {
     setTranscriptPendingCount(pendingFlushRef.current.length);
@@ -244,7 +248,26 @@ export function useLiveLectureTranscription(options: {
     }
   }, [sessionId, currentElapsedMs, syncPendingCount]);
 
+  const foldInterimIntoBuffer = useCallback(() => {
+    const tail = interimTailRef.current.trim();
+    interimTailRef.current = "";
+    if (!tail) return;
+    const buf = utteranceBufferRef.current.trim();
+    if (!buf) {
+      utteranceBufferRef.current = tail;
+      return;
+    }
+    // Interim is often the whole growing utterance, or just the next phrase.
+    if (tail.startsWith(buf)) {
+      utteranceBufferRef.current = tail;
+      return;
+    }
+    if (buf.endsWith(tail) || buf.includes(tail)) return;
+    utteranceBufferRef.current = `${buf} ${tail}`.trim();
+  }, []);
+
   const commitUtterance = useCallback(() => {
+    foldInterimIntoBuffer();
     const text = utteranceBufferRef.current.trim();
     utteranceBufferRef.current = "";
     setPartialText("");
@@ -259,7 +282,7 @@ export function useLiveLectureTranscription(options: {
     onSegmentRef.current?.(segment);
     // Autosave each finalized utterance — don't wait for the 5s safety timer.
     void flushSegments();
-  }, [currentElapsedMs, syncPendingCount, flushSegments]);
+  }, [currentElapsedMs, foldInterimIntoBuffer, syncPendingCount, flushSegments]);
 
   /** Bank in-flight speech, then flush — used on pause, finish, and tab hide. */
   const saveTranscriptNow = useCallback(async (): Promise<void> => {
@@ -542,6 +565,7 @@ export function useLiveLectureTranscription(options: {
         if (transcript) {
           lastTranscriptAtRef.current = Date.now();
           if (msg.is_final) {
+            interimTailRef.current = "";
             utteranceBufferRef.current =
               `${utteranceBufferRef.current} ${transcript}`.trim();
             setPartialText(utteranceBufferRef.current);
@@ -554,6 +578,7 @@ export function useLiveLectureTranscription(options: {
               commitUtterance();
             }
           } else {
+            interimTailRef.current = transcript;
             const base = utteranceBufferRef.current.trim();
             setPartialText(base ? `${base} ${transcript}` : transcript);
           }
@@ -576,6 +601,8 @@ export function useLiveLectureTranscription(options: {
       if (intentionalCloseRef.current) return;
       const st = statusRef.current;
       if (st !== "recording" && st !== "paused" && st !== "reconnecting") return;
+      // Bank the in-flight sentence before Deepgram forgets it.
+      commitUtteranceRef.current();
       scheduleReconnectRef.current?.();
     };
 
