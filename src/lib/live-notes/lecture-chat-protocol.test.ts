@@ -35,6 +35,10 @@ test("resolveLectureChatSectionId matches exact ids and headings", () => {
     resolveLectureChatSectionId("", allowed, sections),
     "s-bbb"
   );
+  assert.equal(
+    resolveLectureChatSectionId("", allowed, sections, "s-aaa"),
+    "s-aaa"
+  );
 });
 
 test("revise after reply streams notes body", () => {
@@ -73,6 +77,42 @@ test("unknown revise id falls back to the last section", () => {
     events.filter((e) => e.type === "op"),
     [{ type: "op", op: "revise", sectionId: "s-bbb" }]
   );
+});
+
+test("unknown revise id prefers the selected section over last", () => {
+  const parser = createLectureChatParser(allowed, "s-new", sections, "s-aaa");
+  const events = [
+    ...parser.push("@@revise s-zzzz\n## Ghost\n- nope\n"),
+    ...parser.flush(),
+  ];
+  assert.deepEqual(
+    events.filter((e) => e.type === "op"),
+    [{ type: "op", op: "revise", sectionId: "s-aaa" }]
+  );
+});
+
+test("revise before reply still streams notes and the student answer", () => {
+  const events = collect(
+    [
+      "@@thought Revising scarcity.",
+      "@@revise s-aaa",
+      "## Scarcity",
+      "- Every choice has a trade-off.",
+      "@@reply",
+      "Simplified the scarcity wording.",
+      "",
+    ].join("\n")
+  );
+  assert.deepEqual(
+    events.filter((e) => e.type === "op"),
+    [{ type: "op", op: "revise", sectionId: "s-aaa" }]
+  );
+  const notes = events
+    .filter((e) => e.type === "text" && e.channel === "notes")
+    .map((e) => (e.type === "text" ? e.delta : ""))
+    .join("");
+  assert.match(notes, /Every choice has a trade-off/);
+  assert.match(replyText(events), /Simplified the scarcity wording/);
 });
 
 function replyText(events: ReturnType<typeof collect>): string {

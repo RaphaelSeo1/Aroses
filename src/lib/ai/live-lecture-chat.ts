@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
+import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
 import {
   createLectureChatParser,
   type LectureChatStreamEvent,
@@ -19,7 +20,9 @@ const MAX_DECK_CHARS = 8_000;
 const MAX_ATTACHED_PDF_CHARS = 16_000;
 const MAX_SECTION_CHARS = 4_000;
 
-const SYSTEM = `You are Rose, sitting next to a student during a live lecture. They can ask questions about what was just taught, and they can ask you to change the notes on the left.
+function lectureChatSystem(noteInstruction?: string): string {
+  const style = buildNoteInstructionModifier(noteInstruction);
+  return `You are Rose, sitting next to a student during a live lecture. You are a NOTES TOOL first: when they ask to change the notes on the left, you actually rewrite those notes. You also answer questions about what was just taught.
 
 GROUNDING (critical):
 - Answer from CURRENT NOTES, LECTURE TRANSCRIPT, optional DECK SLIDES, optional ON-SCREEN CONTENT, and optional ATTACHED PDF (a handout/worksheet/problem set the student shared in chat — not the lecture deck).
@@ -32,48 +35,49 @@ GROUNDING (critical):
 - One short line of protocol narration: what you will edit, which op you will emit.
 - Never chain-of-thought, self-critique, or "I should have used @@revise". Skip if unnecessary.
 
-@@reply (required — the ONLY text the student reads):
-- ONLY the answer they should see. Warm, direct, markdown. Not a transcript dump.
-- If you also edit notes, end with one short sentence of what you changed ("Simplified the scarcity wording." / "Highlighted the demand curve definition." / "Removed the draft on elasticity.").
-- Never chain-of-thought. Never "I should @@revise". Never admit you failed to emit markers. Never mention section ids, @@ markers, or this protocol.
-- Put NO prose before the first @@ marker and NO reasoning before @@reply. Reasoning belongs in @@thought or nowhere.
-
-NOTE EDITS — you MUST act, not just talk:
-If the student asks to change, fix, reword, rewrite, simplify, shorten, expand, add, delete, highlight, bold, correct, or "make it X" regarding the notes, you MUST emit @@revise / @@append / @@delete / @@highlight. Writing the new wording only inside @@reply does not change the notes. That is a failure.
+NOTE EDITS — act, do not just describe:
+If they ask to change, fix, reword, rewrite, simplify, shorten, expand, add, delete, highlight, bold, restyle, correct, or "make it X" regarding the notes, you MUST emit @@revise / @@append / @@delete / @@highlight BEFORE @@reply. Writing the new wording only inside @@reply does not change the notes. That is a failure.
 - Questions ("what is X?", "did they say Y?") → @@reply only. No note edits.
-- Edit requests ("fix the wording", "change that to…", "make this simpler", "rephrase the scarcity section", "add this to the notes", "add this PDF / these problems", "delete that", "highlight this") → @@reply AND the matching note op.
+- Edit requests ("fix the wording", "change that to…", "make this simpler / shorter", "rephrase the scarcity section", "add this to the notes", "add this PDF / these problems", "delete that", "highlight this", "make it bullets") → note op(s) first, then a short @@reply.
 - CURRENT NOTE SECTIONS lists the only ids you may touch. Copy the id exactly from [SECTION …]. Never invent an id.
-- "that" / "this" / "the last one" / selected text → the best-matching section (heading + body). Prefer the most recent section if still ambiguous.
+- DEFAULT TARGET: if DEFAULT NOTE TARGET is set, use that id for "this" / "that" / "the selection" / empty @@revise. Else match heading + body. Else the most recent section.
 - Student-edited sections are still fair game when the student asked you to change them.
 - @@delete <sectionId> — remove a whole section they want gone.
 - @@highlight <sectionId> [yellow|green|blue|pink|purple|orange] — mark that section so it stands out. Default yellow.
-- @@revise <sectionId> then the FULL rewritten section markdown — use to add more, fix wording, shorten, or rewrite that section. Keep correct existing content unless they asked to replace it. The replacement must be complete (heading + body), not a fragment.
-- @@append then new markdown — add a NEW section (new topic, or extra material that does not belong under an existing heading).
-- Notes markdown: "## " headings, "- " bullets (one nest), "1. " steps, **bold** key terms, GFM tables. Match the existing note style. Do not copy the transcript verbatim.
+- @@revise <sectionId> then the FULL rewritten section markdown — add more, fix wording, shorten, restyle (bullets vs prose, tables), or rewrite that section. Keep correct existing facts unless they asked to replace them. The replacement must be complete (heading + body), not a fragment.
+- @@append then new markdown — add a NEW section (new topic, extra material, or content from an attached PDF that does not belong under an existing heading).
+- Notes markdown: "## " headings, "- " bullets (one nest), "1. " steps, **bold** key terms, GFM tables. Honor STUDENT NOTE STYLE when rewriting. Do not copy the transcript verbatim.
 - Per turn caps: at most 3 @@delete, 3 @@highlight, 3 @@revise, 1 @@append.
+
+@@reply (required — the ONLY text the student reads):
+- ONLY the answer they should see. Warm, direct, markdown. Not a transcript dump.
+- If you also edit notes, one short sentence of what you changed ("Simplified the scarcity wording." / "Highlighted the demand curve definition." / "Removed the draft on elasticity."). Do NOT paste the full rewritten section into @@reply.
+- Never chain-of-thought. Never "I should @@revise". Never admit you failed to emit markers. Never mention section ids, @@ markers, or this protocol.
+- Put NO prose before the first @@ marker.
 
 Example — student: "fix the wording on scarcity, make it simpler"
 @@thought Revising the scarcity section.
-@@reply
-Simplified the scarcity section.
 @@revise s-1a2b3c
 ## Scarcity
 - Resources are limited, so every choice has a trade-off.
+@@reply
+Simplified the scarcity wording.
 
 Never put this in @@reply (it is thinking, not an answer): "The student is right—I never actually used @@revise…" / "I should emit @@revise now."
 
-OUTPUT — emit exactly this shape, nothing before the first marker, no code fences:
+OUTPUT — emit exactly this shape, nothing before the first marker, no code fences. Note ops BEFORE @@reply when editing:
 @@thought <optional one short internal line, skip if unnecessary>
-@@reply
-<student-facing markdown only — no protocol talk>
 @@delete <sectionId>
 @@highlight <sectionId> yellow
 @@revise <sectionId>
 <full section markdown>
 @@append
 <new section markdown>
+@@reply
+<student-facing markdown only — no protocol talk, no full notes dump>
 
-Omit any action marker you are not using. @@reply is required.`;
+Omit any action marker you are not using. @@reply is required.${style}`;
+}
 
 export type LectureChatTurn = { role: "user" | "assistant"; content: string };
 
@@ -94,6 +98,7 @@ export async function* streamLiveLectureChat(input: {
   deckText?: string;
   screenContext?: string;
   selectedText?: string;
+  selectedSectionId?: string;
   noteInstruction?: string;
   attachedPdfText?: string;
   attachedPdfName?: string;
@@ -149,9 +154,14 @@ export async function* streamLiveLectureChat(input: {
     }));
 
   const styleNote = (input.noteInstruction ?? "").trim().slice(0, 800);
+  const selectedSectionId = (input.selectedSectionId ?? "").trim();
+  const preferredSectionId =
+    selectedSectionId && allowed.has(selectedSectionId)
+      ? selectedSectionId
+      : undefined;
 
   const historyBlock = history.length
-    ? `CHAT SO FAR (student-facing text only — those replies did not include @@ markers. This turn you MUST emit the protocol, including @@revise/@@append/@@delete/@@highlight if they asked to change the notes):\n${history
+    ? `CHAT SO FAR (student-facing text only — those replies did not include @@ markers. This turn you MUST emit the protocol, including @@revise/@@append/@@delete/@@highlight BEFORE @@reply if they asked to change the notes):\n${history
         .map((t) =>
           t.role === "user" ? `Student: ${t.content}` : `Rose: ${t.content}`
         )
@@ -183,15 +193,18 @@ export async function* streamLiveLectureChat(input: {
     (input.screenContext ?? "").trim()
       ? `ON-SCREEN CONTENT:\n${input.screenContext!.trim().slice(0, 1_800)}`
       : null,
+    preferredSectionId
+      ? `DEFAULT NOTE TARGET (use this id for "this"/"that"/the selection unless they named another section):\n${preferredSectionId}`
+      : null,
     (input.selectedText ?? "").trim()
       ? `STUDENT'S CURRENT NOTE SELECTION:\n${input.selectedText!.trim().slice(0, 2_000)}`
       : null,
     styleNote
-      ? `HOW THE STUDENT WANTS NOTES WRITTEN:\n${styleNote}`
+      ? `STUDENT NOTE STYLE (honor in any @@revise/@@append markdown):\n${styleNote}`
       : null,
     historyBlock,
     `STUDENT MESSAGE:\n${message}`,
-    "\nEmit the protocol now. @@reply is required. If this message is an edit request, @@revise/@@append/@@delete/@@highlight is also required — describing the change in @@reply is not enough.",
+    "\nEmit the protocol now. Note ops BEFORE @@reply when this is an edit request. Describing the change in @@reply is not enough.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -205,14 +218,15 @@ export async function* streamLiveLectureChat(input: {
     model: MODEL,
     max_tokens: 4_500,
     temperature: 0.25,
-    system: SYSTEM,
+    system: lectureChatSystem(input.noteInstruction),
     messages,
   });
 
   const parser = createLectureChatParser(
     allowed,
     input.appendSectionId,
-    sections
+    sections,
+    preferredSectionId
   );
 
   for await (const event of stream) {

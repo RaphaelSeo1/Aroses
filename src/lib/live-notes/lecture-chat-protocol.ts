@@ -49,10 +49,16 @@ export type LectureChatParserSection = {
 export function resolveLectureChatSectionId(
   raw: string,
   allowed: Set<string>,
-  sections: LectureChatParserSection[]
+  sections: LectureChatParserSection[],
+  preferredSectionId?: string
 ): string | null {
   const trimmed = raw.trim();
+  const preferred =
+    preferredSectionId && allowed.has(preferredSectionId)
+      ? preferredSectionId
+      : null;
   if (!trimmed) {
+    if (preferred) return preferred;
     const last = sections[sections.length - 1];
     return last && allowed.has(last.sectionId) ? last.sectionId : null;
   }
@@ -75,7 +81,7 @@ export function resolveLectureChatSectionId(
   if (sections.length === 1 && allowed.has(sections[0]!.sectionId)) {
     return sections[0]!.sectionId;
   }
-  return null;
+  return preferred;
 }
 
 const PROTOCOL_LEAK_LINE =
@@ -133,7 +139,8 @@ export function visibleReplyForStream(raw: string, complete: boolean): string {
 export function createLectureChatParser(
   allowedIds: Set<string>,
   appendSectionId: string,
-  sections: LectureChatParserSection[] = []
+  sections: LectureChatParserSection[] = [],
+  preferredSectionId?: string
 ): {
   push: (deltaText: string) => LectureChatStreamEvent[];
   flush: () => LectureChatStreamEvent[];
@@ -149,6 +156,20 @@ export function createLectureChatParser(
   const notesBody = () => mode === "append" || mode === "revise";
   const replyBody = () => mode === "reply";
   const streamBody = () => notesBody() || replyBody();
+  const resolveTarget = (raw: string) =>
+    resolveLectureChatSectionId(
+      raw,
+      allowedIds,
+      sections,
+      preferredSectionId
+    );
+  const lastResortId = () => {
+    if (preferredSectionId && allowedIds.has(preferredSectionId)) {
+      return preferredSectionId;
+    }
+    const last = sections[sections.length - 1]?.sectionId;
+    return last && allowedIds.has(last) ? last : undefined;
+  };
 
   const completeLine = (out: LectureChatStreamEvent[]) => {
     if (forwarded === 0 && line.startsWith("@@")) {
@@ -172,7 +193,7 @@ export function createLectureChatParser(
         out.push({ type: "op", op: "append", sectionId: appendSectionId });
       } else if (trimmed.startsWith("@@revise")) {
         const raw = trimmed.slice("@@revise".length).trim();
-        const id = resolveLectureChatSectionId(raw, allowedIds, sections);
+        const id = resolveTarget(raw);
         if (id && revises < 4) {
           revises += 1;
           mode = "revise";
@@ -188,8 +209,8 @@ export function createLectureChatParser(
             });
           }
         } else {
-          const fallbackId = sections[sections.length - 1]?.sectionId;
-          if (fallbackId && allowedIds.has(fallbackId) && revises < 4) {
+          const fallbackId = lastResortId();
+          if (fallbackId && revises < 4) {
             revises += 1;
             mode = "revise";
             out.push({ type: "op", op: "revise", sectionId: fallbackId });
@@ -206,7 +227,7 @@ export function createLectureChatParser(
         }
       } else if (trimmed.startsWith("@@delete")) {
         const raw = trimmed.slice("@@delete".length).trim();
-        const id = resolveLectureChatSectionId(raw, allowedIds, sections);
+        const id = resolveTarget(raw);
         if (id && deletes < 4) {
           deletes += 1;
           out.push({ type: "op", op: "delete", sectionId: id });
@@ -221,7 +242,7 @@ export function createLectureChatParser(
           colorName = last;
           idRaw = parts.slice(0, -1).join(" ");
         }
-        const id = resolveLectureChatSectionId(idRaw, allowedIds, sections);
+        const id = resolveTarget(idRaw);
         const color =
           HIGHLIGHT_COLOR_HEX[colorName] ?? HIGHLIGHT_COLOR_HEX.yellow;
         if (id && highlights < 6) {

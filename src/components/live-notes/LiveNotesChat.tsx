@@ -59,6 +59,30 @@ function looksLikeNotesBody(md: string): boolean {
   return t.split("\n").filter((l) => l.trim()).length >= 3;
 }
 
+function looksLikeNoteEditRequest(message: string): boolean {
+  const m = message.trim();
+  if (!m) return false;
+  return (
+    /\b(fix( the)? wording|reword|rewrite|rephrase|restyle|simplify|shorten|condense|expand|elaborate|make (it|this|that|the notes) |change (that|this|it|the) |add (that|this|it|more|these|the) |put (that|this) |take (that|this) out|delete |remove |highlight |bold )\b/i.test(
+      m
+    ) ||
+    /^(please\s+)?((can|could)\s+you\s+)?(fix|change|reword|rewrite|rephrase|simplify|shorten|condense|expand|delete|remove|highlight|add|put)\b/i.test(
+      m
+    ) ||
+    /\b(add|put|write|include|save)\b.{0,40}\b(to|in|into) the notes\b/i.test(m)
+  );
+}
+
+function wantsAppendToNotes(message: string): boolean {
+  const m = message.trim();
+  if (/\b(add more|more detail|expand|elaborate)\b/i.test(m)) return false;
+  return (
+    /\b(add|put|include|append|write)\b.{0,60}\b(to|in|into) the notes\b/i.test(
+      m
+    ) || /\badd this (pdf|file|handout|worksheet)\b/i.test(m)
+  );
+}
+
 function storageKey(sessionId: string) {
   return `aroses.liveNotes.chat.${sessionId}`;
 }
@@ -177,6 +201,8 @@ export function LiveNotesChat({
   turnsRef.current = turns;
   const pendingPdfRef = useRef(pendingPdf);
   pendingPdfRef.current = pendingPdf;
+  const noteInstructionRef = useRef(noteInstruction);
+  noteInstructionRef.current = noteInstruction;
   const queuedPdfsRef = useRef(queuedPdfs);
   queuedPdfsRef.current = queuedPdfs;
 
@@ -569,6 +595,8 @@ export function LiveNotesChat({
       const writer = notesRef.current?.getStreamWriter();
       const sections = writer?.listAllSections(60) ?? [];
       const selectedText = notesRef.current?.getSelectedText() ?? "";
+      const selectedSectionId =
+        notesRef.current?.getSelectedSectionId() ?? "";
       const hasNotes = Boolean(writer && sections.length > 0);
 
       const noteOps: NoteOp[] = [];
@@ -659,7 +687,8 @@ export function LiveNotesChat({
             transcript: recentTranscript || undefined,
             screenContext: screenContext || undefined,
             selectedText: selectedText || undefined,
-            noteInstruction,
+            selectedSectionId: selectedSectionId || undefined,
+            noteInstruction: noteInstructionRef.current,
             attachedPdfText: pdf?.text,
             attachedPdfName: pdf?.fileName,
           }),
@@ -749,19 +778,6 @@ export function LiveNotesChat({
             ? "Updated your notes."
             : "I didn't have a reply for that — try asking again.";
         }
-        const looksLikeEdit =
-          /\b(fix the wording|reword|rewrite|rephrase|change (that|this|it) to|make (it|this|that) (simpler|shorter|clearer|better)|add (that|this|it|more) (to|detail)|put that in the notes|take (that|this) out|delete (that|this|the)|highlight (that|this|the)|expand (that|this|the))\b/i.test(
-            message
-          ) ||
-          /^(please\s+)?((can|could)\s+you\s+)?(fix|change|reword|rewrite|rephrase|simplify|shorten|expand|delete|remove|highlight)\b/i.test(
-            message.trim()
-          );
-        if (!failed && noteOpCount === 0 && looksLikeEdit) {
-          onActivity(
-            "error",
-            "I didn't apply that to the notes. Try again, or select the section first."
-          );
-        }
       } catch (e) {
         failed = true;
         cancelled = true;
@@ -801,6 +817,46 @@ export function LiveNotesChat({
           noteOps,
           visibleReplyForStream(pendingReply, true)
         );
+      } else if (!failed && looksLikeNoteEditRequest(message)) {
+        const replyVisible = visibleReplyForStream(pendingReply, true);
+        const replyNotes = sanitizeChatNotesMarkdown(replyVisible);
+        const targetId =
+          selectedSectionId || sections[sections.length - 1]?.sectionId || "";
+        if (looksLikeNotesBody(replyNotes) && (wantsAppendToNotes(message) || targetId)) {
+          const appendId = `s-${crypto.randomUUID().slice(0, 8)}`;
+          if (wantsAppendToNotes(message) || !targetId) {
+            void applyNoteOps(
+              [
+                {
+                  kind: "append",
+                  sectionId: appendId,
+                  dividerBefore: hasNotes || appendStarted,
+                },
+                { kind: "notes", text: `${replyNotes}\n` },
+              ],
+              ""
+            );
+          } else {
+            void applyNoteOps(
+              [
+                { kind: "revise", sectionId: targetId },
+                { kind: "notes", text: `${replyNotes}\n` },
+              ],
+              ""
+            );
+          }
+          if (
+            /^#{1,3}\s/m.test(replyVisible.trim()) ||
+            /^\s*[-*]\s/m.test(replyVisible.trim())
+          ) {
+            revealReply("Updated your notes.");
+          }
+        } else {
+          onActivity(
+            "error",
+            "I didn't apply that to the notes. Try again, or select the section first."
+          );
+        }
       }
     },
     [
@@ -808,7 +864,6 @@ export function LiveNotesChat({
       attaching,
       busy,
       confirmQueuedPdfs,
-      noteInstruction,
       notesRef,
       onActivity,
       recentTranscript,

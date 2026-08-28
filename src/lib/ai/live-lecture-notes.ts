@@ -68,7 +68,7 @@ const NOTE_STYLE_RULES = `You write structured STUDY NOTES — useful to reread 
 - Administrative chatter (attendance, logistics, "can everyone see the screen") is NOT teaching content — skip it.
 - Bullets ("- ", one "  - " nesting level for sub-points) for lists of points; short prose when a definition or relationship needs a full sentence. Concise and readable — in-depth where the idea needs it, never padded.
 
-DO NOT under-write: if a definition, number, named study/person, result, or worked step was taught, it must appear. Condensing means clearer prose and fewer redundant bullets — not omitting teachable content.
+DO NOT under-write by default: if a definition, number, named study/person, result, or worked step was taught, it must appear. Condensing means clearer prose and fewer redundant bullets — not omitting teachable content. If a STUDENT NOTE STYLE is present and asks for shorter, sparser, or less detailed notes, keep only the load-bearing facts they still need and follow that request.
 
 GROUNDING (critical — overrides everything else on conflict):
 - You may receive THREE sources: NEW TRANSCRIPT SLICE (speech-to-text), ON-SCREEN CONTENT (OCR/vision from the shared lecture display), and DECK SLIDES (pre-uploaded lecture deck pages matched to this slice).
@@ -158,9 +158,9 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 
 /**
  * Layer the student's per-session note request directly under the base style
- * rules (still above grounding/marker sections, which always win). Empty
- * instruction ⇒ the exact base SYSTEM, byte-for-byte. REVIEW_SYSTEM is
- * intentionally never modified — the wrap-up review is factual/structural.
+ * rules. Empty instruction ⇒ the exact base SYSTEM, byte-for-byte.
+ * REVIEW_SYSTEM is intentionally never modified — the wrap-up review is
+ * factual/structural.
  */
 function liveNotesSystem(
   noteInstruction: string | undefined,

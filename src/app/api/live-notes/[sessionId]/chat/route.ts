@@ -27,6 +27,7 @@ const MAX_SECTIONS = 60;
  *   transcript?: string,
  *   screenContext?: string,
  *   selectedText?: string,
+ *   selectedSectionId?: string,
  *   noteInstruction?: string,
  *   attachedPdfText?: string,
  *   attachedPdfName?: string
@@ -65,6 +66,7 @@ export async function POST(request: Request, ctx: Params) {
     transcript?: unknown;
     screenContext?: unknown;
     selectedText?: unknown;
+    selectedSectionId?: unknown;
     noteInstruction?: unknown;
     attachedPdfText?: unknown;
     attachedPdfName?: unknown;
@@ -211,6 +213,10 @@ export async function POST(request: Request, ctx: Params) {
           selectedText:
             typeof b.selectedText === "string"
               ? b.selectedText.trim().slice(0, 2_000)
+              : undefined,
+          selectedSectionId:
+            typeof b.selectedSectionId === "string"
+              ? b.selectedSectionId.trim().slice(0, 64)
               : undefined,
           noteInstruction: noteInstruction || undefined,
           attachedPdfText: attachedPdfText

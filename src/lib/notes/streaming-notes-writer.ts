@@ -566,6 +566,29 @@ export class StreamingNotesWriter {
       .filter((s) => s.markdown.trim().length > 0);
   }
 
+  /**
+   * Section id under the current selection (or caret). Used so chat "this"
+   * lands on the section the student is looking at, not always the last one.
+   */
+  sectionIdAtSelection(): string | null {
+    if (this.editor.isDestroyed) return null;
+    const { $from, $to } = this.editor.state.selection;
+    const fromId = this.sectionIdAtResolved($from);
+    if (fromId) return fromId;
+    return this.sectionIdAtResolved($to);
+  }
+
+  private sectionIdAtResolved($pos: {
+    depth: number;
+    node: (depth: number) => { attrs?: Record<string, unknown> };
+  }): string | null {
+    for (let d = $pos.depth; d > 0; d--) {
+      const sid = $pos.node(d).attrs?.sectionId;
+      if (typeof sid === "string" && sid) return sid;
+    }
+    return null;
+  }
+
   private pmNodesFromMarkdown(
     markdown: string,
     sectionId: string

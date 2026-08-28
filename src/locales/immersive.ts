@@ -21,12 +21,14 @@ const en = {
   noteStylePlaceholder:
     "Tell the AI how you want these notes — e.g. 'more worked examples, skip long definitions, keep it short'. Leave blank for the default.",
   noteStyleHint:
-    "Applies to this session only and can only shape style and emphasis — never facts or format.",
+    "New notes follow this as you type. Rose still won't invent facts.",
   noteStyleDone: "Done",
   noteStyleSave: "Save",
   noteStyleSaving: "Saving…",
   noteStyleSaved: "Saved",
   noteStyleSaveFailed: "Couldn't save",
+  noteStyleUpdating: "Updating…",
+  noteStyleLive: "Live",
 };
 
 const ko: typeof en = {
@@ -52,12 +54,14 @@ const ko: typeof en = {
   noteStylePlaceholder:
     "AI가 이 노트를 어떻게 쓰면 좋을지 알려주세요 — 예: '예제 풀이 많이, 긴 정의는 생략, 짧게'. 비워두면 기본 방식으로 작성돼요.",
   noteStyleHint:
-    "이 세션에만 적용되고, 스타일과 강조만 바꿀 수 있어요 — 사실이나 형식은 바뀌지 않아요.",
+    "새 노트부터 바로 반영돼요. 사실이나 내용은 강의에 없는 걸 지어내지 않아요.",
   noteStyleDone: "완료",
   noteStyleSave: "저장",
   noteStyleSaving: "저장 중…",
   noteStyleSaved: "저장됨",
   noteStyleSaveFailed: "저장 실패",
+  noteStyleUpdating: "반영 중…",
+  noteStyleLive: "적용됨",
 };
 
 export const immersive = { en, ko };

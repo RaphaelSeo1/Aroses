@@ -156,6 +156,8 @@ export type NotesPanelHandle = {
   setStreamingIndicator: (on: boolean) => void;
   /** Plain text of the current editor selection, or "" if nothing selected. */
   getSelectedText: () => string;
+  /** Section id under the caret / selection, or "" if none. */
+  getSelectedSectionId: () => string;
   /** Scroll a live-notes section into view and flash it. */
   revealSection: (sectionId: string) => boolean;
   /** True when the editor has any saved note content. */
@@ -310,7 +312,7 @@ export function NotesPanel({
   /**
    * Per-session "tell the AI how to write these notes" free text.
    * The parent owns the live value (for the next synthesize call). Persist
-   * via `onNoteInstructionSave` when the student taps Save.
+   * is auto-saved as they type; Save is an immediate persist.
    */
   noteInstruction?: string;
   onNoteInstructionChange?: (v: string) => void;
@@ -336,6 +338,9 @@ export function NotesPanel({
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const noteStyleDirty = noteStyleDraft !== noteStyleSaved;
+  const noteStyleDraftRef = useRef(noteStyleDraft);
+  noteStyleDraftRef.current = noteStyleDraft;
+  const noteStyleSaveGenRef = useRef(0);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(() => {
     if (!initialUpdatedAt) return null;
     const t = Date.parse(initialUpdatedAt);
@@ -351,26 +356,52 @@ export function NotesPanel({
 
   // Reset note-style draft when switching notes endpoints / materials.
   useEffect(() => {
+    noteStyleSaveGenRef.current += 1;
     setNoteStyleDraft(noteInstruction);
     setNoteStyleSaved(noteInstruction);
     setNoteStyleSaveState("idle");
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on endpoint change
   }, [endpoint]);
 
-  const saveNoteStyle = useCallback(async () => {
-    if (!onNoteInstructionSave || noteStyleSaveState === "saving") return;
-    setNoteStyleSaveState("saving");
-    try {
-      await onNoteInstructionSave(noteStyleDraft);
-      setNoteStyleSaved(noteStyleDraft);
-      setNoteStyleSaveState("saved");
-      window.setTimeout(() => {
-        setNoteStyleSaveState((s) => (s === "saved" ? "idle" : s));
-      }, 1600);
-    } catch {
-      setNoteStyleSaveState("error");
-    }
-  }, [onNoteInstructionSave, noteStyleDraft, noteStyleSaveState]);
+  const persistNoteStyle = useCallback(
+    async (value: string) => {
+      if (!onNoteInstructionSave) return;
+      const gen = ++noteStyleSaveGenRef.current;
+      setNoteStyleSaveState("saving");
+      try {
+        await onNoteInstructionSave(value);
+        if (gen !== noteStyleSaveGenRef.current) return;
+        setNoteStyleSaved(value);
+        setNoteStyleSaveState("saved");
+        window.setTimeout(() => {
+          if (gen !== noteStyleSaveGenRef.current) return;
+          setNoteStyleSaveState((s) => (s === "saved" ? "idle" : s));
+        }, 1600);
+      } catch {
+        if (gen !== noteStyleSaveGenRef.current) return;
+        setNoteStyleSaveState("error");
+      }
+    },
+    [onNoteInstructionSave]
+  );
+
+  const saveNoteStyle = useCallback(() => {
+    void persistNoteStyle(noteStyleDraftRef.current);
+  }, [persistNoteStyle]);
+
+  useEffect(() => {
+    if (!onNoteInstructionSave) return;
+    if (noteStyleDraft === noteStyleSaved) return;
+    const id = window.setTimeout(() => {
+      void persistNoteStyle(noteStyleDraftRef.current);
+    }, 700);
+    return () => window.clearTimeout(id);
+  }, [
+    noteStyleDraft,
+    noteStyleSaved,
+    onNoteInstructionSave,
+    persistNoteStyle,
+  ]);
 
   const saveTimerRef = useRef<number | null>(null);
   const titleSaveTimerRef = useRef<number | null>(null);
@@ -1034,6 +1065,10 @@ export function NotesPanel({
         if (from === to) return "";
         return editor.state.doc.textBetween(from, to, "\n").trim();
       },
+      getSelectedSectionId: () => {
+        if (!editor || editor.isDestroyed) return "";
+        return streamWriterRef.current?.sectionIdAtSelection() ?? "";
+      },
       revealSection: (sectionId: string) => {
         if (!editor || editor.isDestroyed || !sectionId) return false;
         const root = editor.view.dom;
@@ -1558,9 +1593,19 @@ export function NotesPanel({
                     — {t.immersive.noteStyleTitle}
                   </span>
                 )}
-                {noteStyleDirty ? (
+                {noteStyleSaveState === "error" ? (
+                  <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-red-800 dark:bg-red-950/50 dark:text-red-200">
+                    {t.immersive.noteStyleSaveFailed}
+                  </span>
+                ) : noteStyleDirty || noteStyleSaveState === "saving" ? (
                   <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
-                    Unsaved
+                    {noteStyleSaveState === "saving"
+                      ? t.immersive.noteStyleSaving
+                      : t.immersive.noteStyleUpdating}
+                  </span>
+                ) : noteStyleSaveState === "saved" ? (
+                  <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
+                    {t.immersive.noteStyleLive}
                   </span>
                 ) : null}
               </span>
@@ -1603,7 +1648,7 @@ export function NotesPanel({
                         disabled={
                           !noteStyleDirty || noteStyleSaveState === "saving"
                         }
-                        onClick={() => void saveNoteStyle()}
+                        onClick={() => saveNoteStyle()}
                         className={`rounded-full px-3 py-1 text-[11px] font-semibold transition disabled:cursor-default disabled:opacity-50 ${
                           noteStyleSaveState === "error"
                             ? "bg-red-600 text-white"
