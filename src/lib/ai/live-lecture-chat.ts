@@ -1,5 +1,6 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
+import { tutorChatModel } from "@/lib/ai/anthropic-models";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
 import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
 import {
@@ -9,8 +10,7 @@ import {
 
 export type { LectureChatStreamEvent } from "@/lib/live-notes/lecture-chat-protocol";
 
-const MODEL =
-  process.env.ANTHROPIC_TUTOR_FAST_MODEL?.trim() || "claude-haiku-4-5";
+const MODEL = tutorChatModel();
 
 const MAX_HISTORY_TURNS = 12;
 const MAX_TURN_CHARS = 4_000;

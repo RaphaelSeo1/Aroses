@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { tutorChatModel } from "@/lib/ai/anthropic-models";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
 import { formatSelfStudyTutorBlock } from "@/lib/self-study-context";
 import { AI_ASSISTANT_NAME, APP_NAME } from "@/lib/brand";
@@ -8,7 +9,7 @@ import { isQuizMcq } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
 import type { StudyChatTurn } from "@/types/study-chat";
 
-const MODEL = "claude-sonnet-4-6";
+const MODEL = tutorChatModel();
 
 export type StudyCourseMapEntry = {
   materialId: string;

@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { tutorChatModel } from "@/lib/ai/anthropic-models";
 import {
   formatMentoredTeachingLanguageBlock,
   type CourseOutputLanguage,
@@ -27,7 +28,7 @@ import type {
 } from "@/types/mentored";
 
 const MODEL = "claude-sonnet-4-6";
-const FAST_MODEL = "claude-haiku-4-5";
+const FAST_MODEL = tutorChatModel();
 const MAX_CONTEXT_CHARS = 12_000;
 
 // ---------------------------------------------------------------------------

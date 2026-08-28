@@ -1,5 +1,6 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
+import { tutorChatModel } from "@/lib/ai/anthropic-models";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
 import { AI_ASSISTANT_NAME, APP_NAME } from "@/lib/brand";
 import {
@@ -10,9 +11,7 @@ import {
 } from "@/lib/calendar/calendar-chat";
 import type { CalendarItem } from "@/types/calendar";
 
-/** Pinned — do not inherit ANTHROPIC_TUTOR_MODEL (that override is for voice). */
-const MODEL =
-  process.env.ANTHROPIC_CALENDAR_MODEL?.trim() || "claude-sonnet-4-6";
+const MODEL = tutorChatModel();
 
 const TOOLS: Anthropic.Tool[] = [
   {

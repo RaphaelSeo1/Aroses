@@ -13,15 +13,15 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { tutorChatModel, tutorReplyModel } from "@/lib/ai/anthropic-models";
 import { TUTOR_NOTES_QUALITY_RULES } from "@/lib/ai/tutor-notes-quality";
 import type {
   TutorSessionMessage,
   TutorSessionModeTag,
 } from "@/types/tutor-session";
 
-const MODEL = process.env.ANTHROPIC_TUTOR_MODEL || "claude-sonnet-4-6";
-const FAST_MODEL =
-  process.env.ANTHROPIC_TUTOR_FAST_MODEL || "claude-haiku-4-5";
+const MODEL = tutorReplyModel();
+const FAST_MODEL = tutorChatModel();
 
 // ---------------------------------------------------------------------------
 // 1. System prompt builder
