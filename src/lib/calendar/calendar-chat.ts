@@ -142,6 +142,113 @@ export function coerceStartsAt(
   return null;
 }
 
+export function actionFromToolUse(
+  name: string,
+  input: unknown
+): CalendarChatAction | null {
+  if (!input || typeof input !== "object") return null;
+  const a = input as Record<string, unknown>;
+  if (name === "create_item") {
+    const title = typeof a.title === "string" ? a.title.trim() : "";
+    if (!title) return null;
+    const date =
+      typeof a.date === "string" ? a.date.trim() : "";
+    const time =
+      typeof a.time === "string" ? a.time.trim() : "";
+    const startsAt = date
+      ? time
+        ? `${date}T${normalizeClock(time) ?? time}`
+        : date
+      : null;
+    return {
+      type: "create",
+      title,
+      kind: a.kind === "event" ? "event" : "todo",
+      startsAt,
+      endsAt: null,
+      allDay: !time,
+      important: Boolean(a.important),
+      notes: typeof a.notes === "string" ? a.notes : "",
+    };
+  }
+  const id =
+    typeof a.item === "string"
+      ? a.item.trim()
+      : typeof a.id === "string"
+        ? a.id.trim()
+        : typeof a.title === "string"
+          ? a.title.trim()
+          : "";
+  if (!id) return null;
+  if (name === "complete_item") return { type: "complete", id };
+  if (name === "uncomplete_item") return { type: "uncomplete", id };
+  if (name === "delete_item") return { type: "delete", id };
+  if (name === "update_item") {
+    const date =
+      typeof a.date === "string" ? a.date.trim() : "";
+    const time =
+      typeof a.time === "string" ? a.time.trim() : "";
+    let startsAt: string | undefined;
+    if (date) {
+      startsAt = time ? `${date}T${normalizeClock(time) ?? time}` : date;
+    }
+    return {
+      type: "update",
+      id,
+      title: typeof a.title === "string" ? a.title : undefined,
+      kind: a.kind === "event" || a.kind === "todo" ? a.kind : undefined,
+      startsAt,
+      allDay: time ? false : date ? true : undefined,
+      important: typeof a.important === "boolean" ? a.important : undefined,
+      notes: typeof a.notes === "string" ? a.notes : undefined,
+    };
+  }
+  return null;
+}
+
+function normalizeClock(raw: string): string | null {
+  const trimmed = raw.trim();
+  const m24 = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) {
+    const h = Number(m24[1]);
+    const min = Number(m24[2]);
+    if (h >= 0 && h <= 23 && min >= 0 && min <= 59) {
+      return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+    }
+  }
+  const ampm = trimmed.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+  if (ampm) {
+    let h = Number(ampm[1]);
+    const min = Number(ampm[2] ?? "0");
+    const mer = (ampm[3] ?? "").toLowerCase();
+    if (h < 1 || h > 12 || min < 0 || min > 59) return null;
+    if (mer === "am") h = h === 12 ? 0 : h;
+    else h = h === 12 ? 12 : h + 12;
+    return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  }
+  return null;
+}
+
+export function parseCalendarModelContent(
+  content: { type: string; text?: string; name?: string; input?: unknown }[]
+): { reply: string; actions: CalendarChatAction[] } {
+  const texts: string[] = [];
+  const actions: CalendarChatAction[] = [];
+  for (const block of content) {
+    if (block.type === "text" && typeof block.text === "string") {
+      texts.push(block.text);
+    } else if (block.type === "tool_use" && typeof block.name === "string") {
+      const action = actionFromToolUse(block.name, block.input);
+      if (action) actions.push(action);
+    }
+  }
+  const fromTools = actions.slice(0, 8);
+  if (fromTools.length > 0) {
+    return { reply: texts.join("\n").trim(), actions: fromTools };
+  }
+  return parseCalendarChatResponse(texts.join("\n"));
+}
+
 export function parseCalendarChatResponse(raw: string): {
   reply: string;
   actions: CalendarChatAction[];

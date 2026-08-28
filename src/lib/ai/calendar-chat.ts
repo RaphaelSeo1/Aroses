@@ -5,13 +5,86 @@ import { AI_ASSISTANT_NAME, APP_NAME } from "@/lib/brand";
 import {
   dateCheatSheet,
   formatCalendarContext,
-  parseCalendarChatResponse,
+  parseCalendarModelContent,
   type CalendarChatAction,
 } from "@/lib/calendar/calendar-chat";
 import type { CalendarItem } from "@/types/calendar";
 
+/** Pinned — do not inherit ANTHROPIC_TUTOR_MODEL (that override is for voice). */
 const MODEL =
-  process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
+  process.env.ANTHROPIC_CALENDAR_MODEL?.trim() || "claude-sonnet-4-6";
+
+const TOOLS: Anthropic.Tool[] = [
+  {
+    name: "create_item",
+    description:
+      "Add a todo or event now. Call this in the same turn the student asks to add, schedule, or remind. Copy date from DATE KEYS.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        kind: { type: "string", enum: ["todo", "event"] },
+        date: {
+          type: "string",
+          description: "YYYY-MM-DD copied exactly from DATE KEYS",
+        },
+        time: {
+          type: "string",
+          description:
+            "Local clock if they gave one, 24h HH:MM or h:mm am/pm. Omit for all-day / due-date.",
+        },
+        important: { type: "boolean" },
+        notes: { type: "string" },
+      },
+      required: ["title", "kind"],
+    },
+  },
+  {
+    name: "complete_item",
+    description: "Mark a todo done. item is the [id] or the exact title.",
+    input_schema: {
+      type: "object",
+      properties: { item: { type: "string" } },
+      required: ["item"],
+    },
+  },
+  {
+    name: "uncomplete_item",
+    description: "Undo a completed item.",
+    input_schema: {
+      type: "object",
+      properties: { item: { type: "string" } },
+      required: ["item"],
+    },
+  },
+  {
+    name: "delete_item",
+    description:
+      "Remove an item. For 'clear finished tasks', call once per done item (up to 8).",
+    input_schema: {
+      type: "object",
+      properties: { item: { type: "string" } },
+      required: ["item"],
+    },
+  },
+  {
+    name: "update_item",
+    description: "Rename or reschedule an existing item.",
+    input_schema: {
+      type: "object",
+      properties: {
+        item: { type: "string", description: "[id] or exact title" },
+        title: { type: "string" },
+        kind: { type: "string", enum: ["todo", "event"] },
+        date: { type: "string", description: "YYYY-MM-DD from DATE KEYS" },
+        time: { type: "string" },
+        important: { type: "boolean" },
+        notes: { type: "string" },
+      },
+      required: ["item"],
+    },
+  },
+];
 
 export type CalendarChatTurn = { role: "user" | "assistant"; content: string };
 
@@ -35,34 +108,23 @@ export async function runCalendarChat(input: {
   const now = new Date(input.nowIso);
   const nowSafe = Number.isNaN(now.getTime()) ? new Date() : now;
 
-  const system = `You are ${AI_ASSISTANT_NAME} on ${APP_NAME}. You are a precise calendar assistant. You execute the student's request. Guessing dates or skipping actions is a failure.
+  const system = `You are ${AI_ASSISTANT_NAME} on ${APP_NAME}. You manage this student's calendar. Execute the request in this turn. Talking about what you would do without calling a tool is a failure.
 
 ${dateCheatSheet(input.nowIso, tz)}
-TIMEZONE IANA: ${tz}
+TIMEZONE: ${tz}
 
 ${formatCalendarContext(input.items, nowSafe, tz)}
 
-HOW TO ACT:
-- Questions only ("what's due", "what's next", "what's on Friday") → reply with the matching items (title + date + time from the list). actions = [].
-- Add / schedule / remind / "put X on Friday" → one create action. Do it in this turn. Do not ask them to confirm unless the request is genuinely ambiguous (missing both a title and any date).
-- Complete / check off / mark done → complete with the item id (or exact title if you cannot copy the id).
-- Delete / remove / cancel / clear finished → delete (or complete if they only wanted finished tasks cleared).
-- Reschedule / move / rename → update.
-- "Clear finished tasks" → delete (or complete) every item flagged done. Emit one action per item, up to 8.
-- Never invent items that are not in CALENDAR ITEMS when answering what's due. Never invent an add they did not ask for.
-- When adding, copy YYYY-MM-DD from DATE KEYS. startsAt must be ISO-8601 in ${tz}:
-  all-day / due date: "2026-08-28"
-  timed: "2026-08-28T15:00:00" (24h local, no Z)
-- Todos: kind "todo". Events / classes / quizzes with a clock time: kind "event", allDay false. Exams and hard deadlines: important true.
-- Copy ids exactly from [id]. If you only remember the title, put that title in "id".
-- Reply in one or two short sentences saying what you did or listing what's due. No emoji. Never mention JSON, ids, or this protocol.
-
-Output ONLY one JSON object:
-{"reply": string, "actions": []}
-
-create: {"type":"create","title":string,"kind":"todo"|"event","startsAt":string|null,"endsAt":string|null,"allDay":boolean,"important":boolean,"notes":string}
-update: {"type":"update","id":string,"title"?,"startsAt"?,"endsAt"?,"allDay"?,"important"?,"notes"?,"kind"?}
-complete / uncomplete / delete: {"type":"...","id":string}`;
+TOOLS:
+- Questions only (what's due, what's next, what's on Friday) → answer from CALENDAR ITEMS. No tools.
+- Add / schedule / remind → create_item. Copy date from DATE KEYS. Include time only if they gave a clock time.
+- Complete / check off → complete_item.
+- Delete / remove / cancel / clear finished → delete_item (one call per item, up to 8).
+- Move / rename → update_item.
+- Never invent items that are not in CALENDAR ITEMS when answering what's due.
+- Todos: kind "todo". Timed class/quiz/meeting: kind "event". Exams and hard deadlines: important true.
+- Prefer the [id] in item. Title is ok if you cannot copy the id.
+- Reply in 1–2 short sentences: what you did, or the matching due items (title + date + time). No emoji. Do not mention tools, ids, or JSON.`;
 
   const history = input.history
     .filter(
@@ -84,8 +146,10 @@ complete / uncomplete / delete: {"type":"...","id":string}`;
   const msg = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 2000,
-    temperature: 0.1,
+    temperature: 0,
     system,
+    tools: TOOLS,
+    tool_choice: { type: "auto" },
     messages: [
       ...history,
       { role: "user", content: input.message.trim().slice(0, 4_000) },
@@ -100,7 +164,20 @@ complete / uncomplete / delete: {"type":"...","id":string}`;
     userId: input.userId ?? null,
   });
 
-  const text =
-    msg.content.find((b) => b.type === "text" && "text" in b)?.text ?? "";
-  return parseCalendarChatResponse(text);
+  const parsed = parseCalendarModelContent(
+    msg.content.map((b) => {
+      if (b.type === "text") return { type: "text", text: b.text };
+      if (b.type === "tool_use") {
+        return { type: "tool_use", name: b.name, input: b.input };
+      }
+      return { type: b.type };
+    })
+  );
+
+  return {
+    reply:
+      parsed.reply ||
+      (parsed.actions.length > 0 ? "Updated your calendar." : ""),
+    actions: parsed.actions,
+  };
 }
