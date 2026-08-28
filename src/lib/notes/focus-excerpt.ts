@@ -10,6 +10,9 @@ export type FocusExcerpt = {
   preview: string;
   /** True when we expanded a collapsed caret to the surrounding heading section. */
   usedSection: boolean;
+  /** Document range to persist as a focus-clip mark, if any. */
+  markFrom: number | null;
+  markTo: number | null;
 };
 
 /**
@@ -44,12 +47,24 @@ export function buildFocusExcerpt(opts: {
     } else if (terms.length > 0 && selected.length >= SHORT_SELECTION_CHARS) {
       corpus = `FOCUS ON: ${terms.join("; ")}\n\n${selected}`;
     }
-    return { corpus, preview: selected, usedSection: false };
+    return {
+      corpus,
+      preview: selected,
+      usedSection: false,
+      markFrom: from,
+      markTo: to,
+    };
   }
 
-  const section = currentSectionText(doc, from);
-  if (section.length >= MIN_DIRECT_CHARS) {
-    return { corpus: section, preview: clipPreview(section), usedSection: true };
+  const section = currentSectionRange(doc, from);
+  if (section && section.text.length >= MIN_DIRECT_CHARS) {
+    return {
+      corpus: section.text,
+      preview: clipPreview(section.text),
+      usedSection: true,
+      markFrom: section.from,
+      markTo: section.to,
+    };
   }
 
   const fallback = doc.textBetween(0, Math.min(doc.content.size, 4_000), "\n").trim();
@@ -57,6 +72,8 @@ export function buildFocusExcerpt(opts: {
     corpus: fallback,
     preview: clipPreview(fallback),
     usedSection: true,
+    markFrom: null,
+    markTo: null,
   };
 }
 
@@ -99,14 +116,17 @@ function parentBlockText(doc: PmNode, pos: number): string {
   return $pos.parent.textContent.trim();
 }
 
-function currentSectionText(doc: PmNode, pos: number): string {
+function currentSectionRange(
+  doc: PmNode,
+  pos: number
+): { from: number; to: number; text: string } | null {
   const clamped = Math.min(Math.max(pos, 0), doc.content.size);
   type Block = { from: number; to: number; node: PmNode };
   const blocks: Block[] = [];
   doc.forEach((node, offset) => {
     blocks.push({ from: offset, to: offset + node.nodeSize, node });
   });
-  if (blocks.length === 0) return "";
+  if (blocks.length === 0) return null;
 
   let startIdx = 0;
   let startLevel = 99;
@@ -125,7 +145,11 @@ function currentSectionText(doc: PmNode, pos: number): string {
 
   if (!foundHeading) {
     const b = blocks[startIdx]!;
-    return doc.textBetween(b.from, b.to, "\n").trim();
+    return {
+      from: b.from,
+      to: b.to,
+      text: doc.textBetween(b.from, b.to, "\n").trim(),
+    };
   }
 
   let endIdx = blocks.length;
@@ -142,5 +166,9 @@ function currentSectionText(doc: PmNode, pos: number): string {
 
   const from = blocks[startIdx]!.from;
   const to = blocks[endIdx - 1]!.to;
-  return doc.textBetween(from, to, "\n").trim();
+  return {
+    from,
+    to,
+    text: doc.textBetween(from, to, "\n").trim(),
+  };
 }

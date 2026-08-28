@@ -19,6 +19,7 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
+import { FocusClip, applyFocusClipMark } from "./notes/FocusClip";
 import { NotesFormatToolbar } from "./notes/NotesFormatToolbar";
 import { NotesTableHoverControls } from "./notes/NotesTableHoverControls";
 import { LectureSummaryButton } from "./notes/LectureSummaryButton";
@@ -169,6 +170,8 @@ export type NotesPanelHandle = {
   getSelectedText: () => string;
   /** Section id under the caret / selection, or "" if none. */
   getSelectedSectionId: () => string;
+  /** Section currently in the notes viewport (what the student is looking at). */
+  getVisibleSectionId: () => string;
   /** Scroll a live-notes section into view and flash it. */
   revealSection: (sectionId: string) => boolean;
   /** True when the editor has any saved note content. */
@@ -504,6 +507,7 @@ export function NotesPanel({
       RoseDocument,
       Underline,
       Highlight.configure({ multicolor: true }),
+      FocusClip.configure({ hint: t.immersive.focusClipHint }),
       KeyTermEmphasis,
       Typography,
       TextAlign.configure({
@@ -1109,6 +1113,32 @@ export function NotesPanel({
         if (!editor || editor.isDestroyed) return "";
         return streamWriterRef.current?.sectionIdAtSelection() ?? "";
       },
+      getVisibleSectionId: () => {
+        if (!editor || editor.isDestroyed) return "";
+        const root = editor.view.dom;
+        const nodes = root.querySelectorAll("[data-section-id]");
+        if (nodes.length === 0) {
+          return streamWriterRef.current?.sectionIdAtSelection() ?? "";
+        }
+        const scrollEl = scrollBodyRef.current;
+        const viewportTop = scrollEl
+          ? scrollEl.getBoundingClientRect().top + 56
+          : 80;
+        let bestId = "";
+        let bestScore = Number.POSITIVE_INFINITY;
+        nodes.forEach((el) => {
+          const id = el.getAttribute("data-section-id");
+          if (!id) return;
+          const r = el.getBoundingClientRect();
+          if (r.bottom <= viewportTop) return;
+          const score = r.top <= viewportTop ? 0 : r.top - viewportTop;
+          if (score < bestScore) {
+            bestScore = score;
+            bestId = id;
+          }
+        });
+        return bestId || (streamWriterRef.current?.sectionIdAtSelection() ?? "");
+      },
       revealSection: (sectionId: string) => {
         if (!editor || editor.isDestroyed || !sectionId) return false;
         const root = editor.view.dom;
@@ -1189,16 +1219,30 @@ export function NotesPanel({
         error?: string;
         count?: number;
         attachedToCourse?: boolean;
+        items?: Array<{ id?: unknown }>;
       };
       if (!res.ok) {
         await alertDialog({
           title: t.immersive.focusFailedTitle,
           body:
-            typeof j.error === "string" ? j.error : t.immersive.focusFailedBody,
+            typeof j.error === "string" && j.error.trim()
+              ? j.error
+              : t.immersive.focusFailedBody,
         });
         return;
       }
       const n = typeof j.count === "number" ? j.count : 0;
+      const firstId =
+        typeof j.items?.[0]?.id === "string"
+          ? j.items[0].id
+          : crypto.randomUUID();
+      if (
+        excerpt.markFrom != null &&
+        excerpt.markTo != null &&
+        !editor.isDestroyed
+      ) {
+        applyFocusClipMark(editor, excerpt.markFrom, excerpt.markTo, firstId);
+      }
       await alertDialog({
         title: t.immersive.focusAddedTitle,
         body: j.attachedToCourse
@@ -1974,9 +2018,27 @@ export function NotesPanel({
                 disabled={focusBusy}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => void addSelectionToFocus()}
-                className="inline-flex h-7 items-center rounded-md px-1.5 text-[11px] font-semibold text-zinc-200 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
+                className="inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[11px] font-semibold text-zinc-200 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
               >
-                {focusBusy ? "…" : t.immersive.focusAddShort}
+                {focusBusy ? (
+                  "…"
+                ) : (
+                  <>
+                    <svg
+                      viewBox="0 0 16 16"
+                      width="11"
+                      height="11"
+                      aria-hidden="true"
+                      className="text-violet-300"
+                    >
+                      <path
+                        fill="currentColor"
+                        d="M9.15 1.05 3.4 8.7c-.22.28-.02.7.34.7h3.2l-1.55 5.35c-.16.42.4.72.68.37l6.3-7.55c.22-.28.02-.7-.34-.7H8.85l1.05-5.45c.12-.42-.4-.7-.75-.37Z"
+                      />
+                    </svg>
+                    {t.immersive.focusAddShort}
+                  </>
+                )}
               </button>
             </BubbleMenu>
           ) : null}
@@ -2388,6 +2450,31 @@ export function NotesPanel({
           background: transparent;
           padding: 0;
           font-weight: 700;
+        }
+
+        /* Focus-question clip — lighter and distinct from key-term yellow */
+        .tn-prose .tn-focus-clip {
+          background: rgba(196, 181, 253, 0.22);
+          border-radius: 0.15rem;
+          box-decoration-break: clone;
+          -webkit-box-decoration-break: clone;
+        }
+        .tn-prose .tn-focus-clip-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 0.9rem;
+          height: 0.9rem;
+          margin: 0 0.15rem 0 0;
+          vertical-align: text-top;
+          color: #7c3aed;
+          background: rgba(237, 233, 254, 0.95);
+          border-radius: 999px;
+          pointer-events: auto;
+          cursor: default;
+        }
+        .tn-prose .tn-focus-clip-icon svg {
+          display: block;
         }
 
         /* AI self-revision transitions (StreamingNotesWriter decorations).

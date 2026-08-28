@@ -4,6 +4,7 @@ import {
   isNotesFocusBucketId,
   NOTES_FOCUS_BUCKET_ID,
 } from "@/lib/notes/notes-focus-bucket";
+import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -129,7 +130,20 @@ export async function fetchSrsDueCountsForUser(
     .eq("user_id", userId)
     .lte("due_at", nowIso);
   if (materialFilter) perQ = perQ.eq("material_id", materialFilter);
-  const { data: perRows } = await perQ;
+  let { data: perRows, error: perErr } = await perQ;
+  if (perErr && isMissingDbColumnError(perErr, "source_label")) {
+    let fallback = supabase
+      .from("user_personal_quiz_items")
+      .select("material_id")
+      .eq("user_id", userId)
+      .lte("due_at", nowIso);
+    if (materialFilter) fallback = fallback.eq("material_id", materialFilter);
+    ({ data: perRows, error: perErr } = await fallback);
+  }
+  if (perErr) {
+    console.error("[srs due counts personal]", perErr);
+    perRows = [];
+  }
 
   // Personal focus cards can sit on materials the user doesn't own (Explore /
   // shared / legacy). Hydrate those materials so due counts aren't silently 0.

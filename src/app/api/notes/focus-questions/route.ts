@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { generatePersonalQuizFromNotes } from "@/lib/ai/personal-quiz-from-notes";
 import { NOTES_FOCUS_BUCKET_ID } from "@/lib/notes/notes-focus-bucket";
+import { insertPersonalQuizItems } from "@/lib/notes/personal-quiz-insert";
 import { resolveFocusDestination } from "@/lib/notes/resolve-focus-destination";
 import { createClient } from "@/lib/supabase/server";
 
@@ -61,7 +62,9 @@ export async function POST(request: Request) {
     moduleId:
       typeof b.moduleId === "number" && Number.isFinite(b.moduleId)
         ? b.moduleId
-        : undefined,
+        : typeof b.moduleId === "string" && Number.isFinite(Number(b.moduleId))
+          ? Number(b.moduleId)
+          : undefined,
     noteId: typeof b.noteId === "string" ? b.noteId : undefined,
     liveSessionId:
       typeof b.liveSessionId === "string" ? b.liveSessionId : undefined,
@@ -91,32 +94,29 @@ export async function POST(request: Request) {
   }
 
   const preview = excerpt.replace(/\s+/g, " ").slice(0, 500);
-  const rows = items.map((item) => ({
-    user_id: user.id,
-    material_id: dest.materialId,
-    module_id: dest.moduleId,
-    item,
-    source_note_id: dest.sourceNoteId,
-    source_excerpt: preview,
-    source_label: dest.sourceLabel.slice(0, 200),
-  }));
+  const inserted = await insertPersonalQuizItems(
+    supabase,
+    items.map((item) => ({
+      user_id: user.id,
+      material_id: dest.materialId,
+      module_id: dest.moduleId,
+      item,
+      source_note_id: dest.sourceNoteId,
+      source_excerpt: preview,
+      source_label: dest.sourceLabel.slice(0, 200),
+    }))
+  );
 
-  const { data: inserted, error: insErr } = await supabase
-    .from("user_personal_quiz_items")
-    .insert(rows)
-    .select("id, item, created_at");
-
-  if (insErr) {
-    console.error("[notes/focus-questions insert]", insErr);
+  if (!inserted.ok) {
     return NextResponse.json(
-      { error: "Could not save questions." },
-      { status: 500 }
+      { error: inserted.message },
+      { status: inserted.needsMigration ? 503 : 500 }
     );
   }
 
   return NextResponse.json({
-    count: inserted?.length ?? items.length,
-    items: inserted ?? [],
+    count: inserted.rows.length,
+    items: inserted.rows,
     materialId: dest.materialId,
     moduleId: dest.moduleId,
     sourceLabel: dest.sourceLabel,

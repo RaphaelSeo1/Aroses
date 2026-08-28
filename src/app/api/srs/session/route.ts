@@ -6,6 +6,8 @@ import {
   isNotesFocusBucketId,
   NOTES_FOCUS_BUCKET_ID,
 } from "@/lib/notes/notes-focus-bucket";
+import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
  * GET /api/srs/session
@@ -216,9 +218,6 @@ export async function GET(request: Request) {
   const personalNew: SessionCard[] = [];
 
   if (scope !== "module") {
-    const personalSelect =
-      "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history, source_label";
-
     const uuids =
       allowedMaterialIds && allowedMaterialIds.size > 0
         ? [...allowedMaterialIds].filter((id) => UUID_RE.test(id))
@@ -230,30 +229,19 @@ export async function GET(request: Request) {
 
     const personalRows: Record<string, unknown>[] = [];
     if (uuids === null) {
-      const { data } = await supabase
-        .from("user_personal_quiz_items")
-        .select(personalSelect)
-        .eq("user_id", user.id)
-        .order("due_at", { ascending: true });
-      personalRows.push(...((data ?? []) as Record<string, unknown>[]));
+      personalRows.push(
+        ...(await loadPersonalQuizRows(supabase, user.id, "all"))
+      );
     } else {
       if (uuids.length > 0) {
-        const { data } = await supabase
-          .from("user_personal_quiz_items")
-          .select(personalSelect)
-          .eq("user_id", user.id)
-          .in("material_id", uuids)
-          .order("due_at", { ascending: true });
-        personalRows.push(...((data ?? []) as Record<string, unknown>[]));
+        personalRows.push(
+          ...(await loadPersonalQuizRows(supabase, user.id, "materials", uuids))
+        );
       }
       if (includeNotes) {
-        const { data } = await supabase
-          .from("user_personal_quiz_items")
-          .select(personalSelect)
-          .eq("user_id", user.id)
-          .is("material_id", null)
-          .order("due_at", { ascending: true });
-        personalRows.push(...((data ?? []) as Record<string, unknown>[]));
+        personalRows.push(
+          ...(await loadPersonalQuizRows(supabase, user.id, "notes"))
+        );
       }
     }
 
@@ -385,6 +373,46 @@ export async function GET(request: Request) {
 }
 
 // ---------- helpers --------------------------------------------------------
+
+const PERSONAL_SELECT_FULL =
+  "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history, source_label";
+const PERSONAL_SELECT_BASE =
+  "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history";
+
+async function loadPersonalQuizRows(
+  supabase: SupabaseClient,
+  userId: string,
+  mode: "all" | "materials" | "notes",
+  materialIds?: string[]
+): Promise<Record<string, unknown>[]> {
+  const run = async (select: string) => {
+    let q = supabase
+      .from("user_personal_quiz_items")
+      .select(select)
+      .eq("user_id", userId);
+    if (mode === "materials" && materialIds && materialIds.length > 0) {
+      q = q.in("material_id", materialIds);
+    } else if (mode === "notes") {
+      q = q.is("material_id", null);
+    }
+    return q.order("due_at", { ascending: true });
+  };
+
+  const full = await run(PERSONAL_SELECT_FULL);
+  if (full.error && isMissingDbColumnError(full.error, "source_label")) {
+    const fallback = await run(PERSONAL_SELECT_BASE);
+    if (fallback.error) {
+      console.error("[srs/session personal]", fallback.error);
+      return [];
+    }
+    return (fallback.data ?? []) as Record<string, unknown>[];
+  }
+  if (full.error) {
+    console.error("[srs/session personal]", full.error);
+    return [];
+  }
+  return (full.data ?? []) as Record<string, unknown>[];
+}
 
 function parseScope(v: string | null): Scope | null {
   if (v === "module" || v === "personal" || v === "both") return v;

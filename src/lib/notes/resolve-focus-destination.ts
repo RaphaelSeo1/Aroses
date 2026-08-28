@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
+import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export type FocusSourceInput = {
@@ -86,15 +87,26 @@ export async function resolveFocusDestination(
   }
 
   if (input.liveSessionId && isUuid(input.liveSessionId)) {
-    const { data: session } = await supabase
+    let { data: session, error: sessionErr } = await supabase
       .from("live_lecture_sessions")
       .select("id, user_id, course_id, user_note_id, title")
       .eq("id", input.liveSessionId)
       .eq("user_id", userId)
       .maybeSingle();
-    if (!session) return { error: "Not found.", status: 404 };
-    if (typeof session.user_note_id === "string") {
-      sourceNoteId = session.user_note_id;
+    if (sessionErr && isMissingDbColumnError(sessionErr, "user_note_id")) {
+      ({ data: session, error: sessionErr } = await supabase
+        .from("live_lecture_sessions")
+        .select("id, user_id, course_id, title")
+        .eq("id", input.liveSessionId)
+        .eq("user_id", userId)
+        .maybeSingle());
+    }
+    if (!session) {
+      if (sessionErr) console.error("[resolveFocusDestination live]", sessionErr);
+      return { error: "Not found.", status: 404 };
+    }
+    if (typeof (session as { user_note_id?: unknown }).user_note_id === "string") {
+      sourceNoteId = (session as { user_note_id: string }).user_note_id;
     }
     if (typeof session.title === "string" && session.title.trim()) {
       sourceLabel = session.title.trim();
@@ -118,18 +130,34 @@ export async function resolveFocusDestination(
   }
 
   if (sourceNoteId) {
-    const { data: note } = await supabase
+    let { data: note, error: noteErr } = await supabase
       .from("user_notes")
       .select("id, title, course_id")
       .eq("id", sourceNoteId)
       .eq("user_id", userId)
       .maybeSingle();
-    if (!note) return { error: "Not found.", status: 404 };
-    if (typeof note.title === "string" && note.title.trim()) {
-      sourceLabel = note.title.trim();
+    if (noteErr && isMissingDbColumnError(noteErr, "course_id")) {
+      ({ data: note, error: noteErr } = await supabase
+        .from("user_notes")
+        .select("id, title")
+        .eq("id", sourceNoteId)
+        .eq("user_id", userId)
+        .maybeSingle());
     }
-    if (!courseId && typeof note.course_id === "string") {
-      courseId = note.course_id;
+    if (!note) {
+      const hasOtherSource = Boolean(
+        input.materialId || input.liveSessionId || input.tutorSessionId
+      );
+      if (!hasOtherSource) return { error: "Not found.", status: 404 };
+      if (noteErr) console.error("[resolveFocusDestination note]", noteErr);
+      sourceNoteId = null;
+    } else {
+      if (typeof note.title === "string" && note.title.trim()) {
+        sourceLabel = note.title.trim();
+      }
+      if (!courseId && typeof (note as { course_id?: unknown }).course_id === "string") {
+        courseId = (note as { course_id: string }).course_id;
+      }
     }
   } else if (input.noteId && isUuid(input.noteId)) {
     return { error: "Not found.", status: 404 };

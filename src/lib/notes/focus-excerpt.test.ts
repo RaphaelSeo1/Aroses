@@ -63,6 +63,8 @@ test("selection of a full paragraph is used as-is", () => {
   const excerpt = buildFocusExcerpt({ doc, from: from + 1, to: to - 1 });
   assert.equal(excerpt.usedSection, false);
   assert.match(excerpt.corpus, /Mitochondria produce ATP/);
+  assert.equal(excerpt.markFrom, from + 1);
+  assert.equal(excerpt.markTo, to - 1);
 });
 
 test("short selection is wrapped with parent-block context", () => {
@@ -90,4 +92,6 @@ test("collapsed caret in a heading section uses that section", () => {
   assert.match(excerpt.corpus, /Osmosis/);
   assert.match(excerpt.corpus, /Water moves/);
   assert.doesNotMatch(excerpt.corpus, /Diffusion/);
+  assert.ok(excerpt.markFrom != null && excerpt.markTo != null);
+  assert.ok((excerpt.markTo ?? 0) > (excerpt.markFrom ?? 0));
 });
