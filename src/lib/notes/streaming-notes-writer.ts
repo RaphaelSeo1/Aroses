@@ -9,6 +9,7 @@ import {
   REVISION_DECO_META,
   type RevisionDecoMeta,
 } from "@/components/immersive/notes/Provenance";
+import { trailingEmptyParagraphRange } from "@/lib/notes/empty-paragraph";
 import {
   classifyNoteLine,
   isGfmTableLine,
@@ -68,36 +69,6 @@ type BlockTarget = {
  * placeholder FIRST (deleting after inserting at its boundary would swallow
  * the new node in the position mapping), then return the insertion point.
  */
-function isEmptyParagraph(node: PmNode): boolean {
-  if (node.type.name !== "paragraph") return false;
-  if (node.textContent.trim().length > 0) return false;
-  let hasAtom = false;
-  node.forEach((child) => {
-    if (child.type.name !== "hardBreak" && !child.isText) hasAtom = true;
-  });
-  return !hasAtom;
-}
-
-function trailingEmptyParagraphRange(
-  doc: PmNode
-): { from: number; to: number } | null {
-  const ranges: Array<{ from: number; to: number }> = [];
-  doc.forEach((node, offset) => {
-    ranges.push({ from: offset, to: offset + node.nodeSize });
-  });
-  let i = ranges.length - 1;
-  let from: number | null = null;
-  const to = doc.content.size;
-  while (i >= 0) {
-    const node = doc.child(i);
-    if (!isEmptyParagraph(node)) break;
-    from = ranges[i]!.from;
-    i -= 1;
-  }
-  if (from == null || from >= to) return null;
-  return { from, to };
-}
-
 function insertionPoint(tr: Transaction, target: BlockTarget): number {
   if (target.deletePlaceholder) {
     tr.delete(target.deletePlaceholder.from, target.deletePlaceholder.to);
@@ -201,13 +172,18 @@ export class StreamingNotesWriter {
 
     if (input.heading?.trim()) {
       this.flushPendingDivider();
-      const end = this.editor.state.doc.content.size;
       const heading = this.editor.schema.nodes.heading?.create(
         { level: 2, provenance: "ai", sectionId: input.sectionId },
         this.inlineToPm(parseInlineMarkdown(input.heading.trim()))
       );
       if (heading) {
-        this.dispatchDoc((tr) => tr.insert(end, heading));
+        // Replace the default empty doc paragraph (same as openStreamingBlock)
+        // so we don't leave a leading blank the CSS used to hide.
+        const target = this.blockInsertionPos();
+        this.dispatchDoc((tr) => {
+          const at = insertionPoint(tr, target);
+          tr.insert(at, heading);
+        });
         this.op.wroteAnything = true;
         this.maybeScroll();
       }

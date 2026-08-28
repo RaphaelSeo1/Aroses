@@ -23,6 +23,7 @@ import { NotesFormatToolbar } from "./notes/NotesFormatToolbar";
 import { NotesTableHoverControls } from "./notes/NotesTableHoverControls";
 import { LectureSummaryButton } from "./notes/LectureSummaryButton";
 import { AI_APPEND_META, Provenance, REVISION_DECO_META } from "./notes/Provenance";
+import { trailingEmptyParagraphRange } from "@/lib/notes/empty-paragraph";
 import { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
 import { promptDialog, alertDialog } from "@/components/AppDialogs";
 import { EmojiPickerButton } from "@/components/EmojiPickerButton";
@@ -915,6 +916,12 @@ export function NotesPanel({
           });
         }
 
+        // Replace the default empty doc paragraph when appending at the end
+        // so AI blocks don't leave a leading blank (the CSS that used to
+        // hide those empties also hid student Enter-splits).
+        const trail = trailingEmptyParagraphRange(editor.state.doc);
+        const insertPos = trail ? trail.from : editor.state.doc.content.size;
+
         if (preserveSelection) {
           // Insert at the doc end without focusing — the student's cursor and
           // scroll position stay untouched (ProseMirror maps the selection
@@ -941,9 +948,10 @@ export function NotesPanel({
             .chain()
             .command(({ tr }) => {
               tr.setMeta(AI_APPEND_META, true);
+              if (trail) tr.delete(trail.from, trail.to);
               return true;
             })
-            .insertContentAt(editor.state.doc.content.size, stamped)
+            .insertContentAt(insertPos, stamped)
             .run();
           if (scrollEl && wasNearBottom) {
             requestAnimationFrame(() => {
@@ -951,7 +959,15 @@ export function NotesPanel({
             });
           }
         } else {
-          editor.chain().focus("end").insertContent(blockNodes).run();
+          editor
+            .chain()
+            .command(({ tr }) => {
+              if (trail) tr.delete(trail.from, trail.to);
+              return true;
+            })
+            .focus("end")
+            .insertContent(blockNodes)
+            .run();
         }
 
         if (chunkId) {
@@ -2141,22 +2157,11 @@ export function NotesPanel({
         .tn-prose hr + h3 {
           margin-top: 0 !important;
         }
-        /* Trailing/leading empty paragraphs from generation — don't show as
-           blank lines above a heading. Keep a lone empty p so the student
-           can still type into a blank doc. */
-        .tn-prose > p.is-empty:not(:only-child),
-        .tn-prose > p.is-editor-empty:not(:only-child) {
-          margin: 0 !important;
-          padding: 0 !important;
-          min-height: 0 !important;
-          height: 0 !important;
-          overflow: hidden;
-          border: 0;
-        }
-        .tn-prose > p.is-empty:not(:only-child) br,
-        .tn-prose > p.is-editor-empty:not(:only-child) br {
-          display: none;
-        }
+        /* Empty paragraphs are the gap Enter creates so the student can
+           type between existing blocks. Do not collapse is-empty nodes
+           to height 0 — that hid the caret and made the following words
+           look glued to the new line. Generation leftover empties are
+           removed at insert time (trailingEmptyParagraphRange). */
 
         /* Lecture summary jump highlight */
         .tn-prose .tn-summary-flash {
