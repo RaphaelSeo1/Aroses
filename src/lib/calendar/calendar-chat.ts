@@ -1,4 +1,4 @@
-import type { CalendarItem } from "@/types/calendar";
+import type { CalendarItem, CalendarTodoSection } from "@/types/calendar";
 import {
   compareByStart,
   dateKeyInZone,
@@ -48,11 +48,17 @@ export type CalendarChatAction =
 export function formatCalendarContext(
   items: CalendarItem[],
   now: Date,
-  timeZone?: string
+  timeZone?: string,
+  sections: CalendarTodoSection[] = []
 ): string {
   const today = timeZone ? dateKeyInZone(now, timeZone) : itemDateKey(now.toISOString()) ?? "";
+  const sectionTitle = new Map(sections.map((s) => [s.id, s.title]));
+  const lists =
+    sections.length > 0
+      ? `TODO LISTS: General, ${sections.map((s) => s.title).join(", ")}\n`
+      : "";
   if (items.length === 0) {
-    return "CALENDAR: (empty)";
+    return `${lists}CALENDAR: (empty)`.trim();
   }
   const sorted = [...items].sort((a, b) => {
     if (a.completedAt && !b.completedAt) return 1;
@@ -67,8 +73,12 @@ export function formatCalendarContext(
       : item.allDay
         ? `${date ?? "unscheduled"} ${wd} all-day`
         : `${date ?? ""} ${wd} ${formatTime(item.startsAt, timeZone)}`.trim();
+    const listName = item.sectionId
+      ? sectionTitle.get(item.sectionId) ?? null
+      : null;
     const flags = [
       item.kind,
+      listName ? `list:${listName}` : null,
       item.important ? "important" : null,
       item.completedAt ? "done" : null,
       date && date === today ? "today" : null,
@@ -78,7 +88,7 @@ export function formatCalendarContext(
       .join(", ");
     return `[${item.id}] ${item.title} — ${when} (${flags})`;
   });
-  return `CALENDAR ITEMS earliest-first (${items.length}):\n${lines.join("\n")}`;
+  return `${lists}CALENDAR ITEMS earliest-first (${items.length}):\n${lines.join("\n")}`;
 }
 
 export function dateCheatSheet(nowIso: string, timeZone: string): string {

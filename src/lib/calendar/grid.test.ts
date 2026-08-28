@@ -25,6 +25,7 @@ function item(id: string, startsAt: string, endsAt: string | null): CalendarItem
     allDay: false,
     important: false,
     completedAt: null,
+    sectionId: null,
     createdAt: "",
     updatedAt: "",
   };

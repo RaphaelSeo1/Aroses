@@ -6,15 +6,17 @@ import {
   resolveCalendarItemId,
 } from "@/lib/calendar/calendar-chat";
 import {
-  CALENDAR_SELECT,
-  mapCalendarRow,
   parseCalendarInput,
   parseCalendarPatch,
-  toInsertRow,
-  toPatchRow,
 } from "@/lib/calendar/items";
+import {
+  insertCalendarItem,
+  queryCalendarItems,
+  queryCalendarSections,
+  updateCalendarItem,
+} from "@/lib/calendar/queries";
+import { MAX_CHAT_PDF_CHARS } from "@/lib/live-notes/extract-chat-pdf";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
-import type { CalendarItem } from "@/types/calendar";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -45,11 +47,24 @@ export async function POST(request: Request) {
     history?: unknown;
     timeZone?: unknown;
     nowIso?: unknown;
+    attachedPdfText?: unknown;
+    attachedPdfName?: unknown;
   };
-  const message = typeof b.message === "string" ? b.message.trim() : "";
-  if (!message) {
+  const attachedPdfText =
+    typeof b.attachedPdfText === "string"
+      ? b.attachedPdfText.trim().slice(0, MAX_CHAT_PDF_CHARS)
+      : "";
+  const attachedPdfName =
+    typeof b.attachedPdfName === "string"
+      ? b.attachedPdfName.trim().slice(0, 200)
+      : "";
+  const rawMessage = typeof b.message === "string" ? b.message.trim() : "";
+  if (!rawMessage && !attachedPdfText) {
     return NextResponse.json({ error: "message required" }, { status: 400 });
   }
+  const message =
+    rawMessage.slice(0, 4_000) ||
+    `Look at this PDF${attachedPdfName ? ` (${attachedPdfName})` : ""}.`;
 
   const history = Array.isArray(b.history)
     ? b.history
@@ -70,12 +85,10 @@ export async function POST(request: Request) {
         }))
     : [];
 
-  const { data, error } = await supabase
-    .from("user_calendar_items")
-    .select(CALENDAR_SELECT)
-    .eq("user_id", user.id)
-    .order("starts_at", { ascending: true, nullsFirst: false })
-    .limit(200);
+  const [{ items, error }, sections] = await Promise.all([
+    queryCalendarItems(supabase, user.id, 200),
+    queryCalendarSections(supabase, user.id),
+  ]);
 
   if (error) {
     if (
@@ -96,10 +109,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const items: CalendarItem[] = (data ?? []).map((row) =>
-    mapCalendarRow(row as Parameters<typeof mapCalendarRow>[0])
-  );
-
   enterAiUsageContext({ userId: user.id, feature: "calendar-chat" });
 
   const timeZone =
@@ -118,9 +127,12 @@ export async function POST(request: Request) {
       message,
       history,
       items,
+      sections,
       nowIso,
       timeZone,
       userId: user.id,
+      attachedPdfText: attachedPdfText || undefined,
+      attachedPdfName: attachedPdfName || undefined,
     });
     reply = result.reply;
     actions = result.actions.map((a) => coerceActionTimestamps(a, timeZone));
@@ -148,16 +160,13 @@ export async function POST(request: Request) {
           notes: action.notes,
         });
         if (!input) continue;
-        const { data: created, error: insErr } = await supabase
-          .from("user_calendar_items")
-          .insert(toInsertRow(user.id, input))
-          .select(CALENDAR_SELECT)
-          .single();
-        if (insErr || !created) continue;
-        const mapped = mapCalendarRow(
-          created as Parameters<typeof mapCalendarRow>[0]
+        const { item: created } = await insertCalendarItem(
+          supabase,
+          user.id,
+          input
         );
-        nextItems = [...nextItems, mapped];
+        if (!created) continue;
+        nextItems = [...nextItems, created];
         applied.push("create");
       } else {
         const id = resolveCalendarItemId(action.id, nextItems);
@@ -174,18 +183,14 @@ export async function POST(request: Request) {
         } else if (action.type === "complete" || action.type === "uncomplete") {
           const completedAt =
             action.type === "complete" ? new Date().toISOString() : null;
-          const { data: updated, error: upErr } = await supabase
-            .from("user_calendar_items")
-            .update(toPatchRow({ completedAt }))
-            .eq("id", id)
-            .eq("user_id", user.id)
-            .select(CALENDAR_SELECT)
-            .maybeSingle();
-          if (upErr || !updated) continue;
-          const mapped = mapCalendarRow(
-            updated as Parameters<typeof mapCalendarRow>[0]
+          const { item: updated } = await updateCalendarItem(
+            supabase,
+            user.id,
+            id,
+            { completedAt }
           );
-          nextItems = nextItems.map((i) => (i.id === id ? mapped : i));
+          if (!updated) continue;
+          nextItems = nextItems.map((i) => (i.id === id ? updated : i));
           applied.push(action.type);
         } else if (action.type === "update") {
           const patch = parseCalendarPatch({
@@ -198,18 +203,14 @@ export async function POST(request: Request) {
             notes: action.notes,
           });
           if (!patch || Object.keys(patch).length === 0) continue;
-          const { data: updated, error: upErr } = await supabase
-            .from("user_calendar_items")
-            .update(toPatchRow(patch))
-            .eq("id", id)
-            .eq("user_id", user.id)
-            .select(CALENDAR_SELECT)
-            .maybeSingle();
-          if (upErr || !updated) continue;
-          const mapped = mapCalendarRow(
-            updated as Parameters<typeof mapCalendarRow>[0]
+          const { item: updated } = await updateCalendarItem(
+            supabase,
+            user.id,
+            id,
+            patch
           );
-          nextItems = nextItems.map((i) => (i.id === id ? mapped : i));
+          if (!updated) continue;
+          nextItems = nextItems.map((i) => (i.id === id ? updated : i));
           applied.push("update");
         }
       }

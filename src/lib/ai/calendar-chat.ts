@@ -9,7 +9,8 @@ import {
   parseCalendarModelContent,
   type CalendarChatAction,
 } from "@/lib/calendar/calendar-chat";
-import type { CalendarItem } from "@/types/calendar";
+import { MAX_CHAT_PDF_CHARS } from "@/lib/live-notes/extract-chat-pdf";
+import type { CalendarItem, CalendarTodoSection } from "@/types/calendar";
 
 const MODEL = tutorChatModel();
 
@@ -91,9 +92,12 @@ export async function runCalendarChat(input: {
   message: string;
   history: CalendarChatTurn[];
   items: CalendarItem[];
+  sections?: CalendarTodoSection[];
   nowIso: string;
   timeZone: string;
   userId?: string;
+  attachedPdfText?: string;
+  attachedPdfName?: string;
 }): Promise<{ reply: string; actions: CalendarChatAction[] }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -106,14 +110,19 @@ export async function runCalendarChat(input: {
   const tz = input.timeZone || "UTC";
   const now = new Date(input.nowIso);
   const nowSafe = Number.isNaN(now.getTime()) ? new Date() : now;
+  const attachedPdfText = (input.attachedPdfText ?? "").trim();
+  const attachedPdfName = (input.attachedPdfName ?? "").trim().slice(0, 200);
+  const pdfBlock = attachedPdfText
+    ? `ATTACHED PDF${attachedPdfName ? ` (${attachedPdfName})` : ""}:\n${attachedPdfText.slice(0, MAX_CHAT_PDF_CHARS)}`
+    : "";
 
   const system = `You are ${AI_ASSISTANT_NAME} on ${APP_NAME}. You manage this student's calendar. Execute the request in this turn. Talking about what you would do without calling a tool is a failure.
 
 ${dateCheatSheet(input.nowIso, tz)}
 TIMEZONE: ${tz}
 
-${formatCalendarContext(input.items, nowSafe, tz)}
-
+${formatCalendarContext(input.items, nowSafe, tz, input.sections ?? [])}
+${pdfBlock ? `\n${pdfBlock}\n` : ""}
 TOOLS:
 - Questions only (what's due, what's next, what's on Friday) → answer from CALENDAR ITEMS. No tools.
 - Add / schedule / remind → create_item. Copy date from DATE KEYS. Include time only if they gave a clock time.
@@ -123,6 +132,7 @@ TOOLS:
 - Never invent items that are not in CALENDAR ITEMS when answering what's due.
 - Todos: kind "todo". Timed class/quiz/meeting: kind "event". Exams and hard deadlines: important true.
 - Prefer the [id] in item. Title is ok if you cannot copy the id.
+- Attached PDF is reference only (syllabus, schedule, assignment sheet). When they ask to add dates from it — or send it with no extra question — create_item for dated exams, assignments, and classes (up to 8). Copy those dates from DATE KEYS. Extra detail goes in notes. Do not invent dates that are not in the PDF or their message.
 - Reply in 1–2 short sentences: what you did, or the matching due items (title + date + time). No emoji. Do not mention tools, ids, or JSON.`;
 
   const history = input.history

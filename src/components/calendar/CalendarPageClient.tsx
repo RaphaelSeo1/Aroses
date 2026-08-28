@@ -44,8 +44,19 @@ export function CalendarPageClient({
   openChat?: boolean;
 }) {
   const t = useT();
-  const { items, setItems, loading, error, add, patch, remove } =
-    useCalendarItems();
+  const {
+    items,
+    setItems,
+    sections,
+    loading,
+    error,
+    add,
+    patch,
+    remove,
+    addSection,
+    renameSection,
+    removeSection,
+  } = useCalendarItems();
   const [selected, setSelected] = useState(() =>
     initialDay && /^\d{4}-\d{2}-\d{2}$/.test(initialDay)
       ? parseLocalDateKey(initialDay)
@@ -361,19 +372,30 @@ export function CalendarPageClient({
 
         <CalendarTodoList
           items={todos}
+          sections={sections}
           loading={loading}
           error={error ? t.calendar.loadError : null}
-          onAdd={async (title) => {
+          onAdd={async (title, sectionId) => {
             await add({
               title,
               kind: "todo",
               startsAt: null,
               allDay: true,
+              sectionId,
             });
           }}
           onToggle={toggle}
           onDelete={(item) => void destroy(item)}
           onOpen={openItem}
+          onAddSection={addSection}
+          onRenameSection={renameSection}
+          onDeleteSection={removeSection}
+          onMoveToSection={(itemId, sectionId) => {
+            const item = items.find((i) => i.id === itemId);
+            if (!item || item.kind !== "todo") return;
+            if ((item.sectionId ?? null) === sectionId) return;
+            void patch(itemId, { sectionId });
+          }}
         />
 
         {upcoming.length > 0 ? (

@@ -46,6 +46,7 @@ test("resolveCalendarItemId matches title when id is missing", () => {
       allDay: true,
       important: true,
       completedAt: null,
+      sectionId: null,
       createdAt: "",
       updatedAt: "",
     },

@@ -3,6 +3,7 @@ import type {
   CalendarItemInput,
   CalendarKind,
 } from "@/types/calendar";
+import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export const CALENDAR_TITLE_MAX = 200;
 export const CALENDAR_NOTES_MAX = 2000;
@@ -17,6 +18,7 @@ type Row = {
   all_day: boolean | null;
   important: boolean | null;
   completed_at: string | null;
+  section_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -36,13 +38,16 @@ export function mapCalendarRow(row: Row): CalendarItem {
     allDay: row.all_day !== false,
     important: Boolean(row.important),
     completedAt: row.completed_at,
+    sectionId: typeof row.section_id === "string" ? row.section_id : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-export const CALENDAR_SELECT =
+export const CALENDAR_SELECT_BASE =
   "id, title, notes, kind, starts_at, ends_at, all_day, important, completed_at, created_at, updated_at";
+
+export const CALENDAR_SELECT = `${CALENDAR_SELECT_BASE}, section_id`;
 
 function clampText(raw: unknown, max: number): string {
   if (typeof raw !== "string") return "";
@@ -55,6 +60,13 @@ function isoOrNull(raw: unknown): string | null {
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
+}
+
+function parseSectionId(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === "") return null;
+  if (typeof raw === "string" && isUuid(raw)) return raw;
+  return null;
 }
 
 export function parseCalendarInput(body: unknown): CalendarItemInput | null {
@@ -74,6 +86,7 @@ export function parseCalendarInput(body: unknown): CalendarItemInput | null {
   let completedAt: string | null | undefined;
   if (b.completedAt === null) completedAt = null;
   else if (b.completedAt !== undefined) completedAt = isoOrNull(b.completedAt);
+  const sectionId = parseSectionId(b.sectionId);
 
   return {
     title,
@@ -84,6 +97,7 @@ export function parseCalendarInput(body: unknown): CalendarItemInput | null {
     allDay,
     important,
     ...(completedAt !== undefined ? { completedAt } : {}),
+    ...(sectionId !== undefined ? { sectionId } : {}),
   };
 }
 
@@ -105,11 +119,12 @@ export function parseCalendarPatch(body: unknown): Partial<CalendarItemInput> | 
   if ("completedAt" in b) {
     out.completedAt = b.completedAt === null ? null : isoOrNull(b.completedAt);
   }
+  if ("sectionId" in b) out.sectionId = parseSectionId(b.sectionId) ?? null;
   return out;
 }
 
 export function toInsertRow(userId: string, input: CalendarItemInput) {
-  return {
+  const row: Record<string, unknown> = {
     user_id: userId,
     title: input.title,
     notes: input.notes ?? "",
@@ -120,6 +135,8 @@ export function toInsertRow(userId: string, input: CalendarItemInput) {
     important: Boolean(input.important),
     completed_at: input.completedAt ?? null,
   };
+  if (input.sectionId !== undefined) row.section_id = input.sectionId;
+  return row;
 }
 
 export function toPatchRow(patch: Partial<CalendarItemInput>) {
@@ -132,5 +149,6 @@ export function toPatchRow(patch: Partial<CalendarItemInput>) {
   if (patch.allDay !== undefined) row.all_day = patch.allDay;
   if (patch.important !== undefined) row.important = patch.important;
   if (patch.completedAt !== undefined) row.completed_at = patch.completedAt;
+  if (patch.sectionId !== undefined) row.section_id = patch.sectionId;
   return row;
 }

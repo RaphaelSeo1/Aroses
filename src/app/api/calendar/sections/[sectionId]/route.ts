@@ -1,20 +1,23 @@
 import { NextResponse } from "next/server";
-import { parseCalendarPatch } from "@/lib/calendar/items";
-import { ownedSectionId, updateCalendarItem } from "@/lib/calendar/queries";
+import {
+  CALENDAR_SECTIONS_SELECT,
+  mapSectionRow,
+  parseSectionTitle,
+} from "@/lib/calendar/sections";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export const runtime = "nodejs";
 
-type Params = { params: Promise<{ itemId: string }> };
+type Params = { params: Promise<{ sectionId: string }> };
 
 /**
- * PATCH /api/calendar/[itemId] — update fields or toggle complete.
- * DELETE /api/calendar/[itemId]
+ * PATCH /api/calendar/sections/[sectionId] — rename a to-do section.
+ * DELETE — remove it; tasks move back to General.
  */
 export async function PATCH(request: Request, ctx: Params) {
-  const { itemId } = await ctx.params;
-  if (!isUuid(itemId)) {
+  const { sectionId } = await ctx.params;
+  if (!isUuid(sectionId)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
 
@@ -33,42 +36,38 @@ export async function PATCH(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const patch = parseCalendarPatch(body);
-  if (!patch || Object.keys(patch).length === 0) {
-    return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
+  const title = parseSectionTitle((body as { title?: unknown }).title);
+  if (!title) {
+    return NextResponse.json({ error: "Title is required." }, { status: 400 });
   }
 
-  if (patch.sectionId) {
-    const owned = await ownedSectionId(supabase, user.id, patch.sectionId);
-    if (!owned) {
-      return NextResponse.json({ error: "Unknown section." }, { status: 400 });
-    }
-    patch.sectionId = owned;
-  }
+  const { data, error } = await supabase
+    .from("user_calendar_todo_sections")
+    .update({ title, updated_at: new Date().toISOString() })
+    .eq("id", sectionId)
+    .eq("user_id", user.id)
+    .select(CALENDAR_SECTIONS_SELECT)
+    .maybeSingle();
 
-  const { item, error } = await updateCalendarItem(
-    supabase,
-    user.id,
-    itemId,
-    patch
-  );
   if (error) {
-    console.error("[calendar PATCH]", error);
+    console.error("[calendar sections PATCH]", error);
     return NextResponse.json(
-      { error: "Could not update that." },
+      { error: "Could not rename section." },
       { status: 500 }
     );
   }
-  if (!item) {
+  if (!data) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ item });
+  return NextResponse.json({
+    section: mapSectionRow(data as Parameters<typeof mapSectionRow>[0]),
+  });
 }
 
 export async function DELETE(_request: Request, ctx: Params) {
-  const { itemId } = await ctx.params;
-  if (!isUuid(itemId)) {
+  const { sectionId } = await ctx.params;
+  if (!isUuid(sectionId)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
 
@@ -81,17 +80,17 @@ export async function DELETE(_request: Request, ctx: Params) {
   }
 
   const { data, error } = await supabase
-    .from("user_calendar_items")
+    .from("user_calendar_todo_sections")
     .delete()
-    .eq("id", itemId)
+    .eq("id", sectionId)
     .eq("user_id", user.id)
     .select("id")
     .maybeSingle();
 
   if (error) {
-    console.error("[calendar DELETE]", error);
+    console.error("[calendar sections DELETE]", error);
     return NextResponse.json(
-      { error: "Could not remove that." },
+      { error: "Could not remove section." },
       { status: 500 }
     );
   }

@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
+import { parseCalendarInput } from "@/lib/calendar/items";
 import {
-  CALENDAR_SELECT,
-  mapCalendarRow,
-  parseCalendarInput,
-  toInsertRow,
-} from "@/lib/calendar/items";
+  insertCalendarItem,
+  ownedSectionId,
+  queryCalendarItems,
+  queryCalendarSections,
+} from "@/lib/calendar/queries";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 
 export const runtime = "nodejs";
 
 /**
- * GET /api/calendar — list the signed-in user's calendar items.
+ * GET /api/calendar — list the signed-in user's calendar items and todo sections.
  * POST /api/calendar — create a todo or event.
  */
 export async function GET() {
@@ -22,19 +23,17 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data, error } = await supabase
-    .from("user_calendar_items")
-    .select(CALENDAR_SELECT)
-    .eq("user_id", user.id)
-    .order("starts_at", { ascending: true, nullsFirst: false })
-    .limit(400);
+  const [{ items, error }, sections] = await Promise.all([
+    queryCalendarItems(supabase, user.id),
+    queryCalendarSections(supabase, user.id),
+  ]);
 
   if (error) {
     if (
       error.code === "42P01" ||
       /user_calendar_items/i.test(error.message ?? "")
     ) {
-      return NextResponse.json({ items: [] });
+      return NextResponse.json({ items: [], sections });
     }
     console.error("[calendar GET]", error);
     return NextResponse.json(
@@ -43,11 +42,7 @@ export async function GET() {
     );
   }
 
-  return NextResponse.json({
-    items: (data ?? []).map((row) =>
-      mapCalendarRow(row as Parameters<typeof mapCalendarRow>[0])
-    ),
-  });
+  return NextResponse.json({ items, sections });
 }
 
 export async function POST(request: Request) {
@@ -71,13 +66,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Title is required." }, { status: 400 });
   }
 
-  const { data, error } = await supabase
-    .from("user_calendar_items")
-    .insert(toInsertRow(user.id, input))
-    .select(CALENDAR_SELECT)
-    .single();
+  if (input.sectionId) {
+    const owned = await ownedSectionId(supabase, user.id, input.sectionId);
+    if (!owned) {
+      return NextResponse.json({ error: "Unknown section." }, { status: 400 });
+    }
+    input.sectionId = owned;
+  }
 
-  if (error || !data) {
+  const { item, error } = await insertCalendarItem(supabase, user.id, input);
+  if (error || !item) {
     console.error("[calendar POST]", error);
     return NextResponse.json(
       { error: "Could not add that." },
@@ -85,7 +83,5 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({
-    item: mapCalendarRow(data as Parameters<typeof mapCalendarRow>[0]),
-  });
+  return NextResponse.json({ item });
 }

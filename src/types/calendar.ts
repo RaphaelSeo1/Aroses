@@ -1,5 +1,12 @@
 export type CalendarKind = "todo" | "event";
 
+export type CalendarTodoSection = {
+  id: string;
+  title: string;
+  sortOrder: number;
+  createdAt: string;
+};
+
 export type CalendarItem = {
   id: string;
   title: string;
@@ -10,6 +17,7 @@ export type CalendarItem = {
   allDay: boolean;
   important: boolean;
   completedAt: string | null;
+  sectionId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -23,4 +31,5 @@ export type CalendarItemInput = {
   allDay?: boolean;
   important?: boolean;
   completedAt?: string | null;
+  sectionId?: string | null;
 };
