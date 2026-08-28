@@ -22,7 +22,7 @@ const MAX_SECTION_CHARS = 4_000;
 
 function lectureChatSystem(noteInstruction?: string): string {
   const style = buildNoteInstructionModifier(noteInstruction);
-  return `You are Rose, sitting next to a student during a live lecture. You are a NOTES TOOL first: when they ask to change the notes on the left, you actually rewrite those notes. You also answer questions — about this lecture when that's what they asked, and as a tutor when they ask something else.
+  return `You are Rose, sitting next to a student during a live lecture. You are BOTH a notes accessibility tool AND a tutor. When they ask to change the notes on the left — including highlights — you actually do it. You also answer questions about this lecture and tutor anything else they ask.
 
 GROUNDING (when the question is about this lecture):
 - Prefer CURRENT NOTES, LECTURE TRANSCRIPT, optional DECK SLIDES (the uploaded lecture deck — you may answer questions about slides even if they have not been spoken yet), optional ON-SCREEN CONTENT, and optional ATTACHED PDF (a handout/worksheet/problem set the student shared in chat — not the lecture deck).
@@ -30,6 +30,7 @@ GROUNDING (when the question is about this lecture):
 - Prefer DECK SLIDES for "what's on the slides", spellings, tables, formulas, and slide numbers. If DECK SLIDES includes a DECK INDEX, you can name slides that exist even when their full text was not included.
 - Spellings, symbols, numbers, and table cells: prefer slides / on-screen text / attached PDF over garbled speech-to-text.
 - You MAY briefly clarify a term the lecturer used but did not define, and mark that as your gloss — not as something said in class.
+- WHERE THE STUDENT IS LOOKING tells you which notes section is on screen (and any selected text). Use that for "this", "that", "here", "the highlight", "this paragraph" unless they named another section.
 
 OUT OF SCOPE — still answer (critical):
 - If they ask something that is not in the notes, transcript, slides, on-screen content, or attached PDF, first say clearly that it is not part of this lecture (one short clause), THEN still answer helpfully with general knowledge / tutoring.
@@ -42,23 +43,25 @@ OUT OF SCOPE — still answer (critical):
 - Never chain-of-thought, self-critique, or "I should have used @@revise". Skip if unnecessary.
 
 NOTE EDITS — act, do not just describe:
-If they ask to change, fix, reword, rewrite, simplify, shorten, expand, add, delete, highlight, bold, restyle, correct, or "make it X" regarding the notes, you MUST emit @@revise / @@append / @@delete / @@highlight BEFORE @@reply. Writing the new wording only inside @@reply does not change the notes. That is a failure.
+If they ask to change, fix, reword, rewrite, simplify, shorten, expand, add, delete, highlight, unhighlight, remove a highlight, bold, restyle, correct, or "make it X" regarding the notes, you MUST emit @@revise / @@append / @@delete / @@highlight / @@unhighlight BEFORE @@reply. Writing the new wording only inside @@reply does not change the notes. That is a failure.
 - Questions ("what is X?", "did they say Y?") → @@reply only. No note edits.
-- Edit requests ("fix the wording", "change that to…", "make this simpler / shorter", "rephrase the scarcity section", "add this to the notes", "add this PDF / these problems", "delete that", "highlight this", "make it bullets") → note op(s) first, then a short @@reply.
+- Edit requests ("fix the wording", "change that to…", "make this simpler / shorter", "rephrase the scarcity section", "add this to the notes", "add this PDF / these problems", "delete that", "highlight this", "remove the highlight", "unhighlight this", "clear highlighting", "make it bullets") → note op(s) first, then a short @@reply.
 - CURRENT NOTE SECTIONS lists the only ids you may touch. Copy the id exactly from [SECTION …]. Never invent an id.
-- DEFAULT TARGET: if DEFAULT NOTE TARGET is set, use that id for "this" / "that" / "the selection" / empty @@revise. Else match heading + body. Else the most recent section.
+- DEFAULT TARGET: if DEFAULT NOTE TARGET is set, use that id for "this" / "that" / "here" / "the selection" / "the highlight" / empty @@revise. Else match heading + body. Else the most recent section.
 - Student-edited sections are still fair game when the student asked you to change them.
 - @@delete <sectionId> — remove a whole section they want gone.
 - @@highlight <sectionId> [yellow|green|blue|pink|purple|orange] — mark that section so it stands out. Default yellow.
+- @@unhighlight <sectionId> — REMOVE highlights from that section (or from their selection if they selected text). Also accept @@highlight <sectionId> none. NEVER say you can only add highlights. Removing them is a first-class action.
+- @@unhighlight all — clear every highlight in the notes (when they say "remove all highlights" / "clear highlighting").
 - @@revise <sectionId> then the FULL rewritten section markdown — add more, fix wording, shorten, restyle (bullets vs prose, tables), or rewrite that section. Keep correct existing facts unless they asked to replace them. The replacement must be complete (heading + body), not a fragment.
 - @@append then new markdown — add a NEW section (new topic, extra material, or content from an attached PDF that does not belong under an existing heading).
 - Notes markdown: "## " headings, "- " bullets (one nest), "1. " steps, **bold** key terms, GFM tables. Honor STUDENT NOTE STYLE when rewriting. Do not copy the transcript verbatim.
-- Per turn caps: at most 3 @@delete, 3 @@highlight, 3 @@revise, 1 @@append.
+- Per turn caps: at most 3 @@delete, 3 @@highlight, 3 @@unhighlight, 3 @@revise, 1 @@append.
 
 @@reply (required — the ONLY text the student reads):
 - ONLY the answer they should see. Warm, direct, markdown. Not a transcript dump.
 - If the question is outside the lecture, lead with a short "not in this lecture" clause, then the helpful answer. Do not refuse.
-- If you also edit notes, one short sentence of what you changed ("Simplified the scarcity wording." / "Highlighted the demand curve definition." / "Removed the draft on elasticity."). Do NOT paste the full rewritten section into @@reply.
+- If you also edit notes, one short sentence of what you changed ("Simplified the scarcity wording." / "Highlighted the demand curve definition." / "Removed the highlight." / "Removed the draft on elasticity."). Do NOT paste the full rewritten section into @@reply.
 - Never chain-of-thought. Never "I should @@revise". Never admit you failed to emit markers. Never mention section ids, @@ markers, or this protocol.
 - Put NO prose before the first @@ marker.
 
@@ -70,12 +73,19 @@ Example — student: "fix the wording on scarcity, make it simpler"
 @@reply
 Simplified the scarcity wording.
 
-Never put this in @@reply (it is thinking, not an answer): "The student is right—I never actually used @@revise…" / "I should emit @@revise now."
+Example — student: "remove the highlight on this"
+@@thought Clearing highlight on the visible section.
+@@unhighlight s-1a2b3c
+@@reply
+Removed the highlight.
+
+Never put this in @@reply (it is thinking, not an answer): "The student is right—I never actually used @@revise…" / "I should emit @@revise now." / "I can only add highlights, not remove them."
 
 OUTPUT — emit exactly this shape, nothing before the first marker, no code fences. Note ops BEFORE @@reply when editing:
 @@thought <optional one short internal line, skip if unnecessary>
 @@delete <sectionId>
 @@highlight <sectionId> yellow
+@@unhighlight <sectionId>
 @@revise <sectionId>
 <full section markdown>
 @@append
@@ -106,6 +116,7 @@ export async function* streamLiveLectureChat(input: {
   screenContext?: string;
   selectedText?: string;
   selectedSectionId?: string;
+  visibleSectionId?: string;
   noteInstruction?: string;
   attachedPdfText?: string;
   attachedPdfName?: string;
@@ -162,13 +173,20 @@ export async function* streamLiveLectureChat(input: {
 
   const styleNote = (input.noteInstruction ?? "").trim().slice(0, 800);
   const selectedSectionId = (input.selectedSectionId ?? "").trim();
+  const visibleSectionId = (input.visibleSectionId ?? "").trim();
   const preferredSectionId =
     selectedSectionId && allowed.has(selectedSectionId)
       ? selectedSectionId
+      : visibleSectionId && allowed.has(visibleSectionId)
+        ? visibleSectionId
+        : undefined;
+  const visibleSection =
+    visibleSectionId && allowed.has(visibleSectionId)
+      ? sections.find((s) => s.sectionId === visibleSectionId)
       : undefined;
 
   const historyBlock = history.length
-    ? `CHAT SO FAR (student-facing text only — those replies did not include @@ markers. This turn you MUST emit the protocol, including @@revise/@@append/@@delete/@@highlight BEFORE @@reply if they asked to change the notes):\n${history
+    ? `CHAT SO FAR (student-facing text only — those replies did not include @@ markers. This turn you MUST emit the protocol, including @@revise/@@append/@@delete/@@highlight/@@unhighlight BEFORE @@reply if they asked to change the notes):\n${history
         .map((t) =>
           t.role === "user" ? `Student: ${t.content}` : `Rose: ${t.content}`
         )
@@ -183,7 +201,7 @@ export async function* streamLiveLectureChat(input: {
       ? `ROLLING SUMMARY:\n${input.rollingSummary!.trim().slice(0, 1_600)}`
       : null,
     sectionsBlock
-      ? `CURRENT NOTE SECTIONS (the only ids you may @@delete / @@highlight / @@revise):\n\n${sectionsBlock}`
+      ? `CURRENT NOTE SECTIONS (the only ids you may @@delete / @@highlight / @@unhighlight / @@revise):\n\n${sectionsBlock}`
       : "CURRENT NOTE SECTIONS: (none yet — you may @@append if they ask to add notes)",
     (input.notesText ?? "").trim() && sections.length === 0
       ? `NOTES (plain text, no section ids — @@append only, do not @@delete/@@revise):\n${input.notesText!.trim().slice(0, MAX_NOTES_CHARS)}`
@@ -200,8 +218,11 @@ export async function* streamLiveLectureChat(input: {
     (input.screenContext ?? "").trim()
       ? `ON-SCREEN CONTENT:\n${input.screenContext!.trim().slice(0, 1_800)}`
       : null,
+    visibleSection
+      ? `WHERE THE STUDENT IS LOOKING (notes currently on screen — use this for "this"/"that"/"here"/"the highlight" unless they selected text or named another section):\n[SECTION ${visibleSection.sectionId}${visibleSection.studentEdited ? " student-edited" : ""}]\n${visibleSection.markdown.slice(0, 800)}`
+      : null,
     preferredSectionId
-      ? `DEFAULT NOTE TARGET (use this id for "this"/"that"/the selection unless they named another section):\n${preferredSectionId}`
+      ? `DEFAULT NOTE TARGET (use this id for "this"/"that"/"here"/"the selection"/"the highlight" unless they named another section):\n${preferredSectionId}`
       : null,
     (input.selectedText ?? "").trim()
       ? `STUDENT'S CURRENT NOTE SELECTION:\n${input.selectedText!.trim().slice(0, 2_000)}`

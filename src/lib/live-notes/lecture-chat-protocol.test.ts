@@ -200,6 +200,43 @@ test("visibleReplyForStream holds an incomplete leak line", () => {
   );
 });
 
+test("@@unhighlight emits an unhighlight op", () => {
+  const events = collect("@@unhighlight s-aaa\n@@reply\nRemoved the highlight.\n");
+  assert.deepEqual(
+    events.filter((e) => e.type === "op"),
+    [{ type: "op", op: "unhighlight", sectionId: "s-aaa" }]
+  );
+  assert.match(replyText(events), /Removed the highlight/);
+});
+
+test("@@highlight none clears instead of adding", () => {
+  const events = collect("@@highlight s-aaa none\n@@reply\nCleared.\n");
+  assert.deepEqual(
+    events.filter((e) => e.type === "op"),
+    [{ type: "op", op: "unhighlight", sectionId: "s-aaa" }]
+  );
+});
+
+test("@@unhighlight all clears the whole document", () => {
+  const events = collect("@@unhighlight all\n@@reply\nCleared every highlight.\n");
+  assert.deepEqual(
+    events.filter((e) => e.type === "op"),
+    [{ type: "op", op: "unhighlight", sectionId: "all" }]
+  );
+});
+
+test("empty @@unhighlight uses the preferred (visible) section", () => {
+  const parser = createLectureChatParser(allowed, "s-new", sections, "s-aaa");
+  const events = [
+    ...parser.push("@@unhighlight\n@@reply\nRemoved.\n"),
+    ...parser.flush(),
+  ];
+  assert.deepEqual(
+    events.filter((e) => e.type === "op"),
+    [{ type: "op", op: "unhighlight", sectionId: "s-aaa" }]
+  );
+});
+
 test("streaming preamble never hits the reply channel", () => {
   const parser = createLectureChatParser(allowed, "s-new", sections);
   const events = [

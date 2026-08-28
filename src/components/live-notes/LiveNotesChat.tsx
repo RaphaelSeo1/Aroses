@@ -37,6 +37,7 @@ type ChatTurn = {
 type NoteOp =
   | { kind: "delete"; sectionId: string }
   | { kind: "highlight"; sectionId: string; color: string }
+  | { kind: "unhighlight"; sectionId: string }
   | { kind: "revise"; sectionId: string }
   | { kind: "append"; sectionId: string; dividerBefore: boolean }
   | { kind: "notes"; text: string };
@@ -50,7 +51,7 @@ const SUGGESTIONS = [
   "What did they just cover?",
   "Add more detail to the last section",
   "Highlight the key definition",
-  "Delete the draft that looks wrong",
+  "Remove the highlight on this section",
 ];
 
 function looksLikeNotesBody(md: string): boolean {
@@ -67,13 +68,30 @@ function looksLikeNoteEditRequest(message: string): boolean {
   const m = message.trim();
   if (!m) return false;
   return (
-    /\b(fix( the)? wording|reword|rewrite|rephrase|restyle|simplify|shorten|condense|expand|elaborate|make (it|this|that|the notes) |change (that|this|it|the) |add (that|this|it|more|these|the) |put (that|this) |take (that|this) out|delete |remove |highlight |bold )\b/i.test(
+    /\b(fix( the)? wording|reword|rewrite|rephrase|restyle|simplify|shorten|condense|expand|elaborate|make (it|this|that|the notes) |change (that|this|it|the) |add (that|this|it|more|these|the) |put (that|this) |take (that|this) out|delete |remove |unhighlight |highlight |bold )\b/i.test(
       m
     ) ||
-    /^(please\s+)?((can|could)\s+you\s+)?(fix|change|reword|rewrite|rephrase|simplify|shorten|condense|expand|delete|remove|highlight|add|put)\b/i.test(
+    /^(please\s+)?((can|could)\s+you\s+)?(fix|change|reword|rewrite|rephrase|simplify|shorten|condense|expand|delete|remove|unhighlight|highlight|add|put)\b/i.test(
       m
     ) ||
     /\b(add|put|write|include|save)\b.{0,40}\b(to|in|into) the notes\b/i.test(m)
+  );
+}
+
+function wantsUnhighlight(message: string): boolean {
+  const m = message.trim();
+  if (!m) return false;
+  return (
+    /\bunhighlight\b/i.test(m) ||
+    /\b(remove|clear|take off|undo|get rid of)\b.{0,40}\bhighlight/i.test(m) ||
+    /\bhighlight(ing|s)?\b.{0,20}\b(off|away|gone|none)\b/i.test(m)
+  );
+}
+
+function wantsUnhighlightAll(message: string): boolean {
+  return (
+    wantsUnhighlight(message) &&
+    /\b(all|every|entire|whole)\b/i.test(message)
   );
 }
 
@@ -305,6 +323,7 @@ export function LiveNotesChat({
           | Applied
           | { kind: "delete"; sectionId: string }
           | { kind: "highlight"; sectionId: string; color: string }
+          | { kind: "unhighlight"; sectionId: string }
         > = [];
         for (const item of ops) {
           if (item.kind === "notes") {
@@ -335,6 +354,11 @@ export function LiveNotesChat({
               sectionId: item.sectionId,
               color: item.color,
             });
+          } else if (item.kind === "unhighlight") {
+            coalesced.push({
+              kind: "unhighlight",
+              sectionId: item.sectionId,
+            });
           }
         }
 
@@ -360,6 +384,15 @@ export function LiveNotesChat({
             } else {
               failed += 1;
             }
+          } else if (item.kind === "unhighlight") {
+            const ok =
+              item.sectionId === "all"
+                ? writer.unhighlightAll()
+                : writer.unhighlightSection(item.sectionId, {
+                    preferSelection: true,
+                  });
+            if (ok) applied += 1;
+            else failed += 1;
           } else if (item.kind === "revise") {
             let md = sanitizeChatNotesMarkdown(item.markdown);
             if (!md) md = fallback;
@@ -398,7 +431,9 @@ export function LiveNotesChat({
         notesRef.current?.setStreamingIndicator(false);
         let jumpId: string | undefined;
         for (const item of coalesced) {
-          if ("sectionId" in item) jumpId = item.sectionId;
+          if ("sectionId" in item && item.sectionId !== "all") {
+            jumpId = item.sectionId;
+          }
         }
         if (applied > 0 && failed === 0) {
           onActivity("status", "Updated your notes.", {
@@ -613,6 +648,8 @@ export function LiveNotesChat({
       const selectedText = notesRef.current?.getSelectedText() ?? "";
       const selectedSectionId =
         notesRef.current?.getSelectedSectionId() ?? "";
+      const visibleSectionId =
+        notesRef.current?.getVisibleSectionId() ?? "";
       const hasNotes = Boolean(writer && sections.length > 0);
 
       const noteOps: NoteOp[] = [];
@@ -711,6 +748,7 @@ export function LiveNotesChat({
             screenContext: screenContext || undefined,
             selectedText: selectedText || undefined,
             selectedSectionId: selectedSectionId || undefined,
+            visibleSectionId: visibleSectionId || undefined,
             noteInstruction: noteInstructionRef.current,
             attachedPdfText: pdf?.text,
             attachedPdfName: pdf?.fileName,
@@ -754,6 +792,9 @@ export function LiveNotesChat({
                 color:
                   typeof parsed.color === "string" ? parsed.color : "#fde68a",
               });
+              noteOpCount += 1;
+            } else if (parsed.op === "unhighlight") {
+              noteOps.push({ kind: "unhighlight", sectionId });
               noteOpCount += 1;
             } else if (parsed.op === "revise") {
               noteOps.push({ kind: "revise", sectionId });
@@ -843,11 +884,37 @@ export function LiveNotesChat({
           noteOps,
           visibleReplyForStream(pendingReply, true)
         );
+      } else if (wantsUnhighlight(message)) {
+        const targetId = wantsUnhighlightAll(message)
+          ? "all"
+          : selectedSectionId ||
+            visibleSectionId ||
+            sections[sections.length - 1]?.sectionId ||
+            "";
+        if (targetId) {
+          onActivity("status", "Removing the highlight…");
+          void applyNoteOps([{ kind: "unhighlight", sectionId: targetId }]);
+          if (
+            !spoken ||
+            /\b(can('t|not)|only) (add|highlight)\b/i.test(spoken)
+          ) {
+            revealReply("Removed the highlight.");
+            spoken = "Removed the highlight.";
+          }
+        } else {
+          onActivity(
+            "error",
+            "I didn't see a highlighted section to clear. Scroll to it or select it, then ask again."
+          );
+        }
       } else if (looksLikeNoteEditRequest(message)) {
         const replyVisible = visibleReplyForStream(pendingReply, true);
         const replyNotes = sanitizeChatNotesMarkdown(replyVisible);
         const targetId =
-          selectedSectionId || sections[sections.length - 1]?.sectionId || "";
+          selectedSectionId ||
+          visibleSectionId ||
+          sections[sections.length - 1]?.sectionId ||
+          "";
         if (looksLikeNotesBody(replyNotes) && (wantsAppendToNotes(message) || targetId)) {
           const appendId = `s-${crypto.randomUUID().slice(0, 8)}`;
           if (wantsAppendToNotes(message) || !targetId) {

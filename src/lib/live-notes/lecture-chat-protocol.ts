@@ -4,7 +4,8 @@
  *   @@thought <text>              optional — activity-log line, not the reply
  *   @@reply                       student-facing answer (markdown)
  *   @@delete <sectionId>          drop a note section (no body)
- *   @@highlight <sectionId> [color]
+ *   @@highlight <sectionId> [color|none]
+ *   @@unhighlight <sectionId>
  *   @@revise <sectionId>          replacement notes markdown follows
  *   @@append                      new notes section follows
  *
@@ -23,7 +24,20 @@ export const HIGHLIGHT_COLOR_HEX: Record<string, string> = {
   orange: "#fed7aa",
 };
 
-export type LectureChatOp = "append" | "revise" | "delete" | "highlight";
+export const HIGHLIGHT_CLEAR_TOKENS = new Set([
+  "none",
+  "clear",
+  "off",
+  "remove",
+  "unhighlight",
+]);
+
+export type LectureChatOp =
+  | "append"
+  | "revise"
+  | "delete"
+  | "highlight"
+  | "unhighlight";
 
 export type LectureChatStreamEvent =
   | { type: "thought"; message: string }
@@ -85,7 +99,7 @@ export function resolveLectureChatSectionId(
 }
 
 const PROTOCOL_LEAK_LINE =
-  /@@(?:revise|append|delete|highlight|thought|reply)\b|sectionId/i;
+  /@@(?:revise|append|delete|highlight|unhighlight|thought|reply)\b|sectionId/i;
 const MIGHT_LEAK_RE = /@@|sectionId/i;
 
 export function isProtocolLeakLine(line: string): boolean {
@@ -232,22 +246,49 @@ export function createLectureChatParser(
           deletes += 1;
           out.push({ type: "op", op: "delete", sectionId: id });
         }
+      } else if (trimmed.startsWith("@@unhighlight")) {
+        const raw = trimmed.slice("@@unhighlight".length).trim();
+        const token = (raw.split(/\s+/)[0] ?? "").toLowerCase();
+        if ((token === "all" || token === "*") && highlights < 6) {
+          highlights += 1;
+          out.push({ type: "op", op: "unhighlight", sectionId: "all" });
+        } else {
+          const id = resolveTarget(raw);
+          if (id && highlights < 6) {
+            highlights += 1;
+            out.push({ type: "op", op: "unhighlight", sectionId: id });
+          }
+        }
       } else if (trimmed.startsWith("@@highlight")) {
         const rest = trimmed.slice("@@highlight".length).trim();
         const parts = rest.split(/\s+/);
         let colorName = "yellow";
         let idRaw = rest;
         const last = (parts[parts.length - 1] ?? "").toLowerCase();
-        if (HIGHLIGHT_COLOR_HEX[last]) {
+        if (HIGHLIGHT_COLOR_HEX[last] || HIGHLIGHT_CLEAR_TOKENS.has(last)) {
           colorName = last;
           idRaw = parts.slice(0, -1).join(" ");
         }
-        const id = resolveTarget(idRaw);
-        const color =
-          HIGHLIGHT_COLOR_HEX[colorName] ?? HIGHLIGHT_COLOR_HEX.yellow;
-        if (id && highlights < 6) {
+        const idRawLower = idRaw.trim().toLowerCase();
+        if (
+          HIGHLIGHT_CLEAR_TOKENS.has(colorName) &&
+          (idRawLower === "all" || idRawLower === "*") &&
+          highlights < 6
+        ) {
           highlights += 1;
-          out.push({ type: "op", op: "highlight", sectionId: id, color });
+          out.push({ type: "op", op: "unhighlight", sectionId: "all" });
+        } else {
+          const id = resolveTarget(idRaw);
+          if (id && highlights < 6) {
+            highlights += 1;
+            if (HIGHLIGHT_CLEAR_TOKENS.has(colorName)) {
+              out.push({ type: "op", op: "unhighlight", sectionId: id });
+            } else {
+              const color =
+                HIGHLIGHT_COLOR_HEX[colorName] ?? HIGHLIGHT_COLOR_HEX.yellow;
+              out.push({ type: "op", op: "highlight", sectionId: id, color });
+            }
+          }
         }
       } else if (trimmed.startsWith("@@thought")) {
         const message = trimmed.slice("@@thought".length).trim();

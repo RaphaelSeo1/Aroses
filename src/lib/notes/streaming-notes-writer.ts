@@ -742,7 +742,64 @@ export class StreamingNotesWriter {
     return marked;
   }
 
-  // ── Streaming core ───────────────────────────────────────────────────────
+  /**
+   * Strip highlight marks from a section. If the student has a selection
+   * inside that section, only that range is cleared.
+   */
+  unhighlightSection(
+    sectionId: string,
+    opts?: { preferSelection?: boolean }
+  ): boolean {
+    if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
+    const markType = this.editor.schema.marks.highlight;
+    if (!markType) return false;
+    const blocks = this.sectionBlocks(sectionId);
+    if (blocks.length === 0) return false;
+    const sel = this.editor.state.selection;
+    const useSel = Boolean(opts?.preferSelection) && sel.from !== sel.to;
+    let cleared = false;
+    this.dispatchDoc((tr) => {
+      for (const b of blocks) {
+        const from = b.pos + 1;
+        const to = b.pos + b.node.nodeSize - 1;
+        if (to <= from) continue;
+        let a = from;
+        let c = to;
+        if (useSel) {
+          a = Math.max(from, sel.from);
+          c = Math.min(to, sel.to);
+          if (c <= a) continue;
+        }
+        tr.removeMark(a, c, markType);
+        cleared = true;
+      }
+    });
+    if (cleared) {
+      this.dispatchDeco({ set: { [sectionId]: "rose-note-revised" } });
+      window.setTimeout(() => {
+        if (!this.destroyed && !this.editor.isDestroyed) {
+          this.dispatchDeco({ clear: [sectionId] });
+        }
+      }, REVISION_HIGHLIGHT_MS);
+    }
+    return cleared;
+  }
+
+  /** Strip every highlight mark in the document. */
+  unhighlightAll(): boolean {
+    if (this.destroyed || this.editor.isDestroyed) return false;
+    const markType = this.editor.schema.marks.highlight;
+    if (!markType) return false;
+    const from = 0;
+    const to = this.editor.state.doc.content.size;
+    if (to <= from) return false;
+    let cleared = false;
+    this.dispatchDoc((tr) => {
+      tr.removeMark(from, to, markType);
+      cleared = true;
+    });
+    return cleared;
+  }
 
   private freshOp(kind: ActiveOp["kind"], sectionId: string): ActiveOp {
     return {

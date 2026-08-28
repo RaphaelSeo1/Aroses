@@ -29,6 +29,7 @@ const MAX_SECTIONS = 60;
  *   screenContext?: string,
  *   selectedText?: string,
  *   selectedSectionId?: string,
+ *   visibleSectionId?: string,
  *   noteInstruction?: string,
  *   attachedPdfText?: string,
  *   attachedPdfName?: string
@@ -68,6 +69,7 @@ export async function POST(request: Request, ctx: Params) {
     screenContext?: unknown;
     selectedText?: unknown;
     selectedSectionId?: unknown;
+    visibleSectionId?: unknown;
     noteInstruction?: unknown;
     attachedPdfText?: unknown;
     attachedPdfName?: unknown;
@@ -240,6 +242,10 @@ export async function POST(request: Request, ctx: Params) {
           selectedSectionId:
             typeof b.selectedSectionId === "string"
               ? b.selectedSectionId.trim().slice(0, 64)
+              : undefined,
+          visibleSectionId:
+            typeof b.visibleSectionId === "string"
+              ? b.visibleSectionId.trim().slice(0, 64)
               : undefined,
           noteInstruction: noteInstruction || undefined,
           attachedPdfText: attachedPdfText
