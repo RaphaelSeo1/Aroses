@@ -11,8 +11,7 @@ import {
 } from "@/lib/calendar/items";
 import {
   insertCalendarItem,
-  queryCalendarItems,
-  queryCalendarSections,
+  loadUserCalendar,
   updateCalendarItem,
 } from "@/lib/calendar/queries";
 import { MAX_CHAT_PDF_CHARS } from "@/lib/live-notes/extract-chat-pdf";
@@ -85,10 +84,7 @@ export async function POST(request: Request) {
         }))
     : [];
 
-  const [{ items, error }, sections] = await Promise.all([
-    queryCalendarItems(supabase, user.id, 200),
-    queryCalendarSections(supabase, user.id),
-  ]);
+  const { items, sections, error } = await loadUserCalendar(supabase, user.id, 200);
 
   if (error) {
     if (

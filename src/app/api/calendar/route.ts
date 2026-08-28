@@ -2,9 +2,8 @@ import { NextResponse } from "next/server";
 import { parseCalendarInput } from "@/lib/calendar/items";
 import {
   insertCalendarItem,
+  loadUserCalendar,
   ownedSectionId,
-  queryCalendarItems,
-  queryCalendarSections,
 } from "@/lib/calendar/queries";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 
@@ -23,10 +22,7 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const [{ items, error }, sections] = await Promise.all([
-    queryCalendarItems(supabase, user.id),
-    queryCalendarSections(supabase, user.id),
-  ]);
+  const { items, sections, error } = await loadUserCalendar(supabase, user.id);
 
   if (error) {
     if (

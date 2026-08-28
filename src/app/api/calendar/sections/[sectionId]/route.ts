@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import {
-  CALENDAR_SECTIONS_SELECT,
-  mapSectionRow,
-  parseSectionTitle,
-} from "@/lib/calendar/sections";
+  deleteTodoSection,
+  updateTodoSectionTitle,
+} from "@/lib/calendar/queries";
+import { parseSectionTitle } from "@/lib/calendar/sections";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
@@ -41,14 +41,12 @@ export async function PATCH(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Title is required." }, { status: 400 });
   }
 
-  const { data, error } = await supabase
-    .from("user_calendar_todo_sections")
-    .update({ title, updated_at: new Date().toISOString() })
-    .eq("id", sectionId)
-    .eq("user_id", user.id)
-    .select(CALENDAR_SECTIONS_SELECT)
-    .maybeSingle();
-
+  const { section, error } = await updateTodoSectionTitle(
+    supabase,
+    user.id,
+    sectionId,
+    title
+  );
   if (error) {
     console.error("[calendar sections PATCH]", error);
     return NextResponse.json(
@@ -56,13 +54,11 @@ export async function PATCH(request: Request, ctx: Params) {
       { status: 500 }
     );
   }
-  if (!data) {
+  if (!section) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json({
-    section: mapSectionRow(data as Parameters<typeof mapSectionRow>[0]),
-  });
+  return NextResponse.json({ section });
 }
 
 export async function DELETE(_request: Request, ctx: Params) {
@@ -79,14 +75,7 @@ export async function DELETE(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data, error } = await supabase
-    .from("user_calendar_todo_sections")
-    .delete()
-    .eq("id", sectionId)
-    .eq("user_id", user.id)
-    .select("id")
-    .maybeSingle();
-
+  const { ok, error } = await deleteTodoSection(supabase, user.id, sectionId);
   if (error) {
     console.error("[calendar sections DELETE]", error);
     return NextResponse.json(
@@ -94,7 +83,7 @@ export async function DELETE(_request: Request, ctx: Params) {
       { status: 500 }
     );
   }
-  if (!data) {
+  if (!ok) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
