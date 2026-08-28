@@ -33,6 +33,12 @@ const en = {
   freePractice: "Free practice",
   backToOverview: "← Back to overview",
   sessionComplete: "Session complete",
+  focusQuizFinished: "You finished this focus quiz",
+  nextLecture: "Next lecture",
+  sectionFinishedNoNext:
+    "You're done with this section — no next lecture here.",
+  courseFinishedNoNext:
+    "You're done with this course — no next lecture here.",
   practiceAgain: "Practice again",
   again: "Again",
   hard: "Hard",
@@ -124,6 +130,10 @@ const ko: typeof en = {
   freePractice: "자유 연습",
   backToOverview: "← 개요로 돌아가기",
   sessionComplete: "세션 완료",
+  focusQuizFinished: "이 포커스 퀴즈를 마쳤어요",
+  nextLecture: "다음 강의",
+  sectionFinishedNoNext: "이 섹션은 여기까지예요 — 다음 강의가 없어요.",
+  courseFinishedNoNext: "이 코스의 강의를 모두 마쳤어요.",
   practiceAgain: "다시 연습",
   again: "다시",
   hard: "어려움",

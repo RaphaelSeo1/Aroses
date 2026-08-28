@@ -25,6 +25,7 @@ import { tf } from "@/lib/i18n/format";
 import { useCourseMode } from "@/lib/mentored/use-course-mode";
 import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { persistStudyModulePosition } from "@/lib/study/persist-study-module";
+import { resolveNextLecture } from "@/lib/study/resolve-next-lecture";
 import { CourseRefineDrawer } from "@/components/CourseRefineDrawer";
 import { PracticeProgressPullTab } from "@/components/PracticeProgressPullTab";
 import { StudyChatDrawer } from "@/components/StudyChatDrawer";
@@ -1164,6 +1165,37 @@ export function CoursePlayer({
       fileName: next.fileName,
     };
   }, [hasNextModule, sidebarOutlines, materialId]);
+
+  const focusNextLecture = useMemo(
+    () =>
+      resolveNextLecture({
+        materialId,
+        moduleIds: course.modules.map((m) => m.id),
+        activeModuleId,
+        sidebar: sidebarOutlines.map((o) => ({
+          materialId: o.materialId,
+          moduleIds: o.modules.map((m) => m.id),
+          examGroupId: o.examGroupId,
+        })),
+      }),
+    [materialId, course.modules, activeModuleId, sidebarOutlines]
+  );
+
+  const goToNextLecture = useCallback(() => {
+    if (focusNextLecture.kind !== "lecture") return;
+    persistStudyModulePosition(
+      courseId,
+      focusNextLecture.target.materialId,
+      focusNextLecture.target.moduleId,
+      { mode: "free" }
+    );
+    const q = `?${buildStudySearchParams(
+      focusNextLecture.target.materialId,
+      focusNextLecture.target.moduleId,
+      learnMode
+    )}`;
+    router.push(`${studyBase}${q}`);
+  }, [focusNextLecture, courseId, learnMode, router, studyBase]);
 
   const totalModules = course.modules.length;
   const completedCount = completed.size;
@@ -2504,15 +2536,15 @@ export function CoursePlayer({
                   materialId={materialId}
                   moduleId={activeModule.id}
                   blocked={quizOpen}
-                  hasNextModule={hasNextModule}
                   onRunOpenChange={setPersonalQuizActive}
                   onPersonalQuizBankChanged={bumpPersonalBank}
-                  onAdvanceModule={() => {
-                    const ix = course.modules.findIndex(
-                      (m) => m.id === activeModule.id
-                    );
-                    const next = course.modules[ix + 1];
-                    if (next) syncModuleToUrl(next.id);
+                  nextLecture={{
+                    available: focusNextLecture.kind === "lecture",
+                    endKind:
+                      focusNextLecture.kind === "section_done"
+                        ? "section"
+                        : "course",
+                    onClick: goToNextLecture,
                   }}
                 />
               ) : null}

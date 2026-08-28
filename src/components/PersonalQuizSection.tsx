@@ -40,8 +40,7 @@ export function PersonalQuizSection({
   materialId,
   moduleId,
   blocked,
-  hasNextModule,
-  onAdvanceModule,
+  nextLecture,
   onRunOpenChange,
   onPersonalQuizBankChanged,
   sectionClassName,
@@ -49,8 +48,11 @@ export function PersonalQuizSection({
   materialId: string;
   moduleId: number;
   blocked: boolean;
-  hasNextModule: boolean;
-  onAdvanceModule?: () => void;
+  nextLecture?: {
+    available: boolean;
+    endKind?: "section" | "course";
+    onClick: () => void;
+  };
   onRunOpenChange?: (open: boolean) => void;
   /** Called after personal bank data is refreshed (e.g. parent updates badge counts). */
   onPersonalQuizBankChanged?: () => void;
@@ -679,9 +681,9 @@ export function PersonalQuizSection({
                 void refresh();
               }}
               onComplete={() => {
-                setEpoch((e) => e + 1);
                 void refresh();
               }}
+              nextLecture={nextLecture}
             />
           </div>
         )}

@@ -90,6 +90,16 @@ type Props = {
   onExit?: () => void;
   /** When provided, shows a "Practice again" button on the summary screen. */
   onPracticeAgain?: () => void;
+  /**
+   * Course-scoped focus quiz only. When set, the summary becomes a finish
+   * moment with Next lecture (if available) instead of a dead empty state.
+   * Omit for global SRS review.
+   */
+  nextLecture?: {
+    available: boolean;
+    endKind?: "section" | "course";
+    onClick: () => void;
+  };
 };
 
 /**
@@ -160,6 +170,7 @@ export function SrsReviewSession({
   onComplete,
   onExit,
   onPracticeAgain,
+  nextLecture,
 }: Props) {
   const t = useT();
   const storageKey = `aroses.srs.session.${sessionKey}`;
@@ -485,10 +496,16 @@ export function SrsReviewSession({
   // ----------- render: summary -----------
   if (finished) {
     const elapsedMs = Date.now() - startedAtRef.current;
+    const courseFocus = nextLecture != null;
+    const showNextLecture = courseFocus && nextLecture.available;
+    const primaryBtn =
+      "inline-flex items-center justify-center rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white shadow-md shadow-red-600/20 hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft";
+    const secondaryBtn =
+      "inline-flex items-center justify-center rounded-full border border-zinc-300 bg-white px-5 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900";
     return (
       <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
-          {t.review.sessionComplete}
+          {courseFocus ? t.review.focusQuizFinished : t.review.sessionComplete}
         </h3>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">
           {done.length === 1
@@ -500,6 +517,13 @@ export function SrsReviewSession({
                 duration: formatDuration(elapsedMs),
               })}
         </p>
+        {courseFocus && !nextLecture.available ? (
+          <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+            {nextLecture.endKind === "section"
+              ? t.review.sectionFinishedNoNext
+              : t.review.courseFinishedNoNext}
+          </p>
+        ) : null}
         <dl className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
           {(Object.keys(RATING_COLORS) as SrsRating[]).map((r) => (
             <div
@@ -518,11 +542,20 @@ export function SrsReviewSession({
           ))}
         </dl>
         <div className="mt-6 flex flex-wrap gap-3">
+          {showNextLecture ? (
+            <button
+              type="button"
+              onClick={nextLecture.onClick}
+              className={primaryBtn}
+            >
+              {t.review.nextLecture}
+            </button>
+          ) : null}
           {onPracticeAgain ? (
             <button
               type="button"
               onClick={onPracticeAgain}
-              className="inline-flex items-center justify-center rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white shadow-md shadow-red-600/20 hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
+              className={showNextLecture ? secondaryBtn : primaryBtn}
             >
               {t.review.practiceAgain}
             </button>
@@ -531,7 +564,7 @@ export function SrsReviewSession({
             <button
               type="button"
               onClick={onExit}
-              className="inline-flex items-center justify-center rounded-full border border-zinc-300 bg-white px-5 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
+              className={secondaryBtn}
             >
               {t.review.backToOverview}
             </button>

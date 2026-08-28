@@ -42,6 +42,12 @@ export type SrsReviewLauncherProps = {
   sessionKey: string;
   onExit?: () => void;
   onComplete?: (summary: SrsSessionSummary) => void;
+  /** Course-scoped focus quiz: finish panel with Next lecture. Omit for global SRS. */
+  nextLecture?: {
+    available: boolean;
+    endKind?: "section" | "course";
+    onClick: () => void;
+  };
 };
 
 type FetchState =
@@ -68,6 +74,7 @@ export function SrsReviewLauncher({
   sessionKey,
   onExit,
   onComplete,
+  nextLecture,
 }: SrsReviewLauncherProps) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
   // Bumping this remounts SrsReviewSession with a fresh deck for "Practice
@@ -188,6 +195,7 @@ export function SrsReviewLauncher({
       onExit={onExit}
       onComplete={onComplete}
       onPracticeAgain={state.cards.length > 0 ? practiceAgain : undefined}
+      nextLecture={nextLecture}
     />
   );
 }
