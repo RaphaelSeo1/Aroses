@@ -550,21 +550,25 @@ export function SrsReviewSession({
   const mcq = isQuizMcq(question) ? question : null;
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-4">
-      <SessionHeader
-        position={position}
-        total={total}
-        heading={heading}
-        card={current}
-        showCourseBadge={showCourseBadge}
-        onExit={onExit}
-        t={t.review}
-      />
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 max-h-[calc(100dvh-9.5rem)]">
+      <div className="shrink-0">
+        <SessionHeader
+          position={position}
+          total={total}
+          heading={heading}
+          card={current}
+          showCourseBadge={showCourseBadge}
+          onExit={onExit}
+          t={t.review}
+        />
+      </div>
 
-      <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-6">
-        <p className="text-base font-medium leading-snug text-zinc-900 dark:text-zinc-100 sm:text-lg">
-          {question.question}
-        </p>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="min-h-0 max-h-[min(7.5rem,22vh)] shrink-0 overflow-y-auto overscroll-contain">
+          <p className="text-[15px] font-medium leading-snug text-zinc-900 dark:text-zinc-100 sm:text-base">
+            {question.question}
+          </p>
+        </div>
 
         {mcq ? (
           <McChoices
@@ -575,31 +579,35 @@ export function SrsReviewSession({
             onChoose={handleMcChoose}
           />
         ) : !revealed ? (
-          <FrqAnswerInput
-            value={frText}
-            onChange={setFrText}
-            onSubmit={() => void handleFrSubmit()}
-            onSkip={handleSkipReveal}
-            busy={frBusy}
-            error={frSubmitError}
-          />
-        ) : null}
-
-        {revealed ? (
-          <div className="mt-6 rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
-            {!mcq && frGraded ? (
-              <FrqGradeBlock
-                correct={frCorrect}
-                feedback={frFeedback}
-                studentAnswer={frText}
-              />
-            ) : null}
-            <RevealedAnswer question={question} />
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <FrqAnswerInput
+              value={frText}
+              onChange={setFrText}
+              onSubmit={() => void handleFrSubmit()}
+              onSkip={handleSkipReveal}
+              busy={frBusy}
+              error={frSubmitError}
+            />
           </div>
         ) : null}
 
         {revealed ? (
-          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <div className="rounded-xl bg-zinc-50 px-3 py-2.5 dark:bg-zinc-900">
+              {!mcq && frGraded ? (
+                <FrqGradeBlock
+                  correct={frCorrect}
+                  feedback={frFeedback}
+                  studentAnswer={frText}
+                />
+              ) : null}
+              <RevealedAnswer question={question} />
+            </div>
+          </div>
+        ) : null}
+
+        {revealed ? (
+          <div className="mt-3 grid shrink-0 grid-cols-4 gap-2">
             {(Object.keys(RATING_COLORS) as SrsRating[]).map((r) => {
               const c = RATING_COLORS[r];
               return (
@@ -608,14 +616,14 @@ export function SrsReviewSession({
                   type="button"
                   disabled={submitting}
                   onClick={() => void handleRate(r)}
-                  className={`group flex flex-col items-center gap-1 rounded-xl border-2 px-3 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${c.ring} ${c.bg} ${c.text}`}
+                  className={`group flex flex-col items-center gap-0.5 rounded-lg border px-1.5 py-1.5 text-xs font-semibold leading-tight transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${c.ring} ${c.bg} ${c.text}`}
                 >
                   <span>{ratingLabel(r, t.review)}</span>
-                  <span className="text-xs font-medium opacity-80">
-                    {previews[r].label}
-                  </span>
-                  <span className="mt-1 rounded-md bg-white/70 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-zinc-600 dark:bg-zinc-950/40 dark:text-zinc-300">
-                    {c.key}
+                  <span className="flex items-center gap-1 text-[10px] font-medium opacity-80">
+                    <span>{previews[r].label}</span>
+                    <span className="rounded bg-white/70 px-1 font-mono tracking-wide text-zinc-600 dark:bg-zinc-950/40 dark:text-zinc-300">
+                      {c.key}
+                    </span>
                   </span>
                 </button>
               );
@@ -644,7 +652,7 @@ function McChoices({
   onChoose: (index: number) => void;
 }) {
   return (
-    <ul className="mt-5 space-y-2">
+    <ul className="mt-3 shrink-0 space-y-1.5">
       {question.choices.map((choice, i) => {
         const letter = String.fromCharCode(65 + i);
         const isCorrect = i === question.correctIndex;
@@ -674,16 +682,16 @@ function McChoices({
               type="button"
               disabled={revealed}
               onClick={() => onChoose(i)}
-              className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm transition-colors ${stateClasses} ${
+              className={`flex w-full min-w-0 items-start gap-2 rounded-lg border px-3 py-2 text-left text-sm leading-snug transition-colors ${stateClasses} ${
                 !revealed
                   ? "hover:border-zinc-400 hover:bg-zinc-50 active:bg-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-900"
                   : "cursor-default"
               }`}
             >
-              <span className="mt-0.5 font-mono text-xs text-zinc-500">
+              <span className="mt-px shrink-0 font-mono text-xs text-zinc-500">
                 {letter}.
               </span>
-              <span className="flex-1 text-zinc-800 dark:text-zinc-200">
+              <span className="min-w-0 flex-1 break-words text-zinc-800 dark:text-zinc-200 [overflow-wrap:anywhere]">
                 {choice}
               </span>
               {revealed && isCorrect ? (
@@ -840,7 +848,7 @@ function RevealedAnswer({ question }: { question: CourseQuizItem }) {
           Correct answer:{" "}
           {String.fromCharCode(65 + question.correctIndex)}
         </p>
-        <p className="mt-3 break-words text-sm leading-relaxed text-zinc-600 dark:text-zinc-400 [overflow-wrap:anywhere]">
+        <p className="mt-1.5 break-words text-sm leading-snug text-zinc-600 dark:text-zinc-400 [overflow-wrap:anywhere]">
           {question.explanation}
         </p>
       </>
@@ -901,7 +909,7 @@ function SessionHeader({
     </span>
   ) : null;
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           {heading ? (
