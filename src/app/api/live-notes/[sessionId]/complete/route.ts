@@ -8,6 +8,7 @@ import { liveNotesToSourceMarkdown } from "@/lib/live-notes/notes-review";
 import { packLiveLectureIngestBlob } from "@/lib/live-notes/pack-ingest";
 import { runLiveNotesWrapUp } from "@/lib/live-notes/run-notes-wrap-up";
 import {
+  formatDeckForIngest,
   formatDeckForWrapUp,
   loadSessionDeckPages,
 } from "@/lib/live-notes/slide-pages";
@@ -34,15 +35,17 @@ function formatTimestamp(ms: number): string {
 /**
  * POST /api/live-notes/[sessionId]/complete
  *
- * Wrap-up handoff: compose the lecture transcript AND generated notes
- * (slide content folded into those notes during capture), upload them as
- * a `.txt`, then insert a `pdf_ingest_jobs` row parked at
- * `reviewing_transcript`. The student can review/edit before
- * `confirm-transcript` runs the unmodified generation pipeline.
+ * Wrap-up handoff: compose generated notes (slide-folded content included),
+ * the speech transcript, and uploaded session material (deck pages, on-screen
+ * extracts, optional chat handout) into one ingest blob, upload as `.txt`,
+ * then insert a `pdf_ingest_jobs` row parked at `reviewing_transcript`.
+ *
+ * Optional JSON body: `{ attachedPdfText?, attachedPdfName? }` — chat-attached
+ * handout still sitting in the client's sessionStorage.
  *
  * Idempotent: a second call on a completed session returns the same jobId.
  */
-export async function POST(_request: Request, ctx: Params) {
+export async function POST(request: Request, ctx: Params) {
   const { sessionId } = await ctx.params;
   if (!isUuid(sessionId)) {
     return NextResponse.json({ error: "Invalid session id" }, { status: 400 });
@@ -54,6 +57,26 @@ export async function POST(_request: Request, ctx: Params) {
   } = await supabase.auth.getUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let attachedPdfText = "";
+  let attachedPdfName = "";
+  try {
+    const rawBody = await request.text();
+    if (rawBody.trim()) {
+      const parsed = JSON.parse(rawBody) as {
+        attachedPdfText?: unknown;
+        attachedPdfName?: unknown;
+      };
+      if (typeof parsed.attachedPdfText === "string") {
+        attachedPdfText = parsed.attachedPdfText.trim().slice(0, 16_000);
+      }
+      if (typeof parsed.attachedPdfName === "string") {
+        attachedPdfName = parsed.attachedPdfName.trim().slice(0, 200);
+      }
+    }
+  } catch {
+    /* empty / non-JSON body — notes + transcript + deck still pack */
   }
 
   const { data: session } = await supabase
@@ -144,15 +167,15 @@ export async function POST(_request: Request, ctx: Params) {
           return text || table ? `${head}\n${text}${table}` : null;
         })
         .filter((b): b is string => Boolean(b));
-      screenContent = screenBlocks.join("\n\n").slice(0, 100_000);
+      screenContent = screenBlocks.join("\n\n").slice(0, 200_000);
     }
   } catch {
-    /* migration not applied — transcript-only wrap-up */
+    /* migration not applied — continue without screen extracts */
   }
 
-  const deckContent = formatDeckForWrapUp(
-    await loadSessionDeckPages(supabase, sessionId)
-  );
+  const deckPages = await loadSessionDeckPages(supabase, sessionId);
+  const deckForWrapUp = formatDeckForWrapUp(deckPages);
+  const deckForIngest = formatDeckForIngest(deckPages);
 
   // Mirrors the confirm-transcript minimum — below this, generation would
   // silently no-op, so reject with something actionable instead.
@@ -238,7 +261,7 @@ export async function POST(_request: Request, ctx: Params) {
       notesJson,
       transcript: transcriptOnly,
       screenContent: screenContent || undefined,
-      deckContent: deckContent || undefined,
+      deckContent: deckForWrapUp || undefined,
       lectureTitle: title,
       durationSeconds:
         typeof session.duration_seconds === "number"
@@ -265,24 +288,32 @@ export async function POST(_request: Request, ctx: Params) {
     });
   }
 
-  // ── Ingest source: notes (incl. slide-folded content) + transcript ─────
-  // Screen extracts and the uploaded deck stay in the blob as extra
-  // grounding. Student lines still go to study_context for extra weight.
+  // ── Ingest source: notes + transcript + slides (screen/handout extra) ──
+  // Fair-share packing so no source class is dropped. Student lines still
+  // go to study_context for extra weight, plus the three-source instructions.
   const notesSource =
     liveNotesToSourceMarkdown(notesJson) ||
     (typeof session.notes_text === "string" ? session.notes_text.trim() : "");
+  const handoutContent =
+    attachedPdfText.length >= 12
+      ? attachedPdfName
+        ? `### ${attachedPdfName}\n${attachedPdfText}`
+        : attachedPdfText
+      : "";
   const transcript = packLiveLectureIngestBlob({
     title,
     notesMarkdown: notesSource,
     transcript: body,
     screenContent,
-    deckContent,
+    deckContent: deckForIngest,
+    handoutContent,
   });
 
   const emphasis = extractLiveNotesEmphasis(notesJson);
   const studyContext = buildLiveNotesStudyContext({
     emphasis,
     lectureTitle: title,
+    liveLectureSources: true,
   });
 
   // ── Upload the composed source as the job's storage object ──────────────

@@ -122,6 +122,13 @@ function loadPendingPdf(sessionId: string): PendingPdf | null {
   }
 }
 
+/** Chat-attached handout still in sessionStorage — send this on course wrap-up. */
+export function readLiveNotesChatPdf(
+  sessionId: string
+): { fileName: string; text: string } | null {
+  return loadPendingPdf(sessionId);
+}
+
 function loadTurns(sessionId: string): ChatTurn[] {
   try {
     const raw = sessionStorage.getItem(storageKey(sessionId));

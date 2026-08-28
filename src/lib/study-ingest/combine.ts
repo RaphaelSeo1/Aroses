@@ -1,19 +1,54 @@
-import type { ExtractedStudyContent } from "@/lib/study-ingest/extract";
+import type { ExtractedStudyContent } from "./extract";
 
 /**
  * Delimiter that prefixes each source's text when several files are combined
  * into one job. Downstream budgeting (`truncateMaterial` in study-generation)
  * splits on this marker to give EVERY source an equal, fair share of the
  * character budget — so a small image transcription can never crowd out a long
- * PDF/transcript that happens to come after it. Keep the format in sync with
- * `SOURCE_BLOCK_MARKER_RE` in `src/lib/ai/study-generation.ts`.
+ * PDF/transcript that happens to come after it.
+ *
+ * Keep in sync with live-lecture packing in `src/lib/live-notes/pack-ingest.ts`.
  */
+export const COMBINED_SOURCE_MARKER_RE =
+  /^===== SOURCE \d+\/\d+ — FILE: .+? =====$/gm;
+
 export function combinedSourceMarker(
   index: number,
   total: number,
   label: string
 ): string {
   return `===== SOURCE ${index}/${total} — FILE: ${label} =====`;
+}
+
+export type CombinedSourceBlock = { marker: string; body: string };
+
+/** Split a combined blob into preamble + per-source bodies. Empty blocks if unmarked. */
+export function splitCombinedSourceBlocks(text: string): {
+  preamble: string;
+  blocks: CombinedSourceBlock[];
+} {
+  COMBINED_SOURCE_MARKER_RE.lastIndex = 0;
+  const markers: { index: number; line: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = COMBINED_SOURCE_MARKER_RE.exec(text)) !== null) {
+    markers.push({ index: m.index, line: m[0] });
+  }
+  if (markers.length === 0) {
+    return { preamble: "", blocks: [] };
+  }
+
+  const preamble = text.slice(0, markers[0]!.index).trim();
+  const blocks: CombinedSourceBlock[] = [];
+  for (let i = 0; i < markers.length; i++) {
+    const start = markers[i]!.index;
+    const end = i + 1 < markers.length ? markers[i + 1]!.index : text.length;
+    const segment = text.slice(start, end);
+    const nl = segment.indexOf("\n");
+    const marker = (nl >= 0 ? segment.slice(0, nl) : segment).trim();
+    const body = (nl >= 0 ? segment.slice(nl + 1) : "").trim();
+    blocks.push({ marker, body });
+  }
+  return { preamble, blocks };
 }
 
 export function combineExtractedSources(

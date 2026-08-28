@@ -24,7 +24,7 @@ import {
 import { LecturePreviewPanel } from "@/components/live-notes/LecturePreviewPanel";
 import { ShareGuideModal } from "@/components/live-notes/ShareGuideModal";
 import { SlideDeckAttach } from "@/components/live-notes/SlideDeckAttach";
-import { LiveNotesChat } from "@/components/live-notes/LiveNotesChat";
+import { LiveNotesChat, readLiveNotesChatPdf } from "@/components/live-notes/LiveNotesChat";
 import { useScreenVision } from "@/lib/live-notes/use-screen-vision";
 import { pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-pages";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
@@ -1056,8 +1056,15 @@ export function LiveNotesSurface({
       await stop();
       await flushNow();
 
+      const chatPdf = readLiveNotesChatPdf(sessionId);
       const res = await fetch(`/api/live-notes/${sessionId}/complete`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          chatPdf
+            ? { attachedPdfText: chatPdf.text, attachedPdfName: chatPdf.fileName }
+            : {}
+        ),
       });
       const data = (await res.json().catch(() => ({}))) as {
         redirect?: string;

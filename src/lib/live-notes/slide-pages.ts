@@ -7,7 +7,10 @@ export type DeckPage = {
 };
 
 export const MAX_DECK_PAGES = 200;
+/** Cap for wrap-up Haiku review (keep bounded). Ingest packing uses a larger cap. */
 export const MAX_DECK_WRAPUP_CHARS = 80_000;
+/** Enough raw slide text for fair packing into the 500k ingest blob. */
+export const MAX_DECK_INGEST_CHARS = 400_000;
 export const MAX_DECK_SYNTH_CHARS = 2_400;
 export const MAX_DECK_SEED_CHARS = 7_000;
 export const DECK_SEED_PAGES_PER_CALL = 6;
@@ -152,14 +155,12 @@ export function takeDeckSeedBatch(
   };
 }
 
-/** Full-deck text for wrap-up / course ingest (capped). */
+/** Full-deck text for wrap-up review (capped for the Haiku context). */
 export function formatDeckForWrapUp(pages: DeckPage[]): string {
-  if (pages.length === 0) return "";
-  const blocks = pages.map((p) => {
-    const head = p.title.trim()
-      ? `[slide ${p.pageNum}] ${p.title.trim()}`
-      : `[slide ${p.pageNum}]`;
-    return `${head}\n${p.extractedText.trim()}`;
-  });
-  return blocks.join("\n\n").slice(0, MAX_DECK_WRAPUP_CHARS);
+  return formatDeckPages(pages, MAX_DECK_WRAPUP_CHARS);
+}
+
+/** Full-deck text for course ingest — packLiveLectureIngestBlob fair-shares further. */
+export function formatDeckForIngest(pages: DeckPage[]): string {
+  return formatDeckPages(pages, MAX_DECK_INGEST_CHARS);
 }

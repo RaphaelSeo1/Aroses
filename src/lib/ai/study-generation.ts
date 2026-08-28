@@ -56,7 +56,12 @@ import {
   inferCourseLanguageFromText,
   type CourseOutputLanguage,
 } from "@/lib/course-output-language";
+import {
+  formatLiveLectureGenerationBlock,
+  isLiveLectureStudyContext,
+} from "@/lib/live-notes/notes-emphasis";
 import { formatSelfStudyGenerationBlock } from "@/lib/self-study-context";
+import { splitCombinedSourceBlocks } from "@/lib/study-ingest/combine";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
@@ -218,9 +223,13 @@ const DIGEST_CHUNK_CHARS = 22_000;
 const MAX_DIGEST_CHUNKS = 40;
 
 /**
- * Turn full extracted PDF text into a single string that fits `materialCharLimit`.
+ * Turn full extracted PDF/text into a single string that fits `materialCharLimit`.
  * Short inputs return truncated raw text (no extra model calls). Long inputs are
- * chunked and summarized so later outline/module steps can use the whole deck.
+ * chunked and summarized so later outline/module steps can use the whole source.
+ *
+ * Combined multi-source blobs (live lecture notes+transcript+slides, or several
+ * uploads) are digested per source with a fair share of the cap so one class
+ * cannot crowd out another.
  */
 export async function buildMaterialDigestFromFullPdfText(
   fullText: string,
@@ -252,63 +261,118 @@ export async function buildMaterialDigestFromFullPdfText(
     typeof options?.studyContext === "string" && options.studyContext.trim().length > 0
       ? options.studyContext.trim().slice(0, 2_500)
       : "";
+  const liveLecture =
+    typeof options?.studyContext === "string" &&
+    isLiveLectureStudyContext(options.studyContext);
 
-  const chunks: string[] = [];
-  for (
-    let i = 0;
-    i < compact.length && chunks.length < MAX_DIGEST_CHUNKS;
-    i += DIGEST_CHUNK_CHARS
-  ) {
-    chunks.push(compact.slice(i, i + DIGEST_CHUNK_CHARS));
-  }
+  const digestMax =
+    profile === "express"
+      ? 3072
+      : profile === "fast"
+        ? 4096
+        : profile === "balanced"
+          ? 4096
+          : 6144;
+  const maxAttempts =
+    profile === "express"
+      ? 1
+      : profile === "fast"
+        ? 2
+        : profile === "balanced"
+          ? 2
+          : 3;
 
-  const summaries: string[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i]!;
-    const prompt = `You are compressing slice ${i + 1} of ${chunks.length} from a long PDF transcript into dense study notes. Another step will turn the merged digest into a course.
-
-RULES:
+  const digestRules = `RULES:
 - Preserve **facts**: definitions, formulas, theorems, numbered steps, dates, names, terminology.
 - Preserve **tables, matrices, and enumerated lists VERBATIM**: reproduce any table (e.g. drug tables with names, dosages, half-lives, MAC values, blood/gas partition coefficients, potency ratios, onset/duration, side-effects, contraindications) as a GitHub-flavored **markdown table** (header row + \`|---|\` separator). Keep every proper noun and every number exactly, in the same row/column. NEVER collapse a table into prose or into category names, and never drop, round, or regroup values. Keep each item under the exact category it appears in, and keep mixed-language terms in full, both languages (e.g. "디아제팜(diazepam)").
 - Preserve **structure hints**: chapter/section titles visible in this slice.
-- No JSON, no roleplay.
+- No JSON, no roleplay.${
+    liveLecture
+      ? `
+- This slice may be notes, a speech transcript, slides, on-screen extracts, or a handout — treat it as one source among several. Keep unique content even if you suspect another source repeats it; later steps de-duplicate.`
+      : ""
+  }`;
+
+  async function digestOneBody(
+    body: string,
+    maxChunks: number
+  ): Promise<string> {
+    const chunks: string[] = [];
+    for (
+      let i = 0;
+      i < body.length && chunks.length < maxChunks;
+      i += DIGEST_CHUNK_CHARS
+    ) {
+      chunks.push(body.slice(i, i + DIGEST_CHUNK_CHARS));
+    }
+    const summaries: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i]!;
+      const prompt = `You are compressing slice ${i + 1} of ${chunks.length} from a long source document into dense study notes. Another step will turn the merged digest into a course.
+
+${digestRules}
 
 ${studySnippet ? `Learner context (optional emphasis):\n${studySnippet}\n\n` : ""}--- SLICE ${i + 1}/${chunks.length} ---
 ${chunk}`;
 
-    const digestMax =
-      profile === "express"
-        ? 3072
-        : profile === "fast"
-          ? 4096
-          : profile === "balanced"
-            ? 4096
-            : 6144;
-
-    const msg = await createMessageWithRetries(
-      anthropic,
-      {
-        model,
-        max_tokens: digestMax,
-        temperature: 0.12,
-        messages: [{ role: "user", content: prompt }],
-      },
-      {
-        maxAttempts:
-          profile === "express"
-            ? 1
-            : profile === "fast"
-              ? 2
-              : profile === "balanced"
-                ? 2
-                : 3,
-      }
-    );
-    summaries.push(extractTextBlock(msg));
-    await options?.onChunkDone?.();
+      const msg = await createMessageWithRetries(
+        anthropic,
+        {
+          model,
+          max_tokens: digestMax,
+          temperature: 0.12,
+          messages: [{ role: "user", content: prompt }],
+        },
+        { maxAttempts }
+      );
+      summaries.push(extractTextBlock(msg));
+      await options?.onChunkDone?.();
+    }
+    return summaries.join("\n\n---\n\n");
   }
 
-  const merged = `=== FULL DOCUMENT DIGEST (${chunks.length} slices) ===\n\n${summaries.join("\n\n---\n\n")}`;
+  const { preamble, blocks } = splitCombinedSourceBlocks(compact);
+  if (blocks.length >= 2) {
+    const markerOverhead =
+      blocks.reduce((n, b) => n + b.marker.length + 2, 0) +
+      (preamble.length > 0 ? preamble.length + 2 : 0) +
+      8;
+    const bodyBudget = Math.max(2_000, cap - markerOverhead);
+    const alloc = allocateBudgetAcrossSources(
+      blocks.map((b) => b.body.length),
+      bodyBudget
+    );
+    let chunksLeft = MAX_DIGEST_CHUNKS;
+    const digested: string[] = [];
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i]!;
+      const share = Math.max(800, alloc[i]!);
+      let body: string;
+      if (b.body.length <= share) {
+        body = b.body;
+      } else if (chunksLeft <= 0) {
+        body = truncateMaterial(b.body, share);
+      } else {
+        const maxChunks = Math.max(
+          1,
+          Math.min(
+            chunksLeft,
+            Math.ceil(b.body.length / DIGEST_CHUNK_CHARS)
+          )
+        );
+        const summary = await digestOneBody(b.body, maxChunks);
+        chunksLeft -= maxChunks;
+        body = truncateMaterial(summary, share);
+      }
+      digested.push(`${b.marker}\n${body}`);
+    }
+    return truncateMaterial(
+      [preamble, digested.join("\n\n")].filter((s) => s.length > 0).join("\n\n"),
+      cap
+    );
+  }
+
+  const merged = `=== FULL DOCUMENT DIGEST ===\n\n${await digestOneBody(compact, MAX_DIGEST_CHUNKS)}`;
   return truncateMaterial(merged, cap);
 }
 
@@ -437,17 +501,6 @@ const PIPE_TABLE_RE = /(\|[^\n]+\|\n\|[\s\-:|]+\|(?:\n\|[^\n]+\|)*)/g;
 const MD_IMAGE_RE = /!\[[^\]]*\]\([^)]+\)/g;
 
 /**
- * Matches the per-source delimiter emitted by `combinedSourceMarker`
- * (`src/lib/study-ingest/combine.ts`) and by `assembleModuleSourcesFromPlan`
- * below. When a combined multi-source material exceeds the char budget we split
- * on these markers and allocate the budget FAIRLY across sources instead of
- * first-come-first-served, so a long PDF/transcript that follows an image is
- * never silently dropped. Keep the format in sync with `combinedSourceMarker`.
- */
-const SOURCE_BLOCK_MARKER_RE =
-  /^===== SOURCE \d+\/\d+ — FILE: .+? =====$/gm;
-
-/**
  * Round-robin fair allocation of `bodyBudget` characters across N source bodies:
  * every source gets an equal share; sources that need less donate their slack to
  * sources that need more. Guarantees no single source is starved because another
@@ -500,25 +553,8 @@ function truncateMaterialFairlyAcrossSources(
   text: string,
   maxChars: number
 ): string | null {
-  SOURCE_BLOCK_MARKER_RE.lastIndex = 0;
-  const markers: { index: number; line: string }[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = SOURCE_BLOCK_MARKER_RE.exec(text)) !== null) {
-    markers.push({ index: m.index, line: m[0] });
-  }
-  if (markers.length < 2) return null;
-
-  const preamble = text.slice(0, markers[0]!.index).trim();
-  const blocks: { marker: string; body: string }[] = [];
-  for (let i = 0; i < markers.length; i++) {
-    const start = markers[i]!.index;
-    const end = i + 1 < markers.length ? markers[i + 1]!.index : text.length;
-    const segment = text.slice(start, end);
-    const nl = segment.indexOf("\n");
-    const marker = (nl >= 0 ? segment.slice(0, nl) : segment).trim();
-    const body = (nl >= 0 ? segment.slice(nl + 1) : "").trim();
-    blocks.push({ marker, body });
-  }
+  const { preamble, blocks } = splitCombinedSourceBlocks(text);
+  if (blocks.length < 2) return null;
 
   const markerOverhead =
     blocks.reduce((n, b) => n + b.marker.length + 2, 0) +
@@ -1285,6 +1321,8 @@ function generationContextSuffix(
   if (studyContext) {
     const block = selfStudyBlock(studyContext);
     if (block.trim()) parts.push(block.trim());
+    const live = formatLiveLectureGenerationBlock(studyContext);
+    if (live.trim()) parts.push(live.trim());
   }
   return `\n${parts.join("\n\n")}\n`;
 }
