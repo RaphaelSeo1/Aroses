@@ -5,6 +5,34 @@ import type { MutableRefObject } from "react";
 const AUDIO_CONTEXTS = new WeakMap<MutableRefObject<HTMLAudioElement | null>, AudioContext>();
 const AUDIO_TAILS = new WeakMap<MutableRefObject<HTMLAudioElement | null>, number>();
 
+function startPlaybackLevelSampler(
+  analyser: AnalyserNode,
+  levelRef: MutableRefObject<number>,
+  signal: AbortSignal
+): () => void {
+  const buf = new Uint8Array(analyser.fftSize);
+  let raf = 0;
+  const loop = () => {
+    if (signal.aborted) return;
+    analyser.getByteTimeDomainData(buf as unknown as Uint8Array<ArrayBuffer>);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = ((buf[i] ?? 128) - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / Math.max(1, buf.length));
+    levelRef.current = Math.min(1, Math.max(0, (rms - 0.008) / 0.16));
+    raf = requestAnimationFrame(loop);
+  };
+  raf = requestAnimationFrame(loop);
+  const stop = () => {
+    cancelAnimationFrame(raf);
+    levelRef.current = 0;
+  };
+  signal.addEventListener("abort", stop, { once: true });
+  return stop;
+}
+
 function getAudioContext(
   audioRef: MutableRefObject<HTMLAudioElement | null>
 ): AudioContext {
@@ -31,6 +59,7 @@ async function playDecodedBuffer(
     playbackRate: number;
     audioRef: MutableRefObject<HTMLAudioElement | null>;
     onFirstPlay?: () => void;
+    playbackLevelRef?: MutableRefObject<number>;
   }
 ): Promise<void> {
   if (opts.signal.aborted) return;
@@ -53,11 +82,27 @@ async function playDecodedBuffer(
   opts.onFirstPlay?.();
 
   await new Promise<void>((resolve) => {
-    const finish = () => resolve();
-    source.onended = finish;
     const gain = ctx.createGain();
     source.disconnect();
-    source.connect(gain);
+    let stopLevel: (() => void) | undefined;
+    if (opts.playbackLevelRef) {
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      analyser.connect(gain);
+      stopLevel = startPlaybackLevelSampler(
+        analyser,
+        opts.playbackLevelRef,
+        opts.signal
+      );
+    } else {
+      source.connect(gain);
+    }
+    const finish = () => {
+      stopLevel?.();
+      resolve();
+    };
+    source.onended = finish;
     gain.connect(ctx.destination);
     const fadeIn = Math.min(0.01, duration / 6);
     gain.gain.setValueAtTime(0.4, startAt);
@@ -65,6 +110,7 @@ async function playDecodedBuffer(
     opts.signal.addEventListener(
       "abort",
       () => {
+        stopLevel?.();
         try {
           source.stop();
         } catch {
@@ -109,6 +155,7 @@ async function playMpegArrayBuffer(
     playbackRate: number;
     audioRef: MutableRefObject<HTMLAudioElement | null>;
     onFirstPlay?: () => void;
+    playbackLevelRef?: MutableRefObject<number>;
   }
 ): Promise<void> {
   try {
@@ -122,9 +169,28 @@ async function playMpegArrayBuffer(
   const a = new Audio(url);
   a.playbackRate = opts.playbackRate;
   opts.audioRef.current = a;
+  let stopLevel: (() => void) | undefined;
+  if (opts.playbackLevelRef) {
+    try {
+      const ctx = getAudioContext(opts.audioRef);
+      const src = ctx.createMediaElementSource(a);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      src.connect(analyser);
+      analyser.connect(ctx.destination);
+      stopLevel = startPlaybackLevelSampler(
+        analyser,
+        opts.playbackLevelRef,
+        opts.signal
+      );
+    } catch {
+      /* element already tapped or AudioContext blocked */
+    }
+  }
   let first = true;
   await new Promise<void>((resolve) => {
     const finish = () => {
+      stopLevel?.();
       try {
         URL.revokeObjectURL(url);
       } catch {
@@ -156,6 +222,7 @@ export async function playMpegFromResponse(
     playbackRate: number;
     audioRef: MutableRefObject<HTMLAudioElement | null>;
     onFirstPlay?: () => void;
+    playbackLevelRef?: MutableRefObject<number>;
   }
 ): Promise<void> {
   if (!response.ok || !response.body) {
@@ -183,7 +250,27 @@ export async function playMpegFromResponse(
   audio.playbackRate = opts.playbackRate;
   opts.audioRef.current = audio;
 
+  let stopLevel: (() => void) | undefined;
+  if (opts.playbackLevelRef) {
+    try {
+      const ctx = getAudioContext(opts.audioRef);
+      const src = ctx.createMediaElementSource(audio);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      src.connect(analyser);
+      analyser.connect(ctx.destination);
+      stopLevel = startPlaybackLevelSampler(
+        analyser,
+        opts.playbackLevelRef,
+        opts.signal
+      );
+    } catch {
+      /* element already tapped or AudioContext blocked */
+    }
+  }
+
   const detach = () => {
+    stopLevel?.();
     try {
       URL.revokeObjectURL(objectUrl);
     } catch {

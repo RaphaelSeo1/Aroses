@@ -49,6 +49,19 @@ const MIN_SPEECH_MS = 180;
 const TTS_VOICE_ID =
   process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID || "Rachel";
 
+function rmsFromTimeDomain(buf: Uint8Array): number {
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const v = ((buf[i] ?? 128) - 128) / 128;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / Math.max(1, buf.length));
+}
+
+function levelFromMicRms(rms: number): number {
+  return Math.min(1, Math.max(0, (rms - 0.012) / 0.14));
+}
+
 type MentoredVoiceLanguage = "auto" | "en" | "es" | "fr" | "ko" | "ja" | "zh";
 
 export function useMentoredVoice(opts: {
@@ -166,6 +179,11 @@ export function useMentoredVoice(opts: {
     error: null,
   });
 
+  /** 0..1 mic energy while recording (or barge-in monitoring). */
+  const inputLevelRef = useRef(0);
+  /** 0..1 TTS playback energy while speaking. */
+  const playbackLevelRef = useRef(0);
+
   // ===========================================================================
   // Barge-in VAD monitor
   // ===========================================================================
@@ -182,6 +200,7 @@ export function useMentoredVoice(opts: {
     bargeAnalyserRef.current = null;
     bargeBufRef.current = null;
     bargeStartAtRef.current = 0;
+    inputLevelRef.current = 0;
     if (bargeCtxRef.current) {
       bargeCtxRef.current.close().catch(() => {});
       bargeCtxRef.current = null;
@@ -238,12 +257,8 @@ export function useMentoredVoice(opts: {
         lastSampleAt = sampleNow;
         // TS lib.dom mismatch: AnalyserNode accepts Uint8Array, narrow at call site.
         a.getByteTimeDomainData(buf as unknown as Uint8Array<ArrayBuffer>);
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) {
-          const v = (buf[i] - 128) / 128;
-          sum += v * v;
-        }
-        const rms = Math.sqrt(sum / buf.length);
+        const rms = rmsFromTimeDomain(buf);
+        inputLevelRef.current = levelFromMicRms(rms);
         const now = performance.now();
         if (rms >= bargeRms) {
           if (bargeStartAtRef.current === 0) bargeStartAtRef.current = now;
@@ -297,6 +312,7 @@ export function useMentoredVoice(opts: {
     }
     audioRef.current = null;
     stopBargeMonitor();
+    playbackLevelRef.current = 0;
     setState((s) => ({ ...s, speaking: false }));
   }, [stopBargeMonitor]);
 
@@ -386,6 +402,7 @@ export function useMentoredVoice(opts: {
           playbackRate: playbackRateRef.current,
           audioRef,
           onFirstPlay: () => fireReveal(false),
+          playbackLevelRef,
         });
       } catch (e) {
         if (ac.signal.aborted) return;
@@ -524,6 +541,7 @@ export function useMentoredVoice(opts: {
                   playbackRate: playbackRateRef.current,
                   audioRef,
                   onFirstPlay: () => reveal(false),
+                  playbackLevelRef,
                 });
                 // If for some reason `onFirstPlay` never fired (edge
                 // case: stream ended with 0 bytes), still reveal so
@@ -681,6 +699,7 @@ export function useMentoredVoice(opts: {
     }
     silenceAnalyserRef.current = null;
     silenceBufRef.current = null;
+    inputLevelRef.current = 0;
     if (silenceCtxRef.current) {
       silenceCtxRef.current.close().catch(() => {});
       silenceCtxRef.current = null;
@@ -767,12 +786,8 @@ export function useMentoredVoice(opts: {
           const buf = silenceBufRef.current;
           if (!a || !buf) return;
           a.getByteTimeDomainData(buf as unknown as Uint8Array<ArrayBuffer>);
-          let sum = 0;
-          for (let i = 0; i < buf.length; i++) {
-            const v = (buf[i] - 128) / 128;
-            sum += v * v;
-          }
-          const rms = Math.sqrt(sum / buf.length);
+          const rms = rmsFromTimeDomain(buf);
+          inputLevelRef.current = levelFromMicRms(rms);
           const now = performance.now();
           if (rms > SILENCE_RMS * 2) {
             lastVoiceAt = now;
@@ -932,5 +947,7 @@ export function useMentoredVoice(opts: {
     stopRecording,
     recordUntilSilence,
     transcribe,
+    inputLevelRef,
+    playbackLevelRef,
   };
 }

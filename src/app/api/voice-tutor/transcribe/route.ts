@@ -4,9 +4,7 @@ import {
   transcribeWithWhisper,
   WhisperError,
 } from "@/lib/voice-tutor/transcribe-openai";
-import { canReadStudyMaterial } from "@/lib/voice-tutor/material-access";
-import { getVoiceTutorGate } from "@/lib/voice-tutor/policy";
-import { isUuid } from "@/lib/voice-tutor/uuid";
+import { authorizeVoiceTutorTarget } from "@/lib/voice-tutor/authorize-voice-target";
 import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
 import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 
@@ -61,35 +59,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Recording too large" }, { status: 413 });
   }
 
-  // Tutor Session path: validate session ownership and skip the
-  // material access / voice gate (no per-material cost attribution
-  // on sessions yet).
-  if (typeof sessionIdRaw === "string" && isUuid(sessionIdRaw)) {
-    const { data: sessionRow } = await supabase
-      .from("tutor_sessions")
-      .select("user_id")
-      .eq("id", sessionIdRaw)
-      .maybeSingle();
-    if (!sessionRow || sessionRow.user_id !== user.id) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
-  } else if (typeof materialIdRaw === "string" && isUuid(materialIdRaw)) {
-    const readable = await canReadStudyMaterial(supabase, materialIdRaw);
-    if (!readable) {
-      return NextResponse.json({ error: "Material not found" }, { status: 404 });
-    }
-    const gate = await getVoiceTutorGate({
-      userId: user.id,
-      materialId: materialIdRaw,
-    });
-    if (!gate.allowed) {
-      return NextResponse.json({ error: gate.reason }, { status: 403 });
-    }
-  } else {
-    return NextResponse.json(
-      { error: "Missing materialId or sessionId" },
-      { status: 400 }
-    );
+  const target = await authorizeVoiceTutorTarget(supabase, user.id, {
+    sessionId: sessionIdRaw,
+    materialId: materialIdRaw,
+  });
+  if (!target.ok) {
+    return NextResponse.json({ error: target.error }, { status: target.status });
   }
 
   // When the user is out of voice time, stop the mic too (not just playback) so

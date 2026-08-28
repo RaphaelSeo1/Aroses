@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BrandLogo } from "@/components/BrandLogo";
+import { ChatVoiceTutorButton } from "@/components/chat-voice/ChatVoiceTutorButton";
+import { ChatVoiceTutorOrb } from "@/components/chat-voice/ChatVoiceTutorOrb";
 import { RoseAssistantTabs } from "@/components/RoseAssistantTabs";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
+import { useChatVoiceTutor } from "@/lib/chat-voice/use-chat-voice-tutor";
+import { useT } from "@/lib/i18n/LocaleProvider";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import {
   loadStudyChatMessages,
@@ -497,6 +501,8 @@ export function StudyChatDrawer({
   refineBusy = false,
 }: Props) {
   const router = useRouter();
+  const t = useT();
+  const voiceActiveRef = useRef(false);
   const storageKey = studyChatStorageKey(courseId, materialId);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isControlled = openProp !== undefined;
@@ -633,10 +639,10 @@ export function StudyChatDrawer({
     [navigateTo]
   );
 
-  const send = useCallback(async (textOverride?: string) => {
+  const send = useCallback(async (textOverride?: string): Promise<string | null> => {
     const text = (textOverride ?? input).trim();
     if (!text || loading || actionMode === "navigating" || isStreamingReply) {
-      return;
+      return null;
     }
 
     const prevSnapshot = messages;
@@ -676,7 +682,7 @@ export function StudyChatDrawer({
         );
         setMessages(prevSnapshot);
         if (!textOverride) setInput(text);
-        return;
+        return null;
       }
 
       const payload = body as Partial<StudyChatResponse> & { error?: unknown };
@@ -685,7 +691,7 @@ export function StudyChatDrawer({
         setError("Bad response.");
         setMessages(prevSnapshot);
         if (!textOverride) setInput(text);
-        return;
+        return null;
       }
 
       const options = Array.isArray(payload.options)
@@ -705,49 +711,63 @@ export function StudyChatDrawer({
       setLoading(false);
       setActionMode("idle");
       typewriteAbortRef.current?.abort();
-      const ac = new AbortController();
-      typewriteAbortRef.current = ac;
 
-      setMessages([
-        ...nextMessages,
-        { role: "assistant", content: "", streaming: true },
-      ]);
-
-      try {
-        await typewriteText(
-          reply,
-          (partial) => {
-            setMessages((prev) => {
-              const copy = [...prev];
-              const last = copy[copy.length - 1];
-              if (last?.role === "assistant") {
-                copy[copy.length - 1] = {
-                  ...last,
-                  content: partial,
-                  streaming: true,
-                };
-              }
-              return copy;
-            });
+      if (voiceActiveRef.current) {
+        setMessages([
+          ...nextMessages,
+          {
+            role: "assistant",
+            content: reply,
+            options,
+            trace: completedTrace,
+            streaming: false,
           },
-          ac.signal
-        );
-      } catch {
-        if (ac.signal.aborted) return;
+        ]);
+      } else {
+        const ac = new AbortController();
+        typewriteAbortRef.current = ac;
+
+        setMessages([
+          ...nextMessages,
+          { role: "assistant", content: "", streaming: true },
+        ]);
+
+        try {
+          await typewriteText(
+            reply,
+            (partial) => {
+              setMessages((prev) => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last?.role === "assistant") {
+                  copy[copy.length - 1] = {
+                    ...last,
+                    content: partial,
+                    streaming: true,
+                  };
+                }
+                return copy;
+              });
+            },
+            ac.signal
+          );
+        } catch {
+          if (ac.signal.aborted) return null;
+        }
+
+        if (ac.signal.aborted) return null;
+
+        setMessages([
+          ...nextMessages,
+          {
+            role: "assistant",
+            content: reply,
+            options,
+            trace: completedTrace,
+            streaming: false,
+          },
+        ]);
       }
-
-      if (ac.signal.aborted) return;
-
-      setMessages([
-        ...nextMessages,
-        {
-          role: "assistant",
-          content: reply,
-          options,
-          trace: completedTrace,
-          streaming: false,
-        },
-      ]);
 
       // Only auto-navigate when the student explicitly asked to go somewhere.
       // Model "action" after a normal Q&A is a suggestion — they must tap an option.
@@ -774,10 +794,12 @@ export function StudyChatDrawer({
           );
         }
       }
+      return reply;
     } catch {
       setError("Network error.");
       setMessages(prevSnapshot);
       if (!textOverride) setInput(text);
+      return null;
     } finally {
       setLoading(false);
       if (!willNavigate) setActionMode("idle");
@@ -793,6 +815,18 @@ export function StudyChatDrawer({
     messages,
     scheduleNavigate,
   ]);
+
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const voice = useChatVoiceTutor({
+    materialId,
+    sendAndWait: (text) => sendRef.current(text),
+  });
+  voiceActiveRef.current = voice.active;
+
+  useEffect(() => {
+    if (!open && voice.active) voice.exit();
+  }, [open, voice.active, voice.exit]);
 
   const pickOption = useCallback(
     (option: StudyChatOption) => {
@@ -863,6 +897,14 @@ export function StudyChatDrawer({
             : "none",
         }}
       >
+        {voice.active ? (
+          <ChatVoiceTutorOrb
+            phase={voice.phase}
+            inputLevelRef={voice.inputLevelRef}
+            playbackLevelRef={voice.playbackLevelRef}
+            onExit={voice.exit}
+          />
+        ) : null}
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
           <div className="min-w-0">
             <div className="flex items-center gap-2.5">
@@ -1038,23 +1080,44 @@ export function StudyChatDrawer({
               <p className="px-1 text-[10px] text-zinc-400">
                 Enter to send · Shift+Enter for new line
               </p>
-              <button
-                type="button"
-                disabled={
-                  loading ||
-                  showActionProgress ||
-                  isStreamingReply ||
-                  !input.trim()
-                }
-                onClick={() => void send()}
-                tabIndex={open ? 0 : -1}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-brand px-3.5 text-[12px] font-semibold text-white transition hover:bg-brand-hover disabled:opacity-40"
-              >
-                {showActionProgress || isStreamingReply ? (
-                  <ActionSpinner className="h-3.5 w-3.5" />
+              <div className="flex flex-col items-end gap-1">
+                <div className="flex items-center gap-1.5">
+                <ChatVoiceTutorButton
+                  active={voice.active}
+                  disabled={voice.blocked}
+                  disabledReason={
+                    voice.blocked ? t.billing.voiceCapReached : undefined
+                  }
+                  onClick={voice.toggle}
+                />
+                <button
+                  type="button"
+                  disabled={
+                    loading ||
+                    showActionProgress ||
+                    isStreamingReply ||
+                    !input.trim()
+                  }
+                  onClick={() => void send()}
+                  tabIndex={open ? 0 : -1}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-brand px-3.5 text-[12px] font-semibold text-white transition hover:bg-brand-hover disabled:opacity-40"
+                >
+                  {showActionProgress || isStreamingReply ? (
+                    <ActionSpinner className="h-3.5 w-3.5" />
+                  ) : null}
+                  Send
+                </button>
+                </div>
+                {voice.capped ? (
+                  <p className="max-w-[14rem] text-right text-[10px] leading-snug text-amber-700 dark:text-amber-300">
+                    {t.billing.voiceCapReached}
+                  </p>
+                ) : voice.error ? (
+                  <p className="max-w-[14rem] text-right text-[10px] leading-snug text-red-600 dark:text-red-400">
+                    {voice.error}
+                  </p>
                 ) : null}
-                Send
-              </button>
+              </div>
             </div>
           </div>
         </div>

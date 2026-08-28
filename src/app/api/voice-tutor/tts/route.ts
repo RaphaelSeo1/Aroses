@@ -5,10 +5,8 @@ import {
   streamElevenLabsTts,
   synthesizeElevenLabs,
 } from "@/lib/voice-tutor/elevenlabs-tts";
-import { canReadStudyMaterial } from "@/lib/voice-tutor/material-access";
-import { getVoiceTutorGate } from "@/lib/voice-tutor/policy";
+import { authorizeVoiceTutorTarget } from "@/lib/voice-tutor/authorize-voice-target";
 import { resolveTtsVoiceId } from "@/lib/voice-tutor/resolve-tts-voice";
-import { isUuid } from "@/lib/voice-tutor/uuid";
 import {
   checkVoiceAllowance,
   estimateTtsSeconds,
@@ -75,50 +73,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "text too long" }, { status: 400 });
   }
 
-  // Two auth paths: study material (course / Mentored Learning) OR
-  // tutor session. Exactly one must be valid. Tutor sessions skip
-  // the canReadStudyMaterial check (they aren't tied to a material)
-  // and never use a per-course cloned voice.
-  const sessionIdRaw =
-    typeof b.sessionId === "string" && isUuid(b.sessionId) ? b.sessionId : "";
-  const materialIdRaw =
-    typeof b.materialId === "string" && isUuid(b.materialId) ? b.materialId : "";
-
-  let courseId: string | undefined;
-  if (sessionIdRaw) {
-    const { data: sessionRow } = await supabase
-      .from("tutor_sessions")
-      .select("user_id")
-      .eq("id", sessionIdRaw)
-      .maybeSingle();
-    if (!sessionRow || sessionRow.user_id !== user.id) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    }
-    // No course-cloned voice for tutor sessions.
-    courseId = undefined;
-  } else if (materialIdRaw) {
-    courseId =
-      typeof b.courseId === "string" && isUuid(b.courseId)
-        ? b.courseId
-        : undefined;
-    const readable = await canReadStudyMaterial(supabase, materialIdRaw);
-    if (!readable) {
-      return NextResponse.json({ error: "Material not found" }, { status: 404 });
-    }
-    const gate = await getVoiceTutorGate({
-      userId: user.id,
-      materialId: materialIdRaw,
-      courseId,
-    });
-    if (!gate.allowed) {
-      return NextResponse.json({ error: gate.reason }, { status: 403 });
-    }
-  } else {
-    return NextResponse.json(
-      { error: "Missing materialId or sessionId" },
-      { status: 400 }
-    );
+  // Auth: study material, tutor session, or live-lecture session.
+  const target = await authorizeVoiceTutorTarget(supabase, user.id, {
+    sessionId: b.sessionId,
+    materialId: b.materialId,
+    courseId: b.courseId,
+  });
+  if (!target.ok) {
+    return NextResponse.json({ error: target.error }, { status: target.status });
   }
+  const courseId = target.courseId;
 
   // Voice cap (applies to every surface — mentored, tutor sessions, dock).
   // Over the monthly allowance → 402 so the client falls back to text mode.

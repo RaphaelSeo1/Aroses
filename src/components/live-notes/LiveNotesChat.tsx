@@ -9,8 +9,12 @@ import {
   type FormEvent,
   type RefObject,
 } from "react";
+import { ChatVoiceTutorButton } from "@/components/chat-voice/ChatVoiceTutorButton";
+import { ChatVoiceTutorOrb } from "@/components/chat-voice/ChatVoiceTutorOrb";
 import type { NotesPanelHandle } from "@/components/immersive/NotesPanel";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
+import { useChatVoiceTutor } from "@/lib/chat-voice/use-chat-voice-tutor";
+import { useT } from "@/lib/i18n/LocaleProvider";
 import {
   sanitizeChatNotesMarkdown,
   splitStudentFacingReply,
@@ -174,6 +178,7 @@ export function LiveNotesChat({
   enqueueWriterJob,
   onActivity,
   active = true,
+  voiceCapped = false,
 }: {
   sessionId: string;
   lectureTitle: string;
@@ -189,6 +194,8 @@ export function LiveNotesChat({
   ) => void;
   /** When the chat tab is shown — re-pin to the latest turn. */
   active?: boolean;
+  /** Monthly voice allowance already exhausted (live transcription banner). */
+  voiceCapped?: boolean;
 }) {
   const [turns, setTurns] = useState<ChatTurn[]>(() => loadTurns(sessionId));
   const [draft, setDraft] = useState("");
@@ -212,6 +219,8 @@ export function LiveNotesChat({
   noteInstructionRef.current = noteInstruction;
   const queuedPdfsRef = useRef(queuedPdfs);
   queuedPdfsRef.current = queuedPdfs;
+  const voiceActiveRef = useRef(false);
+  const t = useT();
 
   const stickToLatest = useCallback(() => {
     const el = scrollRef.current;
@@ -562,16 +571,16 @@ export function LiveNotesChat({
   }, [attaching, busy, sessionId]);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string): Promise<string | null> => {
       const typed = text.trim();
-      if (busy || attaching) return;
+      if (busy || attaching) return null;
       let pdf = pendingPdfRef.current;
       if (queuedPdfsRef.current.length > 0) {
         const attached = await confirmQueuedPdfs();
-        if (!attached) return;
+        if (!attached) return null;
         pdf = attached;
       }
-      if (!typed && !pdf) return;
+      if (!typed && !pdf) return null;
       const message = typed || `Look at this PDF (${pdf!.fileName}).`;
       setDraft("");
       setBusy(true);
@@ -660,6 +669,13 @@ export function LiveNotesChat({
             revealReply(source);
           }
           const leftover = source.slice(revealed);
+          if (voiceActiveRef.current) {
+            revealed = source.length;
+            revealReply(source);
+            if (sseDone) break;
+            await sleep(REPLY_TICK_MS);
+            continue;
+          }
           if (!leftover) {
             if (sseDone) break;
             await sleep(REPLY_TICK_MS);
@@ -813,7 +829,10 @@ export function LiveNotesChat({
         inputRef.current?.focus();
       }
 
-      if (!failed && noteOps.length > 0) {
+      if (failed) return null;
+      let spoken = visibleSource().trim();
+
+      if (noteOps.length > 0) {
         onActivity(
           "status",
           noteOpCount === 1
@@ -824,7 +843,7 @@ export function LiveNotesChat({
           noteOps,
           visibleReplyForStream(pendingReply, true)
         );
-      } else if (!failed && looksLikeNoteEditRequest(message)) {
+      } else if (looksLikeNoteEditRequest(message)) {
         const replyVisible = visibleReplyForStream(pendingReply, true);
         const replyNotes = sanitizeChatNotesMarkdown(replyVisible);
         const targetId =
@@ -857,6 +876,7 @@ export function LiveNotesChat({
             /^\s*[-*]\s/m.test(replyVisible.trim())
           ) {
             revealReply("Updated your notes.");
+            spoken = "Updated your notes.";
           }
         } else {
           onActivity(
@@ -865,6 +885,7 @@ export function LiveNotesChat({
           );
         }
       }
+      return spoken || null;
     },
     [
       applyNoteOps,
@@ -879,13 +900,34 @@ export function LiveNotesChat({
     ]
   );
 
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const voice = useChatVoiceTutor({
+    sessionId,
+    sendAndWait: (text) => sendRef.current(text),
+    blocked: voiceCapped,
+  });
+  voiceActiveRef.current = voice.active;
+
+  useEffect(() => {
+    if (!active && voice.active) voice.exit();
+  }, [active, voice.active, voice.exit]);
+
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     void send(draft);
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {voice.active ? (
+        <ChatVoiceTutorOrb
+          phase={voice.phase}
+          inputLevelRef={voice.inputLevelRef}
+          playbackLevelRef={voice.playbackLevelRef}
+          onExit={voice.exit}
+        />
+      ) : null}
       <div
         ref={scrollRef}
         className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3"
@@ -1140,23 +1182,38 @@ export function LiveNotesChat({
                     : "PDF · Enter to send"}
             </p>
           </div>
-          <button
-            type="submit"
-            disabled={
-              busy ||
-              attaching ||
-              (!draft.trim() && !pendingPdf && queuedPdfs.length === 0)
-            }
-            className="rounded-full bg-rose-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
-          >
-            {busy
-              ? turns.some((t) => t.id === streamingId && t.content)
-                ? "Writing…"
-                : "Thinking…"
-              : "Send"}
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <ChatVoiceTutorButton
+              active={voice.active}
+              disabled={voice.blocked}
+              disabledReason={
+                voice.blocked ? t.billing.voiceCapReached : undefined
+              }
+              onClick={voice.toggle}
+            />
+            <button
+              type="submit"
+              disabled={
+                busy ||
+                attaching ||
+                (!draft.trim() && !pendingPdf && queuedPdfs.length === 0)
+              }
+              className="rounded-full bg-rose-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+            >
+              {busy
+                ? turns.some((turn) => turn.id === streamingId && turn.content)
+                  ? "Writing…"
+                  : "Thinking…"
+                : "Send"}
+            </button>
+          </div>
         </div>
       </form>
+      {voice.error ? (
+        <p className="px-2.5 pb-2 text-[10px] leading-snug text-red-600 dark:text-red-400">
+          {voice.error}
+        </p>
+      ) : null}
     </div>
   );
 }

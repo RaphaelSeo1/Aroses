@@ -30,6 +30,10 @@ const en = {
   yes: "Yes",
   no: "No",
   saveLabel: "Save",
+  voiceTutor: "Voice tutor",
+  voiceTutorListening: "Listening",
+  voiceTutorSpeaking: "Rose is speaking",
+  voiceTutorExit: "Exit voice tutor",
 };
 
 const ko: typeof en = {
@@ -64,6 +68,10 @@ const ko: typeof en = {
   yes: "예",
   no: "아니요",
   saveLabel: "저장",
+  voiceTutor: "음성 튜터",
+  voiceTutorListening: "듣는 중",
+  voiceTutorSpeaking: "Rose가 말하는 중",
+  voiceTutorExit: "음성 튜터 종료",
 };
 
 export const common = { en, ko };

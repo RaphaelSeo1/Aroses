@@ -1706,6 +1706,7 @@ export function LiveNotesSurface({
                   pushAiActivity(kind, message, loc)
                 }
                 active={railOpen && railTab === "chat"}
+                voiceCapped={voiceCapped}
               />
             </div>
           </aside>
