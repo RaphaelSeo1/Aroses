@@ -1912,6 +1912,7 @@ export function TutorSessionRunner({
           <div className="h-full min-h-0">
             <NotesPanel
               notesEndpoint={`/api/tutor-session/${initial.id}/notes`}
+              tutorSessionId={initial.id}
               lessonTitle={initial.title}
               courseTitle={
                 initial.modeTag

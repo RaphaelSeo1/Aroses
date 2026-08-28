@@ -1,6 +1,9 @@
+import { isNotesFocusBucketId } from "@/lib/notes/notes-focus-bucket";
+
 /**
  * Delete selected review/practice decks. Prefers deleting the study material;
  * if the user can't edit that row but owns the parent course, delete the course.
+ * The notes-only focus deck is deleted via /api/notes/focus-questions.
  */
 export async function deleteReviewMaterials(
   items: { materialId: string; courseId: string | null }[]
@@ -10,6 +13,12 @@ export async function deleteReviewMaterials(
   const deletedCourseIds = new Set<string>();
 
   for (const item of items) {
+    if (isNotesFocusBucketId(item.materialId)) {
+      const res = await fetch("/api/notes/focus-questions", { method: "DELETE" });
+      if (res.ok) ok += 1;
+      else failed += 1;
+      continue;
+    }
     if (item.courseId && deletedCourseIds.has(item.courseId)) {
       ok += 1;
       continue;

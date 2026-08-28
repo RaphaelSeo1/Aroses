@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload, CourseQuizItem } from "@/types/course";
 import type { SrsRating } from "@/lib/srs-sm2";
+import {
+  isNotesFocusBucketId,
+  NOTES_FOCUS_BUCKET_ID,
+} from "@/lib/notes/notes-focus-bucket";
 
 /**
  * GET /api/srs/session
@@ -212,27 +216,58 @@ export async function GET(request: Request) {
   const personalNew: SessionCard[] = [];
 
   if (scope !== "module") {
-    let personalQuery = supabase
-      .from("user_personal_quiz_items")
-      .select(
-        "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history"
-      )
-      .eq("user_id", user.id)
-      .order("due_at", { ascending: true });
+    const personalSelect =
+      "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history, source_label";
 
-    if (allowedMaterialIds && allowedMaterialIds.size > 0) {
-      personalQuery = personalQuery.in("material_id", [...allowedMaterialIds]);
+    const uuids =
+      allowedMaterialIds && allowedMaterialIds.size > 0
+        ? [...allowedMaterialIds].filter((id) => UUID_RE.test(id))
+        : null;
+    const includeNotes =
+      !allowedMaterialIds ||
+      allowedMaterialIds.size === 0 ||
+      [...allowedMaterialIds].some((id) => isNotesFocusBucketId(id));
+
+    const personalRows: Record<string, unknown>[] = [];
+    if (uuids === null) {
+      const { data } = await supabase
+        .from("user_personal_quiz_items")
+        .select(personalSelect)
+        .eq("user_id", user.id)
+        .order("due_at", { ascending: true });
+      personalRows.push(...((data ?? []) as Record<string, unknown>[]));
+    } else {
+      if (uuids.length > 0) {
+        const { data } = await supabase
+          .from("user_personal_quiz_items")
+          .select(personalSelect)
+          .eq("user_id", user.id)
+          .in("material_id", uuids)
+          .order("due_at", { ascending: true });
+        personalRows.push(...((data ?? []) as Record<string, unknown>[]));
+      }
+      if (includeNotes) {
+        const { data } = await supabase
+          .from("user_personal_quiz_items")
+          .select(personalSelect)
+          .eq("user_id", user.id)
+          .is("material_id", null)
+          .order("due_at", { ascending: true });
+        personalRows.push(...((data ?? []) as Record<string, unknown>[]));
+      }
     }
-
-    const { data: personalRows } = await personalQuery;
 
     // Hydrate materials for personal cards that aren't in the owned map
     // (shared / Explore / legacy course-owner rows). Never drop a user's own
     // focus card just because they don't own the underlying study_materials row.
     const missingMaterialIds = new Set<string>();
     for (const row of personalRows ?? []) {
-      const mid = normId(row.material_id as string);
-      if (mid && !materialById.has(mid)) missingMaterialIds.add(mid);
+      const mid = row.material_id
+        ? normId(row.material_id as string)
+        : "";
+      if (mid && !isNotesFocusBucketId(mid) && !materialById.has(mid)) {
+        missingMaterialIds.add(mid);
+      }
     }
     if (missingMaterialIds.size > 0) {
       const { data: extraMats } = await supabase
@@ -248,9 +283,14 @@ export async function GET(request: Request) {
     }
 
     for (const row of personalRows ?? []) {
-      const mid = normId(row.material_id as string);
-      const mat = materialById.get(mid) ?? stubMaterial(mid);
-      const rowModuleId = Number(row.module_id);
+      const rawMid = row.material_id as string | null;
+      const isNotesOnly = !rawMid;
+      const mid = isNotesOnly ? NOTES_FOCUS_BUCKET_ID : normId(rawMid);
+      const mat = isNotesOnly
+        ? stubMaterial(NOTES_FOCUS_BUCKET_ID)
+        : materialById.get(mid) ?? stubMaterial(mid);
+      const rowModuleId =
+        row.module_id == null ? 0 : Number(row.module_id);
       if (moduleIdFilter != null && rowModuleId !== moduleIdFilter) continue;
       const question = row.item as CourseQuizItem;
       if (!question || typeof question !== "object") continue;
@@ -263,17 +303,23 @@ export async function GET(request: Request) {
 
       const dueIso = (row.due_at as string) ?? nowIso;
       const isDue = new Date(dueIso).getTime() <= Date.now();
+      const notesLabel =
+        typeof row.source_label === "string" && row.source_label.trim()
+          ? row.source_label.trim()
+          : "Focus questions";
 
       const card: SessionCard = {
         kind: "personal",
         cardKey: `personal:${row.id}`,
         personalItemId: row.id as string,
-        materialId: mat.id,
-        fileName: mat.file_name ?? "Untitled upload",
-        courseId: deriveCourseId(mat),
-        courseTitle: deriveCourseTitle(mat),
+        materialId: isNotesOnly ? NOTES_FOCUS_BUCKET_ID : mat.id,
+        fileName: isNotesOnly ? notesLabel : (mat.file_name ?? "Untitled upload"),
+        courseId: isNotesOnly ? null : deriveCourseId(mat),
+        courseTitle: isNotesOnly ? "Notes" : deriveCourseTitle(mat),
         moduleId: rowModuleId,
-        moduleTitle: lookupModuleTitle(mat.course_payload, rowModuleId),
+        moduleTitle: isNotesOnly
+          ? notesLabel
+          : lookupModuleTitle(mat.course_payload, rowModuleId),
         question,
         srs: {
           ease: Number(row.srs_ease) || 2.5,
@@ -366,7 +412,7 @@ function collectMaterialIds(
   const ids = new Set<string>();
   const candidate = (s: string) => {
     const t = normId(s);
-    if (t && UUID_RE.test(t)) ids.add(t);
+    if (t && (UUID_RE.test(t) || isNotesFocusBucketId(t))) ids.add(t);
   };
   if (single) candidate(single);
   if (many) {

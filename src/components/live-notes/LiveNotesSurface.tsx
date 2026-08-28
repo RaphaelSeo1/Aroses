@@ -1476,6 +1476,8 @@ export function LiveNotesSurface({
             notesEndpoint={`/api/live-notes/${sessionId}/notes`}
             lessonTitle={liveTitle}
             courseTitle={courseTitle}
+            noteId={session.userNoteId ?? undefined}
+            liveSessionId={sessionId}
             suggestions={[]}
             onConsumeSuggestion={() => {}}
             autoGenerate={autoGenerate}

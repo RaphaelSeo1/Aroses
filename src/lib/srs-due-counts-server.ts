@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SrsDueCounts } from "@/lib/srs-due";
+import {
+  isNotesFocusBucketId,
+  NOTES_FOCUS_BUCKET_ID,
+} from "@/lib/notes/notes-focus-bucket";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -31,6 +35,28 @@ function deriveCourseTitle(m: MaterialRow): string | null {
   if (!c) return null;
   if (Array.isArray(c)) return c[0]?.title ?? null;
   return c.title ?? null;
+}
+
+function ensureNotesBucket(
+  byMaterial: Map<string, SrsDueCounts["byMaterial"][number]>,
+  label: string | null
+): SrsDueCounts["byMaterial"][number] {
+  let bucket = byMaterial.get(NOTES_FOCUS_BUCKET_ID);
+  if (!bucket) {
+    bucket = {
+      materialId: NOTES_FOCUS_BUCKET_ID,
+      fileName: label || "Focus questions",
+      courseId: null,
+      courseTitle: "Notes",
+      module: 0,
+      personal: 0,
+      total: 0,
+    };
+    byMaterial.set(NOTES_FOCUS_BUCKET_ID, bucket);
+  } else if (label && bucket.fileName === "Focus questions") {
+    bucket.fileName = label;
+  }
+  return bucket;
 }
 
 function ensureBucket(
@@ -99,7 +125,7 @@ export async function fetchSrsDueCountsForUser(
 
   let perQ = supabase
     .from("user_personal_quiz_items")
-    .select("material_id")
+    .select("material_id, source_label")
     .eq("user_id", userId)
     .lte("due_at", nowIso);
   if (materialFilter) perQ = perQ.eq("material_id", materialFilter);
@@ -109,8 +135,12 @@ export async function fetchSrsDueCountsForUser(
   // shared / legacy). Hydrate those materials so due counts aren't silently 0.
   const missingIds = new Set<string>();
   for (const row of perRows ?? []) {
-    const mid = normId(row.material_id as string);
-    if (mid && !byMaterial.has(mid)) missingIds.add(mid);
+    const mid = row.material_id
+      ? normId(row.material_id as string)
+      : NOTES_FOCUS_BUCKET_ID;
+    if (mid && !isNotesFocusBucketId(mid) && !byMaterial.has(mid)) {
+      missingIds.add(mid);
+    }
   }
   if (missingIds.size > 0) {
     const { data: extraMats } = await supabase
@@ -124,8 +154,16 @@ export async function fetchSrsDueCountsForUser(
   }
 
   for (const row of perRows ?? []) {
-    const mid = normId(row.material_id as string);
-    const bucket = ensureBucket(byMaterial, mid, null);
+    const mid = row.material_id
+      ? normId(row.material_id as string)
+      : NOTES_FOCUS_BUCKET_ID;
+    const label =
+      typeof row.source_label === "string" && row.source_label.trim()
+        ? row.source_label.trim()
+        : null;
+    const bucket = isNotesFocusBucketId(mid)
+      ? ensureNotesBucket(byMaterial, label)
+      : ensureBucket(byMaterial, mid, null);
     bucket.personal += 1;
   }
 

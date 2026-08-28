@@ -86,6 +86,7 @@ const en = {
   deleteSelectedWarning:
     "This permanently deletes the selected courses, including uploads, lessons, quizzes, and review cards. This cannot be undone.",
   deleteSelectedError: "Could not delete some courses. Try again.",
+  notesFocusDeck: "From notes",
 };
 
 const ko: typeof en = {
@@ -176,6 +177,7 @@ const ko: typeof en = {
   deleteSelectedWarning:
     "선택한 코스와 업로드, 레슨, 퀴즈, 복습 카드가 영구적으로 삭제돼요. 되돌릴 수 없어요.",
   deleteSelectedError: "일부 코스를 삭제하지 못했어요. 다시 시도해 주세요.",
+  notesFocusDeck: "노트에서",
 };
 
 export const review = { en, ko };

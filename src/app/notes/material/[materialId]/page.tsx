@@ -83,6 +83,7 @@ export default async function MaterialNotesPage(props: {
           </div>
           <NotesDocView
             notesEndpoint={`/api/mentored/notes/${materialId}`}
+            materialId={materialId}
             title={title}
             subtitle={courseTitle}
             initialContentJson={notesRes.data?.content_json ?? EMPTY_DOC}

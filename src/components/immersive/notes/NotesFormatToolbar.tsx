@@ -64,10 +64,18 @@ export function NotesFormatToolbar({
   editor,
   uploadingImage,
   onPickImage,
+  onAddToFocus,
+  addToFocusLabel,
+  addToFocusTitle,
+  addToFocusBusy,
 }: {
   editor: Editor;
   uploadingImage?: boolean;
   onPickImage: () => void;
+  onAddToFocus?: () => void;
+  addToFocusLabel?: string;
+  addToFocusTitle?: string;
+  addToFocusBusy?: boolean;
 }) {
   const s = useEditorState({
     editor,
@@ -247,10 +255,26 @@ export function NotesFormatToolbar({
           <Icon>
             <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
             <circle cx="5.2" cy="6.2" r="1.1" />
-            <path d="M1.8 12.2l3.8-3.6 2.4 2.2 2.6-3.2 3.6 4.6" />
+          <path d="M1.8 12.2l3.8-3.6 2.4 2.2 2.6-3.2 3.6 4.6" />
           </Icon>
         )}
       </ToolBtn>
+      {onAddToFocus ? (
+        <>
+          <Divider />
+          <button
+            type="button"
+            title={addToFocusTitle ?? addToFocusLabel ?? "Add to focus questions"}
+            aria-label={addToFocusTitle ?? addToFocusLabel ?? "Add to focus questions"}
+            disabled={addToFocusBusy}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onAddToFocus}
+            className="inline-flex h-7 items-center rounded-md px-2 text-[11px] font-semibold text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            {addToFocusBusy ? "…" : (addToFocusLabel ?? "Focus")}
+          </button>
+        </>
+      ) : null}
     </div>
   );
 }

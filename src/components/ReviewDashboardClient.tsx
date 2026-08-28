@@ -9,6 +9,7 @@ import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { deleteReviewMaterials } from "@/lib/review-delete-materials";
 import { useSrsDueCounts, type SrsDueByMaterial } from "@/lib/srs-due";
+import { isNotesFocusBucketId } from "@/lib/notes/notes-focus-bucket";
 
 /**
  * Global Review dashboard.
@@ -497,9 +498,15 @@ function CourseRow({
               : "text-zinc-900 dark:text-zinc-100"
           }`}
         >
-          {material.courseTitle ?? material.fileName}
+          {isNotesFocusBucketId(material.materialId)
+            ? t.review.notesFocusDeck
+            : (material.courseTitle ?? material.fileName)}
         </p>
-        {material.courseTitle && material.courseTitle !== material.fileName ? (
+        {isNotesFocusBucketId(material.materialId) ? (
+          <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
+            {material.fileName}
+          </p>
+        ) : material.courseTitle && material.courseTitle !== material.fileName ? (
           <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
             {material.fileName}
           </p>

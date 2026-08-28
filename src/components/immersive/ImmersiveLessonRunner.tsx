@@ -2957,6 +2957,7 @@ export function ImmersiveLessonRunner({
           <NotesPanel
             key="mentored-notes-panel"
             materialId={materialId}
+            moduleId={activeModule.id}
             lessonTitle={activeModule.title}
             courseTitle={course.title}
             suggestions={noteSuggestions}
@@ -3022,6 +3023,7 @@ export function ImmersiveLessonRunner({
                   <NotesPanel
                     key="mentored-notes-panel"
                     materialId={materialId}
+                    moduleId={activeModule.id}
                     lessonTitle={activeModule.title}
                     courseTitle={course.title}
                     suggestions={noteSuggestions}

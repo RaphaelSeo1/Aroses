@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
+import { NOTES_FOCUS_BUCKET_ID } from "@/lib/notes/notes-focus-bucket";
 
 /**
  * GET /api/srs/practice-scope
@@ -81,12 +82,14 @@ export async function GET() {
     .select("material_id")
     .eq("user_id", user.id);
   for (const row of personalRows ?? []) {
-    const id = (row.material_id as string).toLowerCase();
+    const id = row.material_id
+      ? (row.material_id as string).toLowerCase()
+      : NOTES_FOCUS_BUCKET_ID;
     personalByMaterial.set(id, (personalByMaterial.get(id) ?? 0) + 1);
   }
 
   const missingPersonalMats = [...personalByMaterial.keys()].filter(
-    (id) => !materialById.has(id)
+    (id) => id !== NOTES_FOCUS_BUCKET_ID && !materialById.has(id)
   );
   if (missingPersonalMats.length > 0) {
     const { data: extraMats } = await supabase
@@ -154,6 +157,19 @@ export async function GET() {
     })
     .filter((m) => m.total > 0)
     .sort((a, b) => b.total - a.total);
+
+  const notesCount = personalByMaterial.get(NOTES_FOCUS_BUCKET_ID) ?? 0;
+  if (notesCount > 0) {
+    out.push({
+      materialId: NOTES_FOCUS_BUCKET_ID,
+      fileName: "Focus questions",
+      courseId: null,
+      courseTitle: "Notes",
+      moduleQuestions: 0,
+      personalQuestions: notesCount,
+      total: notesCount,
+    });
+  }
 
   const totals = out.reduce(
     (acc, m) => {

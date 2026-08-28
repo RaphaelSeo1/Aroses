@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { deleteReviewMaterials } from "@/lib/review-delete-materials";
+import { isNotesFocusBucketId } from "@/lib/notes/notes-focus-bucket";
 
 type ScopeMaterial = {
   materialId: string;
@@ -219,9 +220,15 @@ export function FreePracticePanel({
                   />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                      {m.courseTitle ?? m.fileName}
+                      {isNotesFocusBucketId(m.materialId)
+                        ? t.review.notesFocusDeck
+                        : (m.courseTitle ?? m.fileName)}
                     </p>
-                    {m.courseTitle && m.courseTitle !== m.fileName ? (
+                    {isNotesFocusBucketId(m.materialId) ? (
+                      <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
+                        {m.fileName}
+                      </p>
+                    ) : m.courseTitle && m.courseTitle !== m.fileName ? (
                       <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
                         {m.fileName}
                       </p>

@@ -24,8 +24,9 @@ import { NotesTableHoverControls } from "./notes/NotesTableHoverControls";
 import { LectureSummaryButton } from "./notes/LectureSummaryButton";
 import { AI_APPEND_META, Provenance, REVISION_DECO_META } from "./notes/Provenance";
 import { trailingEmptyParagraphRange } from "@/lib/notes/empty-paragraph";
+import { buildFocusExcerpt } from "@/lib/notes/focus-excerpt";
 import { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
-import { promptDialog, alertDialog } from "@/components/AppDialogs";
+import { promptDialog, alertDialog, confirmDialog } from "@/components/AppDialogs";
 import { EmojiPickerButton } from "@/components/EmojiPickerButton";
 import {
   readRoseAppendedChunkIds,
@@ -35,6 +36,7 @@ import {
 import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
 import { NOTE_INSTRUCTION_MAX } from "@/lib/ai/note-instruction";
 import { useT } from "@/lib/i18n/LocaleProvider";
+import { tf } from "@/lib/i18n/format";
 import {
   parseInlineMarkdown,
   sanitizeIncompleteInlineMarkdown,
@@ -273,6 +275,10 @@ export function NotesPanel({
   onNoteInstructionChange,
   onNoteInstructionSave,
   lectureRecapEndpoint = null,
+  noteId,
+  liveSessionId,
+  tutorSessionId,
+  moduleId,
 }: {
   /**
    * Mentored Learning path — when set, the panel reads/writes
@@ -333,6 +339,14 @@ export function NotesPanel({
    * Finish has written one.
    */
   lectureRecapEndpoint?: string | null;
+  /** Standalone `/notes/doc` note this editor is bound to. */
+  noteId?: string;
+  /** Live lecture session id (course or standalone capture). */
+  liveSessionId?: string;
+  /** Tutor session whose live notes this editor is showing. */
+  tutorSessionId?: string;
+  /** Preferred course module when attaching generated focus cards. */
+  moduleId?: number;
 }) {
   const t = useT();
   const endpoint = notesEndpoint ?? `/api/mentored/notes/${materialId}`;
@@ -448,6 +462,7 @@ export function NotesPanel({
   const pickImageRef = useRef<() => void>(() => {});
   const insertNoteImageRef = useRef<(file: File) => Promise<void>>(async () => {});
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [focusBusy, setFocusBusy] = useState(false);
 
   // Scrollable document-body wrapper — used by `preserveSelection` appends to
   // decide whether to follow new content (only when already near the bottom).
@@ -1137,6 +1152,78 @@ export function NotesPanel({
     };
   }, [editor, editorRef]);
 
+  const addSelectionToFocus = useCallback(async () => {
+    if (!editor || editor.isDestroyed || focusBusy) return;
+    const { from, to } = editor.state.selection;
+    const excerpt = buildFocusExcerpt({ doc: editor.state.doc, from, to });
+    if (excerpt.corpus.trim().length < 20) {
+      await alertDialog({
+        title: t.immersive.focusTooShortTitle,
+        body: t.immersive.focusTooShortBody,
+      });
+      return;
+    }
+    const ok = await confirmDialog({
+      title: t.immersive.focusConfirmTitle,
+      body: excerpt.usedSection
+        ? t.immersive.focusConfirmBodySection
+        : t.immersive.focusConfirmBodySelection,
+      confirmLabel: t.immersive.focusConfirmAdd,
+    });
+    if (!ok) return;
+    setFocusBusy(true);
+    try {
+      const res = await fetch("/api/notes/focus-questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          excerpt: excerpt.corpus,
+          materialId,
+          moduleId,
+          noteId,
+          liveSessionId,
+          tutorSessionId,
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        count?: number;
+        attachedToCourse?: boolean;
+      };
+      if (!res.ok) {
+        await alertDialog({
+          title: t.immersive.focusFailedTitle,
+          body:
+            typeof j.error === "string" ? j.error : t.immersive.focusFailedBody,
+        });
+        return;
+      }
+      const n = typeof j.count === "number" ? j.count : 0;
+      await alertDialog({
+        title: t.immersive.focusAddedTitle,
+        body: j.attachedToCourse
+          ? tf(t.immersive.focusAddedBodyCourse, { count: n })
+          : tf(t.immersive.focusAddedBodyNotes, { count: n }),
+      });
+    } catch {
+      await alertDialog({
+        title: t.immersive.focusFailedTitle,
+        body: t.immersive.focusFailedBody,
+      });
+    } finally {
+      setFocusBusy(false);
+    }
+  }, [
+    editor,
+    focusBusy,
+    liveSessionId,
+    materialId,
+    moduleId,
+    noteId,
+    t.immersive,
+    tutorSessionId,
+  ]);
+
   const editorReadyFiredRef = useRef(false);
   const notesLoadedForRef = useRef<string | null>(
     initialContentJson ? endpoint : null
@@ -1758,6 +1845,12 @@ export function NotesPanel({
               editor={editor}
               uploadingImage={uploadingImage}
               onPickImage={() => imageInputRef.current?.click()}
+              onAddToFocus={() => void addSelectionToFocus()}
+              addToFocusLabel={
+                focusBusy ? t.immersive.focusAdding : t.immersive.focusAddShort
+              }
+              addToFocusTitle={t.immersive.focusAdd}
+              addToFocusBusy={focusBusy}
             />
           ) : null}
 
@@ -1873,6 +1966,18 @@ export function NotesPanel({
               >
                 <span>🔗</span>
               </BubbleBtn>
+              <span aria-hidden className="mx-1 h-4 w-px bg-white/15" />
+              <button
+                type="button"
+                aria-label={t.immersive.focusAdd}
+                title={t.immersive.focusAdd}
+                disabled={focusBusy}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => void addSelectionToFocus()}
+                className="inline-flex h-7 items-center rounded-md px-1.5 text-[11px] font-semibold text-zinc-200 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
+              >
+                {focusBusy ? "…" : t.immersive.focusAddShort}
+              </button>
             </BubbleMenu>
           ) : null}
           {editor ? (

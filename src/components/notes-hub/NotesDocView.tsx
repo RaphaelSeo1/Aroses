@@ -19,6 +19,10 @@ export function NotesDocView({
   initialUpdatedAt,
   onDocTitleChange,
   lectureRecapEndpoint = null,
+  materialId,
+  noteId,
+  liveSessionId,
+  tutorSessionId,
 }: {
   notesEndpoint: string;
   title: string;
@@ -30,6 +34,10 @@ export function NotesDocView({
   onDocTitleChange?: (title: string) => void;
   /** When set, shows Lecture recap + Generate (live lecture notes). */
   lectureRecapEndpoint?: string | null;
+  materialId?: string;
+  noteId?: string;
+  liveSessionId?: string;
+  tutorSessionId?: string;
 }) {
   const [autoGenerate, setAutoGenerate] = useState(false);
 
@@ -37,6 +45,10 @@ export function NotesDocView({
     <div className="h-[calc(100vh-11rem)] min-h-[24rem]">
       <NotesPanel
         notesEndpoint={notesEndpoint}
+        materialId={materialId}
+        noteId={noteId}
+        liveSessionId={liveSessionId}
+        tutorSessionId={tutorSessionId}
         lessonTitle={title}
         courseTitle={subtitle}
         suggestions={[]}

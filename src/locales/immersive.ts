@@ -28,7 +28,27 @@ const en = {
   noteStyleSaved: "Saved",
   noteStyleSaveFailed: "Couldn't save",
   noteStyleUpdating: "Updating…",
+  lectureRecap: "Lecture recap",
   noteStyleLive: "Live",
+  focusAdd: "Add to focus questions",
+  focusAddShort: "Focus",
+  focusAdding: "Adding…",
+  focusConfirmTitle: "Add to focus questions?",
+  focusConfirmBodySelection:
+    "Rose will turn this selection into practice questions. Find them later in Review → Focus, and in this course's Focus quiz if the note is linked to a course.",
+  focusConfirmBodySection:
+    "Rose will turn this section into practice questions. Find them later in Review → Focus, and in this course's Focus quiz if the note is linked to a course.",
+  focusConfirmAdd: "Add",
+  focusTooShortTitle: "Select more of the note",
+  focusTooShortBody:
+    "Highlight a passage or key term, or click in a section that has enough content.",
+  focusFailedTitle: "Couldn't add focus questions",
+  focusFailedBody: "Try again in a moment.",
+  focusAddedTitle: "Added to focus questions",
+  focusAddedBodyCourse:
+    "Added {count} questions. Practice them in this course's Focus quiz, or in Review.",
+  focusAddedBodyNotes:
+    "Added {count} questions. Practice them anytime in Review → Focus.",
 };
 
 const ko: typeof en = {
@@ -61,7 +81,27 @@ const ko: typeof en = {
   noteStyleSaved: "저장됨",
   noteStyleSaveFailed: "저장 실패",
   noteStyleUpdating: "반영 중…",
+  lectureRecap: "강의 요약",
   noteStyleLive: "적용됨",
+  focusAdd: "포커스 질문에 추가",
+  focusAddShort: "포커스",
+  focusAdding: "추가 중…",
+  focusConfirmTitle: "포커스 질문에 추가할까요?",
+  focusConfirmBodySelection:
+    "Rose가 이 선택 구간으로 연습 문제를 만들어요. 나중에 복습 → 포커스에서 풀 수 있고, 노트가 코스에 연결되어 있으면 그 코스의 포커스 퀴즈에도 나와요.",
+  focusConfirmBodySection:
+    "Rose가 이 섹션으로 연습 문제를 만들어요. 나중에 복습 → 포커스에서 풀 수 있고, 노트가 코스에 연결되어 있으면 그 코스의 포커스 퀴즈에도 나와요.",
+  focusConfirmAdd: "추가",
+  focusTooShortTitle: "노트를 더 선택해 주세요",
+  focusTooShortBody:
+    "문장이나 핵심 용어를 드래그하거나, 내용이 있는 섹션 안을 클릭하세요.",
+  focusFailedTitle: "포커스 질문을 추가하지 못했어요",
+  focusFailedBody: "잠시 후 다시 시도해 주세요.",
+  focusAddedTitle: "포커스 질문에 추가했어요",
+  focusAddedBodyCourse:
+    "질문 {count}개를 추가했어요. 이 코스의 포커스 퀴즈나 복습에서 연습하세요.",
+  focusAddedBodyNotes:
+    "질문 {count}개를 추가했어요. 언제든 복습 → 포커스에서 연습하세요.",
 };
 
 export const immersive = { en, ko };

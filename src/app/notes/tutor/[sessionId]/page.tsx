@@ -78,6 +78,7 @@ export default async function TutorNotesPage(props: {
           </div>
           <NotesDocView
             notesEndpoint={`/api/tutor-session/${sessionId}/notes`}
+            tutorSessionId={sessionId}
             title={title}
             subtitle="Tutor session notes"
             initialContentJson={session.live_notes_json ?? EMPTY_DOC}

@@ -287,6 +287,7 @@ export function StandaloneNoteEditor({
       </p>
       <NotesDocView
         notesEndpoint={`/api/notes/${noteId}`}
+        noteId={noteId}
         title={title}
         subtitle="My notes"
         initialContentJson={initialContentJson}

@@ -185,7 +185,7 @@ const en = {
     items: [
       "**Sidebar curriculum** — modules, lessons, progress; scroll position saved",
       "**Highlights** — select text in Pink, Yellow, Blue, Green, or Purple; capture quotes to notes",
-      "**Personal quiz** — turn notes/highlights into focus cards",
+      "**Personal quiz** — turn notes/highlights into focus cards; from the notes editor, select a passage or key term and tap **Add to focus questions**",
       "**Media panel** — synced transcript for uploaded audio/video",
       "**Ask Rose!** — text study chat about the current module",
       "**Voice dock** — hold M or Live; language & speed controls; Rose can navigate by voice (\"take me to the section on…\")",
@@ -200,7 +200,7 @@ const en = {
     previewTitle: "Practice room tabs",
     items: [
       "**Module quiz** — MCQ + free response, AI-graded; **Practice again** when done; can mark module complete",
-      "**Focus quiz** — your personal note cards (always practices all saved cards)",
+      "**Focus quiz** — your personal note cards (always practices all saved cards). Add more from the notes editor with **Add to focus questions**.",
       "**Whole-course mixed quiz** — separate link in the sidebar (not a third practice tab)",
       "Owners can **generate** more module quiz questions",
     ],
@@ -227,7 +227,7 @@ const en = {
       "Optional topic; up to **20 files**, 200 MB combined (PDF, Word, slides, images, text — not audio/video)",
       "Paste screenshots from clipboard; add files mid-session",
       "**Skip and just start talking** — no setup required",
-      "Live Notion-style notes (synthesized, not raw transcript)",
+      "Live Notion-style notes (synthesized, not raw transcript). Select a passage and tap **Add to focus questions** to quiz yourself later.",
       "Voice: Hold M or Live; text input anytime",
     ],
     inactivityHeading: "Inactivity timeline",
@@ -639,7 +639,7 @@ const ko: typeof en = {
     items: [
       "**사이드바 커리큘럼** — 모듈, 레슨, 진행; 스크롤 위치 저장",
       "**하이라이트** — 분홍, 노랑, 파랑, 초록, 보라로 텍스트 선택; 인용을 노트에 저장",
-      "**개인 퀴즈** — 노트/하이라이트를 포커스 카드로",
+      "**개인 퀴즈** — 노트/하이라이트를 포커스 카드로; 노트 편집기에서 문장이나 핵심 용어를 선택한 뒤 **포커스 질문에 추가**",
       "**미디어 패널** — 업로드한 오디오/비디오 동기화 전사",
       "**Rose에게 질문!** — 현재 모듈에 대한 텍스트 학습 채팅",
       "**음성 독** — M 길게 누르기 또는 Live; 언어·속도 조절; Rose가 음성으로 이동 가능 (\"…에 관한 섹션으로\")",
@@ -653,7 +653,7 @@ const ko: typeof en = {
     previewTitle: "연습실 탭",
     items: [
       "**모듈 퀴즈** — 객관식 + 서술형, AI 채점; 끝나면 **다시 연습**; 모듈 완료 표시 가능",
-      "**포커스 퀴즈** — 개인 노트 카드 (저장된 카드 전부 연습)",
+      "**포커스 퀴즈** — 개인 노트 카드 (저장된 카드 전부 연습). 노트 편집기에서 **포커스 질문에 추가**로 더 만들 수 있어요.",
       "**전체 코스 혼합 퀴즈** — 사이드바 별도 링크 (세 번째 연습 탭 아님)",
       "소유자는 모듈 퀴즈 문제를 더 **생성**할 수 있어요",
     ],
@@ -680,7 +680,7 @@ const ko: typeof en = {
       "선택 주제; 최대 **20개 파일**, 합계 200MB (PDF, Word, 슬라이드, 이미지, 텍스트 — 오디오/비디오 제외)",
       "클립보드에서 스크린샷 붙여넣기; 세션 중 파일 추가",
       "**건너뛰고 대화 시작** — 설정 없이 가능",
-      "Notion 스타일 실시간 노트 (원문 전사 아님)",
+      "Notion 스타일 실시간 노트 (원문 전사 아님). 구간을 선택한 뒤 **포커스 질문에 추가**하면 나중에 퀴즈로 풀 수 있어요.",
       "음성: Hold M 또는 Live; 언제든 텍스트 입력",
     ],
     inactivityHeading: "비활성 타임라인",
