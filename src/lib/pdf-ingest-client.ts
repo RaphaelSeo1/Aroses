@@ -520,6 +520,23 @@ export async function pollPdfIngestJob(
       continue;
     }
 
+    if (ingestPhase === "digesting_full_pdf") {
+      onProgress?.({
+        line: "Preparing your notes and transcript for the course…",
+        bar: "indeterminate",
+      });
+      if (!signal?.aborted) {
+        void fetch("/api/process-pdf/expand", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId }),
+          signal,
+        }).catch(() => {});
+      }
+      await sleep(8_000);
+      continue;
+    }
+
     // Drive `POST /expand`:
     // built === total but job is still `running` (server saves all modules then finalizes;
     // if the client never got the completion response from the last module expand, or

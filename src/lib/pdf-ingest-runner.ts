@@ -2277,6 +2277,11 @@ export async function runPdfIngestJob(
 
 /**
  * Resume after the student confirms an audio/video transcript.
+ *
+ * Claims `reviewing_transcript` → `digesting_full_pdf` so a second kick
+ * (client `/expand` or a retried confirm) no-ops while this worker is alive.
+ * If the worker died mid-digest, `updated_at` goes stale and a later kick
+ * can reclaim.
  */
 export async function runPdfIngestContinueAfterTranscript(
   jobId: string,
@@ -2285,18 +2290,40 @@ export async function runPdfIngestContinueAfterTranscript(
   const admin = createAdminClient();
   if (!admin) return;
 
-  const { data: job } = await admin
+  const CONTINUE_SELECT =
+    "id, user_id, course_id, exam_group_id, storage_path, original_file_name, ingest_epoch, created_at, ingest_transcript, source_files, status, ingest_phase";
+
+  const { data: freshClaim } = await admin
     .from("pdf_ingest_jobs")
-    .select(
-      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, ingest_epoch, created_at, ingest_transcript, source_files, status, ingest_phase"
-    )
+    .update({
+      ingest_phase: "digesting_full_pdf",
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", jobId)
+    .eq("status", "running")
+    .eq("ingest_phase", "reviewing_transcript")
+    .select(CONTINUE_SELECT)
     .maybeSingle();
 
-  if (!job || job.status !== "running") return;
-  if ((job as { ingest_phase?: string }).ingest_phase !== "reviewing_transcript") {
-    return;
+  let job = freshClaim;
+  if (!job) {
+    const staleBefore = new Date(Date.now() - 12_000).toISOString();
+    const { data: staleClaim } = await admin
+      .from("pdf_ingest_jobs")
+      .update({
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .eq("status", "running")
+      .eq("ingest_phase", "digesting_full_pdf")
+      .is("ingest_outline", null)
+      .lt("updated_at", staleBefore)
+      .select(CONTINUE_SELECT)
+      .maybeSingle();
+    job = staleClaim;
   }
+
+  if (!job || job.status !== "running") return;
 
   const transcript =
     typeof (job as { ingest_transcript?: unknown }).ingest_transcript === "string"
@@ -2420,14 +2447,34 @@ async function runPdfIngestOutlinePhase(
 
   // Structure planning uses per-chunk source text on the job; skip the slow
   // multi-call digest for long PDFs when chunks already carry full coverage.
-  const storedMaterial =
-    chunks.length > 0
-      ? materialTextForPdfIngest(sourceTextForOutline)
-      : sourceTextForOutline.length > 24_000
-        ? await buildMaterialDigestFromFullPdfText(sourceTextForOutline, {
-            studyContext: courseStudyContext ?? undefined,
-          })
-        : materialTextForPdfIngest(sourceTextForOutline);
+  // Heartbeat while digesting — a 500k live-lecture blob can take well over
+  // the 15s phase-1 stall window, which would otherwise reset the job.
+  const digestHeartbeat = setInterval(() => {
+    void touchJobProgress(admin, jobId);
+  }, 8_000);
+  let storedMaterial: string;
+  try {
+    if (chunks.length === 0 && sourceTextForOutline.length > 24_000) {
+      await admin
+        .from("pdf_ingest_jobs")
+        .update({
+          ingest_phase: "digesting_full_pdf",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", jobId)
+        .eq("ingest_epoch", claimedEpoch);
+    }
+    storedMaterial =
+      chunks.length > 0
+        ? materialTextForPdfIngest(sourceTextForOutline)
+        : sourceTextForOutline.length > 24_000
+          ? await buildMaterialDigestFromFullPdfText(sourceTextForOutline, {
+              studyContext: courseStudyContext ?? undefined,
+            })
+          : materialTextForPdfIngest(sourceTextForOutline);
+  } finally {
+    clearInterval(digestHeartbeat);
+  }
 
   if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
     return;

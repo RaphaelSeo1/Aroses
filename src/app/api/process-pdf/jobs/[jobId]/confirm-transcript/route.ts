@@ -13,8 +13,10 @@ const UUID_RE =
 type Params = { params: Promise<{ jobId: string }> };
 
 /**
- * POST body: { transcript: string }
- * Saves edited transcript and continues course outline generation.
+ * POST body: { transcript?: string }
+ * Optional transcript only if the student edited the review panel. Live-lecture
+ * jobs already stored the packed notes+transcript+slides blob — re-posting it
+ * hangs confirm. Then continues outline generation.
  */
 export async function POST(request: Request, ctx: Params) {
   const { jobId } = await ctx.params;
@@ -47,9 +49,10 @@ export async function POST(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: unknown;
+  let body: unknown = {};
   try {
-    body = await request.json();
+    const raw = await request.text();
+    if (raw.trim()) body = JSON.parse(raw) as unknown;
   } catch {
     return NextResponse.json({ error: "Expected JSON body." }, { status: 400 });
   }
@@ -61,7 +64,10 @@ export async function POST(request: Request, ctx: Params) {
       ? (body as { transcript: string }).transcript.trim()
       : "";
 
-  if (transcript.length < 80) {
+  // Live-lecture jobs already stored the packed notes+transcript+slides blob
+  // (up to 500k). Re-posting it on confirm hangs the browser and can exceed
+  // the request body limit — only write when the student actually edited.
+  if (transcript.length > 0 && transcript.length < 80) {
     return NextResponse.json(
       { error: "Transcript is too short to build a course." },
       { status: 400 }
@@ -92,13 +98,21 @@ export async function POST(request: Request, ctx: Params) {
     );
   }
 
-  const { error: upErr } = await supabase
+  const patch: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+  if (transcript.length >= 80) {
+    patch.ingest_transcript = transcript.slice(0, 500_000);
+  }
+
+  const { data: saved, error: upErr } = await supabase
     .from("pdf_ingest_jobs")
-    .update({
-      ingest_transcript: transcript.slice(0, 500_000),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", jobId);
+    .update(patch)
+    .eq("id", jobId)
+    .eq("user_id", user.id)
+    .eq("status", "running")
+    .select("ingest_transcript")
+    .maybeSingle();
 
   if (upErr) {
     return NextResponse.json(
@@ -107,10 +121,25 @@ export async function POST(request: Request, ctx: Params) {
     );
   }
 
-  after(() => {
-    void runPdfIngestContinueAfterTranscript(jobId, {
-      driveModules: true,
-    }).catch((e) => console.error("[confirm-transcript]", jobId, e));
+  const stored =
+    typeof saved?.ingest_transcript === "string"
+      ? saved.ingest_transcript.trim()
+      : "";
+  if (stored.length < 80) {
+    return NextResponse.json(
+      { error: "Transcript is too short to build a course." },
+      { status: 400 }
+    );
+  }
+
+  after(async () => {
+    try {
+      await runPdfIngestContinueAfterTranscript(jobId, {
+        driveModules: true,
+      });
+    } catch (e) {
+      console.error("[confirm-transcript]", jobId, e);
+    }
   });
 
   return NextResponse.json({ ok: true }, { status: 202 });

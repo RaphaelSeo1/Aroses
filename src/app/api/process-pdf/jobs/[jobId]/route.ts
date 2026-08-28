@@ -505,7 +505,8 @@ export async function GET(_request: Request, ctx: Params) {
     originalFileName,
     streamPreview,
     ingestPhase,
-    ingestTranscript,
+    ingestTranscript:
+      ingestPhase === "reviewing_transcript" ? ingestTranscript : undefined,
     previewCourse,
   });
 }

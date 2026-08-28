@@ -1,7 +1,11 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { runPdfIngestExpandOne, runPdfIngestJob } from "@/lib/pdf-ingest-runner";
+import {
+  runPdfIngestContinueAfterTranscript,
+  runPdfIngestExpandOne,
+  runPdfIngestJob,
+} from "@/lib/pdf-ingest-runner";
 
 export const runtime = "nodejs";
 
@@ -50,6 +54,10 @@ export async function POST(request: Request) {
     body && typeof body === "object" && typeof (body as { jobId?: unknown }).jobId === "string"
       ? (body as { jobId: string }).jobId
       : "";
+  const resumeTranscript =
+    !!body &&
+    typeof body === "object" &&
+    (body as { resumeTranscript?: unknown }).resumeTranscript === true;
 
   if (!UUID_RE.test(jobId)) {
     return NextResponse.json({ error: "Invalid job id." }, { status: 400 });
@@ -68,26 +76,47 @@ export async function POST(request: Request) {
   const result = await runPdfIngestExpandOne(jobId);
 
   if (result.kind === "failed") {
-    // If the job is still pending, phase 1 (extract + outline) hasn't started
-    // yet — the original after() in POST /api/process-pdf may have been dropped
-    // or delayed. Re-kick it here so the build self-heals without a manual
-    // re-upload. The atomic claim inside runPdfIngestJob (eq status=pending)
-    // makes re-triggering safe: a duplicate kick is a no-op.
-    if (result.message === "Job is not ready to expand yet.") {
+    // Pending jobs: original after() from POST /api/process-pdf may have been
+    // dropped. Re-kick phase 1 inline (awaited) so the build self-heals.
+    //
+    // Live-lecture confirm parks the job at reviewing_transcript / digesting.
+    // `after()` on confirm often dies on Vercel; the client POSTs expand with
+    // resumeTranscript, and the poller retries while digesting.
+    const notReady =
+      result.message === "Job is not ready to expand yet." ||
+      /outline not ready|Still preparing source material/i.test(result.message);
+    if (notReady) {
       const { data: statusRow } = await supabase
         .from("pdf_ingest_jobs")
-        .select("status")
+        .select("status, ingest_phase, ingest_outline")
         .eq("id", jobId)
         .maybeSingle();
 
       if (statusRow?.status === "pending") {
-        // Run phase 1 inline (awaited) rather than via after(). after() shares
-        // the parent invocation's budget and Vercel can terminate it early for
-        // large PDFs (slow extraction + outline generation). By awaiting here
-        // we give phase 1 the full 300 s function window. The client fires this
-        // expand call as fire-and-forget so holding the response is invisible.
         await runPdfIngestJob(jobId).catch((e) =>
           console.error("[process-pdf/expand] inline phase1", jobId, e)
+        );
+        return NextResponse.json({
+          complete: false,
+          modulesBuilt: 0,
+          modulesTotal: 0,
+        });
+      }
+
+      const phase = (statusRow as { ingest_phase?: string } | null)?.ingest_phase;
+      const noOutline =
+        (statusRow as { ingest_outline?: unknown } | null)?.ingest_outline ==
+        null;
+      if (
+        statusRow?.status === "running" &&
+        noOutline &&
+        (phase === "digesting_full_pdf" ||
+          (resumeTranscript && phase === "reviewing_transcript"))
+      ) {
+        await runPdfIngestContinueAfterTranscript(jobId, {
+          driveModules: true,
+        }).catch((e) =>
+          console.error("[process-pdf/expand] resume transcript", jobId, e)
         );
         return NextResponse.json({
           complete: false,

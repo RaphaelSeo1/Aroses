@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 export function TranscriptReviewPanel({
   jobId,
@@ -14,6 +14,7 @@ export function TranscriptReviewPanel({
   const [text, setText] = useState(initialTranscript);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const originalRef = useRef(initialTranscript);
 
   async function confirm() {
     if (text.trim().length < 80) {
@@ -23,12 +24,13 @@ export function TranscriptReviewPanel({
     setBusy(true);
     setError(null);
     try {
+      const edited = text !== originalRef.current;
       const res = await fetch(
         `/api/process-pdf/jobs/${jobId}/confirm-transcript`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ transcript: text }),
+          body: JSON.stringify(edited ? { transcript: text } : {}),
         }
       );
       const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -50,8 +52,9 @@ export function TranscriptReviewPanel({
         Review transcript
       </h3>
       <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-        Fix any transcription mistakes before we generate your course. Names,
-        jargon, and formulas are worth double-checking.
+        Fix mistakes in the notes, transcript, or slides we will use to
+        build your course. Names, jargon, and formulas are worth
+        double-checking.
       </p>
       <textarea
         value={text}
