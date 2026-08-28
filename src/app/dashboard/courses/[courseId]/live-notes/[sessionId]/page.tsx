@@ -82,6 +82,7 @@ export default async function LiveNotesSessionPage({ params }: Props) {
     ...(await loadSessionDeckMeta(supabase, sessionId).then((m) => ({
       slidesFileName: m.fileName,
       slidesPageCount: m.pageCount,
+      slidesSeededThroughPage: m.seededThroughPage,
     }))),
   };
 

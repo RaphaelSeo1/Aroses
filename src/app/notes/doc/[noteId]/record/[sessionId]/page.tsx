@@ -102,6 +102,7 @@ export default async function StandaloneNoteRecordPage({ params }: Props) {
     ...(await loadSessionDeckMeta(supabase, sessionId).then((m) => ({
       slidesFileName: m.fileName,
       slidesPageCount: m.pageCount,
+      slidesSeededThroughPage: m.seededThroughPage,
     }))),
   };
 

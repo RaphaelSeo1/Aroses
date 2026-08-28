@@ -61,23 +61,45 @@ export async function loadSessionDeckPages(
 export async function loadSessionDeckMeta(
   supabase: SupabaseClient,
   sessionId: string
-): Promise<{ fileName: string | null; pageCount: number }> {
-  try {
-    const { data, error } = await supabase
-      .from("live_lecture_sessions")
-      .select("slides_file_name, slides_page_count")
-      .eq("id", sessionId)
-      .maybeSingle();
-    if (error || !data) return { fileName: null, pageCount: 0 };
+): Promise<{
+  fileName: string | null;
+  pageCount: number;
+  seededThroughPage: number;
+}> {
+  const empty = { fileName: null, pageCount: 0, seededThroughPage: 0 };
+  const parse = (data: {
+    slides_file_name?: unknown;
+    slides_page_count?: unknown;
+    slides_seeded_through_page?: unknown;
+  }) => {
     const fileName =
       typeof data.slides_file_name === "string" && data.slides_file_name.trim()
         ? data.slides_file_name.trim()
         : null;
     const pageCount =
       typeof data.slides_page_count === "number" ? data.slides_page_count : 0;
-    return { fileName, pageCount };
+    const seededThroughPage =
+      typeof data.slides_seeded_through_page === "number"
+        ? data.slides_seeded_through_page
+        : 0;
+    return { fileName, pageCount, seededThroughPage };
+  };
+  try {
+    const { data, error } = await supabase
+      .from("live_lecture_sessions")
+      .select("slides_file_name, slides_page_count, slides_seeded_through_page")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (!error && data) return parse(data);
+    const fallback = await supabase
+      .from("live_lecture_sessions")
+      .select("slides_file_name, slides_page_count")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (fallback.error || !fallback.data) return empty;
+    return parse(fallback.data);
   } catch {
-    return { fileName: null, pageCount: 0 };
+    return empty;
   }
 }
 

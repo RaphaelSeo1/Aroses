@@ -28,6 +28,7 @@ import { LiveNotesChat } from "@/components/live-notes/LiveNotesChat";
 import { useScreenVision } from "@/lib/live-notes/use-screen-vision";
 import { pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-pages";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
+import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
  * Live Notes — full-page live lecture capture surface.
@@ -131,6 +132,8 @@ export type LiveNotesInitialSession = {
   noteInstruction?: string;
   slidesFileName?: string | null;
   slidesPageCount?: number;
+  /** How far deck-seeding has gotten; 0 means uploaded but not generated yet. */
+  slidesSeededThroughPage?: number;
 };
 
 function formatElapsed(ms: number): string {
@@ -186,6 +189,7 @@ export function LiveNotesSurface({
   variant?: "course" | "standalone";
 }) {
   const router = useRouter();
+  const t = useT();
   const sessionId = session.id;
   const isStandalone = variant === "standalone" || Boolean(session.userNoteId);
   /** Hub list — standalone notes no longer use a separate "doc" editor page. */
@@ -237,6 +241,9 @@ export function LiveNotesSurface({
   );
   const [slidesPageCount, setSlidesPageCount] = useState(
     session.slidesPageCount ?? 0
+  );
+  const [deckSeedRequested, setDeckSeedRequested] = useState(
+    (session.slidesSeededThroughPage ?? 0) > 0
   );
   const noteInstructionRef = useRef(noteInstruction);
   const handleNoteInstructionChange = useCallback((value: string) => {
@@ -361,7 +368,7 @@ export function LiveNotesSurface({
 
   const maybeSynthesize = useCallback(
     async (force: boolean, opts?: { seedFromDeck?: boolean }) => {
-      if (!autoGenerateRef.current) return;
+      if (!autoGenerateRef.current && !opts?.seedFromDeck) return;
       if (synthInFlightRef.current) {
         if (opts?.seedFromDeck) pendingSeedRef.current = true;
         return;
@@ -692,25 +699,52 @@ export function LiveNotesSurface({
     [sessionId, pushAiActivity, syncAiWritingUi]
   );
 
+  const startDeckSeed = useCallback(() => {
+    setDeckSeedRequested(true);
+    void maybeSynthesize(false, { seedFromDeck: true });
+  }, [maybeSynthesize]);
+
   const handleSlidesChange = useCallback(
     (next: { fileName: string | null; pageCount: number }) => {
       setSlidesFileName(next.fileName);
       setSlidesPageCount(next.pageCount);
-      if (next.pageCount > 0) {
-        void maybeSynthesize(false, { seedFromDeck: true });
+      if (next.pageCount <= 0) {
+        setDeckSeedRequested(false);
+        return;
       }
+      setDeckSeedRequested(false);
+      window.setTimeout(() => {
+        void (async () => {
+          const ok = await confirmDialog({
+            title: t.liveNotes.seedConfirmTitle,
+            body: t.liveNotes.seedConfirmBody,
+            confirmLabel: t.liveNotes.seedConfirmYes,
+            cancelLabel: t.liveNotes.seedConfirmNotYet,
+          });
+          if (!ok) return;
+          startDeckSeed();
+        })();
+      }, 50);
     },
-    [maybeSynthesize]
+    [startDeckSeed, t.liveNotes]
   );
 
-  // Resume seeding if this session already has a deck (reload / reopen).
+  // Resume in-progress deck seeding after reload — never auto-start if they
+  // uploaded and chose "not yet" (seededThroughPage stays 0).
   const initialDeckSeedRef = useRef(false);
   useEffect(() => {
     if (initialDeckSeedRef.current) return;
     if ((session.slidesPageCount ?? 0) <= 0) return;
     initialDeckSeedRef.current = true;
-    void maybeSynthesize(false, { seedFromDeck: true });
-  }, [maybeSynthesize, session.slidesPageCount]);
+    if ((session.slidesSeededThroughPage ?? 0) > 0) {
+      setDeckSeedRequested(true);
+      void maybeSynthesize(false, { seedFromDeck: true });
+    }
+  }, [
+    maybeSynthesize,
+    session.slidesPageCount,
+    session.slidesSeededThroughPage,
+  ]);
   useEffect(() => {
     const t = window.setInterval(() => {
       void maybeSynthesize(false);
@@ -1109,6 +1143,26 @@ export function LiveNotesSurface({
     !finishing &&
     !returningSession;
 
+  const showGenerateFromSlides =
+    slidesPageCount > 0 && !deckSeedRequested && !finishing && !deleting;
+  const generateFromSlidesButton = (compact: boolean) =>
+    showGenerateFromSlides ? (
+      <button
+        type="button"
+        onClick={() => startDeckSeed()}
+        disabled={aiWriting}
+        className={
+          compact
+            ? "rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300"
+            : "mt-2 w-full rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-60 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-200"
+        }
+      >
+        {aiWriting
+          ? t.liveNotes.generatingFromSlides
+          : t.liveNotes.generateFromSlides}
+      </button>
+    ) : null;
+
   return (
     <div className="flex h-dvh flex-col bg-app-gradient">
       {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -1172,6 +1226,7 @@ export function LiveNotesSurface({
             onChange={handleSlidesChange}
             disabled={finishing || deleting}
           />
+          {generateFromSlidesButton(true)}
         </div>
 
         {/* Controls */}
@@ -1675,11 +1730,7 @@ export function LiveNotesSurface({
                 {liveTitle.trim() || "Untitled lecture"}
               </h1>
               <p className="mt-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
-                Upload the lecture slides and Rose drafts notes from them right
-                away. As the lecturer talks, those drafts get edited — wrong
-                slide claims dropped, spoken detail folded in. Pick a source to
-                start — share the <strong>lecture</strong> tab, not this Rose
-                page.
+                {t.liveNotes.startOverlayBody}
               </p>
               <div className="mt-4">
                 <SlideDeckAttach
@@ -1689,6 +1740,7 @@ export function LiveNotesSurface({
                   onChange={handleSlidesChange}
                   disabled={status === "connecting"}
                 />
+                {generateFromSlidesButton(false)}
               </div>
               <div className="mt-4 grid gap-2">
                 <button

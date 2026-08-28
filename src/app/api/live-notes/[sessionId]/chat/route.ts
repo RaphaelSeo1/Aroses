@@ -3,7 +3,8 @@ import { streamLiveLectureChat } from "@/lib/ai/live-lecture-chat";
 import { clampNoteInstruction } from "@/lib/ai/note-instruction";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { MAX_CHAT_PDF_CHARS } from "@/lib/live-notes/extract-chat-pdf";
-import { formatDeckForWrapUp, loadSessionDeckPages } from "@/lib/live-notes/slide-pages";
+import { pickSlidePagesForChat } from "@/lib/live-notes/pick-relevant-slide-pages";
+import { loadSessionDeckPages } from "@/lib/live-notes/slide-pages";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
@@ -167,10 +168,34 @@ export async function POST(request: Request, ctx: Params) {
     typeof b.transcript === "string" ? b.transcript.trim() : "";
   const transcript = (clientTranscript || dbTranscript).slice(0, 12_000);
 
+  const notesText =
+    typeof session.notes_text === "string" ? session.notes_text : "";
+
+  const recentHeadings = sections
+    .map((s) => s.markdown.match(/^##\s+(.+)$/m)?.[1]?.trim())
+    .filter((h): h is string => Boolean(h))
+    .slice(-8);
+
   let deckText = "";
   try {
     const pages = await loadSessionDeckPages(supabase, sessionId);
-    deckText = formatDeckForWrapUp(pages).slice(0, 8_000);
+    deckText = pickSlidePagesForChat({
+      pages,
+      message,
+      transcript,
+      rollingSummary:
+        typeof session.rolling_summary === "string"
+          ? session.rolling_summary
+          : "",
+      recentHeadings,
+      notesSnippet:
+        sections.length > 0
+          ? sections
+              .map((s) => s.markdown)
+              .join("\n")
+              .slice(0, 2_500)
+          : notesText.slice(0, 2_500),
+    }).text;
   } catch {
     deckText = "";
   }
@@ -180,8 +205,6 @@ export async function POST(request: Request, ctx: Params) {
     typeof session.title === "string" ? session.title : undefined;
   const rollingSummary =
     typeof session.rolling_summary === "string" ? session.rolling_summary : "";
-  const notesText =
-    typeof session.notes_text === "string" ? session.notes_text : "";
 
   const encoder = new TextEncoder();
   const sseLine = (event: string, data: unknown): string =>

@@ -145,13 +145,13 @@ export function SlideDeckAttach({
         setError(body.error || "Could not read those slides.");
         return;
       }
+      setOpen(false);
+      setDragOver(false);
+      dragDepth.current = 0;
       onChange({
         fileName: body.fileName ?? file.name,
         pageCount: typeof body.pageCount === "number" ? body.pageCount : 0,
       });
-      setOpen(false);
-      setDragOver(false);
-      dragDepth.current = 0;
     } catch {
       setError("Could not upload the slides. Check your connection and retry.");
     } finally {

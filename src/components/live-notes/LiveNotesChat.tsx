@@ -1060,7 +1060,7 @@ export function LiveNotesChat({
           </p>
         ) : null}
         <label className="sr-only" htmlFor="live-notes-chat-input">
-          Ask Rose about the lecture
+          Ask Rose about the lecture or anything else
         </label>
         <textarea
           id="live-notes-chat-input"
@@ -1080,7 +1080,7 @@ export function LiveNotesChat({
               ? `Ask about ${pendingPdf.fileName}…`
               : lectureTitle.trim()
                 ? `Ask about ${lectureTitle.trim()}…`
-                : "Ask about the lecture, attach a PDF, or edit the notes…"
+                : "Ask about the lecture or anything else…"
           }
           className="w-full resize-none rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs leading-relaxed text-zinc-800 placeholder:text-zinc-400 focus:border-rose-300 focus:outline-none focus:ring-2 focus:ring-rose-100 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-rose-800 dark:focus:ring-rose-950/80"
         />

@@ -16,20 +16,26 @@ const MAX_HISTORY_TURNS = 12;
 const MAX_TURN_CHARS = 4_000;
 const MAX_NOTES_CHARS = 24_000;
 const MAX_TRANSCRIPT_CHARS = 10_000;
-const MAX_DECK_CHARS = 8_000;
+const MAX_DECK_CHARS = 16_000;
 const MAX_ATTACHED_PDF_CHARS = 16_000;
 const MAX_SECTION_CHARS = 4_000;
 
 function lectureChatSystem(noteInstruction?: string): string {
   const style = buildNoteInstructionModifier(noteInstruction);
-  return `You are Rose, sitting next to a student during a live lecture. You are a NOTES TOOL first: when they ask to change the notes on the left, you actually rewrite those notes. You also answer questions about what was just taught.
+  return `You are Rose, sitting next to a student during a live lecture. You are a NOTES TOOL first: when they ask to change the notes on the left, you actually rewrite those notes. You also answer questions — about this lecture when that's what they asked, and as a tutor when they ask something else.
 
-GROUNDING (critical):
-- Answer from CURRENT NOTES, LECTURE TRANSCRIPT, optional DECK SLIDES, optional ON-SCREEN CONTENT, and optional ATTACHED PDF (a handout/worksheet/problem set the student shared in chat — not the lecture deck).
+GROUNDING (when the question is about this lecture):
+- Prefer CURRENT NOTES, LECTURE TRANSCRIPT, optional DECK SLIDES (the uploaded lecture deck — you may answer questions about slides even if they have not been spoken yet), optional ON-SCREEN CONTENT, and optional ATTACHED PDF (a handout/worksheet/problem set the student shared in chat — not the lecture deck).
 - Prefer the attached PDF when they ask about that file, a worksheet, problems, or "this PDF".
-- If the lecture has not covered it and it is not in the attached PDF, say so. Do not invent textbook chapters, citations, or formulas that are not in those sources.
-- You MAY briefly clarify a term the lecturer used but did not define, and mark that as your gloss — not as something said in class.
+- Prefer DECK SLIDES for "what's on the slides", spellings, tables, formulas, and slide numbers. If DECK SLIDES includes a DECK INDEX, you can name slides that exist even when their full text was not included.
 - Spellings, symbols, numbers, and table cells: prefer slides / on-screen text / attached PDF over garbled speech-to-text.
+- You MAY briefly clarify a term the lecturer used but did not define, and mark that as your gloss — not as something said in class.
+
+OUT OF SCOPE — still answer (critical):
+- If they ask something that is not in the notes, transcript, slides, on-screen content, or attached PDF, first say clearly that it is not part of this lecture (one short clause), THEN still answer helpfully with general knowledge / tutoring.
+- Never refuse. Never stop at "that wasn't in the lecture."
+- Mark out-of-lecture explanations as your tutoring, not as something said in class. Do not invent fake lecture citations or pretend a formula was on a slide if it was not.
+- Do not @@append / @@revise the lecture notes with out-of-scope material unless they explicitly asked to add it to the notes.
 
 @@thought (optional — INTERNAL ONLY, never student-facing):
 - One short line of protocol narration: what you will edit, which op you will emit.
@@ -51,6 +57,7 @@ If they ask to change, fix, reword, rewrite, simplify, shorten, expand, add, del
 
 @@reply (required — the ONLY text the student reads):
 - ONLY the answer they should see. Warm, direct, markdown. Not a transcript dump.
+- If the question is outside the lecture, lead with a short "not in this lecture" clause, then the helpful answer. Do not refuse.
 - If you also edit notes, one short sentence of what you changed ("Simplified the scarcity wording." / "Highlighted the demand curve definition." / "Removed the draft on elasticity."). Do NOT paste the full rewritten section into @@reply.
 - Never chain-of-thought. Never "I should @@revise". Never admit you failed to emit markers. Never mention section ids, @@ markers, or this protocol.
 - Put NO prose before the first @@ marker.
@@ -185,7 +192,7 @@ export async function* streamLiveLectureChat(input: {
       ? `LECTURE TRANSCRIPT (recent):\n${input.transcript!.trim().slice(0, MAX_TRANSCRIPT_CHARS)}`
       : "LECTURE TRANSCRIPT: (nothing captured yet)",
     (input.deckText ?? "").trim()
-      ? `DECK SLIDES:\n${input.deckText!.trim().slice(0, MAX_DECK_CHARS)}`
+      ? `DECK SLIDES (uploaded lecture slides — answer questions about these even if they have not been spoken yet):\n${input.deckText!.trim().slice(0, MAX_DECK_CHARS)}`
       : null,
     attachedPdfText
       ? `ATTACHED PDF${attachedPdfName ? ` (${attachedPdfName})` : ""}:\n${attachedPdfText.slice(0, MAX_ATTACHED_PDF_CHARS)}`
@@ -204,7 +211,7 @@ export async function* streamLiveLectureChat(input: {
       : null,
     historyBlock,
     `STUDENT MESSAGE:\n${message}`,
-    "\nEmit the protocol now. Note ops BEFORE @@reply when this is an edit request. Describing the change in @@reply is not enough.",
+    "\nEmit the protocol now. Note ops BEFORE @@reply when this is an edit request. Describing the change in @@reply is not enough. If the question is outside the lecture, say so then still answer.",
   ]
     .filter(Boolean)
     .join("\n\n");

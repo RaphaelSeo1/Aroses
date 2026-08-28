@@ -11,6 +11,7 @@ import { help } from "./help";
 import { immersive } from "./immersive";
 import { landing } from "./landing";
 import { legal } from "./legal";
+import { liveNotes } from "./liveNotes";
 import { messages } from "./messages";
 import { nav } from "./nav";
 import { onboarding } from "./onboarding";
@@ -52,6 +53,7 @@ export function getDictionary(locale: UiLocale) {
     forum: forum[locale],
     messages: messages[locale],
     legal: legal[locale],
+    liveNotes: liveNotes[locale],
     progress: progress[locale],
     help: help[locale],
   };
