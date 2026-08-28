@@ -346,11 +346,33 @@ function readAnchorFromMark(mark: HTMLElement): LessonHighlightAnchor | null {
   return { blockPath, start, end };
 }
 
+function enclosingStrong(range: Range): HTMLElement | null {
+  const startEl =
+    range.startContainer.nodeType === Node.ELEMENT_NODE
+      ? (range.startContainer as HTMLElement)
+      : range.startContainer.parentElement;
+  const endEl =
+    range.endContainer.nodeType === Node.ELEMENT_NODE
+      ? (range.endContainer as HTMLElement)
+      : range.endContainer.parentElement;
+  const startStrong = startEl?.closest("strong");
+  const endStrong = endEl?.closest("strong");
+  if (startStrong && startStrong === endStrong) return startStrong;
+  return null;
+}
+
 function applyInlineHighlight(
   root: HTMLElement,
   range: Range,
   color: LessonHighlightColor
 ): AppliedHighlight {
+  const insideStrong = enclosingStrong(range);
+  if (insideStrong && root.contains(insideStrong)) {
+    const expanded = range.cloneRange();
+    expanded.selectNode(insideStrong);
+    range = expanded;
+  }
+
   const debugText = range.toString().slice(0, 80);
   const groupId = generateId("g");
   console.log("[highlight] applyInlineHighlight start", {
@@ -425,60 +447,42 @@ function applyInlineHighlight(
     unwrapElement(mark, { normalize: false });
   }
 
-  // Wrap each text node, tagging it with its block + group ids.
+  // Wrap the block range as one mark so inner <strong> stays inside the
+  // highlight instead of becoming a separate yellow span per text node.
   const blocksOut: AppliedHighlight["blocks"] = [];
   for (const [block, nodes] of groupedByBlock) {
     const blockId = blockIds.get(block)!;
-    const orderedNodes = [...nodes];
-    const blockRange = document.createRange();
+    const orderedNodes = nodes.filter((n) => n.isConnected);
     const firstNode = orderedNodes[0];
     const lastNode = orderedNodes[orderedNodes.length - 1];
-    if (firstNode && lastNode) {
-      blockRange.setStart(
-        firstNode,
-        firstNode === startContainer
-          ? Math.min(startOffset, firstNode.nodeValue?.length ?? 0)
-          : 0
-      );
-      blockRange.setEnd(
-        lastNode,
-        lastNode === endContainer
-          ? Math.min(endOffset, lastNode.nodeValue?.length ?? 0)
-          : (lastNode.nodeValue?.length ?? 0)
-      );
-    }
+    if (!firstNode || !lastNode) continue;
+    const blockRange = document.createRange();
+    blockRange.setStart(
+      firstNode,
+      firstNode === startContainer
+        ? Math.min(startOffset, firstNode.nodeValue?.length ?? 0)
+        : 0
+    );
+    blockRange.setEnd(
+      lastNode,
+      lastNode === endContainer
+        ? Math.min(endOffset, lastNode.nodeValue?.length ?? 0)
+        : (lastNode.nodeValue?.length ?? 0)
+    );
     const anchor = computeAnchorForBlockRange(root, block, blockRange);
-    const wrappedTexts: string[] = [];
-    for (const node of [...nodes].reverse()) {
-      if (!node.isConnected) continue;
-      const part = document.createRange();
-      part.selectNodeContents(node);
-      if (node === startContainer) {
-        part.setStart(node, Math.min(startOffset, node.nodeValue?.length ?? 0));
-      }
-      if (node === endContainer) {
-        part.setEnd(node, Math.min(endOffset, node.nodeValue?.length ?? 0));
-      }
-      const wrapped = wrapTextRange(
-        part,
-        color,
+    const wrapped = wrapTextRange(
+      blockRange,
+      color,
+      blockId,
+      groupId,
+      anchor ?? undefined
+    );
+    if (wrapped) {
+      blocksOut.push({
+        text: normalizeWhitespace(wrapped),
         blockId,
-        groupId,
-        anchor ?? undefined
-      );
-      if (wrapped) wrappedTexts.push(wrapped);
-    }
-    if (wrappedTexts.length > 0) {
-      const blockText = normalizeWhitespace(
-        wrappedTexts.reverse().join(" ")
-      );
-      if (blockText) {
-        blocksOut.push({
-          text: blockText,
-          blockId,
-          anchor: anchor ?? undefined,
-        });
-      }
+        anchor: anchor ?? undefined,
+      });
     }
   }
 
@@ -555,7 +559,11 @@ function wrapTextRange(
   mark.style.setProperty("-webkit-box-decoration-break", "clone");
 
   try {
-    range.surroundContents(mark);
+    // Preserve inner <strong> / <em> so highlight wraps bold key terms
+    // instead of flattening them into a disconnected yellow span.
+    const contents = range.extractContents();
+    mark.appendChild(contents);
+    range.insertNode(mark);
   } catch {
     mark.textContent = raw;
     range.deleteContents();
@@ -1284,6 +1292,13 @@ export function LessonQuoteCaptureRegion({
       <div ref={ref} className={className}>
         {children}
       </div>
+      <style jsx global>{`
+        mark[data-lesson-highlight-color] strong {
+          background: transparent;
+          padding: 0;
+          font-weight: 700;
+        }
+      `}</style>
       {menu ? (
         <div
           className="fixed z-[120] flex max-w-[min(26rem,calc(100vw-1rem))] flex-wrap items-center gap-1 rounded-2xl border border-zinc-200/90 bg-white/95 p-1.5 text-xs shadow-xl shadow-zinc-900/10 backdrop-blur dark:border-zinc-700 dark:bg-zinc-950/95 dark:shadow-black/40"

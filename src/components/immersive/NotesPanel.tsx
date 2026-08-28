@@ -38,7 +38,15 @@ import { useT } from "@/lib/i18n/LocaleProvider";
 import {
   parseInlineMarkdown,
   sanitizeIncompleteInlineMarkdown,
+  keyTermMarks,
+  KEY_TERM_HIGHLIGHT_COLOR,
 } from "@/lib/notes/notes-markdown";
+import {
+  applyKeyTermHighlight,
+  clearKeyTermEmphasis,
+  KeyTermEmphasis,
+  toggleKeyTermEmphasis,
+} from "@/lib/notes/key-term-emphasis";
 import {
   imageFilesFromDataTransfer,
   NOTE_IMAGE_MIME_TYPES,
@@ -47,7 +55,7 @@ import {
 
 /** Highlighter palette offered in the selection bubble menu. */
 const HIGHLIGHT_COLORS: { label: string; value: string }[] = [
-  { label: "Yellow", value: "#fde68a" },
+  { label: "Yellow", value: KEY_TERM_HIGHLIGHT_COLOR },
   { label: "Green", value: "#bbf7d0" },
   { label: "Blue", value: "#bfdbfe" },
   { label: "Pink", value: "#fbcfe8" },
@@ -481,6 +489,7 @@ export function NotesPanel({
       RoseDocument,
       Underline,
       Highlight.configure({ multicolor: true }),
+      KeyTermEmphasis,
       Typography,
       TextAlign.configure({
         types: ["heading", "paragraph"],
@@ -813,7 +822,7 @@ export function NotesPanel({
               type RichText = {
                 type: "text";
                 text: string;
-                marks?: { type: string }[];
+                marks?: { type: string; attrs?: Record<string, string> }[];
               };
               let inlineContent: RichText[];
               if (bold && text.toLowerCase().startsWith(bold.toLowerCase())) {
@@ -821,7 +830,7 @@ export function NotesPanel({
                   {
                     type: "text",
                     text: text.slice(0, bold.length),
-                    marks: [{ type: "bold" }],
+                    marks: keyTermMarks(),
                   },
                   {
                     type: "text",
@@ -872,11 +881,11 @@ export function NotesPanel({
                         {
                           type: "text",
                           text: term,
-                          marks: [{ type: "bold" }],
+                          marks: keyTermMarks(),
                         },
                         { type: "text", text: ` — ${definition}` },
                       ]
-                    : [{ type: "text", text: term, marks: [{ type: "bold" }] }],
+                    : [{ type: "text", text: term, marks: keyTermMarks() }],
                 },
               ],
             })),
@@ -1774,7 +1783,7 @@ export function NotesPanel({
                 aria-label="Bold"
                 title="Bold (⌘B)"
                 active={editor.isActive("bold")}
-                onClick={() => editor.chain().focus().toggleBold().run()}
+                onClick={() => toggleKeyTermEmphasis(editor)}
               >
                 <span className="font-bold">B</span>
               </BubbleBtn>
@@ -1817,9 +1826,7 @@ export function NotesPanel({
                   aria-label={`Highlight ${c.label.toLowerCase()}`}
                   title={`Highlight ${c.label.toLowerCase()}`}
                   active={editor.isActive("highlight", { color: c.value })}
-                  onClick={() =>
-                    editor.chain().focus().setHighlight({ color: c.value }).run()
-                  }
+                  onClick={() => applyKeyTermHighlight(editor, c.value)}
                 >
                   <span
                     className="inline-block h-3 w-3 rounded-sm ring-1 ring-black/15"
@@ -1831,7 +1838,7 @@ export function NotesPanel({
                 aria-label="Remove highlight"
                 title="Remove highlight"
                 active={false}
-                onClick={() => editor.chain().focus().unsetHighlight().run()}
+                onClick={() => clearKeyTermEmphasis(editor)}
               >
                 <span className="text-[12px] leading-none">⌫</span>
               </BubbleBtn>
@@ -2019,7 +2026,12 @@ export function NotesPanel({
         }
         .tn-prose strong {
           font-weight: 700;
-          color: #1a1a1c;
+          color: inherit;
+          background: ${KEY_TERM_HIGHLIGHT_COLOR};
+          padding: 0.05rem 0.18rem;
+          border-radius: 0.2rem;
+          box-decoration-break: clone;
+          -webkit-box-decoration-break: clone;
         }
         .tn-prose em {
           font-style: italic;
@@ -2257,12 +2269,20 @@ export function NotesPanel({
           text-align: left;
         }
 
-        /* Highlight */
+        /* Highlight — same wash as bold key terms; nested pair is one pill */
         .tn-prose mark {
-          background: rgba(253, 224, 71, 0.5);
-          padding: 0.05rem 0.2rem;
-          border-radius: 0.25rem;
+          background: ${KEY_TERM_HIGHLIGHT_COLOR};
+          padding: 0.05rem 0.18rem;
+          border-radius: 0.2rem;
           color: inherit;
+          box-decoration-break: clone;
+          -webkit-box-decoration-break: clone;
+        }
+        .tn-prose mark strong,
+        .tn-prose strong mark {
+          background: transparent;
+          padding: 0;
+          font-weight: 700;
         }
 
         /* AI self-revision transitions (StreamingNotesWriter decorations).

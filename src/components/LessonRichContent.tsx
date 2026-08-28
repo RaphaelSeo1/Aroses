@@ -43,6 +43,12 @@ const markdownComponents = {
   li: (props: React.ComponentProps<"li">) => (
     <li className="pl-0.5" {...props} />
   ),
+  strong: (props: React.ComponentProps<"strong">) => (
+    <strong
+      className="rounded-[0.2rem] bg-[#fde68a] px-[0.18rem] py-[0.05rem] font-bold text-inherit [box-decoration-break:clone] [[data-lesson-highlight-color]_&]:bg-transparent [[data-lesson-highlight-color]_&]:px-0 [[data-lesson-highlight-color]_&]:py-0"
+      {...props}
+    />
+  ),
   a: ({
     href,
     children,

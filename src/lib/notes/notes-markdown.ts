@@ -19,10 +19,26 @@
  * every rule here.
  */
 
+/** Default highlighter color for key terms (`**bold**` / TipTap highlight). */
+export const KEY_TERM_HIGHLIGHT_COLOR = "#fde68a";
+
+export type NoteMarkJson = {
+  type: string;
+  attrs?: Record<string, string>;
+};
+
+/** Bold + highlight together — one visual treatment for key terms. */
+export function keyTermMarks(): NoteMarkJson[] {
+  return [
+    { type: "bold" },
+    { type: "highlight", attrs: { color: KEY_TERM_HIGHLIGHT_COLOR } },
+  ];
+}
+
 export type NoteInlineJson = {
   type: "text";
   text: string;
-  marks?: Array<{ type: string }>;
+  marks?: NoteMarkJson[];
 };
 
 export type NoteNodeJson = {
@@ -30,7 +46,7 @@ export type NoteNodeJson = {
   attrs?: Record<string, unknown>;
   content?: Array<NoteNodeJson | NoteInlineJson>;
   text?: string;
-  marks?: Array<{ type: string }>;
+  marks?: NoteMarkJson[];
 };
 
 export type NoteLineKind =
@@ -176,7 +192,7 @@ export function parseInlineMarkdown(text: string): NoteInlineJson[] {
       flushPlain();
       const inner = text.slice(i + 2, close);
       if (inner) {
-        out.push({ type: "text", text: inner, marks: [{ type: "bold" }] });
+        out.push({ type: "text", text: inner, marks: keyTermMarks() });
       }
       i = close + 2;
       continue;

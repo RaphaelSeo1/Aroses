@@ -13,6 +13,7 @@ import { trailingEmptyParagraphRange } from "@/lib/notes/empty-paragraph";
 import {
   classifyNoteLine,
   isGfmTableLine,
+  KEY_TERM_HIGHLIGHT_COLOR,
   markdownToNoteNodes,
   mightBecomeNotePrefix,
   noteNodesToMarkdown,
@@ -694,17 +695,35 @@ export class StreamingNotesWriter {
   }
 
   /**
-   * Apply a highlight mark across every text node in an AI section.
+   * Highlight key terms in an AI section. Bold spans (from `**term**`)
+   * get the highlight mark so highlight and bold stay one treatment.
+   * If the section has no bold, fall back to the whole block.
    */
-  highlightSection(sectionId: string, color = "#fde68a"): boolean {
+  highlightSection(sectionId: string, color = KEY_TERM_HIGHLIGHT_COLOR): boolean {
     if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
     const markType = this.editor.schema.marks.highlight;
+    const boldType = this.editor.schema.marks.bold;
     if (!markType) return false;
     const blocks = this.sectionBlocks(sectionId);
     if (blocks.length === 0) return false;
     let marked = false;
     this.dispatchDoc((tr) => {
       for (const b of blocks) {
+        const boldRanges: Array<{ from: number; to: number }> = [];
+        if (boldType) {
+          b.node.descendants((node, pos) => {
+            if (!node.isText || !boldType.isInSet(node.marks)) return;
+            const from = b.pos + pos;
+            boldRanges.push({ from, to: from + node.nodeSize });
+          });
+        }
+        if (boldRanges.length > 0) {
+          for (const r of boldRanges) {
+            tr.addMark(r.from, r.to, markType.create({ color }));
+            marked = true;
+          }
+          continue;
+        }
         const from = b.pos + 1;
         const to = b.pos + b.node.nodeSize - 1;
         if (to <= from) continue;
@@ -1106,9 +1125,11 @@ export class StreamingNotesWriter {
       .map((t) =>
         schema.text(
           t.text,
-          (t.marks ?? []).flatMap((m) =>
-            schema.marks[m.type] ? [schema.marks[m.type].create()] : []
-          )
+          (t.marks ?? []).flatMap((m) => {
+            const markType = schema.marks[m.type];
+            if (!markType) return [];
+            return [markType.create(m.attrs ?? undefined)];
+          })
         )
       );
   }

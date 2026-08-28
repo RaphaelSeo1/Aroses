@@ -59,7 +59,7 @@ export function HighlightedSummary({
           seg.mark ? (
             <mark
               key={i}
-              className="rounded-sm bg-amber-200/90 px-0.5 text-inherit dark:bg-amber-400/35"
+              className="rounded-sm bg-amber-200/90 px-0.5 font-semibold text-inherit dark:bg-amber-400/35"
             >
               {seg.text}
             </mark>

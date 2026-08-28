@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { Editor } from "@tiptap/react";
 import { useEditorState } from "@tiptap/react";
+import { toggleKeyTermEmphasis } from "@/lib/notes/key-term-emphasis";
 
 function Icon({ children }: { children: ReactNode }) {
   return (
@@ -126,7 +127,7 @@ export function NotesFormatToolbar({
       <ToolBtn
         title="Bold"
         active={s.bold}
-        onClick={() => editor.chain().focus().toggleBold().run()}
+        onClick={() => toggleKeyTermEmphasis(editor)}
       >
         <span className="text-[13px] font-bold leading-none">B</span>
       </ToolBtn>
