@@ -56,7 +56,7 @@ export function CalendarMonthGrid({
           ›
         </button>
       </div>
-      <div className="mt-3 grid grid-cols-7 gap-0.5 text-center">
+      <div className={`grid grid-cols-7 text-center ${compact ? "mt-1.5 gap-0" : "mt-3 gap-0.5"}`}>
         {headers.map((h, i) => (
           <div
             key={`${h}-${i}`}
@@ -77,7 +77,8 @@ export function CalendarMonthGrid({
               type="button"
               onClick={() => onSelect(d)}
               className={[
-                "relative mx-auto flex h-8 w-8 items-center justify-center rounded-full text-[12px] tabular-nums",
+                "relative mx-auto flex items-center justify-center rounded-full tabular-nums",
+                compact ? "h-6 w-6 text-[10px]" : "h-8 w-8 text-[12px]",
                 inMonth
                   ? "text-zinc-800 dark:text-zinc-100"
                   : "text-zinc-300 dark:text-zinc-600",
@@ -86,7 +87,6 @@ export function CalendarMonthGrid({
                   : isToday
                     ? "ring-1 ring-brand/50"
                     : "hover:bg-zinc-100 dark:hover:bg-zinc-800",
-                compact ? "h-7 w-7 text-[11px]" : "",
               ].join(" ")}
             >
               {d.getDate()}

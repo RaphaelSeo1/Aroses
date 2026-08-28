@@ -78,9 +78,6 @@ export async function DashboardHomeContent({
             <div className="min-w-0">
               <PendingCollaboratorInvites />
               <PendingFriendRequests />
-              <div className="mb-8 lg:hidden">
-                <HomeCalendarWidget />
-              </div>
               <ReviewDueBanner
                 initialDueCounts={initialDueCounts}
                 demoteCta={primaryAction !== "review"}
@@ -304,6 +301,9 @@ export async function DashboardHomeContent({
                   />
                 </nav>
               </section>
+              <div className="mt-8 lg:hidden">
+                <HomeCalendarWidget />
+              </div>
             </div>
 
             <div className="hidden lg:block">

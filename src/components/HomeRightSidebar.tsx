@@ -147,7 +147,6 @@ export function HomeRightSidebar({
 
   return (
     <aside className="space-y-4 lg:sticky lg:top-[5.5rem]">
-      <HomeCalendarWidget />
       {showPlanUsage && planUsage ? (
         <section className="group relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-gradient-to-br from-sky-50/80 via-white to-white p-5 shadow-sm ring-1 ring-sky-100/80 backdrop-blur-md dark:border-zinc-800 dark:from-sky-950/40 dark:via-zinc-950 dark:to-zinc-950 dark:ring-sky-900/40">
           <div
@@ -295,6 +294,8 @@ export function HomeRightSidebar({
           </div>
         ) : null}
       </section>
+
+      <HomeCalendarWidget />
 
       {hasUpNext ? (
         <section className="overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/95 p-5 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-950/80 dark:ring-zinc-700/30">
