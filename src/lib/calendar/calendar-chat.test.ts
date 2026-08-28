@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseCalendarChatResponse, resolveCalendarItemId } from "./calendar-chat";
+import {
+  coerceStartsAt,
+  parseCalendarChatResponse,
+  resolveCalendarItemId,
+} from "./calendar-chat";
 import type { CalendarItem } from "@/types/calendar";
 
 test("parseCalendarChatResponse extracts reply and create actions", () => {
@@ -47,5 +51,16 @@ test("resolveCalendarItemId matches title when id is missing", () => {
   assert.equal(
     resolveCalendarItemId("Chem quiz", items),
     "11111111-1111-4111-8111-111111111111"
+  );
+});
+
+test("coerceStartsAt treats naive datetimes as wall clock in the zone", () => {
+  assert.equal(
+    coerceStartsAt("2026-08-28T15:00", "America/Los_Angeles"),
+    "2026-08-28T22:00:00.000Z"
+  );
+  assert.equal(
+    coerceStartsAt("2026-08-28", "America/Los_Angeles"),
+    "2026-08-28T16:00:00.000Z"
   );
 });

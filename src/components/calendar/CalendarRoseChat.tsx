@@ -7,27 +7,6 @@ import type { CalendarItem } from "@/types/calendar";
 
 type Turn = { id: string; role: "user" | "assistant"; content: string };
 
-const STORAGE_KEY = "aroses.calendar.chat";
-
-function loadTurns(): Turn[] {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (t): t is Turn =>
-        !!t &&
-        typeof t === "object" &&
-        (t.role === "user" || t.role === "assistant") &&
-        typeof t.content === "string" &&
-        typeof t.id === "string"
-    );
-  } catch {
-    return [];
-  }
-}
-
 export function CalendarRoseChat({
   onItems,
   autoFocus = false,
@@ -39,23 +18,16 @@ export function CalendarRoseChat({
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [hydrated, setHydrated] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    setTurns(loadTurns());
-    setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(turns.slice(-24)));
+      sessionStorage.removeItem("aroses.calendar.chat");
     } catch {
       /* ignore */
     }
-  }, [turns, hydrated]);
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -63,7 +35,7 @@ export function CalendarRoseChat({
 
   useEffect(() => {
     if (autoFocus) inputRef.current?.focus();
-  }, [autoFocus, hydrated]);
+  }, [autoFocus]);
 
   const send = async (text: string) => {
     const message = text.trim();

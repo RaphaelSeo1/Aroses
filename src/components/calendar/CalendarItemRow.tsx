@@ -1,18 +1,20 @@
 "use client";
 
 import type { CalendarItem } from "@/types/calendar";
-import { formatTime, itemDateKey, localDateKey } from "@/lib/calendar/dates";
+import { formatItemWhen, formatTime, itemDateKey, localDateKey } from "@/lib/calendar/dates";
 import { useT } from "@/lib/i18n/LocaleProvider";
 
 export function CalendarItemRow({
   item,
   compact = false,
+  showDate = false,
   onToggle,
   onDelete,
   onOpen,
 }: {
   item: CalendarItem;
   compact?: boolean;
+  showDate?: boolean;
   onToggle?: () => void;
   onDelete?: () => void;
   onOpen?: () => void;
@@ -22,14 +24,15 @@ export function CalendarItemRow({
   const dateKey = itemDateKey(item.startsAt);
   const overdue =
     Boolean(dateKey && dateKey < today && !item.completedAt && item.kind === "todo");
-  const timeLabel =
-    item.startsAt && !item.allDay && item.kind === "event"
+  const when = showDate
+    ? formatItemWhen(item.startsAt, { allDay: item.allDay })
+    : item.startsAt && !item.allDay && item.kind === "event"
       ? formatTime(item.startsAt)
       : null;
   const meta = [
     overdue ? t.calendar.overdue : null,
-    timeLabel,
-    !overdue && !timeLabel && !compact ? t.calendar.noTime : null,
+    when,
+    !showDate && !overdue && !when && !compact ? t.calendar.noTime : null,
     item.important ? t.calendar.important : null,
   ]
     .filter(Boolean)

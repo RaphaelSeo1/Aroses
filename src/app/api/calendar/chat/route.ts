@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import { runCalendarChat } from "@/lib/ai/calendar-chat";
-import { resolveCalendarItemId } from "@/lib/calendar/calendar-chat";
+import {
+  coerceActionTimestamps,
+  resolveCalendarItemId,
+} from "@/lib/calendar/calendar-chat";
 import {
   CALENDAR_SELECT,
   mapCalendarRow,
@@ -120,7 +123,7 @@ export async function POST(request: Request) {
       userId: user.id,
     });
     reply = result.reply;
-    actions = result.actions;
+    actions = result.actions.map((a) => coerceActionTimestamps(a, timeZone));
   } catch (e) {
     console.error("[calendar/chat]", e);
     return NextResponse.json(

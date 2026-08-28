@@ -293,43 +293,43 @@ export function HomeRightSidebar({
             })}
           </div>
         ) : null}
+
+        {hasUpNext ? (
+          <div className="mt-5 border-t border-zinc-200/80 pt-4 dark:border-zinc-800">
+            <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              {t.dashboard.upNextTitle}
+            </p>
+            <ul className="mt-3 space-y-2.5">
+              {reviewDueTotal > 0 ? (
+                <li>
+                  <Link
+                    href="/dashboard/review"
+                    className="block rounded-xl border border-brand-border/50 bg-brand-blush/40 px-3 py-2.5 text-xs font-medium text-brand-ink transition hover:bg-brand-blush/70 dark:border-brand-border/30 dark:bg-brand-blush/10 dark:text-brand-soft dark:hover:bg-brand-blush/20"
+                  >
+                    {reviewDueTotal === 1
+                      ? t.dashboard.upNextReviewsOne
+                      : tf(t.dashboard.upNextReviews, {
+                          count: reviewDueTotal,
+                        })}
+                  </Link>
+                </li>
+              ) : null}
+              {resumeTitle && resumeHref ? (
+                <li>
+                  <Link
+                    href={resumeHref}
+                    className="block rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2.5 text-xs font-medium text-zinc-800 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/50 dark:text-zinc-100 dark:hover:bg-zinc-900"
+                  >
+                    {tf(t.dashboard.upNextModule, { title: resumeTitle })}
+                  </Link>
+                </li>
+              ) : null}
+            </ul>
+          </div>
+        ) : null}
       </section>
 
       <HomeCalendarWidget />
-
-      {hasUpNext ? (
-        <section className="overflow-hidden rounded-3xl border border-zinc-200/90 bg-white/95 p-5 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-950/80 dark:ring-zinc-700/30">
-          <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            {t.dashboard.upNextTitle}
-          </p>
-          <ul className="mt-3 space-y-2.5">
-            {reviewDueTotal > 0 ? (
-              <li>
-                <Link
-                  href="/dashboard/review"
-                  className="block rounded-xl border border-brand-border/50 bg-brand-blush/40 px-3 py-2.5 text-xs font-medium text-brand-ink transition hover:bg-brand-blush/70 dark:border-brand-border/30 dark:bg-brand-blush/10 dark:text-brand-soft dark:hover:bg-brand-blush/20"
-                >
-                  {reviewDueTotal === 1
-                    ? t.dashboard.upNextReviewsOne
-                    : tf(t.dashboard.upNextReviews, {
-                        count: reviewDueTotal,
-                      })}
-                </Link>
-              </li>
-            ) : null}
-            {resumeTitle && resumeHref ? (
-              <li>
-                <Link
-                  href={resumeHref}
-                  className="block rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2.5 text-xs font-medium text-zinc-800 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900/50 dark:text-zinc-100 dark:hover:bg-zinc-900"
-                >
-                  {tf(t.dashboard.upNextModule, { title: resumeTitle })}
-                </Link>
-              </li>
-            ) : null}
-          </ul>
-        </section>
-      ) : null}
     </aside>
   );
 }
