@@ -4,6 +4,7 @@ import Link from "next/link";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { PLANS, type PlanTier } from "@/lib/billing/plans";
 import type { PlanUsageSummary } from "@/lib/billing/plan-usage-types";
+import { HomeCalendarWidget } from "@/components/calendar/HomeCalendarWidget";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 
@@ -146,6 +147,7 @@ export function HomeRightSidebar({
 
   return (
     <aside className="space-y-4 lg:sticky lg:top-[5.5rem]">
+      <HomeCalendarWidget />
       {showPlanUsage && planUsage ? (
         <section className="group relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-gradient-to-br from-sky-50/80 via-white to-white p-5 shadow-sm ring-1 ring-sky-100/80 backdrop-blur-md dark:border-zinc-800 dark:from-sky-950/40 dark:via-zinc-950 dark:to-zinc-950 dark:ring-sky-900/40">
           <div

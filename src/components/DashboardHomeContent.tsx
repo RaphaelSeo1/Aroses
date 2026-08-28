@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppHeader } from "@/components/AppHeader";
 import type { DashboardCourse } from "@/components/CourseDashboardList";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
+import { HomeCalendarWidget } from "@/components/calendar/HomeCalendarWidget";
 import { HomeHubEntryLink } from "@/components/HomeHubEntryLink";
 import { HomeRecordLectureCard } from "@/components/HomeRecordLectureCard";
 import { HomeResumeHero } from "@/components/HomeResumeHero";
@@ -77,6 +78,9 @@ export async function DashboardHomeContent({
             <div className="min-w-0">
               <PendingCollaboratorInvites />
               <PendingFriendRequests />
+              <div className="mb-8 lg:hidden">
+                <HomeCalendarWidget />
+              </div>
               <ReviewDueBanner
                 initialDueCounts={initialDueCounts}
                 demoteCta={primaryAction !== "review"}
@@ -244,6 +248,13 @@ export async function DashboardHomeContent({
                   className="grid grid-cols-2 gap-3 lg:grid-cols-3"
                   aria-label={t.dashboard.homeHubNavLabel}
                 >
+                  <HomeHubEntryLink
+                    href="/calendar"
+                    variant="calendar"
+                    layout="tile"
+                    label={t.calendar.hubLabel}
+                    hint={t.calendar.hubHint}
+                  />
                   <HomeHubEntryLink
                     href="/notes"
                     variant="notes"

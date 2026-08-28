@@ -9,7 +9,8 @@ export type HomeHubEntryVariant =
   | "create"
   | "tutor"
   | "sessions"
-  | "explore";
+  | "explore"
+  | "calendar";
 
 const variantStyles: Record<
   HomeHubEntryVariant,
@@ -24,6 +25,35 @@ const variantStyles: Record<
     countDot: string;
   }
 > = {
+  calendar: {
+    iconWrap:
+      "bg-teal-100 text-teal-700 ring-teal-200/70 dark:bg-teal-950/60 dark:text-teal-300 dark:ring-teal-900/50",
+    hoverBorder: "hover:border-teal-200 dark:hover:border-teal-800",
+    arrowHover: "group-hover:text-teal-600 dark:group-hover:text-teal-400",
+    cardBg:
+      "bg-gradient-to-br from-teal-50/80 via-white to-white dark:from-teal-950/30 dark:via-zinc-950 dark:to-zinc-950",
+    cornerGlow:
+      "bg-teal-200/50 group-hover:bg-teal-200/70 dark:bg-teal-900/30",
+    countDot:
+      "bg-teal-500 shadow-[0_0_0_3px_rgba(20,184,166,0.22)] dark:bg-teal-400 dark:shadow-[0_0_0_3px_rgba(20,184,166,0.28)]",
+    icon: (
+      <svg
+        viewBox="0 0 24 24"
+        className="h-5 w-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <line x1="16" y1="2" x2="16" y2="6" />
+        <line x1="8" y1="2" x2="8" y2="6" />
+        <line x1="3" y1="10" x2="21" y2="10" />
+      </svg>
+    ),
+  },
   notes: {
     iconWrap:
       "bg-violet-100 text-violet-700 ring-violet-200/70 dark:bg-violet-950/60 dark:text-violet-300 dark:ring-violet-900/50",

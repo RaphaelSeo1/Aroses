@@ -3,6 +3,7 @@ import { auth } from "./auth";
 import { billing } from "./billing";
 import { common } from "./common";
 import { courseBuild } from "./courseBuild";
+import { calendar } from "./calendar";
 import { dashboard } from "./dashboard";
 import { explore } from "./explore";
 import { forum } from "./forum";
@@ -37,6 +38,7 @@ export function getDictionary(locale: UiLocale) {
     onboarding: onboarding[locale],
     productTour: productTour[locale],
     dashboard: dashboard[locale],
+    calendar: calendar[locale],
     settings: settings[locale],
     study: study[locale],
     explore: explore[locale],
