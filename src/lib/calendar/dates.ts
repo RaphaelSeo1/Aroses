@@ -256,6 +256,30 @@ export function formatNowInZone(nowIso: string, timeZone: string): string {
   }
 }
 
+export function minutesOfDay(d: Date): number {
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+export function snapMinutes(mins: number, snap = 15): number {
+  const clamped = Math.max(0, Math.min(24 * 60, mins));
+  return Math.round(clamped / snap) * snap;
+}
+
+export function minutesToTimeValue(mins: number): string {
+  const clamped = Math.max(0, Math.min(24 * 60 - 1, mins));
+  return `${pad2(Math.floor(clamped / 60))}:${pad2(clamped % 60)}`;
+}
+
+export function addMinutesIso(iso: string, minutes: number): string {
+  return new Date(new Date(iso).getTime() + minutes * 60_000).toISOString();
+}
+
+export function isoFromDateMinutes(day: Date, minutes: number): string {
+  const d = startOfDay(day);
+  d.setMinutes(Math.max(0, Math.min(24 * 60, minutes)));
+  return d.toISOString();
+}
+
 export function upcomingDateKeys(
   from: Date,
   count: number,

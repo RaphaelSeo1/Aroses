@@ -46,6 +46,11 @@ const en = {
   weekNext: "Next week",
   dayPrev: "Previous day",
   dayNext: "Next day",
+  todosTitle: "To do",
+  todosHint: "Write tasks here. Drag one onto the calendar to schedule it.",
+  showCompleted: "Show completed",
+  hideCompleted: "Hide completed",
+  gridHint: "Click and drag to create a time block. Drag events to move them.",
   hubLabel: "Calendar",
   hubHint: "Todos, due dates, and what’s next.",
 };
@@ -98,6 +103,11 @@ const ko: typeof en = {
   weekNext: "다음 주",
   dayPrev: "이전 날",
   dayNext: "다음 날",
+  todosTitle: "할 일",
+  todosHint: "여기에 적고, 캘린더로 끌어다 놓으면 일정이 됩니다.",
+  showCompleted: "완료한 항목 보기",
+  hideCompleted: "완료한 항목 숨기기",
+  gridHint: "클릭한 채로 끌면 시간 일정이 생깁니다. 일정을 끌어서 옮기세요.",
   hubLabel: "캘린더",
   hubHint: "할 일, 마감, 다음 일정.",
 };

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  addCalendarDays,
   combineLocalDateTime,
   isoFromLocalDateKey,
   localDateKey,
@@ -14,26 +15,47 @@ import type { CalendarItem, CalendarItemInput, CalendarKind } from "@/types/cale
 export function CalendarItemForm({
   initial,
   defaultDateKey,
+  defaultTime,
+  defaultEndTime,
+  defaultKind,
+  defaultAllDay,
+  defaultHasDate,
   onSave,
   onCancel,
 }: {
   initial?: CalendarItem | null;
   defaultDateKey?: string;
+  defaultTime?: string;
+  defaultEndTime?: string;
+  defaultKind?: CalendarKind;
+  defaultAllDay?: boolean;
+  defaultHasDate?: boolean;
   onSave: (input: CalendarItemInput) => Promise<void>;
   onCancel: () => void;
 }) {
   const t = useT();
   const [title, setTitle] = useState(initial?.title ?? "");
   const [notes, setNotes] = useState(initial?.notes ?? "");
-  const [kind, setKind] = useState<CalendarKind>(initial?.kind ?? "todo");
+  const [kind, setKind] = useState<CalendarKind>(
+    initial?.kind ?? defaultKind ?? "todo"
+  );
   const [dateKey, setDateKey] = useState(
     toDateInputValue(initial?.startsAt) || defaultDateKey || localDateKey(new Date())
   );
   const [hasDate, setHasDate] = useState(
-    Boolean(initial?.startsAt) || Boolean(defaultDateKey)
+    initial
+      ? Boolean(initial.startsAt)
+      : defaultHasDate ?? Boolean(defaultDateKey)
   );
-  const [allDay, setAllDay] = useState(initial?.allDay !== false);
-  const [time, setTime] = useState(toTimeInputValue(initial?.startsAt) || "09:00");
+  const [allDay, setAllDay] = useState(
+    initial ? initial.allDay !== false : defaultAllDay !== false
+  );
+  const [time, setTime] = useState(
+    toTimeInputValue(initial?.startsAt) || defaultTime || "09:00"
+  );
+  const [endTime, setEndTime] = useState(
+    toTimeInputValue(initial?.endsAt) || defaultEndTime || "10:00"
+  );
   const [important, setImportant] = useState(Boolean(initial?.important));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,18 +67,26 @@ export function CalendarItemForm({
     setError(null);
     try {
       let startsAt: string | null = null;
+      let endsAt: string | null = null;
       if (hasDate && dateKey) {
-        startsAt =
-          kind === "event" && !allDay
-            ? combineLocalDateTime(dateKey, time)
-            : isoFromLocalDateKey(dateKey);
+        const timed = !allDay;
+        if (timed) {
+          startsAt = combineLocalDateTime(dateKey, time);
+          endsAt = combineLocalDateTime(dateKey, endTime);
+          if (new Date(endsAt) <= new Date(startsAt)) {
+            endsAt = combineLocalDateTime(addCalendarDays(dateKey, 1), endTime);
+          }
+        } else {
+          startsAt = isoFromLocalDateKey(dateKey);
+        }
       }
       await onSave({
         title: trimmed,
         notes: notes.trim(),
         kind,
         startsAt,
-        allDay: kind === "todo" || allDay,
+        endsAt,
+        allDay: !hasDate || allDay,
         important,
       });
     } catch (e) {
@@ -114,17 +144,25 @@ export function CalendarItemForm({
             onChange={(e) => setDateKey(e.target.value)}
             className="flex-1 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
           />
-          {kind === "event" && !allDay ? (
-            <input
-              type="time"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-              className="w-28 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-            />
+          {hasDate && !allDay ? (
+            <>
+              <input
+                type="time"
+                value={time}
+                onChange={(e) => setTime(e.target.value)}
+                className="w-28 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+              />
+              <input
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                className="w-28 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+              />
+            </>
           ) : null}
         </div>
       ) : null}
-      {kind === "event" ? (
+      {hasDate ? (
         <label className="flex items-center gap-2 text-[12px] text-zinc-600 dark:text-zinc-300">
           <input
             type="checkbox"
