@@ -346,6 +346,30 @@ html.dark .bg-app-gradient {
   }
 }
 
+/* Expanding sonar rings around the chat-bar Aroses voice control. */
+@keyframes arosesSoundWave {
+  0% {
+    transform: scale(1);
+    opacity: 0.62;
+  }
+  100% {
+    transform: scale(1.85);
+    opacity: 0;
+  }
+}
+.animate-aroses-sound-wave {
+  animation-name: arosesSoundWave;
+  animation-timing-function: ease-out;
+  animation-iteration-count: infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-aroses-sound-wave {
+    animation: none;
+    opacity: 0.4;
+    transform: scale(1.28);
+  }
+}
+
 /* Word/char reveal: each unit fades + de-blurs in as it "generates". */
 .tw-word {
   display: inline-block;

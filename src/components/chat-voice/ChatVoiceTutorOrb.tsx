@@ -4,6 +4,8 @@ import { useEffect, useRef } from "react";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import type { ChatVoicePhase } from "@/lib/chat-voice/use-chat-voice-tutor";
 
+const RING_COUNT = 4;
+
 export function ChatVoiceTutorOrb({
   phase,
   inputLevelRef,
@@ -16,10 +18,8 @@ export function ChatVoiceTutorOrb({
   onExit: () => void;
 }) {
   const t = useT();
-  const wrapRef = useRef<HTMLButtonElement | null>(null);
   const coreRef = useRef<HTMLDivElement | null>(null);
-  const ringARef = useRef<HTMLSpanElement | null>(null);
-  const ringBRef = useRef<HTMLSpanElement | null>(null);
+  const ringRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
@@ -31,52 +31,59 @@ export function ChatVoiceTutorOrb({
     const start = performance.now();
 
     const tick = (now: number) => {
-      const wrap = wrapRef.current;
       const core = coreRef.current;
-      const ringA = ringARef.current;
-      const ringB = ringBRef.current;
-      if (!wrap || !core) return;
+      if (!core) return;
 
       const elapsed = (now - start) / 1000;
       const p = phaseRef.current;
       const mic = Math.min(1, Math.max(0, inputLevelRef.current));
       const play = Math.min(1, Math.max(0, playbackLevelRef.current));
 
-      let y = 0;
-      let scale = 1;
-      let rotA = 0;
-      let rotB = 0;
-      let glow = 0.35;
+      let period = 2.2;
+      let maxScale = 1.55;
+      let maxOp = 0.42;
+      let coreScale = 1;
 
       if (reduced) {
-        scale = p === "speaking" ? 1.08 : p === "listening" ? 1.04 : 1;
+        coreScale = p === "speaking" ? 1.06 : p === "listening" ? 1.03 : 1;
       } else if (p === "listening") {
-        y = Math.sin(elapsed * 2.1) * 3;
-        scale = 1.02 + mic * 0.55;
-        glow = 0.4 + mic * 0.55;
+        period = 1.1 - mic * 0.28;
+        maxScale = 1.48 + mic * 0.55;
+        maxOp = 0.42 + mic * 0.48;
+        coreScale = 1.02 + mic * 0.14;
       } else if (p === "speaking") {
         const energy = 0.18 + play * 0.82;
-        y = Math.sin(elapsed * 3.4) * (4 + play * 8);
-        scale = 1.04 + energy * 0.38;
-        rotA = elapsed * 70;
-        rotB = elapsed * -110;
-        glow = 0.5 + energy * 0.5;
+        period = 0.82 - play * 0.22;
+        maxScale = 1.58 + energy * 0.48;
+        maxOp = 0.5 + energy * 0.38;
+        coreScale = 1.03 + energy * 0.12;
+      } else if (p === "thinking") {
+        period = 1.55;
+        maxScale = 1.48;
+        maxOp = 0.4;
+        coreScale = 1 + Math.sin(elapsed * 1.85) * 0.03;
       } else {
-        // idle / thinking: gentle float + breathe
-        y = Math.sin(elapsed * 1.35) * 7;
-        scale = 1 + Math.sin(elapsed * 1.85) * 0.045;
-        rotA = elapsed * 18;
-        rotB = elapsed * -12;
-        glow = 0.32 + Math.sin(elapsed * 1.85) * 0.08;
+        period = 2.2;
+        maxScale = 1.5;
+        maxOp = 0.36;
+        coreScale = 1 + Math.sin(elapsed * 1.35) * 0.025;
       }
 
-      wrap.style.transform = `translateY(${y.toFixed(2)}px)`;
-      core.style.transform = `scale(${scale.toFixed(3)})`;
-      core.style.boxShadow = `0 0 ${(18 + glow * 28).toFixed(0)}px ${
-        (6 + glow * 10).toFixed(0)
-      }px rgba(220, 38, 38, ${glow.toFixed(2)})`;
-      if (ringA) ringA.style.transform = `rotate(${rotA.toFixed(1)}deg)`;
-      if (ringB) ringB.style.transform = `rotate(${rotB.toFixed(1)}deg)`;
+      core.style.transform = `scale(${coreScale.toFixed(3)})`;
+
+      for (let i = 0; i < RING_COUNT; i++) {
+        const ring = ringRefs.current[i];
+        if (!ring) continue;
+        if (reduced) {
+          const s = 1.12 + i * 0.16;
+          ring.style.transform = `scale(${s.toFixed(3)})`;
+          ring.style.opacity = `${Math.max(0.12, 0.38 - i * 0.07).toFixed(3)}`;
+          continue;
+        }
+        const t = ((elapsed / Math.max(0.35, period) + i / RING_COUNT) % 1);
+        ring.style.transform = `scale(${(1 + t * (maxScale - 1)).toFixed(3)})`;
+        ring.style.opacity = `${((1 - t) * maxOp).toFixed(3)}`;
+      }
 
       raf = requestAnimationFrame(tick);
     };
@@ -92,38 +99,27 @@ export function ChatVoiceTutorOrb({
         : t.common.voiceTutor;
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-24 z-20 flex justify-center sm:bottom-28">
-      <div className="pointer-events-auto relative flex items-start gap-2">
+    <div className="pointer-events-none absolute inset-x-0 bottom-24 z-20 flex justify-center overflow-visible sm:bottom-28">
+      <div className="pointer-events-auto relative flex items-start gap-2 overflow-visible">
         <button
           type="button"
-          ref={wrapRef}
           onClick={onExit}
           aria-label={`${label}. ${t.common.voiceTutorExit}`}
-          className="relative h-[4.5rem] w-[4.5rem] rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
+          className="relative h-[4.5rem] w-[4.5rem] overflow-visible rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
         >
-          <span
-            ref={ringARef}
-            aria-hidden
-            className="absolute -inset-1 rounded-full border border-rose-300/50 dark:border-rose-400/40"
-            style={{
-              borderRadius: "50%",
-              borderTopColor: "rgba(220, 38, 38, 0.85)",
-              borderBottomColor: "transparent",
-            }}
-          />
-          <span
-            ref={ringBRef}
-            aria-hidden
-            className="absolute -inset-2.5 rounded-full border border-rose-200/40 dark:border-rose-500/30"
-            style={{
-              borderRadius: "50%",
-              borderLeftColor: "rgba(252, 165, 165, 0.9)",
-              borderRightColor: "transparent",
-            }}
-          />
+          {Array.from({ length: RING_COUNT }, (_, i) => (
+            <span
+              key={i}
+              ref={(el) => {
+                ringRefs.current[i] = el;
+              }}
+              aria-hidden
+              className="pointer-events-none absolute inset-0 rounded-full border border-rose-500/80 dark:border-rose-400/70"
+            />
+          ))}
           <div
             ref={coreRef}
-            className="absolute inset-0 overflow-hidden rounded-full bg-rose-600"
+            className="absolute inset-0 z-[1] overflow-hidden rounded-full bg-rose-600"
           >
             <img
               src="/aroses-icon.png"
@@ -139,7 +135,7 @@ export function ChatVoiceTutorOrb({
           type="button"
           onClick={onExit}
           aria-label={t.common.voiceTutorExit}
-          className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full border border-zinc-200 bg-white/90 text-zinc-500 shadow-sm hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900/90 dark:text-zinc-300 dark:hover:text-white"
+          className="relative z-[1] mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full border border-zinc-200 bg-white/90 text-zinc-500 shadow-sm hover:text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900/90 dark:text-zinc-300 dark:hover:text-white"
         >
           <svg
             viewBox="0 0 24 24"
