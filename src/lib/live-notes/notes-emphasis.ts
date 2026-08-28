@@ -1,10 +1,10 @@
 /**
- * Wrap-up weighting: pull the student's own writing (and their edits to AI
- * blocks) plus the AI-notes heading outline out of a Live Notes TipTap doc.
+ * Live-lecture wrap-up: pull student writing (and edits to AI blocks) plus
+ * the AI-notes heading outline out of a Live Notes TipTap doc.
  *
- * These become emphasis signals in the ingest job's `study_context` — they
- * steer structure and priority through the existing learner-context prompt
- * channel, while the transcript remains the ONLY factual source material.
+ * These become emphasis signals in the ingest job's `study_context` — extra
+ * lesson/quiz weight and a structure hint. The generated notes themselves
+ * are also packed into the ingest source blob next to the transcript.
  */
 
 type PmNode = {
@@ -79,7 +79,7 @@ export function buildLiveNotesStudyContext(input: {
   const goalParts: string[] = [];
   if (studentLines.length > 0) {
     goalParts.push(
-      "STUDENT NOTES & EDITS taken live during the lecture (emphasis signals — give these topics extra lessons, examples, and quiz weight; they are NOT source material and add no new facts):",
+      "STUDENT NOTES & EDITS taken live during the lecture (give these topics extra lessons, examples, and quiz weight):",
       ...studentLines.map((l) => `• ${l}`)
     );
   }
@@ -92,7 +92,7 @@ export function buildLiveNotesStudyContext(input: {
 
   const lines: string[] = [
     `TITLE: ${input.lectureTitle.slice(0, 150)}`,
-    "SUMMARY: Live-captured lecture. The transcript is the only source of facts; the notes below signal what the student cared about.",
+    "SUMMARY: Live-captured lecture. Source material is BOTH the generated notes (including slide content folded into those notes) AND the speech transcript. Student-written lines below still get extra lesson and quiz weight.",
   ];
   if (studentLines.length > 0) {
     lines.push("FOCUS AREAS:");

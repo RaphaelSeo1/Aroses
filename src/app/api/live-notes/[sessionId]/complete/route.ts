@@ -4,6 +4,8 @@ import {
   buildLiveNotesStudyContext,
   extractLiveNotesEmphasis,
 } from "@/lib/live-notes/notes-emphasis";
+import { liveNotesToSourceMarkdown } from "@/lib/live-notes/notes-review";
+import { packLiveLectureIngestBlob } from "@/lib/live-notes/pack-ingest";
 import { runLiveNotesWrapUp } from "@/lib/live-notes/run-notes-wrap-up";
 import {
   formatDeckForWrapUp,
@@ -32,14 +34,11 @@ function formatTimestamp(ms: number): string {
 /**
  * POST /api/live-notes/[sessionId]/complete
  *
- * Wrap-up handoff: compose the lecture transcript from stored segments,
- * upload it to the ingest bucket as a `.txt` (satisfies the job table's
- * `storage_path NOT NULL` and makes the existing retry route work), then
- * insert a `pdf_ingest_jobs` row parked at `reviewing_transcript` — exactly
- * the state an audio upload reaches after Whisper. The client redirects to
- * the existing build page, where `TranscriptReviewPanel` lets the student
- * review/edit before `confirm-transcript` runs the unmodified generation
- * pipeline.
+ * Wrap-up handoff: compose the lecture transcript AND generated notes
+ * (slide content folded into those notes during capture), upload them as
+ * a `.txt`, then insert a `pdf_ingest_jobs` row parked at
+ * `reviewing_transcript`. The student can review/edit before
+ * `confirm-transcript` runs the unmodified generation pipeline.
  *
  * Idempotent: a second call on a completed session returns the same jobId.
  */
@@ -60,7 +59,7 @@ export async function POST(_request: Request, ctx: Params) {
   const { data: session } = await supabase
     .from("live_lecture_sessions")
     .select(
-      "id, user_id, course_id, exam_group_id, title, status, started_at, duration_seconds, metered_seconds, ingest_job_id, notes_json"
+      "id, user_id, course_id, exam_group_id, title, status, started_at, duration_seconds, metered_seconds, ingest_job_id, notes_json, notes_text"
     )
     .eq("id", sessionId)
     .maybeSingle();
@@ -155,18 +154,6 @@ export async function POST(_request: Request, ctx: Params) {
     await loadSessionDeckPages(supabase, sessionId)
   );
 
-  // Combined ingest blob: screen first (spellings/numbers), then uploaded
-  // deck, then transcript.
-  const transcript = (
-    [
-      screenContent ? `[from ${title} screen]\n${screenContent}` : null,
-      deckContent ? `[from ${title} slides]\n${deckContent}` : null,
-      transcriptOnly,
-    ]
-      .filter(Boolean)
-      .join("\n\n")
-  ).slice(0, 500_000);
-
   // Mirrors the confirm-transcript minimum — below this, generation would
   // silently no-op, so reject with something actionable instead.
   if (body.trim().length < 80) {
@@ -220,28 +207,6 @@ export async function POST(_request: Request, ctx: Params) {
   if (!examGroupId) {
     return NextResponse.json(
       { error: "Could not find a section for this course." },
-      { status: 500 }
-    );
-  }
-
-  // ── Upload the composed transcript as the job's storage object ──────────
-  // `{userId}/{uuid}.txt` matches the ingest path contract, so retry /
-  // failure-cleanup paths that download or remove the object work unchanged.
-  const storagePath = `${user.id}/${crypto.randomUUID()}.txt`;
-  const { error: uploadErr } = await admin.storage
-    .from(STUDY_PDF_INGEST_BUCKET)
-    .upload(storagePath, new Blob([transcript], { type: "text/plain" }), {
-      contentType: "text/plain",
-      upsert: false,
-    });
-  if (uploadErr) {
-    console.error("[live-notes/complete] transcript upload", sessionId, uploadErr);
-    void report("live-notes.transcript_upload_failed", uploadErr, {
-      userId: user.id,
-      detail: { sessionId },
-    });
-    return NextResponse.json(
-      { error: "Could not save the transcript file." },
       { status: 500 }
     );
   }
@@ -300,16 +265,47 @@ export async function POST(_request: Request, ctx: Params) {
     });
   }
 
-  // ── Three-input weighting (v2) ───────────────────────────────────────────
-  // Student-authored/edited note blocks + the AI-notes heading outline flow
-  // into `study_context`, which every outline/module prompt already renders
-  // as learner context. Emphasis only — the transcript stays the sole
-  // factual source.
+  // ── Ingest source: notes (incl. slide-folded content) + transcript ─────
+  // Screen extracts and the uploaded deck stay in the blob as extra
+  // grounding. Student lines still go to study_context for extra weight.
+  const notesSource =
+    liveNotesToSourceMarkdown(notesJson) ||
+    (typeof session.notes_text === "string" ? session.notes_text.trim() : "");
+  const transcript = packLiveLectureIngestBlob({
+    title,
+    notesMarkdown: notesSource,
+    transcript: body,
+    screenContent,
+    deckContent,
+  });
+
   const emphasis = extractLiveNotesEmphasis(notesJson);
   const studyContext = buildLiveNotesStudyContext({
     emphasis,
     lectureTitle: title,
   });
+
+  // ── Upload the composed source as the job's storage object ──────────────
+  // `{userId}/{uuid}.txt` matches the ingest path contract, so retry /
+  // failure-cleanup paths that download or remove the object work unchanged.
+  const storagePath = `${user.id}/${crypto.randomUUID()}.txt`;
+  const { error: uploadErr } = await admin.storage
+    .from(STUDY_PDF_INGEST_BUCKET)
+    .upload(storagePath, new Blob([transcript], { type: "text/plain" }), {
+      contentType: "text/plain",
+      upsert: false,
+    });
+  if (uploadErr) {
+    console.error("[live-notes/complete] transcript upload", sessionId, uploadErr);
+    void report("live-notes.transcript_upload_failed", uploadErr, {
+      userId: user.id,
+      detail: { sessionId },
+    });
+    return NextResponse.json(
+      { error: "Could not save the transcript file." },
+      { status: 500 }
+    );
+  }
 
   // ── Insert the job parked at reviewing_transcript ────────────────────────
   // Same recoverable state audio uploads reach after Whisper: the reaper

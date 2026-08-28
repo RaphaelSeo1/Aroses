@@ -89,6 +89,16 @@ export function extractLectureSummaryMarkdown(
 }
 
 /**
+ * Full live-notes document as markdown for course ingest: recap (if any)
+ * plus every section (AI, student, slide-folded). Empty string if nothing.
+ */
+export function liveNotesToSourceMarkdown(notesJson: unknown): string {
+  const recap = extractLectureSummaryMarkdown(notesJson);
+  const body = noteNodesToMarkdown(topLevelNodes(notesJson)).trim();
+  return [recap, body].filter(Boolean).join("\n\n").trim();
+}
+
+/**
  * Store a tutor-style lecture recap on the TipTap doc attrs (not in the
  * live notes body). Replaces any prior recap.
  */
