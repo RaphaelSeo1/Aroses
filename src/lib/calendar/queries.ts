@@ -29,8 +29,19 @@ function isMissingRelation(
   tableHint: string
 ): boolean {
   if (!err) return false;
-  if (err.code === "42P01" || err.code === "PGRST205") return true;
-  return (err.message ?? "").toLowerCase().includes(tableHint.toLowerCase());
+  if (
+    err.code === "42P01" ||
+    err.code === "PGRST205" ||
+    err.code === "PGRST204"
+  ) {
+    return true;
+  }
+  const msg = (err.message ?? "").toLowerCase();
+  return (
+    msg.includes(tableHint.toLowerCase()) ||
+    msg.includes("schema cache") ||
+    msg.includes("does not exist")
+  );
 }
 
 export async function queryCalendarItems(
@@ -119,18 +130,13 @@ export async function loadUserCalendar(
     };
   }
   const split = splitTodoSectionFallback(items);
-  if (sectionResult.tableMissing) {
-    return {
-      items: split.items,
-      sections: split.sections,
-      tableMissing: true,
-      error: null,
-    };
-  }
   return {
     items: split.items,
-    sections: sectionResult.sections,
-    tableMissing: false,
+    sections:
+      sectionResult.sections.length > 0
+        ? sectionResult.sections
+        : split.sections,
+    tableMissing: sectionResult.tableMissing,
     error: null,
   };
 }
@@ -307,15 +313,31 @@ export async function insertTodoSection(
   error: { code?: string; message?: string } | null;
   tooMany?: boolean;
 }> {
+  const dedicated = await insertDedicatedTodoSection(supabase, userId, title);
+  if (dedicated.section || dedicated.tooMany) return dedicated;
+  if (dedicated.error && !isMissingRelation(dedicated.error, "user_calendar_todo_sections")) {
+    /* table exists but insert failed — still try the items fallback */
+  }
+  return insertFallbackTodoSection(supabase, userId, title);
+}
+
+async function insertDedicatedTodoSection(
+  supabase: SupabaseClient,
+  userId: string,
+  title: string
+): Promise<{
+  section: CalendarTodoSection | null;
+  error: { code?: string; message?: string } | null;
+  tooMany?: boolean;
+}> {
   const { count, error: countErr } = await supabase
     .from("user_calendar_todo_sections")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId);
 
-  if (countErr && isMissingRelation(countErr, "user_calendar_todo_sections")) {
-    return insertFallbackTodoSection(supabase, userId, title);
+  if (countErr) {
+    return { section: null, error: countErr };
   }
-  if (countErr) return { section: null, error: countErr };
   if ((count ?? 0) >= CALENDAR_SECTIONS_MAX) {
     return { section: null, error: null, tooMany: true };
   }
@@ -357,29 +379,46 @@ async function insertFallbackTodoSection(
   error: { code?: string; message?: string } | null;
   tooMany?: boolean;
 }> {
-  const { items, error } = await queryCalendarItems(supabase, userId);
-  if (error) return { section: null, error };
+  const listed = await supabase
+    .from("user_calendar_items")
+    .select(CALENDAR_SELECT_BASE)
+    .eq("user_id", userId)
+    .limit(400);
+  if (listed.error) return { section: null, error: listed.error };
+  const items = (listed.data ?? []).map((row) =>
+    mapCalendarRow(row as Parameters<typeof mapCalendarRow>[0])
+  );
   const { sections } = splitTodoSectionFallback(items);
   if (sections.length >= CALENDAR_SECTIONS_MAX) {
     return { section: null, error: null, tooMany: true };
   }
   const sortOrder =
     sections.reduce((max, s) => Math.max(max, s.sortOrder), -1) + 1;
-  const inserted = await insertCalendarItem(supabase, userId, {
-    title,
-    notes: encodeTodoSectionFallbackNotes({ sortOrder, itemIds: [] }),
-    kind: "todo",
-    allDay: true,
-  });
-  if (inserted.error || !inserted.item) {
-    return { section: null, error: inserted.error };
-  }
+
+  const { data, error } = await supabase
+    .from("user_calendar_items")
+    .insert({
+      user_id: userId,
+      title,
+      notes: encodeTodoSectionFallbackNotes({ sortOrder, itemIds: [] }),
+      kind: "todo",
+      starts_at: null,
+      ends_at: null,
+      all_day: true,
+      important: false,
+      completed_at: null,
+    })
+    .select(CALENDAR_SELECT_BASE)
+    .single();
+
+  if (error || !data) return { section: null, error };
+  const item = mapCalendarRow(data as Parameters<typeof mapCalendarRow>[0]);
   return {
     section: {
-      id: inserted.item.id,
-      title: inserted.item.title,
+      id: item.id,
+      title: item.title,
       sortOrder,
-      createdAt: inserted.item.createdAt,
+      createdAt: item.createdAt,
     },
     error: null,
   };
@@ -402,29 +441,37 @@ export async function updateTodoSectionTitle(
     .select(CALENDAR_SECTIONS_SELECT)
     .maybeSingle();
 
-  if (error && isMissingRelation(error, "user_calendar_todo_sections")) {
-    const updated = await updateCalendarItem(supabase, userId, sectionId, {
-      title,
-    });
-    if (updated.error) return { section: null, error: updated.error };
-    if (!updated.item || !isTodoSectionFallbackNotes(updated.item.notes)) {
-      return { section: null, error: null };
-    }
-    const parsed = parseTodoSectionFallbackNotes(updated.item.notes);
+  if (!error && data) {
     return {
-      section: {
-        id: updated.item.id,
-        title: updated.item.title,
-        sortOrder: parsed?.sortOrder ?? 0,
-        createdAt: updated.item.createdAt,
-      },
+      section: mapSectionRow(data as Parameters<typeof mapSectionRow>[0]),
       error: null,
     };
   }
-  if (error) return { section: null, error };
-  if (!data) return { section: null, error: null };
+  if (error && !isMissingRelation(error, "user_calendar_todo_sections")) {
+    return { section: null, error };
+  }
+
+  const { data: row, error: rowErr } = await supabase
+    .from("user_calendar_items")
+    .update({ title, updated_at: new Date().toISOString() })
+    .eq("id", sectionId)
+    .eq("user_id", userId)
+    .select(CALENDAR_SELECT_BASE)
+    .maybeSingle();
+  if (rowErr) return { section: null, error: rowErr };
+  const notes = typeof row?.notes === "string" ? row.notes : "";
+  if (!row || !isTodoSectionFallbackNotes(notes)) {
+    return { section: null, error: error ?? null };
+  }
+  const parsed = parseTodoSectionFallbackNotes(notes);
+  const item = mapCalendarRow(row as Parameters<typeof mapCalendarRow>[0]);
   return {
-    section: mapSectionRow(data as Parameters<typeof mapSectionRow>[0]),
+    section: {
+      id: item.id,
+      title: item.title,
+      sortOrder: parsed?.sortOrder ?? 0,
+      createdAt: item.createdAt,
+    },
     error: null,
   };
 }
@@ -442,27 +489,28 @@ export async function deleteTodoSection(
     .select("id")
     .maybeSingle();
 
-  if (error && isMissingRelation(error, "user_calendar_todo_sections")) {
-    const { data: row } = await supabase
-      .from("user_calendar_items")
-      .select("id, notes")
-      .eq("id", sectionId)
-      .eq("user_id", userId)
-      .maybeSingle();
-    const notes = typeof row?.notes === "string" ? row.notes : "";
-    if (!row?.id || !isTodoSectionFallbackNotes(notes)) {
-      return { ok: false, error: null };
-    }
-    const del = await supabase
-      .from("user_calendar_items")
-      .delete()
-      .eq("id", sectionId)
-      .eq("user_id", userId)
-      .select("id")
-      .maybeSingle();
-    if (del.error) return { ok: false, error: del.error };
-    return { ok: Boolean(del.data), error: null };
+  if (!error && data) return { ok: true, error: null };
+  if (error && !isMissingRelation(error, "user_calendar_todo_sections")) {
+    return { ok: false, error };
   }
-  if (error) return { ok: false, error };
-  return { ok: Boolean(data), error: null };
+
+  const { data: row } = await supabase
+    .from("user_calendar_items")
+    .select("id, notes")
+    .eq("id", sectionId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  const notes = typeof row?.notes === "string" ? row.notes : "";
+  if (!row?.id || !isTodoSectionFallbackNotes(notes)) {
+    return { ok: false, error: error ?? null };
+  }
+  const del = await supabase
+    .from("user_calendar_items")
+    .delete()
+    .eq("id", sectionId)
+    .eq("user_id", userId)
+    .select("id")
+    .maybeSingle();
+  if (del.error) return { ok: false, error: del.error };
+  return { ok: Boolean(del.data), error: null };
 }

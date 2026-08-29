@@ -38,7 +38,12 @@ export async function POST(request: Request) {
   if (error || !section) {
     console.error("[calendar sections POST]", error);
     return NextResponse.json(
-      { error: "Could not create that section." },
+      {
+        error:
+          typeof error?.message === "string" && error.message.trim()
+            ? error.message
+            : "Could not create that section.",
+      },
       { status: 500 }
     );
   }
