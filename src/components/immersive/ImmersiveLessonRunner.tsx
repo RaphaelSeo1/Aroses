@@ -16,6 +16,7 @@ import { SlideStage } from "@/components/immersive/SlideStage";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
+import { pumpTypewriterReply } from "@/lib/chat/typewriter-pump";
 import type { CourseModule, CoursePayload } from "@/types/course";
 import type {
   InteractionMode,
@@ -1727,6 +1728,26 @@ export function ImmersiveLessonRunner({
         let chunkAccum = "";
         let firstChunkEmitted = false;
         const sentences: string[] = [];
+        let replySource = "";
+        let sseDone = false;
+        const pump = pumpTypewriterReply({
+          getSource: () => replySource,
+          reveal: (next) => {
+            setTranscriptLines((prev) => {
+              const id = activeRoseLineIdRef.current;
+              if (!id) return prev;
+              return prev.map((l) =>
+                l.id === id ? { ...l, text: next, streaming: true } : l
+              );
+            });
+            setTutorReply(next.length > 0 ? next : null);
+            if (interactionModeRef.current !== "voice") {
+              setNarrationText(next);
+            }
+          },
+          isDone: () => sseDone,
+          isCancelled: () => isStale() || streamAc.signal.aborted,
+        });
 
         const sentenceStream = (async function* (): AsyncGenerator<
           string,
@@ -1736,23 +1757,7 @@ export function ImmersiveLessonRunner({
           for await (const ev of eachSseEvent()) {
             if (ev.type === "text") {
               pendingBuf += ev.delta;
-              if (interactionMode !== "voice") {
-                // Text-only mode: reveal tokens in the dialogue strip.
-                setTranscriptLines((prev) => {
-                  const id = activeRoseLineIdRef.current;
-                  if (!id) return prev;
-                  return prev.map((l) =>
-                    l.id === id
-                      ? { ...l, text: (l.text ?? "") + ev.delta, streaming: true }
-                      : l
-                  );
-                });
-                setTutorReply((prev) => {
-                  const next = (prev ?? "") + ev.delta;
-                  setNarrationText(next);
-                  return next;
-                });
-              }
+              replySource += ev.delta;
               // Flush complete sentences (ending in . ! ? or newline).
               // We require a terminator + whitespace OR end-of-buffer so
               // we don't cut mid-decimal ("3.14") in pathological cases.
@@ -1824,28 +1829,19 @@ export function ImmersiveLessonRunner({
         })();
 
         if (interactionModeRef.current === "voice") {
-          // Gate transcript reveal on audio playback — each sentence
-          // appears in the transcript card the moment its audio chunk
-          // actually starts playing, NOT when Claude emits the tokens.
-          // If a sentence's audio fetch / playback fails, the hook
-          // still fires `onSentencePlaying` with `failed: true` so the
-          // text is revealed anyway (no silent + no-caption state).
-          //
-          // If the user barges in mid-reply, sentences after the abort
-          // point will NEVER fire their reveal callback — that's
-          // intentional. We don't backfill the rest of the text on
-          // abort; the partially-revealed transcript is what the
-          // student actually heard, which is what they should see.
+          // Dialogue typewrites from the SSE buffer. TTS still speaks
+          // complete sentence chunks. `onSentencePlaying` only updates
+          // lastSpokenRef / narration — not the student bubble.
           let revealedUpTo = 0;
           await voice.speakSentenceStream(sentenceStream, {
             onSentencePlaying: (text, index) => {
               if (index < revealedUpTo) return;
               revealedUpTo = index + 1;
               const spoken = sentences.slice(0, revealedUpTo).join(" ");
-              patchActiveRoseLine(spoken, true);
               // Keep the "what Rose has said out loud" snapshot
               // current — used as `interruptedAfter` if the student
-              // barges in next.
+              // barges in next. The dialogue bubble typewrites from
+              // the SSE buffer independently; TTS still gets chunks.
               lastSpokenRef.current = spoken;
               // Walk-through highlight: the SOURCE panel highlights
               // the paragraph closest to whatever Rose is saying
@@ -1860,6 +1856,9 @@ export function ImmersiveLessonRunner({
             void _;
           }
         }
+
+        sseDone = true;
+        await pump;
 
         if (isStale() || streamAc.signal.aborted) return;
 

@@ -7,6 +7,7 @@ import { ChatVoiceTutorButton } from "@/components/chat-voice/ChatVoiceTutorButt
 import { ChatVoiceTutorOrb } from "@/components/chat-voice/ChatVoiceTutorOrb";
 import { RoseAssistantTabs } from "@/components/RoseAssistantTabs";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
+import { typewriteKnownText } from "@/lib/chat/typewriter-pump";
 import { useChatVoiceTutor } from "@/lib/chat-voice/use-chat-voice-tutor";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
@@ -111,37 +112,6 @@ function truncateForTrace(text: string, max = 100): string {
   const t = text.trim().replace(/\s+/g, " ");
   if (t.length <= max) return t;
   return `${t.slice(0, max - 1)}…`;
-}
-
-/** Reveal `full` into `onFrame` in small character chunks. */
-function typewriteText(
-  full: string,
-  onFrame: (partial: string) => void,
-  signal?: AbortSignal
-): Promise<void> {
-  if (!full) {
-    onFrame("");
-    return Promise.resolve();
-  }
-  const charsPerTick = Math.max(2, Math.min(8, Math.ceil(full.length / 90)));
-  const delayMs = 10;
-  return new Promise((resolve, reject) => {
-    let i = 0;
-    const step = () => {
-      if (signal?.aborted) {
-        reject(new DOMException("Aborted", "AbortError"));
-        return;
-      }
-      i = Math.min(full.length, i + charsPerTick);
-      onFrame(full.slice(0, i));
-      if (i >= full.length) {
-        resolve();
-        return;
-      }
-      window.setTimeout(step, delayMs);
-    };
-    step();
-  });
 }
 
 function buildReplyTrace(
@@ -733,7 +703,7 @@ export function StudyChatDrawer({
         ]);
 
         try {
-          await typewriteText(
+          await typewriteKnownText(
             reply,
             (partial) => {
               setMessages((prev) => {
@@ -749,7 +719,7 @@ export function StudyChatDrawer({
                 return copy;
               });
             },
-            ac.signal
+            { signal: ac.signal }
           );
         } catch {
           if (ac.signal.aborted) return null;

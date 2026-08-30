@@ -7,6 +7,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { typewriteKnownText } from "@/lib/chat/typewriter-pump";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { describePdfIngestUploadFailure } from "@/lib/storage-upload-errors";
@@ -240,7 +241,20 @@ export function CalendarRoseChat({
       .filter((x) => x.content.trim())
       .slice(-12)
       .map((x) => ({ role: x.role, content: x.content }));
-    setTurns((prev) => [...prev, userTurn]);
+    const assistantId = `a-${Date.now()}`;
+    setTurns((prev) => [
+      ...prev,
+      userTurn,
+      { id: assistantId, role: "assistant", content: "" },
+    ]);
+
+    const revealReply = (next: string) => {
+      setTurns((prev) =>
+        prev.map((turn) =>
+          turn.id === assistantId ? { ...turn, content: next } : turn
+        )
+      );
+    };
 
     try {
       const res = await fetch("/api/calendar/chat", {
@@ -262,24 +276,12 @@ export function CalendarRoseChat({
       };
       if (!res.ok) throw new Error(data.error || t.calendar.roseError);
       if (Array.isArray(data.items)) onItems(data.items);
-      setTurns((prev) => [
-        ...prev,
-        {
-          id: `a-${Date.now()}`,
-          role: "assistant",
-          content: data.reply?.trim() || t.calendar.roseEmpty,
-        },
-      ]);
+      const reply = data.reply?.trim() || t.calendar.roseEmpty;
+      await typewriteKnownText(reply, revealReply);
     } catch (e) {
-      setTurns((prev) => [
-        ...prev,
-        {
-          id: `a-${Date.now()}`,
-          role: "assistant",
-          content:
-            e instanceof Error && e.message ? e.message : t.calendar.roseError,
-        },
-      ]);
+      revealReply(
+        e instanceof Error && e.message ? e.message : t.calendar.roseError
+      );
     } finally {
       setBusy(false);
       inputRef.current?.focus();
@@ -352,7 +354,7 @@ export function CalendarRoseChat({
             </div>
           ))
         )}
-        {busy ? (
+        {busy && turns[turns.length - 1]?.content === "" ? (
           <p className="text-[12px] text-zinc-400">{AI_ASSISTANT_NAME}…</p>
         ) : null}
       </div>

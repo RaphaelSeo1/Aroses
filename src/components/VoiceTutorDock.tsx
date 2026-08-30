@@ -17,6 +17,7 @@ import type {
 } from "@/components/VoiceTutorTranscriptSidebar";
 import { VoiceWaveform } from "@/components/VoiceWaveform";
 import type { VoiceContinuationHint } from "@/lib/ai/study-chat";
+import { pumpTypewriterReply } from "@/lib/chat/typewriter-pump";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import { playMpegFromResponse } from "@/lib/voice-tutor/play-mpeg-from-response";
 import type { StudyChatTurn } from "@/types/study-chat";
@@ -820,7 +821,14 @@ export function VoiceTutorDock({
       };
 
       let fullText = "";
+      let sseDone = false;
       let detectedAction: unknown | null = null;
+      const pump = pumpTypewriterReply({
+        getSource: () => fullText,
+        reveal: setLiveAssistantText,
+        isDone: () => sseDone,
+        isCancelled: () => cancelled,
+      });
 
       try {
         const voiceContinuation = pendingVoiceContinuationRef.current;
@@ -898,7 +906,6 @@ export function VoiceTutorDock({
                 fullText += data.delta;
                 sentenceBuf += data.delta;
                 assistantStreamFullRef.current = fullText;
-                setLiveAssistantText(fullText);
                 let chunk;
                 while ((chunk = extractChunk(false)) !== null) {
                   pendingTtsChunks.push(chunk);
@@ -920,6 +927,7 @@ export function VoiceTutorDock({
         }
 
         streamTokensDoneRef.current = true;
+        sseDone = true;
 
         // Flush whatever remains in the sentence buffer.
         const tail = extractChunk(true);
@@ -927,6 +935,7 @@ export function VoiceTutorDock({
         flushPendingTtsChunks(true);
 
         await playbackTail;
+        if (!cancelled) await pump;
 
         if (cancelled) {
           messagesRef.current = prev;
@@ -963,6 +972,7 @@ export function VoiceTutorDock({
         if (!cancelled) setError("Network error — try again.");
         messagesRef.current = prev;
       } finally {
+        sseDone = true;
         cancelPlaybackRef.current = null;
         setBusy(false);
         // If we were cancelled by barge-in or by leaving live mode, whoever

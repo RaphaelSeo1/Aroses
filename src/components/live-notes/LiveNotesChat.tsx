@@ -15,6 +15,7 @@ import type { NotesPanelHandle } from "@/components/immersive/NotesPanel";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
 import { useChatVoiceTutor } from "@/lib/chat-voice/use-chat-voice-tutor";
 import { useT } from "@/lib/i18n/LocaleProvider";
+import { pumpTypewriterReply } from "@/lib/chat/typewriter-pump";
 import {
   sanitizeChatNotesMarkdown,
   splitStudentFacingReply,
@@ -41,11 +42,6 @@ type NoteOp =
   | { kind: "revise"; sectionId: string }
   | { kind: "append"; sectionId: string; dividerBefore: boolean }
   | { kind: "notes"; text: string };
-
-const REPLY_TICK_MS = 16;
-const REPLY_CPS = 68;
-const REPLY_CPS_CATCHUP = 170;
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const SUGGESTIONS = [
   "What did they just cover?",
@@ -657,7 +653,6 @@ export function LiveNotesChat({
       let noteOpCount = 0;
       let pendingReply = "";
       let fallbackReply: string | null = null;
-      let revealed = 0;
       let sseDone = false;
       let cancelled = false;
       const thoughtAcc: string[] = [];
@@ -697,44 +692,14 @@ export function LiveNotesChat({
         );
       };
 
-      const pumpReply = async () => {
-        while (!cancelled) {
-          harvestLeaks();
-          const source = visibleSource();
-          if (revealed > source.length) {
-            revealed = source.length;
-            revealReply(source);
-          }
-          const leftover = source.slice(revealed);
-          if (voiceActiveRef.current) {
-            revealed = source.length;
-            revealReply(source);
-            if (sseDone) break;
-            await sleep(REPLY_TICK_MS);
-            continue;
-          }
-          if (!leftover) {
-            if (sseDone) break;
-            await sleep(REPLY_TICK_MS);
-            continue;
-          }
-          const cps =
-            leftover.length > 320
-              ? REPLY_CPS_CATCHUP
-              : leftover.length > 90
-                ? 110
-                : REPLY_CPS;
-          const step = Math.max(
-            1,
-            Math.round((cps * REPLY_TICK_MS) / 1000)
-          );
-          revealed += Math.min(step, leftover.length);
-          revealReply(source.slice(0, revealed));
-          await sleep(REPLY_TICK_MS);
-        }
-      };
-
-      const pump = pumpReply();
+      const pump = pumpTypewriterReply({
+        getSource: visibleSource,
+        reveal: revealReply,
+        isDone: () => sseDone,
+        isCancelled: () => cancelled,
+        skipAnimation: () => voiceActiveRef.current,
+        onTick: harvestLeaks,
+      });
       let failed = false;
       try {
         const res = await fetch(`/api/live-notes/${sessionId}/chat`, {

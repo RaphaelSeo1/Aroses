@@ -9,7 +9,7 @@ import {
   type NotesPanelHandle,
   type AutoGenerateBlock,
 } from "@/components/immersive/NotesPanel";
-import { TypewriterText } from "@/components/immersive/TypewriterText";
+import { pumpTypewriterReply, typewriteKnownText } from "@/lib/chat/typewriter-pump";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
 import { studentRequestedNotesSave } from "@/lib/mentored/build-auto-notes-from-tutor-turn";
@@ -124,10 +124,6 @@ export function TutorSessionRunner({
   messagesRef.current = messages;
   const [composer, setComposer] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  // Id of the message currently being revealed. Only this assistant bubble
-  // types out character-by-character; older bubbles render instantly so the
-  // transcript doesn't re-animate everything on each render.
-  const [liveAssistantId, setLiveAssistantId] = useState<string | null>(null);
   const [endError, setEndError] = useState<string | null>(null);
   const [endingSession, setEndingSession] = useState(false);
   const [sessionPaused, setSessionPaused] = useState(
@@ -652,11 +648,17 @@ export function TutorSessionRunner({
       const trimmed = text.trim();
       if (!trimmed) return;
       const assistantId = `a-${Date.now()}`;
-      setLiveAssistantId(assistantId);
       setMessages((prev) => [
         ...prev,
-        { id: assistantId, role: "assistant", content: trimmed },
+        { id: assistantId, role: "assistant", content: "" },
       ]);
+      await typewriteKnownText(trimmed, (next) => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: next } : m
+          )
+        );
+      });
       if (opts?.persist !== false) {
         try {
           await fetch(
@@ -756,7 +758,6 @@ export function TutorSessionRunner({
       };
       const assistantId = `a-${Date.now()}`;
       activeAssistantIdRef.current = assistantId;
-      setLiveAssistantId(assistantId);
       const assistantMsg: LocalMessage = {
         id: assistantId,
         role: "assistant",
@@ -791,12 +792,6 @@ export function TutorSessionRunner({
         const s = sentence.trim();
         if (!s) return;
         revealedSentencesRef.current = [...revealedSentencesRef.current, s];
-        const revealed = revealedSentencesRef.current.join(" ");
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: revealed } : m
-          )
-        );
       };
 
       const runTurnPlayback = async (fromIndex: number) => {
@@ -850,8 +845,11 @@ export function TutorSessionRunner({
         void runTurnPlayback(0);
       }
 
-      // SSE stream.
+      // SSE stream. Visual typewriter runs in parallel so token chunks
+      // don't dump into the bubble; TTS still gets complete sentences.
       let buffered = "";
+      let sseDone = false;
+      let cancelled = false;
       let lastFlushedAt = 0;
       const SENTENCE_RE = /([.!?])\s+(?=[A-Z“"'(\[])/g;
 
@@ -881,6 +879,19 @@ export function TutorSessionRunner({
       const streamAc = new AbortController();
       activeTurnStreamRef.current?.abort();
       activeTurnStreamRef.current = streamAc;
+
+      const pump = pumpTypewriterReply({
+        getSource: () => buffered,
+        reveal: (next) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: next } : m
+            )
+          );
+        },
+        isDone: () => sseDone,
+        isCancelled: () => cancelled || streamAc.signal.aborted,
+      });
 
       try {
         const res = await fetch(
@@ -931,15 +942,9 @@ export function TutorSessionRunner({
                   if (interactionModeRef.current === "voice") {
                     // §12 — Do NOT update the bubble's content here.
                     // The onSentencePlaying callback drives reveal in
-                    // lockstep with TTS playback.
+                    // lockstep with TTS playback. Visual skipAnimation
+                    // dumps the same spoken-stable buffer when voice is on.
                     flushSentences(false);
-                  } else {
-                    // Text mode: reveal the streaming reply as it arrives.
-                    setMessages((prev) =>
-                      prev.map((m) =>
-                        m.id === assistantId ? { ...m, content: buffered } : m
-                      )
-                    );
                   }
                 }
               } catch {
@@ -977,6 +982,8 @@ export function TutorSessionRunner({
         }
         flushSentences(true);
         turnVoice.streamDone = true;
+        sseDone = true;
+        await pump;
         const finalContent = buffered.trim() || revealedSentencesRef.current.join(" ");
         setMessages((prev) =>
           prev.map((m) =>
@@ -1006,6 +1013,8 @@ export function TutorSessionRunner({
           );
         }
       } catch (e) {
+        cancelled = true;
+        sseDone = true;
         if (streamAc.signal.aborted) {
           turnVoice.streamDone = true;
           return;
@@ -1648,7 +1657,6 @@ export function TutorSessionRunner({
               <MessageBubble
                 key={m.id}
                 message={m}
-                live={m.role === "assistant" && m.id === liveAssistantId}
                 onAddToNotes={() => addMessageToNotes(m)}
                 addedRecently={addedNoteIds.has(m.id)}
               />
@@ -1952,12 +1960,10 @@ export function TutorSessionRunner({
 
 function MessageBubble({
   message,
-  live,
   onAddToNotes,
   addedRecently,
 }: {
   message: LocalMessage;
-  live: boolean;
   onAddToNotes: () => void;
   addedRecently: boolean;
 }) {
@@ -1982,16 +1988,7 @@ function MessageBubble({
               Rose
             </p>
           ) : null}
-          <p className="whitespace-pre-wrap">
-            {isUser ? (
-              display
-            ) : (
-              // Reveal Rose's replies character-by-character (matching the
-              // course-generation feel). Only the live message animates;
-              // older bubbles render instantly via `instant`.
-              <TypewriterText text={display} instant={!live} charIntervalMs={9} />
-            )}
-          </p>
+          <p className="whitespace-pre-wrap">{display}</p>
 
           {message.image ? (
             <a
