@@ -11,6 +11,7 @@ import {
   TUTOR_SESSION_MAX_FILES,
   TUTOR_SESSION_MAX_TOTAL_BYTES,
 } from "@/lib/tutor-session/upload-limits";
+import { isChatAttachmentKind } from "@/lib/chat/chat-attachment-formats";
 import { detectIngestFormat } from "@/lib/study-ingest/formats";
 import { logActivity } from "@/lib/activity-log";
 import type {
@@ -98,9 +99,12 @@ export async function POST(request: Request) {
   }
   let totalBytes = 0;
   for (const f of fileEntries) {
-    if (!detectIngestFormat(f.name, f.type)) {
+    const kind = detectIngestFormat(f.name, f.type);
+    if (!isChatAttachmentKind(kind)) {
       return NextResponse.json(
-        { error: `Unsupported file type: ${f.name}` },
+        {
+          error: `This chat can use PDFs, Word, slides, images, and text files.`,
+        },
         { status: 400 }
       );
     }

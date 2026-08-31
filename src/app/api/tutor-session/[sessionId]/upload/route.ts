@@ -9,6 +9,7 @@ import {
   TUTOR_SESSION_MAX_FILES,
   TUTOR_SESSION_MAX_TOTAL_BYTES,
 } from "@/lib/tutor-session/upload-limits";
+import { isChatAttachmentKind } from "@/lib/chat/chat-attachment-formats";
 import { detectIngestFormat } from "@/lib/study-ingest/formats";
 
 /**
@@ -100,9 +101,12 @@ export async function POST(request: Request, ctx: Params) {
   }
   let totalBytes = 0;
   for (const f of fileEntries) {
-    if (!detectIngestFormat(f.name, f.type)) {
+    const kind = detectIngestFormat(f.name, f.type);
+    if (!isChatAttachmentKind(kind)) {
       return NextResponse.json(
-        { error: `Unsupported file type: ${f.name}` },
+        {
+          error: `This chat can use PDFs, Word, slides, images, and text files.`,
+        },
         { status: 400 }
       );
     }
@@ -123,7 +127,7 @@ export async function POST(request: Request, ctx: Params) {
     const buf = Buffer.from(await file.arrayBuffer());
     const mime = file.type || "application/octet-stream";
     const formatKind = detectIngestFormat(file.name, mime);
-    if (!formatKind) {
+    if (!isChatAttachmentKind(formatKind)) {
       failedFiles.push(`${file.name} (unsupported type)`);
       continue;
     }

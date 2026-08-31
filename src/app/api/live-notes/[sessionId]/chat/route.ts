@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { streamLiveLectureChat } from "@/lib/ai/live-lecture-chat";
 import { clampNoteInstruction } from "@/lib/ai/note-instruction";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
+import { lookAtAttachmentPrompt } from "@/lib/chat/chat-attachment-formats";
+import { parseChatAttachments } from "@/lib/chat/chat-attachment-parse";
 import { MAX_CHAT_PDF_CHARS } from "@/lib/live-notes/extract-chat-pdf";
 import { pickSlidePagesForChat } from "@/lib/live-notes/pick-relevant-slide-pages";
 import { loadSessionDeckPages } from "@/lib/live-notes/slide-pages";
@@ -32,7 +34,8 @@ const MAX_SECTIONS = 60;
  *   visibleSectionId?: string,
  *   noteInstruction?: string,
  *   attachedPdfText?: string,
- *   attachedPdfName?: string
+ *   attachedPdfName?: string,
+ *   attachedFiles?: { name: string, text: string }[]
  * }
  *
  *   event: thought data: { message }
@@ -73,20 +76,15 @@ export async function POST(request: Request, ctx: Params) {
     noteInstruction?: unknown;
     attachedPdfText?: unknown;
     attachedPdfName?: unknown;
+    attachedFiles?: unknown;
   };
-  const attachedPdfText =
-    typeof b.attachedPdfText === "string" ? b.attachedPdfText.trim() : "";
-  const attachedPdfName =
-    typeof b.attachedPdfName === "string"
-      ? b.attachedPdfName.trim().slice(0, 200)
-      : "";
+  const attached = parseChatAttachments(b);
   const rawMessage = typeof b.message === "string" ? b.message.trim() : "";
-  if (!rawMessage && !attachedPdfText) {
+  if (!rawMessage && !attached.text) {
     return NextResponse.json({ error: "message required" }, { status: 400 });
   }
   const message =
-    rawMessage.slice(0, MAX_MESSAGE) ||
-    `Look at this PDF${attachedPdfName ? ` (${attachedPdfName})` : ""}.`;
+    rawMessage.slice(0, MAX_MESSAGE) || lookAtAttachmentPrompt(attached.name);
 
   const { data: session } = await supabase
     .from("live_lecture_sessions")
@@ -248,10 +246,10 @@ export async function POST(request: Request, ctx: Params) {
               ? b.visibleSectionId.trim().slice(0, 64)
               : undefined,
           noteInstruction: noteInstruction || undefined,
-          attachedPdfText: attachedPdfText
-            ? attachedPdfText.slice(0, MAX_CHAT_PDF_CHARS)
+          attachedPdfText: attached.text
+            ? attached.text.slice(0, MAX_CHAT_PDF_CHARS)
             : undefined,
-          attachedPdfName: attachedPdfName || undefined,
+          attachedPdfName: attached.name || undefined,
           appendSectionId,
           userId: user.id,
         })) {

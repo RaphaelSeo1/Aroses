@@ -6,7 +6,8 @@ import type { TutorSessionModeTag } from "@/types/tutor-session";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { promptDialog } from "@/components/AppDialogs";
-import { detectIngestFormat, INGEST_ACCEPT_ATTRIBUTE } from "@/lib/study-ingest/formats";
+import { CHAT_ATTACHMENT_ACCEPT_ATTRIBUTE, isChatAttachmentKind } from "@/lib/chat/chat-attachment-formats";
+import { detectIngestFormat } from "@/lib/study-ingest/formats";
 import {
   TUTOR_SESSION_MAX_FILES,
   TUTOR_SESSION_MAX_TOTAL_BYTES,
@@ -114,13 +115,11 @@ export function TutorSessionStartScreen() {
         let rejectedUnsupported: string | null = null;
         for (const f of incoming) {
           const kind = detectIngestFormat(f.name, f.type);
-          if (!kind) {
+          if (!isChatAttachmentKind(kind)) {
             rejectedUnsupported = f.name;
-            continue;
-          }
-          if (kind === "audio" || kind === "video") {
-            rejectedUnsupported = f.name;
-            setError(tf(t.tutor.errAudioVideo, { name: f.name }));
+            if (kind === "audio" || kind === "video") {
+              setError(tf(t.tutor.errAudioVideo, { name: f.name }));
+            }
             continue;
           }
           if (next.length >= TUTOR_SESSION_MAX_FILES) {
@@ -399,7 +398,7 @@ export function TutorSessionStartScreen() {
           <input
             ref={fileInputRef}
             type="file"
-            accept={INGEST_ACCEPT_ATTRIBUTE}
+            accept={CHAT_ATTACHMENT_ACCEPT_ATTRIBUTE}
             multiple
             className="sr-only"
             onChange={(e) => addFiles(e.target.files)}

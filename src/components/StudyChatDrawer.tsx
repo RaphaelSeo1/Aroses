@@ -7,6 +7,8 @@ import { ChatVoiceTutorButton } from "@/components/chat-voice/ChatVoiceTutorButt
 import { ChatVoiceTutorOrb } from "@/components/chat-voice/ChatVoiceTutorOrb";
 import { RoseAssistantTabs } from "@/components/RoseAssistantTabs";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
+import { chatFileKey, lookAtAttachmentPrompt } from "@/lib/chat/chat-attachment-formats";
+import { useChatAttachments } from "@/lib/chat/use-chat-attachments";
 import { typewriteKnownText } from "@/lib/chat/typewriter-pump";
 import { useChatVoiceTutor } from "@/lib/chat-voice/use-chat-voice-tutor";
 import { useT } from "@/lib/i18n/LocaleProvider";
@@ -509,6 +511,28 @@ export function StudyChatDrawer({
     actionMode === "navigating" ? NAV_ACTION_STEPS : REPLY_ACTION_STEPS;
   const showActionProgress = actionMode !== "idle";
   const isStreamingReply = messages.some((m) => m.streaming);
+  const composerBusy =
+    loading || actionMode === "navigating" || isStreamingReply;
+  const attach = useChatAttachments({ disabled: composerBusy });
+  const {
+    queued,
+    pending,
+    attaching,
+    attachError,
+    dragOver,
+    fileInputRef,
+    accept,
+    queueFiles,
+    removeQueued,
+    confirmQueued,
+    clearPending,
+    pendingRef,
+    queuedRef,
+    onDragEnter,
+    onDragOver,
+    onDragLeave,
+    onDrop,
+  } = attach;
   const liveTrace =
     actionMode === "navigating"
       ? buildNavTrace(actionQuestion, actionStep, actionNavLabel)
@@ -610,15 +634,30 @@ export function StudyChatDrawer({
   );
 
   const send = useCallback(async (textOverride?: string): Promise<string | null> => {
-    const text = (textOverride ?? input).trim();
-    if (!text || loading || actionMode === "navigating" || isStreamingReply) {
+    const typed = (textOverride ?? input).trim();
+    if (loading || actionMode === "navigating" || isStreamingReply || attaching) {
       return null;
     }
+    let pdf = pendingRef.current;
+    if (queuedRef.current.length > 0) {
+      const extracted = await confirmQueued();
+      if (!extracted) return null;
+      pdf = extracted;
+    }
+    if (!typed && !pdf) {
+      return null;
+    }
+    const text = typed || lookAtAttachmentPrompt(pdf!.fileName);
 
     const prevSnapshot = messages;
+    const displayContent = typed
+      ? pdf
+        ? `${typed}\n\n📎 ${pdf.fileName}`
+        : typed
+      : `📎 ${pdf!.fileName}`;
     const nextMessages: ChatMessage[] = [
       ...prevSnapshot,
-      { role: "user", content: text },
+      { role: "user", content: displayContent },
     ];
 
     setError(null);
@@ -639,7 +678,15 @@ export function StudyChatDrawer({
           materialId,
           moduleId,
           quizOpen,
-          messages: nextMessages.map(({ role, content }) => ({ role, content })),
+          messages: [
+            ...prevSnapshot.map(({ role, content }) => ({ role, content })),
+            { role: "user", content: text },
+          ],
+          attachedPdfText: pdf?.text,
+          attachedPdfName: pdf?.fileName,
+          attachedFiles: pdf
+            ? [{ name: pdf.fileName, text: pdf.text }]
+            : undefined,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -651,7 +698,7 @@ export function StudyChatDrawer({
             : "Something went wrong."
         );
         setMessages(prevSnapshot);
-        if (!textOverride) setInput(text);
+        if (!textOverride) setInput(typed);
         return null;
       }
 
@@ -660,7 +707,7 @@ export function StudyChatDrawer({
       if (typeof reply !== "string") {
         setError("Bad response.");
         setMessages(prevSnapshot);
-        if (!textOverride) setInput(text);
+        if (!textOverride) setInput(typed);
         return null;
       }
 
@@ -768,7 +815,7 @@ export function StudyChatDrawer({
     } catch {
       setError("Network error.");
       setMessages(prevSnapshot);
-      if (!textOverride) setInput(text);
+      if (!textOverride) setInput(typed);
       return null;
     } finally {
       setLoading(false);
@@ -776,6 +823,8 @@ export function StudyChatDrawer({
     }
   }, [
     actionMode,
+    attaching,
+    confirmQueued,
     input,
     isStreamingReply,
     loading,
@@ -1029,7 +1078,80 @@ export function StudyChatDrawer({
           <div ref={bottomRef} />
         </div>
 
-        <div className="shrink-0 border-t border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+        <div
+          className={`shrink-0 border-t bg-white p-4 dark:bg-zinc-950 ${
+            dragOver
+              ? "border-rose-300 bg-rose-50/70 dark:border-rose-800 dark:bg-rose-950/30"
+              : "border-zinc-200 dark:border-zinc-800"
+          }`}
+          onDragEnter={onDragEnter}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={accept}
+            multiple
+            className="sr-only"
+            disabled={composerBusy || attaching}
+            onChange={(e) => queueFiles(e.target.files ?? undefined)}
+          />
+          {queued.length > 0 ? (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              {queued.map((file) => (
+                <span
+                  key={chatFileKey(file)}
+                  className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-dashed border-zinc-300 bg-white px-2 py-0.5 text-[10px] font-medium text-zinc-700 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200"
+                >
+                  <span className="truncate" title={file.name}>
+                    {file.name}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={composerBusy || attaching}
+                    onClick={() => removeQueued(file)}
+                    className="ml-0.5 shrink-0 rounded-full px-1 text-zinc-400 hover:text-zinc-700 disabled:opacity-50 dark:hover:text-zinc-200"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <button
+                type="button"
+                disabled={composerBusy || attaching}
+                onClick={() => void confirmQueued()}
+                className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-[10px] font-semibold text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
+              >
+                {queued.length === 1 ? "Confirm file" : `Confirm ${queued.length} files`}
+              </button>
+            </div>
+          ) : null}
+          {pending ? (
+            <div className="mb-2 flex items-center gap-1.5">
+              <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
+                <span className="truncate" title={pending.fileName}>
+                  📎 {pending.fileName}
+                </span>
+                <button
+                  type="button"
+                  disabled={composerBusy || attaching}
+                  onClick={clearPending}
+                  className="ml-0.5 shrink-0 rounded-full px-1 text-zinc-400 hover:text-zinc-700 disabled:opacity-50 dark:hover:text-zinc-200"
+                  aria-label="Remove attachment"
+                >
+                  ×
+                </button>
+              </span>
+            </div>
+          ) : null}
+          {attachError ? (
+            <p className="mb-2 text-[10px] leading-snug text-red-600 dark:text-red-400">
+              {attachError}
+            </p>
+          ) : null}
           <div className="rounded-xl border border-zinc-200 bg-zinc-50/50 focus-within:border-brand-border focus-within:bg-white dark:border-zinc-800 dark:bg-zinc-900/40 dark:focus-within:border-brand/40 dark:focus-within:bg-zinc-950">
             <textarea
               rows={2}
@@ -1041,15 +1163,64 @@ export function StudyChatDrawer({
                   void send();
                 }
               }}
-              placeholder={`Message ${AI_ASSISTANT_NAME}…`}
+              placeholder={
+                pending
+                  ? `Ask about ${pending.fileName}…`
+                  : `Message ${AI_ASSISTANT_NAME}…`
+              }
               className="min-h-[52px] w-full resize-none bg-transparent px-3.5 pt-3 text-[13px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:text-zinc-100"
-              disabled={loading || showActionProgress || isStreamingReply}
+              disabled={composerBusy || attaching}
               tabIndex={open ? 0 : -1}
             />
             <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5">
-              <p className="px-1 text-[10px] text-zinc-400">
-                Enter to send · Shift+Enter for new line
-              </p>
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  disabled={composerBusy || attaching}
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="Attach a file"
+                  title="Attach a file"
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 hover:border-brand hover:text-brand disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+                >
+                  {attaching ? (
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-3.5 w-3.5 animate-spin"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      aria-hidden
+                    >
+                      <circle cx="12" cy="12" r="9" opacity="0.25" />
+                      <path d="M21 12a9 9 0 0 1-9 9" strokeLinecap="round" />
+                    </svg>
+                  ) : (
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-3.5 w-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden
+                    >
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 1 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 1 1-2.83-2.83l8.49-8.48" />
+                    </svg>
+                  )}
+                </button>
+                <p className="truncate text-[10px] text-zinc-400">
+                  {attaching
+                    ? queued.length > 1
+                      ? "Reading files…"
+                      : "Reading file…"
+                    : dragOver
+                      ? "Drop files to add"
+                      : queued.length > 0
+                        ? "Add more, then confirm"
+                        : "PDF, Word, slides, images, text · Enter to send"}
+                </p>
+              </div>
               <div className="flex flex-col items-end gap-1">
                 <div className="flex items-center gap-1.5">
                 <ChatVoiceTutorButton
@@ -1063,10 +1234,9 @@ export function StudyChatDrawer({
                 <button
                   type="button"
                   disabled={
-                    loading ||
-                    showActionProgress ||
-                    isStreamingReply ||
-                    !input.trim()
+                    composerBusy ||
+                    attaching ||
+                    (!input.trim() && !pending && queued.length === 0)
                   }
                   onClick={() => void send()}
                   tabIndex={open ? 0 : -1}

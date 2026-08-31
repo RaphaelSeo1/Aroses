@@ -15,17 +15,14 @@ import type { NotesPanelHandle } from "@/components/immersive/NotesPanel";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
 import { useChatVoiceTutor } from "@/lib/chat-voice/use-chat-voice-tutor";
 import { useT } from "@/lib/i18n/LocaleProvider";
+import { chatFileKey, lookAtAttachmentPrompt, MAX_CHAT_ATTACHMENT_CHARS } from "@/lib/chat/chat-attachment-formats";
+import { useChatAttachments } from "@/lib/chat/use-chat-attachments";
 import { pumpTypewriterReply } from "@/lib/chat/typewriter-pump";
 import {
   sanitizeChatNotesMarkdown,
   splitStudentFacingReply,
   visibleReplyForStream,
 } from "@/lib/live-notes/lecture-chat-protocol";
-import { describePdfIngestUploadFailure } from "@/lib/storage-upload-errors";
-import { ingestStoragePathForFile } from "@/lib/study-ingest/client-upload";
-import { detectIngestFormat, MAX_INGEST_DOCUMENT_BYTES } from "@/lib/study-ingest/formats";
-import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
-import { createClient } from "@/lib/supabase/client";
 
 type ChatTurn = {
   id: string;
@@ -109,16 +106,7 @@ function pdfStorageKey(sessionId: string) {
   return `aroses.liveNotes.chatPdf.${sessionId}`;
 }
 
-type PendingPdf = { fileName: string; text: string };
-
-const MAX_CHAT_PDFS = 5;
-const MAX_CHAT_PDF_CHARS = 16_000;
-
-function pdfFileKey(file: File) {
-  return `${file.name}:${file.size}:${file.lastModified}`;
-}
-
-function loadPendingPdf(sessionId: string): PendingPdf | null {
+function loadPendingPdf(sessionId: string): { fileName: string; text: string } | null {
   try {
     const raw = sessionStorage.getItem(pdfStorageKey(sessionId));
     if (!raw) return null;
@@ -126,15 +114,15 @@ function loadPendingPdf(sessionId: string): PendingPdf | null {
     if (
       !parsed ||
       typeof parsed !== "object" ||
-      typeof (parsed as PendingPdf).fileName !== "string" ||
-      typeof (parsed as PendingPdf).text !== "string"
+      typeof (parsed as { fileName?: unknown }).fileName !== "string" ||
+      typeof (parsed as { text?: unknown }).text !== "string"
     ) {
       return null;
     }
-    const fileName = (parsed as PendingPdf).fileName.trim().slice(0, 200);
-    const text = (parsed as PendingPdf).text.trim();
+    const fileName = (parsed as { fileName: string }).fileName.trim().slice(0, 200);
+    const text = (parsed as { text: string }).text.trim();
     if (!fileName || text.length < 12) return null;
-    return { fileName, text: text.slice(0, MAX_CHAT_PDF_CHARS) };
+    return { fileName, text: text.slice(0, MAX_CHAT_ATTACHMENT_CHARS) };
   } catch {
     return null;
   }
@@ -215,24 +203,35 @@ export function LiveNotesChat({
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
-  const [pendingPdf, setPendingPdf] = useState<PendingPdf | null>(() =>
-    loadPendingPdf(sessionId)
-  );
-  const [queuedPdfs, setQueuedPdfs] = useState<File[]>([]);
-  const [attaching, setAttaching] = useState(false);
-  const [attachError, setAttachError] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
+  const attach = useChatAttachments({
+    disabled: busy,
+    initialPending: loadPendingPdf(sessionId),
+  });
+  const {
+    queued,
+    pending,
+    attaching,
+    attachError,
+    dragOver,
+    fileInputRef,
+    accept,
+    queueFiles,
+    removeQueued,
+    confirmQueued,
+    clearPending,
+    pendingRef,
+    queuedRef,
+    onDragEnter,
+    onDragOver,
+    onDragLeave,
+    onDrop,
+  } = attach;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
-  const pendingPdfRef = useRef(pendingPdf);
-  pendingPdfRef.current = pendingPdf;
   const noteInstructionRef = useRef(noteInstruction);
   noteInstructionRef.current = noteInstruction;
-  const queuedPdfsRef = useRef(queuedPdfs);
-  queuedPdfsRef.current = queuedPdfs;
   const voiceActiveRef = useRef(false);
   const t = useT();
 
@@ -284,10 +283,10 @@ export function LiveNotesChat({
 
   useEffect(() => {
     try {
-      if (pendingPdf) {
+      if (pending) {
         sessionStorage.setItem(
           pdfStorageKey(sessionId),
-          JSON.stringify(pendingPdf)
+          JSON.stringify(pending)
         );
       } else {
         sessionStorage.removeItem(pdfStorageKey(sessionId));
@@ -295,7 +294,7 @@ export function LiveNotesChat({
     } catch {
       /* ignore */
     }
-  }, [sessionId, pendingPdf]);
+  }, [sessionId, pending]);
 
   const applyNoteOps = useCallback(
     async (ops: NoteOp[], fallbackMarkdown = "") => {
@@ -453,166 +452,18 @@ export function LiveNotesChat({
     [enqueueWriterJob, notesRef, onActivity]
   );
 
-  const queuePdfs = useCallback(
-    (list: FileList | File[] | undefined) => {
-      if (busy || attaching) return;
-      const incoming = Array.from(list ?? []);
-      if (incoming.length === 0) return;
-      setAttachError(null);
-      const accepted: File[] = [];
-      let skippedType = 0;
-      let skippedSize = 0;
-      const maxMb = Math.round(MAX_INGEST_DOCUMENT_BYTES / (1024 * 1024));
-      for (const file of incoming) {
-        const kind = detectIngestFormat(file.name, file.type);
-        if (kind !== "pdf") {
-          skippedType += 1;
-          continue;
-        }
-        if (file.size > MAX_INGEST_DOCUMENT_BYTES) {
-          skippedSize += 1;
-          continue;
-        }
-        accepted.push(file);
-      }
-      if (accepted.length === 0) {
-        setAttachError(
-          skippedSize > 0
-            ? `That PDF is too large (max ${maxMb}MB).`
-            : "Attach a PDF."
-        );
-        return;
-      }
-      setQueuedPdfs((prev) => {
-        const have = new Set(prev.map(pdfFileKey));
-        const next = [...prev];
-        for (const file of accepted) {
-          if (next.length >= MAX_CHAT_PDFS) break;
-          const key = pdfFileKey(file);
-          if (have.has(key)) continue;
-          have.add(key);
-          next.push(file);
-        }
-        return next;
-      });
-      if (accepted.length + queuedPdfsRef.current.length > MAX_CHAT_PDFS) {
-        setAttachError(`You can attach up to ${MAX_CHAT_PDFS} PDFs at a time.`);
-      } else if (skippedType > 0 || skippedSize > 0) {
-        setAttachError(
-          skippedSize > 0
-            ? `Skipped ${skippedSize} file${skippedSize === 1 ? "" : "s"} over ${maxMb}MB.`
-            : "Only PDFs were added."
-        );
-      }
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    },
-    [attaching, busy]
-  );
-
-  const confirmQueuedPdfs = useCallback(async (): Promise<PendingPdf | null> => {
-    const queued = queuedPdfsRef.current;
-    if (queued.length === 0 || busy || attaching) {
-      return pendingPdfRef.current;
-    }
-    setAttachError(null);
-    setAttaching(true);
-    try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user?.id) {
-        setAttachError("Sign in again, then retry the upload.");
-        return null;
-      }
-
-      const extracted: PendingPdf[] = [];
-      for (const file of queued) {
-        const pathInfo = ingestStoragePathForFile(user.id, file);
-        if (!pathInfo) {
-          setAttachError("Attach a PDF.");
-          return null;
-        }
-        const { error: upErr } = await supabase.storage
-          .from(STUDY_PDF_INGEST_BUCKET)
-          .upload(pathInfo.storagePath, file, {
-            contentType: pathInfo.contentType,
-            cacheControl: "3600",
-            upsert: false,
-          });
-        if (upErr) {
-          setAttachError(
-            describePdfIngestUploadFailure(
-              typeof upErr.message === "string" ? upErr.message : String(upErr)
-            )
-          );
-          return null;
-        }
-
-        const res = await fetch(`/api/live-notes/${sessionId}/chat-pdf`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            storagePath: pathInfo.storagePath,
-            fileName: file.name,
-          }),
-        });
-        const body = (await res.json().catch(() => ({}))) as {
-          error?: string;
-          fileName?: string;
-          text?: string;
-        };
-        if (!res.ok || typeof body.text !== "string" || !body.text.trim()) {
-          await supabase.storage
-            .from(STUDY_PDF_INGEST_BUCKET)
-            .remove([pathInfo.storagePath])
-            .catch(() => {});
-          setAttachError(body.error || `Could not read ${file.name}.`);
-          return null;
-        }
-        extracted.push({
-          fileName: (body.fileName ?? file.name).slice(0, 200),
-          text: body.text.trim(),
-        });
-      }
-
-      const prior = pendingPdfRef.current;
-      const parts = [
-        ...(prior ? [{ fileName: prior.fileName, text: prior.text }] : []),
-        ...extracted,
-      ];
-      const per = Math.max(1_200, Math.floor(MAX_CHAT_PDF_CHARS / parts.length));
-      const combined: PendingPdf = {
-        fileName: parts.map((p) => p.fileName).join(", ").slice(0, 200),
-        text: parts
-          .map((p) => `### ${p.fileName}\n${p.text.slice(0, per)}`)
-          .join("\n\n")
-          .slice(0, MAX_CHAT_PDF_CHARS),
-      };
-      setPendingPdf(combined);
-      setQueuedPdfs([]);
-      return combined;
-    } catch {
-      setAttachError("Could not attach that PDF. Try again.");
-      return null;
-    } finally {
-      setAttaching(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  }, [attaching, busy, sessionId]);
-
   const send = useCallback(
     async (text: string): Promise<string | null> => {
       const typed = text.trim();
       if (busy || attaching) return null;
-      let pdf = pendingPdfRef.current;
-      if (queuedPdfsRef.current.length > 0) {
-        const attached = await confirmQueuedPdfs();
+      let pdf = pendingRef.current;
+      if (queuedRef.current.length > 0) {
+        const attached = await confirmQueued();
         if (!attached) return null;
         pdf = attached;
       }
       if (!typed && !pdf) return null;
-      const message = typed || `Look at this PDF (${pdf!.fileName}).`;
+      const message = typed || lookAtAttachmentPrompt(pdf!.fileName);
       setDraft("");
       setBusy(true);
 
@@ -717,6 +568,9 @@ export function LiveNotesChat({
             noteInstruction: noteInstructionRef.current,
             attachedPdfText: pdf?.text,
             attachedPdfName: pdf?.fileName,
+            attachedFiles: pdf
+              ? [{ name: pdf.fileName, text: pdf.text }]
+              : undefined,
           }),
         });
         const contentType = res.headers.get("content-type") ?? "";
@@ -923,7 +777,7 @@ export function LiveNotesChat({
       applyNoteOps,
       attaching,
       busy,
-      confirmQueuedPdfs,
+      confirmQueued,
       notesRef,
       onActivity,
       recentTranscript,
@@ -1040,26 +894,10 @@ export function LiveNotesChat({
 
       <form
         onSubmit={onSubmit}
-        onDragEnter={(e) => {
-          e.preventDefault();
-          if (busy || attaching) return;
-          setDragOver(true);
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          if (busy || attaching) return;
-          setDragOver(true);
-        }}
-        onDragLeave={(e) => {
-          e.preventDefault();
-          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-          setDragOver(false);
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          queuePdfs(e.dataTransfer.files);
-        }}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
         className={`border-t p-2.5 dark:border-zinc-800 ${
           dragOver
             ? "border-rose-300 bg-rose-50/70 dark:border-rose-800 dark:bg-rose-950/30"
@@ -1069,19 +907,19 @@ export function LiveNotesChat({
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,application/pdf"
+          accept={accept}
           multiple
           className="sr-only"
           disabled={busy || attaching}
           onChange={(e) => {
-            queuePdfs(e.target.files ?? undefined);
+            queueFiles(e.target.files ?? undefined);
           }}
         />
-        {queuedPdfs.length > 0 ? (
+        {queued.length > 0 ? (
           <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-            {queuedPdfs.map((file) => (
+            {queued.map((file) => (
               <span
-                key={pdfFileKey(file)}
+                key={chatFileKey(file)}
                 className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-dashed border-zinc-300 bg-white px-2 py-0.5 text-[10px] font-medium text-zinc-700 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200"
               >
                 <span className="truncate" title={file.name}>
@@ -1090,11 +928,7 @@ export function LiveNotesChat({
                 <button
                   type="button"
                   disabled={busy || attaching}
-                  onClick={() =>
-                    setQueuedPdfs((prev) =>
-                      prev.filter((f) => pdfFileKey(f) !== pdfFileKey(file))
-                    )
-                  }
+                  onClick={() => removeQueued(file)}
                   className="ml-0.5 shrink-0 rounded-full px-1 text-zinc-400 hover:text-zinc-700 disabled:opacity-50 dark:hover:text-zinc-200"
                   aria-label={`Remove ${file.name}`}
                 >
@@ -1105,30 +939,25 @@ export function LiveNotesChat({
             <button
               type="button"
               disabled={busy || attaching}
-              onClick={() => void confirmQueuedPdfs()}
+              onClick={() => void confirmQueued()}
               className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-[10px] font-semibold text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
             >
-              {queuedPdfs.length === 1
-                ? "Confirm PDF"
-                : `Confirm ${queuedPdfs.length} PDFs`}
+              {queued.length === 1 ? "Confirm file" : `Confirm ${queued.length} files`}
             </button>
           </div>
         ) : null}
-        {pendingPdf ? (
+        {pending ? (
           <div className="mb-1.5 flex items-center gap-1.5">
             <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-medium text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
-              <span className="truncate" title={pendingPdf.fileName}>
-                📎 {pendingPdf.fileName}
+              <span className="truncate" title={pending.fileName}>
+                📎 {pending.fileName}
               </span>
               <button
                 type="button"
                 disabled={busy || attaching}
-                onClick={() => {
-                  setPendingPdf(null);
-                  setAttachError(null);
-                }}
+                onClick={clearPending}
                 className="ml-0.5 shrink-0 rounded-full px-1 text-zinc-400 hover:text-zinc-700 disabled:opacity-50 dark:hover:text-zinc-200"
-                aria-label="Remove PDF"
+                aria-label="Remove attachment"
               >
                 ×
               </button>
@@ -1157,8 +986,8 @@ export function LiveNotesChat({
             }
           }}
           placeholder={
-            pendingPdf
-              ? `Ask about ${pendingPdf.fileName}…`
+            pending
+              ? `Ask about ${pending.fileName}…`
               : lectureTitle.trim()
                 ? `Ask about ${lectureTitle.trim()}…`
                 : "Ask about the lecture or anything else…"
@@ -1171,8 +1000,8 @@ export function LiveNotesChat({
               type="button"
               disabled={busy || attaching}
               onClick={() => fileInputRef.current?.click()}
-              aria-label="Attach a PDF"
-              title="Attach a PDF"
+              aria-label="Attach a file"
+              title="Attach a file"
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 hover:border-rose-300 hover:text-rose-700 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-rose-800 dark:hover:text-rose-300"
             >
               {attaching ? (
@@ -1204,14 +1033,14 @@ export function LiveNotesChat({
             </button>
             <p className="truncate text-[10px] text-zinc-400 dark:text-zinc-500">
               {attaching
-                ? queuedPdfs.length > 1
-                  ? "Reading PDFs…"
-                  : "Reading PDF…"
+                ? queued.length > 1
+                  ? "Reading files…"
+                  : "Reading file…"
                 : dragOver
-                  ? "Drop PDFs to add"
-                  : queuedPdfs.length > 0
+                  ? "Drop files to add"
+                  : queued.length > 0
                     ? "Add more, then confirm"
-                    : "PDF · Enter to send"}
+                    : "PDF, Word, slides, images, text · Enter to send"}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -1228,7 +1057,7 @@ export function LiveNotesChat({
               disabled={
                 busy ||
                 attaching ||
-                (!draft.trim() && !pendingPdf && queuedPdfs.length === 0)
+                (!draft.trim() && !pending && queued.length === 0)
               }
               className="rounded-full bg-rose-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
             >

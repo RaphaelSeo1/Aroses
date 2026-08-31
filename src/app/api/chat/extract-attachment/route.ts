@@ -1,43 +1,24 @@
 import { NextResponse } from "next/server";
 import { extractChatAttachmentFromStorage } from "@/lib/live-notes/extract-chat-pdf";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
-import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
 
-type Params = { params: Promise<{ sessionId: string }> };
-
 /**
- * POST /api/live-notes/[sessionId]/chat-pdf
+ * POST /api/chat/extract-attachment
  * Body: { storagePath: string, fileName?: string }
- * Client already uploaded a document/image to study-pdf-ingest. Extract
- * text for lecture chat (does not replace the lecture slide deck).
+ *
+ * Client already uploaded the file to study-pdf-ingest. Extract text for
+ * lecture / study / calendar chat (PDF, Word, slides, text, images).
  */
-export async function POST(request: Request, ctx: Params) {
-  const { sessionId } = await ctx.params;
-  if (!isUuid(sessionId)) {
-    return NextResponse.json({ error: "Invalid session id" }, { status: 400 });
-  }
-
+export async function POST(request: Request) {
   const supabase = await createRouteHandlerSupabase();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { data: session } = await supabase
-    .from("live_lecture_sessions")
-    .select("id, user_id, status")
-    .eq("id", sessionId)
-    .maybeSingle();
-  if (!session || session.user_id !== user.id) {
-    return NextResponse.json({ error: "Session not found" }, { status: 404 });
-  }
-  if (session.status === "failed") {
-    return NextResponse.json({ error: "This session has ended." }, { status: 409 });
   }
 
   let body: unknown;
@@ -63,5 +44,6 @@ export async function POST(request: Request, ctx: Params) {
   return NextResponse.json({
     fileName: result.fileName,
     text: result.text,
+    kind: result.kind,
   });
 }

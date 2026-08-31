@@ -1,23 +1,65 @@
 import "server-only";
+import {
+  CHAT_ATTACHMENT_UNSUPPORTED_MESSAGE,
+  isChatAttachmentKind,
+  maxBytesForChatKind,
+  MAX_CHAT_ATTACHMENT_CHARS,
+  MIN_CHAT_ATTACHMENT_CHARS,
+  type ChatAttachmentKind,
+} from "@/lib/chat/chat-attachment-formats";
 import { extractPdfText } from "@/lib/pdf-text/extract";
-import { MAX_INGEST_DOCUMENT_BYTES } from "@/lib/study-ingest/formats";
+import { extractStudyMaterialFromBuffer } from "@/lib/study-ingest/extract";
+import { detectIngestFormat, MAX_INGEST_DOCUMENT_BYTES } from "@/lib/study-ingest/formats";
 import { isValidIngestStoragePath } from "@/lib/study-ingest/path";
+import { rtfToPlainText } from "@/lib/study-ingest/rtf";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-/** Cap so a worksheet/handout fits beside notes + transcript. */
-export const MAX_CHAT_PDF_CHARS = 16_000;
+/** @deprecated Use MAX_CHAT_ATTACHMENT_CHARS — kept so existing chat routes typecheck. */
+export const MAX_CHAT_PDF_CHARS = MAX_CHAT_ATTACHMENT_CHARS;
 export const MAX_CHAT_PDF_BYTES = MAX_INGEST_DOCUMENT_BYTES;
 
 export type ChatPdfExtractResult =
-  | { ok: true; text: string; fileName: string }
+  | { ok: true; text: string; fileName: string; kind: ChatAttachmentKind }
   | { ok: false; status: number; error: string };
 
+function emptyFileError(kind: ChatAttachmentKind): string {
+  if (kind === "pdf") {
+    return "Couldn't read text from that PDF. Export it with selectable text (not a scan) and try again.";
+  }
+  if (kind === "image") {
+    return "I couldn't read text from this image. Make sure the photo is in focus and well-lit.";
+  }
+  return "Couldn't read enough text from that file. Try another document or a clearer photo.";
+}
+
+async function extractChatText(
+  buffer: Buffer,
+  fileName: string,
+  kind: ChatAttachmentKind
+): Promise<string> {
+  if (kind === "pdf") {
+    return (await extractPdfText(buffer)).trim();
+  }
+  if (kind === "text" || kind === "markdown") {
+    return buffer.toString("utf8").replace(/^\uFEFF/, "").trim();
+  }
+  if (kind === "rtf") {
+    return rtfToPlainText(buffer.toString("utf8")).trim();
+  }
+  const part = await extractStudyMaterialFromBuffer({
+    buffer,
+    fileName,
+    kind,
+  });
+  return part.plainText.trim();
+}
+
 /**
- * Download a PDF the student uploaded to study-pdf-ingest, extract selectable
- * text, then remove the storage object (chat only needs the extract).
+ * Download a chat attachment from study-pdf-ingest, extract text (PDF / Word /
+ * slides / text / image OCR), then remove the storage object.
  */
-export async function extractChatPdfFromStorage(input: {
+export async function extractChatAttachmentFromStorage(input: {
   storagePath: string;
   userId: string;
   fileName?: string;
@@ -29,12 +71,13 @@ export async function extractChatPdfFromStorage(input: {
   const fileName =
     input.fileName?.trim().slice(0, 200) ||
     storagePath.split("/").pop() ||
-    "attachment.pdf";
-  if (!fileName.toLowerCase().endsWith(".pdf")) {
+    "attachment";
+  const kind = detectIngestFormat(fileName) ?? detectIngestFormat(storagePath);
+  if (!isChatAttachmentKind(kind)) {
     return {
       ok: false,
       status: 400,
-      error: "Attach a PDF.",
+      error: CHAT_ATTACHMENT_UNSUPPORTED_MESSAGE,
     };
   }
 
@@ -60,34 +103,59 @@ export async function extractChatPdfFromStorage(input: {
   }
 
   const buffer = Buffer.from(await blob.arrayBuffer());
-  if (buffer.length > MAX_CHAT_PDF_BYTES) {
+  const maxBytes = maxBytesForChatKind(kind);
+  if (buffer.length > maxBytes) {
     await admin.storage.from(STUDY_PDF_INGEST_BUCKET).remove([storagePath]).catch(() => {});
-    const maxMb = Math.round(MAX_CHAT_PDF_BYTES / (1024 * 1024));
+    const maxMb = Math.round(maxBytes / (1024 * 1024));
     return {
       ok: false,
       status: 400,
-      error: `That PDF is too large. Maximum is ${maxMb}MB.`,
+      error: `That file is too large. Maximum is ${maxMb}MB.`,
     };
   }
 
-  const raw = (await extractPdfText(buffer)).trim();
+  let raw = "";
+  try {
+    raw = await extractChatText(buffer, fileName, kind);
+  } catch (e) {
+    await admin.storage
+      .from(STUDY_PDF_INGEST_BUCKET)
+      .remove([storagePath])
+      .catch(() => {});
+    const msg = e instanceof Error ? e.message.trim() : "";
+    return {
+      ok: false,
+      status: 400,
+      error: msg || emptyFileError(kind),
+    };
+  }
+
   await admin.storage
     .from(STUDY_PDF_INGEST_BUCKET)
     .remove([storagePath])
     .catch(() => {});
 
-  if (raw.length < 12) {
+  if (raw.length < MIN_CHAT_ATTACHMENT_CHARS) {
     return {
       ok: false,
       status: 400,
-      error:
-        "Couldn't read text from that PDF. Export it with selectable text (not a scan) and try again.",
+      error: emptyFileError(kind),
     };
   }
 
   return {
     ok: true,
     fileName,
-    text: raw.slice(0, MAX_CHAT_PDF_CHARS),
+    kind,
+    text: raw.slice(0, MAX_CHAT_ATTACHMENT_CHARS),
   };
+}
+
+/** @deprecated Prefer extractChatAttachmentFromStorage. */
+export async function extractChatPdfFromStorage(input: {
+  storagePath: string;
+  userId: string;
+  fileName?: string;
+}): Promise<ChatPdfExtractResult> {
+  return extractChatAttachmentFromStorage(input);
 }

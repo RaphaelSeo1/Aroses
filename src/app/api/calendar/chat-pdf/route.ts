@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
-import { extractChatPdfFromStorage } from "@/lib/live-notes/extract-chat-pdf";
+import { extractChatAttachmentFromStorage } from "@/lib/live-notes/extract-chat-pdf";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 90;
 
 /**
  * POST /api/calendar/chat-pdf
  * Body: { storagePath: string, fileName?: string }
- * Client already uploaded the PDF to study-pdf-ingest. Extract selectable
+ * Client already uploaded a document/image to study-pdf-ingest. Extract
  * text so calendar chat can use it as reference (not persisted).
  */
 export async function POST(request: Request) {
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "storagePath required" }, { status: 400 });
   }
 
-  const result = await extractChatPdfFromStorage({
+  const result = await extractChatAttachmentFromStorage({
     storagePath: b.storagePath.trim(),
     userId: user.id,
     fileName: typeof b.fileName === "string" ? b.fileName : undefined,

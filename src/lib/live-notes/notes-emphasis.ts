@@ -79,7 +79,7 @@ export function isLiveLectureStudyContext(stored: string): boolean {
 export function formatLiveLectureGenerationBlock(stored: string): string {
   if (!isLiveLectureStudyContext(stored)) return "";
   return `=== LIVE LECTURE SOURCES (first-class — not transcript-only) ===
-The MATERIAL is a merge of labeled sources: \`[from … notes]\`, \`[from … transcript]\`, \`[from … slides]\`, and possibly \`[from … screen]\` / \`[from … handout]\`. Generated notes, speech transcript, and uploaded slides/deck are EQUAL primary sources. On-screen extracts and chat-attached PDFs are additional session material — use them too. None of these is "the only source."
+The MATERIAL is a merge of labeled sources: \`[from … notes]\`, \`[from … transcript]\`, \`[from … slides]\`, and possibly \`[from … screen]\` / \`[from … handout]\`. Generated notes, speech transcript, and uploaded slides/deck are EQUAL primary sources. On-screen extracts and chat-attached files are additional session material — use them too. None of these is "the only source."
 
 THOROUGHNESS:
 - Cover the UNION of unique teachable content. Include slide pages, tables, and formulas the lecturer never spoke, AND spoken explanations, worked examples, and asides that never appeared on slides.

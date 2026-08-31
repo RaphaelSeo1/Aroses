@@ -10,6 +10,12 @@ import {
   type AutoGenerateBlock,
 } from "@/components/immersive/NotesPanel";
 import { pumpTypewriterReply, typewriteKnownText } from "@/lib/chat/typewriter-pump";
+import {
+  CHAT_ATTACHMENT_ACCEPT_ATTRIBUTE,
+  CHAT_ATTACHMENT_UNSUPPORTED_MESSAGE,
+  isChatAttachmentKind,
+} from "@/lib/chat/chat-attachment-formats";
+import { detectIngestFormat } from "@/lib/study-ingest/formats";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
 import { studentRequestedNotesSave } from "@/lib/mentored/build-auto-notes-from-tutor-turn";
@@ -489,6 +495,7 @@ export function TutorSessionRunner({
     initial.uploads ?? []
   );
   const [uploading, setUploading] = useState(false);
+  const [attachDragOver, setAttachDragOver] = useState(false);
   const [showMaterialsDrawer, setShowMaterialsDrawer] = useState(false);
   const midUploadInputRef = useRef<HTMLInputElement>(null);
 
@@ -1064,16 +1071,39 @@ export function TutorSessionRunner({
   // pipeline as /start), then injects a synthetic instruction so
   // Rose actually says something about the new material.
   const handleUploadFiles = useCallback(
-    async (fileList: FileList | null) => {
-      if (!fileList || fileList.length === 0) return;
+    async (fileList: FileList | File[] | null) => {
+      if (!fileList || (fileList instanceof FileList ? fileList.length === 0 : fileList.length === 0)) {
+        return;
+      }
       if (uploading) return;
+      const incoming = Array.from(fileList);
+      const accepted: File[] = [];
+      const rejected: string[] = [];
+      for (const f of incoming) {
+        const kind = detectIngestFormat(f.name, f.type);
+        if (!isChatAttachmentKind(kind)) {
+          rejected.push(f.name);
+          continue;
+        }
+        accepted.push(f);
+      }
+      if (accepted.length === 0) {
+        const errMsg: LocalMessage = {
+          id: `sys-err-${Date.now()}`,
+          role: "assistant",
+          content: rejected.length
+            ? `(${CHAT_ATTACHMENT_UNSUPPORTED_MESSAGE})`
+            : "(Couldn't upload that — try again in a sec.)",
+        };
+        setMessages((prev) => [...prev, errMsg]);
+        if (midUploadInputRef.current) midUploadInputRef.current.value = "";
+        return;
+      }
       setUploading(true);
       try {
         const form = new FormData();
         const names: string[] = [];
-        for (let i = 0; i < fileList.length; i += 1) {
-          const f = fileList.item(i);
-          if (!f) continue;
+        for (const f of accepted) {
           form.append("files", f);
           names.push(f.name);
         }
@@ -1669,7 +1699,33 @@ export function TutorSessionRunner({
           </div>
 
           {/* Voice dock */}
-          <div className="border-t border-white/50 bg-white/70 px-3 py-3 sm:px-5">
+          <div
+            className={`border-t px-3 py-3 sm:px-5 ${
+              attachDragOver
+                ? "border-violet-300 bg-violet-50/80 dark:border-violet-800 dark:bg-violet-950/30"
+                : "border-white/50 bg-white/70"
+            }`}
+            onDragEnter={(e) => {
+              if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+              e.preventDefault();
+              setAttachDragOver(true);
+            }}
+            onDragOver={(e) => {
+              if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+              setAttachDragOver(true);
+            }}
+            onDragLeave={(e) => {
+              if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+              setAttachDragOver(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setAttachDragOver(false);
+              void handleUploadFiles(Array.from(e.dataTransfer.files));
+            }}
+          >
             {/* Mode toggles — Voice⇄Text, plus mic capture (push/live) in voice. */}
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
@@ -1817,7 +1873,7 @@ export function TutorSessionRunner({
               <input
                 ref={midUploadInputRef}
                 type="file"
-                accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.txt,.md"
+                accept={CHAT_ATTACHMENT_ACCEPT_ATTRIBUTE}
                 multiple
                 className="sr-only"
                 onChange={(e) => void handleUploadFiles(e.target.files)}

@@ -19,6 +19,7 @@ import {
   isUnambiguousNavigation,
 } from "@/lib/study-chat-nav";
 import { buildNavigationOptions } from "@/lib/study-chat-options";
+import { parseChatAttachments } from "@/lib/chat/chat-attachment-parse";
 import type { StudyChatOption, StudyChatTurn } from "@/types/study-chat";
 import type { CoursePayload } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
@@ -174,6 +175,9 @@ export async function POST(request: Request) {
     moduleId?: number;
     quizOpen?: boolean;
     messages?: StudyChatTurn[];
+    attachedPdfText?: unknown;
+    attachedPdfName?: unknown;
+    attachedFiles?: unknown;
   };
 
   if (typeof b.materialId !== "string" || !UUID_RE.test(b.materialId)) {
@@ -282,6 +286,11 @@ export async function POST(request: Request) {
     }
 
     contextText = buildLegacyStudyContext(summary, keyConcepts, questions);
+  }
+
+  const attached = parseChatAttachments(b);
+  if (attached.text) {
+    contextText += `\n\n=== ATTACHED FILE${attached.name ? ` (${attached.name})` : ""} ===\n${attached.text}\nPrefer this attached file when the student asks about it, a worksheet, or "this PDF" / "this doc" / "this image".\n`;
   }
 
   try {

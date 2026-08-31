@@ -113,7 +113,7 @@ export async function runCalendarChat(input: {
   const attachedPdfText = (input.attachedPdfText ?? "").trim();
   const attachedPdfName = (input.attachedPdfName ?? "").trim().slice(0, 200);
   const pdfBlock = attachedPdfText
-    ? `ATTACHED PDF${attachedPdfName ? ` (${attachedPdfName})` : ""}:\n${attachedPdfText.slice(0, MAX_CHAT_PDF_CHARS)}`
+    ? `ATTACHED FILE${attachedPdfName ? ` (${attachedPdfName})` : ""}:\n${attachedPdfText.slice(0, MAX_CHAT_PDF_CHARS)}`
     : "";
 
   const system = `You are ${AI_ASSISTANT_NAME} on ${APP_NAME}. You manage this student's calendar. Execute the request in this turn. Talking about what you would do without calling a tool is a failure.
@@ -132,7 +132,7 @@ TOOLS:
 - Never invent items that are not in CALENDAR ITEMS when answering what's due.
 - Todos: kind "todo". Timed class/quiz/meeting: kind "event". Exams and hard deadlines: important true.
 - Prefer the [id] in item. Title is ok if you cannot copy the id.
-- Attached PDF is reference only (syllabus, schedule, assignment sheet). When they ask to add dates from it — or send it with no extra question — create_item for dated exams, assignments, and classes (up to 8). Copy those dates from DATE KEYS. Extra detail goes in notes. Do not invent dates that are not in the PDF or their message.
+- Attached file is reference only (syllabus, schedule, assignment sheet, screenshot). When they ask to add dates from it — or send it with no extra question — create_item for dated exams, assignments, and classes (up to 8). Copy those dates from DATE KEYS. Extra detail goes in notes. Do not invent dates that are not in the file or their message.
 - Reply in 1–2 short sentences: what you did, or the matching due items (title + date + time). No emoji. Do not mention tools, ids, or JSON.`;
 
   const history = input.history

@@ -14,7 +14,8 @@ import {
   loadUserCalendar,
   updateCalendarItem,
 } from "@/lib/calendar/queries";
-import { MAX_CHAT_PDF_CHARS } from "@/lib/live-notes/extract-chat-pdf";
+import { lookAtAttachmentPrompt } from "@/lib/chat/chat-attachment-formats";
+import { parseChatAttachments } from "@/lib/chat/chat-attachment-parse";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 
 export const runtime = "nodejs";
@@ -48,22 +49,15 @@ export async function POST(request: Request) {
     nowIso?: unknown;
     attachedPdfText?: unknown;
     attachedPdfName?: unknown;
+    attachedFiles?: unknown;
   };
-  const attachedPdfText =
-    typeof b.attachedPdfText === "string"
-      ? b.attachedPdfText.trim().slice(0, MAX_CHAT_PDF_CHARS)
-      : "";
-  const attachedPdfName =
-    typeof b.attachedPdfName === "string"
-      ? b.attachedPdfName.trim().slice(0, 200)
-      : "";
+  const attached = parseChatAttachments(b);
   const rawMessage = typeof b.message === "string" ? b.message.trim() : "";
-  if (!rawMessage && !attachedPdfText) {
+  if (!rawMessage && !attached.text) {
     return NextResponse.json({ error: "message required" }, { status: 400 });
   }
   const message =
-    rawMessage.slice(0, 4_000) ||
-    `Look at this PDF${attachedPdfName ? ` (${attachedPdfName})` : ""}.`;
+    rawMessage.slice(0, 4_000) || lookAtAttachmentPrompt(attached.name);
 
   const history = Array.isArray(b.history)
     ? b.history
@@ -127,8 +121,8 @@ export async function POST(request: Request) {
       nowIso,
       timeZone,
       userId: user.id,
-      attachedPdfText: attachedPdfText || undefined,
-      attachedPdfName: attachedPdfName || undefined,
+      attachedPdfText: attached.text || undefined,
+      attachedPdfName: attached.name || undefined,
     });
     reply = result.reply;
     actions = result.actions.map((a) => coerceActionTimestamps(a, timeZone));
