@@ -405,13 +405,13 @@ async function loadPersonalQuizRows(
       console.error("[srs/session personal]", fallback.error);
       return [];
     }
-    return (fallback.data ?? []) as Record<string, unknown>[];
+    return (fallback.data ?? []) as unknown as Record<string, unknown>[];
   }
   if (full.error) {
     console.error("[srs/session personal]", full.error);
     return [];
   }
-  return (full.data ?? []) as Record<string, unknown>[];
+  return (full.data ?? []) as unknown as Record<string, unknown>[];
 }
 
 function parseScope(v: string | null): Scope | null {

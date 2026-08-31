@@ -130,7 +130,13 @@ export async function fetchSrsDueCountsForUser(
     .eq("user_id", userId)
     .lte("due_at", nowIso);
   if (materialFilter) perQ = perQ.eq("material_id", materialFilter);
-  let { data: perRows, error: perErr } = await perQ;
+  type PersonalDueRow = {
+    material_id?: string | null;
+    source_label?: string | null;
+  };
+  const firstPersonal = await perQ;
+  let perErr = firstPersonal.error;
+  let perRows: PersonalDueRow[] | null = firstPersonal.data;
   if (perErr && isMissingDbColumnError(perErr, "source_label")) {
     let fallback = supabase
       .from("user_personal_quiz_items")
@@ -138,7 +144,12 @@ export async function fetchSrsDueCountsForUser(
       .eq("user_id", userId)
       .lte("due_at", nowIso);
     if (materialFilter) fallback = fallback.eq("material_id", materialFilter);
-    ({ data: perRows, error: perErr } = await fallback);
+    const fb = await fallback;
+    perErr = fb.error;
+    perRows = (fb.data ?? []).map((row) => ({
+      material_id: row.material_id ?? null,
+      source_label: null,
+    }));
   }
   if (perErr) {
     console.error("[srs due counts personal]", perErr);
