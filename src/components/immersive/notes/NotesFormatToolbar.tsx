@@ -43,7 +43,7 @@ function ToolBtn({
       disabled={disabled}
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition disabled:opacity-40 ${
+      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition disabled:opacity-40 ${
         active
           ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
           : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
@@ -55,7 +55,7 @@ function ToolBtn({
 }
 
 function Divider() {
-  return <span className="mx-0.5 h-4 w-px bg-zinc-200 dark:bg-zinc-700" />;
+  return <span className="mx-0.5 h-4 w-px shrink-0 bg-zinc-200 dark:bg-zinc-700" />;
 }
 
 /** Persistent Docs-style formatting bar for the notes editor. */
@@ -67,6 +67,7 @@ export function NotesFormatToolbar({
   addToFocusLabel,
   addToFocusTitle,
   addToFocusBusy,
+  onEditLink,
   highlightColors,
   highlightPaintColor,
   onHighlightPaintColor,
@@ -78,6 +79,7 @@ export function NotesFormatToolbar({
   addToFocusLabel?: string;
   addToFocusTitle?: string;
   addToFocusBusy?: boolean;
+  onEditLink?: () => void;
   highlightColors?: Array<{ label: string; value: string }>;
   highlightPaintColor?: string | null;
   onHighlightPaintColor?: (color: string | null) => void;
@@ -98,12 +100,18 @@ export function NotesFormatToolbar({
       left: ed.isActive({ textAlign: "left" }),
       center: ed.isActive({ textAlign: "center" }),
       right: ed.isActive({ textAlign: "right" }),
+      code: ed.isActive("code"),
+      link: ed.isActive("link"),
     }),
   });
 
   return (
-    <div className="sticky top-0 z-20 -mx-1 mb-3 flex items-center gap-0.5 rounded-xl border border-zinc-200/90 bg-white/95 px-1.5 py-1 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-950/95">
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">
+    <div
+      role="toolbar"
+      aria-label="Text formatting"
+      className="flex items-center gap-0.5 px-3 py-1 xl:px-5"
+    >
+      <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-0.5 overflow-x-auto [scrollbar-width:thin]">
       <ToolBtn
         title="Heading 1"
         active={s.h1}
@@ -170,6 +178,22 @@ export function NotesFormatToolbar({
           S
         </span>
       </ToolBtn>
+      <ToolBtn
+        title="Inline code"
+        active={s.code}
+        onClick={() => editor.chain().focus().toggleCode().run()}
+      >
+        <span className="font-mono text-[10px] leading-none">{"</>"}</span>
+      </ToolBtn>
+      {onEditLink ? (
+        <ToolBtn title="Link (⌘K)" active={s.link} onClick={onEditLink}>
+          <Icon>
+            <path d="M6.5 9.5l3-3" />
+            <path d="M7.2 4.2l1.1-1.1a2.5 2.5 0 013.5 3.5L10.6 7.8" />
+            <path d="M8.8 11.8l-1.1 1.1a2.5 2.5 0 01-3.5-3.5L5.4 8.2" />
+          </Icon>
+        </ToolBtn>
+      ) : null}
       {highlightColors && highlightColors.length > 0 ? (
         <>
           <Divider />

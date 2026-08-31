@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
-import { BubbleMenu } from "@tiptap/react/menus";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Underline from "@tiptap/extension-underline";
@@ -49,7 +48,7 @@ import {
   uploadNoteImage,
 } from "@/lib/notes/upload-note-image";
 
-/** Highlighter palette offered in the selection bubble menu. */
+/** Highlighter palette offered in the pinned format toolbar. */
 const HIGHLIGHT_COLORS: { label: string; value: string }[] = [
   { label: "Yellow", value: KEY_TERM_HIGHLIGHT_COLOR },
   { label: "Green", value: "#bbf7d0" },
@@ -71,7 +70,7 @@ const HIGHLIGHT_COLORS: { label: string; value: string }[] = [
  *     blockquotes, dividers, links, highlights, callouts,
  *     images/screenshots (paste, drop, or upload), tables, text align.
  *   - Slash-command menu (Notion-style) for inserting blocks.
- *   - Bubble menu over selections for inline formatting.
+ *   - Format toolbar locked above the note-style bar (always on-screen).
  *   - Auto-save with a subtle, fading "Saved" indicator.
  *
  * Storage / data contract is unchanged:
@@ -1294,6 +1293,30 @@ export function NotesPanel({
     tutorSessionId,
   ]);
 
+  const editSelectionLink = useCallback(() => {
+    if (!editor || editor.isDestroyed) return;
+    const prev = editor.getAttributes("link").href as string | undefined;
+    void promptDialog({
+      title: "Edit link",
+      label: "Link URL",
+      placeholder: "https://example.com",
+      body: "Leave blank to remove the link.",
+      defaultValue: prev ?? "",
+    }).then((url) => {
+      if (url === null || editor.isDestroyed) return;
+      if (url === "") {
+        editor.chain().focus().unsetLink().run();
+      } else {
+        editor
+          .chain()
+          .focus()
+          .extendMarkRange("link")
+          .setLink({ href: url })
+          .run();
+      }
+    });
+  }, [editor]);
+
   const editorReadyFiredRef = useRef(false);
   const notesLoadedForRef = useRef<string | null>(
     initialContentJson ? endpoint : null
@@ -1697,7 +1720,7 @@ export function NotesPanel({
     <aside
       className={`tn-panel relative flex flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-[0_20px_50px_-25px_rgba(60,60,90,0.18)] backdrop-blur-md ${fillHeight ? "h-full min-h-0" : ""} ${className ?? ""}`}
     >
-      {/* Sticky chrome: save status + (optional) note-style instruction box. */}
+      {/* Sticky chrome: save status, format tools, optional note-style bar. */}
       <div
         className={`${pinToolbar ? "sticky top-0 z-10" : ""} shrink-0 border-b border-zinc-100 bg-white/95 backdrop-blur-sm`}
       >
@@ -1754,6 +1777,26 @@ export function NotesPanel({
             )}
           </div>
         </div>
+
+        {editor ? (
+          <div className="border-t border-zinc-100">
+            <NotesFormatToolbar
+              editor={editor}
+              uploadingImage={uploadingImage}
+              onPickImage={() => imageInputRef.current?.click()}
+              onAddToFocus={() => void addSelectionToFocus()}
+              addToFocusLabel={
+                focusBusy ? t.immersive.focusAdding : t.immersive.focusAddShort
+              }
+              addToFocusTitle={t.immersive.focusAdd}
+              addToFocusBusy={focusBusy}
+              onEditLink={editSelectionLink}
+              highlightColors={HIGHLIGHT_COLORS}
+              highlightPaintColor={highlightPaintColor}
+              onHighlightPaintColor={setHighlightPaintColor}
+            />
+          </div>
+        ) : null}
 
         {onNoteInstructionChange ? (
           <div className="border-t border-zinc-100 bg-zinc-50/90 px-5 py-2.5 xl:px-7">
@@ -1910,23 +1953,6 @@ export function NotesPanel({
             <div className="mt-5 h-px w-full bg-zinc-100" />
           </header>
 
-          {editor ? (
-            <NotesFormatToolbar
-              editor={editor}
-              uploadingImage={uploadingImage}
-              onPickImage={() => imageInputRef.current?.click()}
-              onAddToFocus={() => void addSelectionToFocus()}
-              addToFocusLabel={
-                focusBusy ? t.immersive.focusAdding : t.immersive.focusAddShort
-              }
-              addToFocusTitle={t.immersive.focusAdd}
-              addToFocusBusy={focusBusy}
-              highlightColors={HIGHLIGHT_COLORS}
-              highlightPaintColor={highlightPaintColor}
-              onHighlightPaintColor={setHighlightPaintColor}
-            />
-          ) : null}
-
           <input
             ref={imageInputRef}
             type="file"
@@ -1940,147 +1966,6 @@ export function NotesPanel({
           />
 
           {/* Editor */}
-          {editor ? (
-            <BubbleMenu
-              editor={editor}
-              className="tn-bubble flex items-center gap-0.5 rounded-xl bg-zinc-900/95 px-1 py-1 shadow-2xl ring-1 ring-black/20 backdrop-blur"
-            >
-              <BubbleBtn
-                aria-label="Bold"
-                title="Bold (⌘B)"
-                active={editor.isActive("bold")}
-                onClick={() => editor.chain().focus().toggleBold().run()}
-              >
-                <span className="font-bold">B</span>
-              </BubbleBtn>
-              <BubbleBtn
-                aria-label="Italic"
-                title="Italic (⌘I)"
-                active={editor.isActive("italic")}
-                onClick={() => editor.chain().focus().toggleItalic().run()}
-              >
-                <span className="italic">I</span>
-              </BubbleBtn>
-              <BubbleBtn
-                aria-label="Underline"
-                title="Underline (⌘U)"
-                active={editor.isActive("underline")}
-                onClick={() => editor.chain().focus().toggleUnderline().run()}
-              >
-                <span className="underline">U</span>
-              </BubbleBtn>
-              <BubbleBtn
-                aria-label="Strikethrough"
-                title="Strikethrough"
-                active={editor.isActive("strike")}
-                onClick={() => editor.chain().focus().toggleStrike().run()}
-              >
-                <span className="line-through">S</span>
-              </BubbleBtn>
-              <span aria-hidden className="mx-1 h-4 w-px bg-white/15" />
-              <BubbleBtn
-                aria-label="Inline code"
-                title="Inline code"
-                active={editor.isActive("code")}
-                onClick={() => editor.chain().focus().toggleCode().run()}
-              >
-                <span className="font-mono text-[11px]">{"</>"}</span>
-              </BubbleBtn>
-              {HIGHLIGHT_COLORS.map((c) => (
-                <BubbleBtn
-                  key={c.value}
-                  aria-label={`Highlight ${c.label.toLowerCase()}`}
-                  title={`Highlight ${c.label.toLowerCase()}`}
-                  active={editor.isActive("highlight", { color: c.value })}
-                  onClick={() => {
-                    editor
-                      .chain()
-                      .focus()
-                      .setHighlight({ color: c.value })
-                      .run();
-                    setHighlightPaintColor(c.value);
-                  }}
-                >
-                  <span
-                    className="inline-block h-3 w-3 rounded-sm ring-1 ring-black/15"
-                    style={{ background: c.value }}
-                  />
-                </BubbleBtn>
-              ))}
-              <BubbleBtn
-                aria-label="Remove highlight"
-                title="Remove highlight"
-                active={false}
-                onClick={() => {
-                  editor.chain().focus().unsetHighlight().run();
-                  setHighlightPaintColor(null);
-                }}
-              >
-                <span className="text-[12px] leading-none">⌫</span>
-              </BubbleBtn>
-              <BubbleBtn
-                aria-label="Link"
-                title="Link (⌘K)"
-                active={editor.isActive("link")}
-                onClick={() => {
-                  const prev = editor.getAttributes("link").href as
-                    | string
-                    | undefined;
-                  void promptDialog({
-                    title: "Edit link",
-                    label: "Link URL",
-                    placeholder: "https://example.com",
-                    body: "Leave blank to remove the link.",
-                    defaultValue: prev ?? "",
-                  }).then((url) => {
-                    if (url === null) return;
-                    if (url === "") {
-                      editor.chain().focus().unsetLink().run();
-                    } else {
-                      editor
-                        .chain()
-                        .focus()
-                        .extendMarkRange("link")
-                        .setLink({ href: url })
-                        .run();
-                    }
-                  });
-                }}
-              >
-                <span>🔗</span>
-              </BubbleBtn>
-              <span aria-hidden className="mx-1 h-4 w-px bg-white/15" />
-              <button
-                type="button"
-                aria-label={t.immersive.focusAdd}
-                title={t.immersive.focusAdd}
-                disabled={focusBusy}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => void addSelectionToFocus()}
-                className="inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[11px] font-semibold text-zinc-200 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
-              >
-                {focusBusy ? (
-                  "…"
-                ) : (
-                  <>
-                    <svg
-                      viewBox="0 0 16 16"
-                      width="11"
-                      height="11"
-                      aria-hidden="true"
-                      className="text-violet-300"
-                    >
-                      <path
-                        fill="currentColor"
-                        d="M9.15 1.05 3.4 8.7c-.22.28-.02.7.34.7h3.2l-1.55 5.35c-.16.42.4.72.68.37l6.3-7.55c.22-.28.02-.7-.34-.7H8.85l1.05-5.45c.12-.42-.4-.7-.75-.37Z"
-                      />
-                    </svg>
-                    {t.immersive.focusAddShort}
-                  </>
-                )}
-              </button>
-            </BubbleMenu>
-          ) : null}
           {editor ? (
             <>
               <EditorContent editor={editor} />
@@ -2606,45 +2491,7 @@ export function NotesPanel({
         .tn-prose ::selection {
           background: rgba(35, 131, 226, 0.18);
         }
-
-        /* Bubble menu dark theme — icons */
-        .tn-bubble button {
-          color: #e5e7eb;
-        }
-        .tn-bubble button[data-active="true"] {
-          background: rgba(255, 255, 255, 0.12);
-          color: white;
-        }
       `}</style>
     </aside>
-  );
-}
-
-function BubbleBtn({
-  children,
-  onClick,
-  active,
-  ...rest
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  active?: boolean;
-  "aria-label": string;
-  title: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-active={active ? "true" : undefined}
-      {...rest}
-      className={`inline-flex h-7 w-7 items-center justify-center rounded-md text-[12px] font-medium transition ${
-        active
-          ? "bg-white/15 text-white"
-          : "text-zinc-200 hover:bg-white/10 hover:text-white"
-      }`}
-    >
-      {children}
-    </button>
   );
 }
