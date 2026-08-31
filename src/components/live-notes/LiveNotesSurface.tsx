@@ -27,6 +27,11 @@ import { SlideDeckAttach } from "@/components/live-notes/SlideDeckAttach";
 import { LiveNotesChat, readLiveNotesChatPdf } from "@/components/live-notes/LiveNotesChat";
 import { useScreenVision } from "@/lib/live-notes/use-screen-vision";
 import { pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-pages";
+import {
+  extractNoteHeading,
+  matchHeadingToSections,
+  uniqueIncomingNoteLines,
+} from "@/lib/live-notes/fold-note-markdown";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 import { useT } from "@/lib/i18n/LocaleProvider";
 
@@ -410,22 +415,30 @@ export function LiveNotesSurface({
 
       // Revisable = AI sections the new speech might belong to. Match by
       // overlap so a late mention can still @@revise an early slide draft,
-      // not only the last 3 sections. Cap at 4 for the model.
+      // not only the last few sections. Cap at 6 for the model.
       const excerpts = sectionExcerptsRef.current;
-      const allSections = writer.listRevisableSections(80);
+      const allSections = writer.listRevisableSections(200);
       const revisable = (
         seedFromDeck
           ? []
-          : pickRevisableByTranscript(allSections, pending, 4)
+          : pickRevisableByTranscript(allSections, pending, 6)
       ).map((s) => ({
         sectionId: s.sectionId,
         markdown: s.markdown,
         transcriptExcerpt: excerpts.get(s.sectionId),
       }));
-      const recentHeadings = allSections
-        .map((s) => s.markdown.match(/^##\s+(.+)$/m)?.[1]?.trim())
-        .filter((h): h is string => Boolean(h))
-        .slice(-5);
+      const existingHeadings = allSections
+        .map((s) => {
+          const heading = extractNoteHeading(s.markdown);
+          return heading
+            ? { sectionId: s.sectionId, heading }
+            : null;
+        })
+        .filter((h): h is { sectionId: string; heading: string } => Boolean(h))
+        .slice(0, 40);
+      const recentHeadings = revisable
+        .map((s) => extractNoteHeading(s.markdown))
+        .filter((h): h is string => Boolean(h));
 
       let appendSectionId: string | null = null;
       let revisedSectionId: string | null = null;
@@ -478,8 +491,20 @@ export function LiveNotesSurface({
         appendSectionId = pendingAppend.sectionId;
         pendingAppend = null;
       };
+      const typewrite = async (text: string) => {
+        if (!text) return;
+        const step = charsPerTick();
+        for (let i = 0; i < text.length; i += step) {
+          writer.write(text.slice(i, i + step));
+          gotContent = true;
+          await sleep(TYPE_TICK_MS);
+        }
+      };
       const runPump = async () => {
         let opValid = false;
+        let foldIntoId: string | null = null;
+        let foldBuf = "";
+        let classifyingAppend = false;
         while (true) {
           const item = queue.shift();
           if (!item) {
@@ -495,7 +520,15 @@ export function LiveNotesSurface({
               dividerBefore: item.dividerBefore,
             };
             opValid = true;
+            if (!seedFromDeck) {
+              classifyingAppend = true;
+              foldBuf = "";
+              foldIntoId = null;
+            }
           } else if (item.kind === "revise") {
+            classifyingAppend = false;
+            foldIntoId = null;
+            foldBuf = "";
             pendingAppend = null;
             writer.finishOp();
             revisedSectionId = item.sectionId;
@@ -505,13 +538,53 @@ export function LiveNotesSurface({
           } else if (item.kind === "text" && !opValid) {
             // Orphan text with no active op — ignore (stale revise body).
           } else if (opValid && item.text) {
-            ensureAppendStarted();
-            const step = charsPerTick();
-            for (let i = 0; i < item.text.length; i += step) {
-              writer.write(item.text.slice(i, i + step));
-              gotContent = true;
-              await sleep(TYPE_TICK_MS);
+            if (classifyingAppend) {
+              foldBuf += item.text;
+              const nl = foldBuf.indexOf("\n");
+              if (nl < 0 && foldBuf.length < 160) continue;
+              const firstLine = (nl >= 0 ? foldBuf.slice(0, nl) : foldBuf).trim();
+              const match = matchHeadingToSections(firstLine, allSections);
+              classifyingAppend = false;
+              if (match) {
+                foldIntoId = match.sectionId;
+                pendingAppend = null;
+                pushAiActivity(
+                  "revise",
+                  "Adding this to the notes already written…",
+                  {
+                    sectionId: match.sectionId,
+                    sectionLabel: extractNoteHeading(match.markdown) ?? undefined,
+                  }
+                );
+                continue;
+              }
+              ensureAppendStarted();
+              await typewrite(foldBuf);
+              foldBuf = "";
+              continue;
             }
+            if (foldIntoId) {
+              foldBuf += item.text;
+              continue;
+            }
+            ensureAppendStarted();
+            await typewrite(item.text);
+          }
+        }
+        if (classifyingAppend && foldBuf.trim()) {
+          classifyingAppend = false;
+          ensureAppendStarted();
+          await typewrite(foldBuf);
+          foldBuf = "";
+        }
+        if (foldIntoId) {
+          const live = writer
+            .listRevisableSections(200)
+            .find((s) => s.sectionId === foldIntoId);
+          const extra = uniqueIncomingNoteLines(live?.markdown ?? "", foldBuf);
+          if (extra && writer.extendSection(foldIntoId, extra)) {
+            gotContent = true;
+            revisedSectionId = foldIntoId;
           }
         }
         pendingAppend = null;
@@ -543,7 +616,13 @@ export function LiveNotesSurface({
               }
             }
             if (revisedSectionId && gotContent && !seedFromDeck) {
-              excerpts.set(revisedSectionId, pending.slice(0, 3_000));
+              const prev = excerpts.get(revisedSectionId) ?? "";
+              excerpts.set(
+                revisedSectionId,
+                prev.includes(DECK_DRAFT_EXCERPT)
+                  ? `${DECK_DRAFT_EXCERPT}\n${pending.slice(0, 2_800)}`
+                  : pending.slice(0, 3_000)
+              );
             }
           })
           .catch(() => {})
@@ -561,6 +640,7 @@ export function LiveNotesSurface({
             newSegmentText: seedFromDeck ? "" : pending,
             seedFromDeck: seedFromDeck || undefined,
             recentHeadings,
+            existingHeadings,
             revisable,
             screenContext: seedFromDeck
               ? undefined

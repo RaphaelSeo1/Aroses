@@ -3,6 +3,7 @@ import {
   MAX_DECK_SYNTH_CHARS,
   type DeckPage,
 } from "@/lib/live-notes/slide-pages";
+import { extractNoteHeading } from "@/lib/live-notes/fold-note-markdown";
 
 /** Cap for lecture-chat deck context (relevant pages + title index). */
 export const MAX_CHAT_DECK_CHARS = 16_000;
@@ -180,24 +181,46 @@ export function pickRelevantSlidePages(input: {
 
 /**
  * Choose which existing AI sections to offer for @@revise when speech arrives.
- * Prefers sections whose markdown overlaps the new transcript (slide drafts
- * sitting at the start of the doc would otherwise never be in the last-N window).
+ * Mixes the newest sections (live continuation) with earlier ones whose
+ * heading/body overlap the slice (slide drafts at the top of the doc would
+ * otherwise never be in a last-N window).
  */
 export function pickRevisableByTranscript<
   T extends { markdown: string },
->(sections: T[], transcriptSlice: string, limit = 4): T[] {
+>(sections: T[], transcriptSlice: string, limit = 6): T[] {
   if (sections.length <= limit) return sections;
   const query = tokenize(transcriptSlice);
   if (query.length < 2) return sections.slice(-limit);
-  const scored = sections.map((section, index) => ({
-    section,
-    index,
-    score: countOverlap(new Set(tokenize(section.markdown)), query),
-  }));
-  scored.sort((a, b) => b.score - a.score || b.index - a.index);
-  const matched = scored.filter((s) => s.score >= 2).slice(0, limit);
+
+  const recentCount = Math.min(2, sections.length);
+  const recent = sections.slice(-recentCount);
+  const recentSet = new Set(recent);
+  const scored = sections.map((section, index) => {
+    const heading = extractNoteHeading(section.markdown) ?? "";
+    const headingToks = new Set(tokenize(heading));
+    const bodyToks = new Set(tokenize(section.markdown));
+    const headingScore = countOverlap(headingToks, query);
+    const bodyScore = countOverlap(bodyToks, query);
+    return {
+      section,
+      index,
+      headingScore,
+      score: headingScore * 3 + bodyScore,
+    };
+  });
+  const matched = scored
+    .filter((s) => !recentSet.has(s.section))
+    .filter((s) => s.headingScore >= 1 || s.score >= 2)
+    .sort((a, b) => b.score - a.score || b.index - a.index)
+    .slice(0, Math.max(0, limit - recent.length));
+
   if (matched.length === 0) return sections.slice(-limit);
-  return matched.sort((a, b) => a.index - b.index).map((s) => s.section);
+
+  const picked = new Set<T>([
+    ...matched.map((s) => s.section),
+    ...recent,
+  ]);
+  return sections.filter((s) => picked.has(s));
 }
 
 /** "slide 12", "slides 5-7", "page 3", "pp. 8–10" */

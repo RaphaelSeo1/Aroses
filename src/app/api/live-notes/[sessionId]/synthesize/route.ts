@@ -80,6 +80,7 @@ export async function POST(request: Request, ctx: Params) {
   const b = body as {
     newSegmentText?: unknown;
     recentHeadings?: unknown;
+    existingHeadings?: unknown;
     revisable?: unknown;
     screenContext?: unknown;
     noteInstruction?: unknown;
@@ -99,7 +100,25 @@ export async function POST(request: Request, ctx: Params) {
   const recentHeadings = Array.isArray(b.recentHeadings)
     ? b.recentHeadings
         .filter((h): h is string => typeof h === "string" && h.trim().length > 0)
-        .slice(-5)
+        .slice(-8)
+    : [];
+  const existingHeadings = Array.isArray(b.existingHeadings)
+    ? b.existingHeadings
+        .filter(
+          (h): h is { sectionId: string; heading: string } =>
+            !!h &&
+            typeof h === "object" &&
+            typeof (h as { sectionId?: unknown }).sectionId === "string" &&
+            (h as { sectionId: string }).sectionId.length > 0 &&
+            (h as { sectionId: string }).sectionId.length <= 64 &&
+            typeof (h as { heading?: unknown }).heading === "string" &&
+            (h as { heading: string }).heading.trim().length > 0
+        )
+        .slice(0, 40)
+        .map((h) => ({
+          sectionId: h.sectionId,
+          heading: h.heading.trim().slice(0, 120),
+        }))
     : [];
   const revisable: RevisableSection[] = Array.isArray(b.revisable)
     ? b.revisable
@@ -112,7 +131,7 @@ export async function POST(request: Request, ctx: Params) {
             (s as { sectionId: string }).sectionId.length <= 64 &&
             typeof (s as { markdown?: unknown }).markdown === "string"
         )
-        .slice(-MAX_REVISABLE_SECTIONS)
+        .slice(0, MAX_REVISABLE_SECTIONS)
         .map((s) => ({
           sectionId: s.sectionId,
           markdown: s.markdown.slice(0, MAX_SECTION_CHARS),
@@ -238,6 +257,7 @@ export async function POST(request: Request, ctx: Params) {
             : newSegmentText,
           rollingSummary,
           recentHeadings,
+          existingHeadings,
           revisable: seedFromDeck ? [] : revisable,
           appendSectionId,
           lectureTitle,

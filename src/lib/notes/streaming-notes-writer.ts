@@ -630,6 +630,48 @@ export class StreamingNotesWriter {
   }
 
   /**
+   * Insert extra markdown at the end of an existing AI section (no new
+   * heading). Used when live speech belongs in a slide-drafted section
+   * instead of a duplicate at the bottom of the notes.
+   */
+  extendSection(sectionId: string, markdown: string): boolean {
+    if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
+    const body = markdown.trim().replace(/^#{1,3}\s.+\n?/, "").trim();
+    if (!body) return false;
+    this.finishOp();
+    const blocks = this.sectionBlocks(sectionId);
+    if (blocks.length === 0) return false;
+    if (
+      blocks.some(
+        (b) =>
+          b.node.attrs?.provenance !== "ai" &&
+          b.node.attrs?.provenance !== "ai-context"
+      )
+    ) {
+      return false;
+    }
+    const pmNodes = this.pmNodesFromMarkdown(body, sectionId).filter(
+      (n) => n.type.name !== "heading"
+    );
+    if (pmNodes.length === 0) return false;
+    const last = blocks[blocks.length - 1]!;
+    const insertPos = last.pos + last.node.nodeSize;
+    this.dispatchDoc((tr) => {
+      tr.insert(
+        Math.min(insertPos, tr.doc.content.size),
+        Fragment.from(pmNodes)
+      );
+    });
+    this.dispatchDeco({ set: { [sectionId]: "rose-note-revised" } });
+    window.setTimeout(() => {
+      if (!this.destroyed && !this.editor.isDestroyed) {
+        this.dispatchDeco({ clear: [sectionId] });
+      }
+    }, REVISION_HIGHLIGHT_MS);
+    return true;
+  }
+
+  /**
    * Instantly append a new markdown section (chat @@append).
    */
   appendMarkdown(

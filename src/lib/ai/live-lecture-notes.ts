@@ -24,10 +24,10 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
  *
  *   @@thought <text>       zero or more, FIRST — short user-visible narration
  *                          (specific to this slice; may call out on-screen finds)
- *   @@revise <sectionId>   rare — full replacement ONLY for factual errors
- *                          in a recent section (not for continuations)
- *   @@append               exactly once — new notes for the new slice
- *                          (nothing after it when the slice has no teaching)
+ *   @@revise <sectionId>   fold speech into an existing section (slide
+ *                          draft or continued topic) — full replacement body
+ *   @@append               exactly once — genuinely NEW topics only
+ *                          (empty when the slice was folded into @@revise)
  *   @@summary              exactly once, LAST — updated rolling summary
  *                          (withheld from the client, persisted server-side)
  *
@@ -49,8 +49,9 @@ const RECAP_MODEL =
 export const ROLLING_SUMMARY_MAX_CHARS = 1_600;
 /** Max transcript slice per call (client triggers around ~700). */
 const MAX_SEGMENT_INPUT_CHARS = 12_000;
-/** Self-revision context caps (cost bound: ~4 sections/call). */
-export const MAX_REVISABLE_SECTIONS = 4;
+/** Self-revision context caps (cost bound: ~6 sections/call). */
+export const MAX_REVISABLE_SECTIONS = 6;
+const MAX_EXISTING_HEADINGS = 40;
 const MAX_SECTION_MARKDOWN_CHARS = 4_000;
 const MAX_SECTION_EXCERPT_CHARS = 2_400;
 const MAX_DECK_LIVE_CHARS = 2_400;
@@ -58,7 +59,7 @@ const MAX_DECK_SEED_CHARS = 7_000;
 
 const NOTE_STYLE_RULES = `You write structured STUDY NOTES — useful to reread later, not a transcript and not a re-narration of the lecture. Aim for the old thorough default, cleaned up: keep the substance, drop the noise.
 
-- Start a "## " heading whenever the lecturer moves to a distinct topic or concept (3–8 words naming the idea; never repeat a RECENT HEADING).
+- Start a "## " heading whenever the lecturer moves to a distinct topic or concept (3–8 words naming the idea; never repeat an EXISTING NOTE HEADING — fold into that section instead).
 - Under each heading, write enough that a student who missed the verbal fluff still understands the point: crisp definitions, key numbers/units, named studies/people/dates, cause→effect, and the load-bearing supporting detail. Prefer a short paragraph or a handful of solid bullets over one telegraphic line.
 - SUMMARIZE as you go. New transcript arrives often — do NOT dump every utterance. Fold related sentences into one clear note. Skip filler, hedging, transitions, anecdotes, repetition, and anything that wouldn't help someone study the material.
 - Bold key terms with **term** on first introduction only. State definitions cleanly even when the lecturer phrased them loosely — but only from what was said or shown.
@@ -99,20 +100,22 @@ ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
-SELF-REVISION / CONTINUATION (preserve prior notes — wiping is worse than a duplicate bullet):
-Before writing, check whether the NEW TRANSCRIPT SLICE continues, completes, or repeats a topic already in YOUR RECENT NOTE SECTIONS (same concept, same worked example, or the remaining items of an enumeration a recent section started — match by meaning, not only exact heading text).
+SELF-REVISION / CONTINUATION (notes from slides or earlier slices already exist — do not rewrite them at the bottom):
+Before writing, check EXISTING NOTE HEADINGS and YOUR RECENT NOTE SECTIONS. If the NEW TRANSCRIPT SLICE continues, completes, repeats, or is about the same topic as a section that is already written (same concept, same worked example, remaining items of an enumeration — match by meaning, not only exact heading text):
 
-DEFAULT: @@append the new teaching. Only @@revise when you will KEEP the existing section almost intact.
+- You MUST @@revise that sectionId. Copy forward every still-correct heading, bullet, table, and number, THEN fold in the new spoken detail. The rewritten section MUST be at least as long as the prior markdown unless the lecturer explicitly retracted content. Leave @@append empty.
+- Do NOT @@append a new section that restates or continues that topic. A second copy at the bottom is always wrong when the notes already exist.
+- If you are unsure whether it is the same topic, @@revise the closest matching listed section rather than appending.
 
-- If it ADDS to a recent section (more explanation, another example, the next list item) → @@revise <sectionId> with the FULL section: copy forward every still-correct heading, bullet, table, and number, THEN add the new material. The rewritten section MUST be at least as long as the prior markdown unless the lecturer explicitly retracted content. Leaving @@append empty is OK only when the new slice was fully folded in.
-- If it INTRODUCES a genuinely new topic → @@append under a new heading. Prefer a more specific facet heading over a near-duplicate H2 for the same topic.
-- If it only REPEATS already-captured material → leave @@append empty (still emit the marker). Do NOT @@revise a section just to rephrase it.
-- NEVER @@revise because of grammar, punctuation, capitalization, filler words, or OCR/STT flicker. NEVER replace a long section with a short "correction" that drops earlier facts.
-- For a narrow factual fix only (lecturer said "not 3mg, 30mg"; slide shows the real spelling): @@revise with the full section, changing only that token.
-- Slide DRAFTS (transcript excerpt is "${DECK_DRAFT_EXCERPT}"): when this speech covers that topic, @@revise to fold speech into the draft. Speech that clearly overrides ONE claim wins for that claim only. Additional spoken detail is additive. Do NOT treat "here's more on this" as "delete the draft."
+Only @@append when the slice introduces a topic that has NO matching existing heading.
+
+- If the slice only REPEATS already-captured material → leave @@append empty (still emit the marker). Do NOT @@revise just to rephrase.
+- NEVER @@revise for grammar, punctuation, capitalization, filler words, or OCR/STT flicker. NEVER replace a long section with a short "correction" that drops earlier facts.
+- Narrow factual fix only (lecturer said "not 3mg, 30mg"): @@revise with the full section, changing only that token.
+- Slide DRAFTS (transcript excerpt is "${DECK_DRAFT_EXCERPT}"): speech about that topic MUST @@revise the draft. Additional spoken detail is additive. Do NOT treat "here's more on this" as "delete the draft."
 - Other substantive contradictions (two incompatible things the lecturer said, or live screen vs speech): do NOT pick a winner — @@append an **Open question:** line instead.
 
-Only sections in YOUR RECENT NOTE SECTIONS may be revised. Never touch older/unshown sections. At most one @@revise per call. If you are unsure whether to revise or append, @@append.
+Only sections in YOUR RECENT NOTE SECTIONS may be revised. If a matching heading exists but that id is not in YOUR RECENT NOTE SECTIONS, leave @@append empty rather than duplicating it. At most one @@revise per call.
 
 NARRATION (@@thought — user-visible, optional but valuable):
 - You MAY emit zero or one short @@thought line before @@revise/@@append. This is Rose speaking to the student in the activity log — not notes.
@@ -188,6 +191,8 @@ export async function* streamLiveLectureNotes(input: {
   newSegmentText: string;
   rollingSummary: string;
   recentHeadings: string[];
+  /** All already-written H2s (id + title) so the model can avoid duplicates. */
+  existingHeadings?: Array<{ sectionId: string; heading: string }>;
   revisable: RevisableSection[];
   /** Server-assigned id for the section this call appends. */
   appendSectionId: string;
@@ -224,9 +229,18 @@ export async function* streamLiveLectureNotes(input: {
   const headings = input.recentHeadings
     .map((h) => h.trim())
     .filter(Boolean)
-    .slice(-5);
+    .slice(-8);
+  const existingHeadings = (input.existingHeadings ?? [])
+    .filter(
+      (h) =>
+        typeof h.sectionId === "string" &&
+        h.sectionId.trim() &&
+        typeof h.heading === "string" &&
+        h.heading.trim()
+    )
+    .slice(0, MAX_EXISTING_HEADINGS);
   const revisable =
-    mode === "seed" ? [] : input.revisable.slice(-MAX_REVISABLE_SECTIONS);
+    mode === "seed" ? [] : input.revisable.slice(0, MAX_REVISABLE_SECTIONS);
   // Keep screen context tight — large dumps encourage unnecessary rewrites.
   const screenContext =
     mode === "seed" ? "" : (input.screenContext ?? "").trim().slice(0, 1_800);
@@ -280,11 +294,13 @@ export async function* streamLiveLectureNotes(input: {
           summary
             ? `ROLLING SUMMARY OF THE LECTURE SO FAR:\n${summary}`
             : "ROLLING SUMMARY OF THE LECTURE SO FAR: (lecture just started)",
-          headings.length > 0
-            ? `RECENT HEADINGS (do not spawn a near-duplicate H2 for the same topic — fold new detail into that section, or use a more specific facet heading):\n${headings.map((h) => `- ${h}`).join("\n")}`
-            : null,
+          existingHeadings.length > 0
+            ? `EXISTING NOTE HEADINGS (already written — if this slice is the same topic, @@revise that id when it is in YOUR RECENT NOTE SECTIONS; never @@append a second copy at the bottom):\n${existingHeadings.map((h) => `- [${h.sectionId}] ${h.heading}`).join("\n")}`
+            : headings.length > 0
+              ? `RECENT HEADINGS (do not spawn a near-duplicate H2 for the same topic — fold new detail into that section):\n${headings.map((h) => `- ${h}`).join("\n")}`
+              : null,
           sectionsBlock
-            ? `YOUR RECENT NOTE SECTIONS (the only sections you may @@revise):\n\n${sectionsBlock}`
+            ? `YOUR RECENT NOTE SECTIONS (the only sections you may @@revise — fold speech into these instead of appending a duplicate):\n\n${sectionsBlock}`
             : "YOUR RECENT NOTE SECTIONS: (none yet — no @@revise operations possible)",
           screenContext
             ? `ON-SCREEN CONTENT (authoritative for spellings/symbols/numbers/tables — use for grounding; do NOT revise prior notes merely because the screen changed):\n${screenContext}`
@@ -294,8 +310,8 @@ export async function* streamLiveLectureNotes(input: {
             : null,
           `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
           hasDraft
-            ? "\nEmit the protocol now. If this speech covers a slide-drafted section, @@revise it only to FOLD IN new spoken detail while keeping every still-correct bullet. Additional information is not an error — do not replace the section with only the new slice. Remove a claim only if the lecturer clearly contradicted or skipped it. Do not @@revise for grammar, punctuation, or OCR flicker. @@append for topics with no matching draft."
-            : "\nEmit the protocol now. Prefer @@append for genuinely new topics. @@revise a recent section only when you will keep its existing content and add/fix a specific point. Never wipe a section for grammar, punctuation, or extra detail. **Open question:** only for unclear contradictions in speech/screen.",
+            ? "\nEmit the protocol now. If this speech covers a slide-drafted section, @@revise it to FOLD IN new spoken detail while keeping every still-correct bullet. Additional information is not an error — do not replace the section with only the new slice. @@append ONLY for a topic that has no matching existing heading. Empty @@append when the slice was folded in or is a repeat."
+            : "\nEmit the protocol now. If notes already exist for this topic, @@revise that section (keep prior content, add new facts). @@append ONLY for a genuinely new topic with no matching heading. Never wipe a section. Empty @@append when the slice was folded in or is a repeat. **Open question:** only for unclear contradictions in speech/screen.",
         ]
           .filter(Boolean)
           .join("\n\n");
