@@ -18,6 +18,7 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
+import { Indent } from "./notes/Indent";
 import { FocusClip, applyFocusClipMark } from "./notes/FocusClip";
 import { NotesFormatToolbar } from "./notes/NotesFormatToolbar";
 import { NotesTableHoverControls } from "./notes/NotesTableHoverControls";
@@ -511,6 +512,7 @@ export function NotesPanel({
       TextAlign.configure({
         types: ["heading", "paragraph"],
       }),
+      Indent,
       Link.configure({
         openOnClick: false,
         autolink: true,
@@ -598,29 +600,37 @@ export function NotesPanel({
         },
       },
       handleKeyDown: (view, event) => {
-        // Tab / Shift-Tab nest & un-nest list items (bulleted, numbered, and
-        // to-do). This lets a student indent an item under another — e.g. a
-        // sub-point beneath a numbered step — and then change its type with
-        // the slash menu. We handle it explicitly (rather than relying solely
-        // on the list keymap) so nesting is reliable regardless of focus.
+        // Tab / Shift-Tab: nest list items, indent other blocks, and never
+        // move focus out of the editor. Tables keep cell-to-cell Tab.
         if (event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
           const ed = editorInstanceRef.current;
-          if (ed) {
-            const itemType = ed.isActive("taskItem")
-              ? "taskItem"
-              : ed.isActive("listItem")
-                ? "listItem"
-                : null;
-            if (itemType) {
-              event.preventDefault();
-              if (event.shiftKey) {
-                ed.chain().focus().liftListItem(itemType).run();
-              } else {
-                ed.chain().focus().sinkListItem(itemType).run();
-              }
-              return true;
-            }
+          if (!ed || ed.isDestroyed) {
+            event.preventDefault();
+            return true;
           }
+          if (ed.isActive("table")) {
+            return false;
+          }
+          event.preventDefault();
+          const itemType = ed.isActive("taskItem")
+            ? "taskItem"
+            : ed.isActive("listItem")
+              ? "listItem"
+              : null;
+          if (itemType) {
+            if (event.shiftKey) {
+              ed.chain().focus().liftListItem(itemType).run();
+            } else {
+              ed.chain().focus().sinkListItem(itemType).run();
+            }
+            return true;
+          }
+          if (event.shiftKey) {
+            ed.chain().focus().outdent().run();
+          } else {
+            ed.chain().focus().indent().run();
+          }
+          return true;
         }
         // Cmd+K for link insertion — match Notion's default.
         if ((event.metaKey || event.ctrlKey) && event.key === "k") {
@@ -2354,6 +2364,16 @@ export function NotesPanel({
         .tn-prose [data-text-align="left"] {
           text-align: left;
         }
+
+        /* Tab indent — 1.5em per level, persisted as data-indent. */
+        .tn-prose [data-indent="1"] { padding-left: 1.5em; }
+        .tn-prose [data-indent="2"] { padding-left: 3em; }
+        .tn-prose [data-indent="3"] { padding-left: 4.5em; }
+        .tn-prose [data-indent="4"] { padding-left: 6em; }
+        .tn-prose [data-indent="5"] { padding-left: 7.5em; }
+        .tn-prose [data-indent="6"] { padding-left: 9em; }
+        .tn-prose [data-indent="7"] { padding-left: 10.5em; }
+        .tn-prose [data-indent="8"] { padding-left: 12em; }
 
         /* Highlight — student drag, toolbar, bubble, or chat on request.
            Leave background to TipTap's inline color so the palette shows. */
