@@ -3,8 +3,6 @@ import test from "node:test";
 import {
   consumeGfmTable,
   isGfmTableSeparatorLine,
-  KEY_TERM_HIGHLIGHT_COLOR,
-  keyTermMarks,
   markdownToNoteNodes,
   noteNodesToMarkdown,
   parseInlineMarkdown,
@@ -16,28 +14,19 @@ test("parses closed **bold** spans", () => {
   const nodes = parseInlineMarkdown("see **term** here");
   assert.deepEqual(nodes, [
     { type: "text", text: "see " },
-    { type: "text", text: "term", marks: keyTermMarks() },
+    { type: "text", text: "term", marks: [{ type: "bold" }] },
     { type: "text", text: " here" },
   ]);
 });
 
-test("**term** carries bold and highlight together", () => {
-  const nodes = parseInlineMarkdown("**Mitochondria**");
-  const marks = nodes[0]?.marks ?? [];
-  assert.equal(marks.some((m) => m.type === "bold"), true);
-  assert.equal(marks.some((m) => m.type === "highlight"), true);
-  assert.equal(
-    marks.find((m) => m.type === "highlight")?.attrs?.color,
-    KEY_TERM_HIGHLIGHT_COLOR
-  );
-});
-
-test("round-trip still emits **term** (highlight is implied by bold)", () => {
+test("round-trip still emits **term** as bold, not a highlight mark", () => {
   const nodes = markdownToNoteNodes("- **Aspirin** thins blood", {
     sectionId: "s1",
     provenance: "ai",
   });
   assert.match(noteNodesToMarkdown(nodes), /\*\*Aspirin\*\*/);
+  const inline = parseInlineMarkdown("**Aspirin**");
+  assert.deepEqual(inline[0]?.marks, [{ type: "bold" }]);
 });
 
 test("parses closed *italic* spans", () => {

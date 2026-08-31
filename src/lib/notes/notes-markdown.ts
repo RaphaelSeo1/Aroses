@@ -19,21 +19,13 @@
  * every rule here.
  */
 
-/** Default highlighter color for key terms (`**bold**` / TipTap highlight). */
+/** Default yellow when the student or chat applies a highlight mark. */
 export const KEY_TERM_HIGHLIGHT_COLOR = "#fde68a";
 
 export type NoteMarkJson = {
   type: string;
   attrs?: Record<string, string>;
 };
-
-/** Bold + highlight together — one visual treatment for key terms. */
-export function keyTermMarks(): NoteMarkJson[] {
-  return [
-    { type: "bold" },
-    { type: "highlight", attrs: { color: KEY_TERM_HIGHLIGHT_COLOR } },
-  ];
-}
 
 export type NoteInlineJson = {
   type: "text";
@@ -192,7 +184,7 @@ export function parseInlineMarkdown(text: string): NoteInlineJson[] {
       flushPlain();
       const inner = text.slice(i + 2, close);
       if (inner) {
-        out.push({ type: "text", text: inner, marks: keyTermMarks() });
+        out.push({ type: "text", text: inner, marks: [{ type: "bold" }] });
       }
       i = close + 2;
       continue;

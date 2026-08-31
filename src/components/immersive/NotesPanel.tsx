@@ -19,7 +19,6 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
-import { FocusClip, applyFocusClipMark } from "./notes/FocusClip";
 import { NotesFormatToolbar } from "./notes/NotesFormatToolbar";
 import { NotesTableHoverControls } from "./notes/NotesTableHoverControls";
 import { LectureSummaryButton } from "./notes/LectureSummaryButton";
@@ -41,15 +40,8 @@ import { tf } from "@/lib/i18n/format";
 import {
   parseInlineMarkdown,
   sanitizeIncompleteInlineMarkdown,
-  keyTermMarks,
   KEY_TERM_HIGHLIGHT_COLOR,
 } from "@/lib/notes/notes-markdown";
-import {
-  applyKeyTermHighlight,
-  clearKeyTermEmphasis,
-  KeyTermEmphasis,
-  toggleKeyTermEmphasis,
-} from "@/lib/notes/key-term-emphasis";
 import {
   imageFilesFromDataTransfer,
   NOTE_IMAGE_MIME_TYPES,
@@ -507,8 +499,6 @@ export function NotesPanel({
       RoseDocument,
       Underline,
       Highlight.configure({ multicolor: true }),
-      FocusClip.configure({ hint: t.immersive.focusClipHint }),
-      KeyTermEmphasis,
       Typography,
       TextAlign.configure({
         types: ["heading", "paragraph"],
@@ -849,7 +839,7 @@ export function NotesPanel({
                   {
                     type: "text",
                     text: text.slice(0, bold.length),
-                    marks: keyTermMarks(),
+                    marks: [{ type: "bold" }],
                   },
                   {
                     type: "text",
@@ -900,11 +890,11 @@ export function NotesPanel({
                         {
                           type: "text",
                           text: term,
-                          marks: keyTermMarks(),
+                          marks: [{ type: "bold" }],
                         },
                         { type: "text", text: ` — ${definition}` },
                       ]
-                    : [{ type: "text", text: term, marks: keyTermMarks() }],
+                    : [{ type: "text", text: term, marks: [{ type: "bold" }] }],
                 },
               ],
             })),
@@ -1219,7 +1209,6 @@ export function NotesPanel({
         error?: string;
         count?: number;
         attachedToCourse?: boolean;
-        items?: Array<{ id?: unknown }>;
       };
       if (!res.ok) {
         await alertDialog({
@@ -1232,17 +1221,6 @@ export function NotesPanel({
         return;
       }
       const n = typeof j.count === "number" ? j.count : 0;
-      const firstId =
-        typeof j.items?.[0]?.id === "string"
-          ? j.items[0].id
-          : crypto.randomUUID();
-      if (
-        excerpt.markFrom != null &&
-        excerpt.markTo != null &&
-        !editor.isDestroyed
-      ) {
-        applyFocusClipMark(editor, excerpt.markFrom, excerpt.markTo, firstId);
-      }
       await alertDialog({
         title: t.immersive.focusAddedTitle,
         body: j.attachedToCourse
@@ -1920,7 +1898,7 @@ export function NotesPanel({
                 aria-label="Bold"
                 title="Bold (⌘B)"
                 active={editor.isActive("bold")}
-                onClick={() => toggleKeyTermEmphasis(editor)}
+                onClick={() => editor.chain().focus().toggleBold().run()}
               >
                 <span className="font-bold">B</span>
               </BubbleBtn>
@@ -1963,7 +1941,9 @@ export function NotesPanel({
                   aria-label={`Highlight ${c.label.toLowerCase()}`}
                   title={`Highlight ${c.label.toLowerCase()}`}
                   active={editor.isActive("highlight", { color: c.value })}
-                  onClick={() => applyKeyTermHighlight(editor, c.value)}
+                  onClick={() =>
+                    editor.chain().focus().setHighlight({ color: c.value }).run()
+                  }
                 >
                   <span
                     className="inline-block h-3 w-3 rounded-sm ring-1 ring-black/15"
@@ -1975,7 +1955,7 @@ export function NotesPanel({
                 aria-label="Remove highlight"
                 title="Remove highlight"
                 active={false}
-                onClick={() => clearKeyTermEmphasis(editor)}
+                onClick={() => editor.chain().focus().unsetHighlight().run()}
               >
                 <span className="text-[12px] leading-none">⌫</span>
               </BubbleBtn>
@@ -2193,12 +2173,7 @@ export function NotesPanel({
         }
         .tn-prose strong {
           font-weight: 700;
-          color: inherit;
-          background: ${KEY_TERM_HIGHLIGHT_COLOR};
-          padding: 0.05rem 0.18rem;
-          border-radius: 0.2rem;
-          box-decoration-break: clone;
-          -webkit-box-decoration-break: clone;
+          color: #1a1a1c;
         }
         .tn-prose em {
           font-style: italic;
@@ -2436,45 +2411,12 @@ export function NotesPanel({
           text-align: left;
         }
 
-        /* Highlight — same wash as bold key terms; nested pair is one pill */
+        /* Highlight — only when the student (or chat, on request) marks text */
         .tn-prose mark {
-          background: ${KEY_TERM_HIGHLIGHT_COLOR};
-          padding: 0.05rem 0.18rem;
-          border-radius: 0.2rem;
+          background: rgba(253, 224, 71, 0.5);
+          padding: 0.05rem 0.2rem;
+          border-radius: 0.25rem;
           color: inherit;
-          box-decoration-break: clone;
-          -webkit-box-decoration-break: clone;
-        }
-        .tn-prose mark strong,
-        .tn-prose strong mark {
-          background: transparent;
-          padding: 0;
-          font-weight: 700;
-        }
-
-        /* Focus-question clip — lighter and distinct from key-term yellow */
-        .tn-prose .tn-focus-clip {
-          background: rgba(196, 181, 253, 0.22);
-          border-radius: 0.15rem;
-          box-decoration-break: clone;
-          -webkit-box-decoration-break: clone;
-        }
-        .tn-prose .tn-focus-clip-icon {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 0.9rem;
-          height: 0.9rem;
-          margin: 0 0.15rem 0 0;
-          vertical-align: text-top;
-          color: #7c3aed;
-          background: rgba(237, 233, 254, 0.95);
-          border-radius: 999px;
-          pointer-events: auto;
-          cursor: default;
-        }
-        .tn-prose .tn-focus-clip-icon svg {
-          display: block;
         }
 
         /* AI self-revision transitions (StreamingNotesWriter decorations).
