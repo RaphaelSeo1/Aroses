@@ -67,6 +67,9 @@ export function NotesFormatToolbar({
   addToFocusLabel,
   addToFocusTitle,
   addToFocusBusy,
+  highlightColors,
+  highlightPaintColor,
+  onHighlightPaintColor,
 }: {
   editor: Editor;
   uploadingImage?: boolean;
@@ -75,6 +78,9 @@ export function NotesFormatToolbar({
   addToFocusLabel?: string;
   addToFocusTitle?: string;
   addToFocusBusy?: boolean;
+  highlightColors?: Array<{ label: string; value: string }>;
+  highlightPaintColor?: string | null;
+  onHighlightPaintColor?: (color: string | null) => void;
 }) {
   const s = useEditorState({
     editor,
@@ -163,6 +169,51 @@ export function NotesFormatToolbar({
           S
         </span>
       </ToolBtn>
+      {highlightColors && highlightColors.length > 0 ? (
+        <>
+          <Divider />
+          {highlightColors.map((c) => (
+            <ToolBtn
+              key={c.value}
+              title={
+                highlightPaintColor === c.value
+                  ? `${c.label} highlighter on — drag to paint. Click again to turn off.`
+                  : `Highlight ${c.label.toLowerCase()} — drag over text`
+              }
+              active={highlightPaintColor === c.value}
+              onClick={() => {
+                const { from, to } = editor.state.selection;
+                if (from !== to) {
+                  editor
+                    .chain()
+                    .focus()
+                    .setHighlight({ color: c.value })
+                    .run();
+                  onHighlightPaintColor?.(c.value);
+                  return;
+                }
+                onHighlightPaintColor?.(
+                  highlightPaintColor === c.value ? null : c.value
+                );
+              }}
+            >
+              <span
+                className="inline-block h-3 w-3 rounded-sm ring-1 ring-black/20"
+                style={{ background: c.value }}
+              />
+            </ToolBtn>
+          ))}
+          <ToolBtn
+            title="Remove highlight"
+            onClick={() => {
+              editor.chain().focus().unsetHighlight().run();
+              onHighlightPaintColor?.(null);
+            }}
+          >
+            <span className="text-[11px] leading-none">⌫</span>
+          </ToolBtn>
+        </>
+      ) : null}
       <Divider />
       <ToolBtn
         title="Bulleted list"

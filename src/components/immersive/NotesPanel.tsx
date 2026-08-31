@@ -453,6 +453,13 @@ export function NotesPanel({
   // Live handle to the editor so the (synchronously-defined) key handler can
   // reach commands without a use-before-define on `editor`.
   const editorInstanceRef = useRef<Editor | null>(null);
+  /** Drag-to-highlight: paint this color when the student drags a selection. */
+  const highlightPaintColorRef = useRef<string | null>(KEY_TERM_HIGHLIGHT_COLOR);
+  const highlightDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [highlightPaintColor, setHighlightPaintColor] = useState<string | null>(
+    KEY_TERM_HIGHLIGHT_COLOR
+  );
+  highlightPaintColorRef.current = highlightPaintColor;
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const pickImageRef = useRef<() => void>(() => {});
   const insertNoteImageRef = useRef<(file: File) => Promise<void>>(async () => {});
@@ -561,6 +568,33 @@ export function NotesPanel({
         event.preventDefault();
         void insertNoteImageRef.current(files[0]!);
         return true;
+      },
+      handleDOMEvents: {
+        mousedown: (_view, event) => {
+          if (event.button !== 0) return false;
+          highlightDragStartRef.current = {
+            x: event.clientX,
+            y: event.clientY,
+          };
+          return false;
+        },
+        mouseup: (view, event) => {
+          const start = highlightDragStartRef.current;
+          highlightDragStartRef.current = null;
+          const color = highlightPaintColorRef.current;
+          if (!color || event.button !== 0) return false;
+          if (start) {
+            const dx = event.clientX - start.x;
+            const dy = event.clientY - start.y;
+            if (dx * dx + dy * dy < 25) return false;
+          }
+          const { from, to } = view.state.selection;
+          if (to - from < 2) return false;
+          const ed = editorInstanceRef.current;
+          if (!ed || ed.isDestroyed) return false;
+          ed.chain().setHighlight({ color }).run();
+          return false;
+        },
       },
       handleKeyDown: (view, event) => {
         // Tab / Shift-Tab nest & un-nest list items (bulleted, numbered, and
@@ -1873,6 +1907,9 @@ export function NotesPanel({
               }
               addToFocusTitle={t.immersive.focusAdd}
               addToFocusBusy={focusBusy}
+              highlightColors={HIGHLIGHT_COLORS}
+              highlightPaintColor={highlightPaintColor}
+              onHighlightPaintColor={setHighlightPaintColor}
             />
           ) : null}
 
@@ -1941,9 +1978,14 @@ export function NotesPanel({
                   aria-label={`Highlight ${c.label.toLowerCase()}`}
                   title={`Highlight ${c.label.toLowerCase()}`}
                   active={editor.isActive("highlight", { color: c.value })}
-                  onClick={() =>
-                    editor.chain().focus().setHighlight({ color: c.value }).run()
-                  }
+                  onClick={() => {
+                    editor
+                      .chain()
+                      .focus()
+                      .setHighlight({ color: c.value })
+                      .run();
+                    setHighlightPaintColor(c.value);
+                  }}
                 >
                   <span
                     className="inline-block h-3 w-3 rounded-sm ring-1 ring-black/15"
@@ -1955,7 +1997,10 @@ export function NotesPanel({
                 aria-label="Remove highlight"
                 title="Remove highlight"
                 active={false}
-                onClick={() => editor.chain().focus().unsetHighlight().run()}
+                onClick={() => {
+                  editor.chain().focus().unsetHighlight().run();
+                  setHighlightPaintColor(null);
+                }}
               >
                 <span className="text-[12px] leading-none">⌫</span>
               </BubbleBtn>
@@ -2411,12 +2456,14 @@ export function NotesPanel({
           text-align: left;
         }
 
-        /* Highlight — only when the student (or chat, on request) marks text */
+        /* Highlight — student drag, toolbar, bubble, or chat on request.
+           Leave background to TipTap's inline color so the palette shows. */
         .tn-prose mark {
-          background: rgba(253, 224, 71, 0.5);
-          padding: 0.05rem 0.2rem;
+          padding: 0.05rem 0.18rem;
           border-radius: 0.25rem;
           color: inherit;
+          box-decoration-break: clone;
+          -webkit-box-decoration-break: clone;
         }
 
         /* AI self-revision transitions (StreamingNotesWriter decorations).

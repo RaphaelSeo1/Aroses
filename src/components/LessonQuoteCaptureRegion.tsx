@@ -860,14 +860,40 @@ export function LessonQuoteCaptureRegion({
       const rect = hit.range.getBoundingClientRect();
       pendingRef.current = hit;
       activeMarkRef.current = null;
+      const applied = applyInlineHighlight(
+        root,
+        hit.range.cloneRange(),
+        "yellow"
+      );
+      if (applied.ok && applied.blocks.length > 0) {
+        for (const block of applied.blocks) {
+          dispatchQuote({
+            lessonIndex,
+            text: block.text,
+            color: "yellow",
+            anchor: block.anchor,
+            action: "highlight",
+          });
+        }
+        const mark = root.querySelector<HTMLElement>(
+          `[data-lesson-highlight-group-id="${applied.groupId}"]`
+        );
+        if (mark) activeMarkRef.current = mark;
+        window.getSelection()?.removeAllRanges();
+        pendingRef.current = null;
+        setMenu({
+          text: hit.text,
+          mode: "existing",
+          top: Math.max(8, rect.top - 44),
+          left: Math.min(window.innerWidth - 220, Math.max(8, rect.left)),
+        });
+        return;
+      }
       setMenu({
         text: hit.text,
         mode: "selection",
         top: Math.max(8, rect.top - 44),
-        left: Math.min(
-          window.innerWidth - 260,
-          Math.max(8, rect.left)
-        ),
+        left: Math.min(window.innerWidth - 260, Math.max(8, rect.left)),
       });
     };
 
