@@ -49,6 +49,7 @@ const en = {
     "Added {count} questions. Practice them in this course's Focus quiz, or in Review.",
   focusAddedBodyNotes:
     "Added {count} questions. Practice them anytime in Review → Focus.",
+  focusClipHint: "Added to focus questions",
 };
 
 const ko: typeof en = {
@@ -102,6 +103,7 @@ const ko: typeof en = {
     "질문 {count}개를 추가했어요. 이 코스의 포커스 퀴즈나 복습에서 연습하세요.",
   focusAddedBodyNotes:
     "질문 {count}개를 추가했어요. 언제든 복습 → 포커스에서 연습하세요.",
+  focusClipHint: "포커스 질문에 추가됨",
 };
 
 export const immersive = { en, ko };

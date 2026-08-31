@@ -102,7 +102,8 @@ export function NotesFormatToolbar({
   });
 
   return (
-    <div className="sticky top-0 z-20 -mx-1 mb-3 flex flex-wrap items-center gap-0.5 rounded-xl border border-zinc-200/90 bg-white/95 px-1.5 py-1 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-950/95">
+    <div className="sticky top-0 z-20 -mx-1 mb-3 flex items-center gap-0.5 rounded-xl border border-zinc-200/90 bg-white/95 px-1.5 py-1 shadow-sm backdrop-blur dark:border-zinc-700 dark:bg-zinc-950/95">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">
       <ToolBtn
         title="Heading 1"
         active={s.h1}
@@ -309,39 +310,37 @@ export function NotesFormatToolbar({
           </Icon>
         )}
       </ToolBtn>
+      </div>
       {onAddToFocus ? (
-        <>
-          <Divider />
-          <button
-            type="button"
-            title={addToFocusTitle ?? addToFocusLabel ?? "Add to focus questions"}
-            aria-label={addToFocusTitle ?? addToFocusLabel ?? "Add to focus questions"}
-            disabled={addToFocusBusy}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={onAddToFocus}
-            className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-semibold text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            {addToFocusBusy ? (
-              "…"
-            ) : (
-              <>
-                <svg
-                  viewBox="0 0 16 16"
-                  width="11"
-                  height="11"
-                  aria-hidden="true"
-                  className="text-violet-600"
-                >
-                  <path
-                    fill="currentColor"
-                    d="M9.15 1.05 3.4 8.7c-.22.28-.02.7.34.7h3.2l-1.55 5.35c-.16.42.4.72.68.37l6.3-7.55c.22-.28.02-.7-.34-.7H8.85l1.05-5.45c.12-.42-.4-.7-.75-.37Z"
-                  />
-                </svg>
-                {addToFocusLabel ?? "Focus"}
-              </>
-            )}
-          </button>
-        </>
+        <button
+          type="button"
+          title={addToFocusTitle ?? addToFocusLabel ?? "Add to focus questions"}
+          aria-label={addToFocusTitle ?? addToFocusLabel ?? "Add to focus questions"}
+          disabled={addToFocusBusy}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onAddToFocus}
+          className="ml-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-semibold text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        >
+          {addToFocusBusy ? (
+            "…"
+          ) : (
+            <>
+              <svg
+                viewBox="0 0 16 16"
+                width="11"
+                height="11"
+                aria-hidden="true"
+                className="text-violet-600"
+              >
+                <path
+                  fill="currentColor"
+                  d="M9.15 1.05 3.4 8.7c-.22.28-.02.7.34.7h3.2l-1.55 5.35c-.16.42.4.72.68.37l6.3-7.55c.22-.28.02-.7-.34-.7H8.85l1.05-5.45c.12-.42-.4-.7-.75-.37Z"
+                />
+              </svg>
+              {addToFocusLabel ?? "Focus"}
+            </>
+          )}
+        </button>
       ) : null}
     </div>
   );

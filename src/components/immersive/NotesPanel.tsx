@@ -19,6 +19,7 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { SlashCommand } from "./notes/SlashCommand";
 import { Callout } from "./notes/Callout";
+import { FocusClip, applyFocusClipMark } from "./notes/FocusClip";
 import { NotesFormatToolbar } from "./notes/NotesFormatToolbar";
 import { NotesTableHoverControls } from "./notes/NotesTableHoverControls";
 import { LectureSummaryButton } from "./notes/LectureSummaryButton";
@@ -506,6 +507,7 @@ export function NotesPanel({
       RoseDocument,
       Underline,
       Highlight.configure({ multicolor: true }),
+      FocusClip.configure({ hint: t.immersive.focusClipHint }),
       Typography,
       TextAlign.configure({
         types: ["heading", "paragraph"],
@@ -1243,6 +1245,7 @@ export function NotesPanel({
         error?: string;
         count?: number;
         attachedToCourse?: boolean;
+        items?: Array<{ id?: unknown }>;
       };
       if (!res.ok) {
         await alertDialog({
@@ -1255,6 +1258,17 @@ export function NotesPanel({
         return;
       }
       const n = typeof j.count === "number" ? j.count : 0;
+      const firstId =
+        typeof j.items?.[0]?.id === "string"
+          ? j.items[0].id
+          : crypto.randomUUID();
+      if (
+        excerpt.markFrom != null &&
+        excerpt.markTo != null &&
+        !editor.isDestroyed
+      ) {
+        applyFocusClipMark(editor, excerpt.markFrom, excerpt.markTo, firstId);
+      }
       await alertDialog({
         title: t.immersive.focusAddedTitle,
         body: j.attachedToCourse
@@ -2464,6 +2478,31 @@ export function NotesPanel({
           color: inherit;
           box-decoration-break: clone;
           -webkit-box-decoration-break: clone;
+        }
+
+        /* Focus-question clip — lighter and distinct from student highlighter */
+        .tn-prose .tn-focus-clip {
+          background: rgba(196, 181, 253, 0.28);
+          border-radius: 0.15rem;
+          box-decoration-break: clone;
+          -webkit-box-decoration-break: clone;
+        }
+        .tn-prose .tn-focus-clip-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 0.9rem;
+          height: 0.9rem;
+          margin: 0 0.15rem 0 0;
+          vertical-align: text-top;
+          color: #7c3aed;
+          background: rgba(237, 233, 254, 0.95);
+          border-radius: 999px;
+          pointer-events: auto;
+          cursor: default;
+        }
+        .tn-prose .tn-focus-clip-icon svg {
+          display: block;
         }
 
         /* AI self-revision transitions (StreamingNotesWriter decorations).
