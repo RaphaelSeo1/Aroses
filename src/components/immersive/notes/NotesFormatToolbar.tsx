@@ -202,19 +202,27 @@ export function NotesFormatToolbar({
               key={c.value}
               title={
                 highlightPaintColor === c.value
-                  ? `${c.label} highlighter on — drag to paint. Click again to turn off.`
-                  : `Highlight ${c.label.toLowerCase()} — drag over text`
+                  ? `${c.label} highlighter on — click again to turn off`
+                  : `Highlight ${c.label.toLowerCase()}`
               }
               active={highlightPaintColor === c.value}
               onClick={() => {
                 const { from, to } = editor.state.selection;
+                const alreadyThisColor = editor.isActive("highlight", {
+                  color: c.value,
+                });
                 if (from !== to) {
-                  editor
-                    .chain()
-                    .focus()
-                    .setHighlight({ color: c.value })
-                    .run();
-                  onHighlightPaintColor?.(c.value);
+                  if (alreadyThisColor) {
+                    editor.chain().focus().unsetHighlight().run();
+                    onHighlightPaintColor?.(null);
+                  } else {
+                    editor
+                      .chain()
+                      .focus()
+                      .setHighlight({ color: c.value })
+                      .run();
+                    onHighlightPaintColor?.(c.value);
+                  }
                   return;
                 }
                 onHighlightPaintColor?.(
@@ -228,15 +236,6 @@ export function NotesFormatToolbar({
               />
             </ToolBtn>
           ))}
-          <ToolBtn
-            title="Remove highlight"
-            onClick={() => {
-              editor.chain().focus().unsetHighlight().run();
-              onHighlightPaintColor?.(null);
-            }}
-          >
-            <span className="text-[11px] leading-none">⌫</span>
-          </ToolBtn>
         </>
       ) : null}
       <Divider />
