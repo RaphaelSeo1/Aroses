@@ -24,8 +24,8 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
  *
  *   @@thought <text>       zero or more, FIRST — short user-visible narration
  *                          (specific to this slice; may call out on-screen finds)
- *   @@revise <sectionId>   fold speech into an existing section (slide
- *                          draft or continued topic) — full replacement body
+ *   @@revise <sectionId>   new or corrected bullets for an existing section
+ *                          (client keeps prior bullets; never a wipe)
  *   @@append               exactly once — genuinely NEW topics only
  *                          (empty when the slice was folded into @@revise)
  *   @@summary              exactly once, LAST — updated rolling summary
@@ -80,12 +80,12 @@ GROUNDING (critical — overrides everything else on conflict):
   - **Open question:** Notes had <prior claim>; just said/shown <new claim>. Which is right?
   Keep both claims visible in that question.
 - SLIDE DRAFTS vs SPEECH: Sections drafted from the uploaded deck (transcript excerpt "${DECK_DRAFT_EXCERPT}" or empty excerpt) are provisional. When this slice of speech covers that topic, @@revise the matching section:
-  - Lecturer ADDS explanation, examples, emphasis, or "also / next / furthermore" detail → KEEP every still-correct slide bullet and FOLD the new spoken detail in. Additional information is not an error. Never replace the section with only the new slice.
-  - Lecturer clearly CONTRADICTS a specific claim ("actually it's X", "not Y", "ignore that") → replace only that claim. Keep the rest of the section.
-  - Lecturer SKIPPED / "ignore this slide" → drop those bullets.
+  - Lecturer ADDS explanation, examples, emphasis, or "also / next / furthermore" detail → emit ONLY the new spoken bullets. The client keeps every still-correct slide bullet. Additional information is not an error. Never replace the section with only the new slice.
+  - Lecturer clearly CONTRADICTS a specific claim ("actually it's X", "not Y", "ignore that") → emit only that corrected bullet. Keep the rest of the section.
+  - Lecturer SKIPPED / "ignore this slide" → say so in one bullet; do not wipe the whole section.
   Do not wipe a whole section because one token, comma, or extra clause arrived.
 - Do NOT @@revise for: grammar, punctuation, capitalization, articles, near-identical rephrasing, STT/OCR flicker, or a slightly different wording of the same fact. Those are not errors.
-- Clear STT/spelling token-fix only (slide shows the drug name, transcript garbled it): fix that one token in a @@revise that still contains ALL previous bullets, or write the correct spelling in @@append without wiping.
+- Clear STT/spelling token-fix only (slide shows the drug name, transcript garbled it): @@revise with that one corrected bullet — not the rest of the section.
 - If ON-SCREEN CONTENT is missing or empty, prefer DECK SLIDES for spellings/numbers of the current topic; if both are missing, every fact must come from the transcript alone.
 - OCR/screen extracts can change every few seconds. A new OCR dump that overlaps the same slide is NOT a reason to rewrite. Only use screen text to fix a spelling/number when it is clearly more reliable than STT.
 - No outside knowledge, no invented examples, no invented figures (doses, percentages, dates, totals).
@@ -100,19 +100,19 @@ ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
-SELF-REVISION / CONTINUATION (notes from slides or earlier slices already exist — do not rewrite them at the bottom):
+SELF-REVISION / CONTINUATION (notes from slides or earlier slices already exist — do not wipe them):
 Before writing, check EXISTING NOTE HEADINGS and YOUR RECENT NOTE SECTIONS. If the NEW TRANSCRIPT SLICE continues, completes, repeats, or is about the same topic as a section that is already written (same concept, same worked example, remaining items of an enumeration — match by meaning, not only exact heading text):
 
-- You MUST @@revise that sectionId. Copy forward every still-correct heading, bullet, table, and number, THEN fold in the new spoken detail. The rewritten section MUST be at least as long as the prior markdown unless the lecturer explicitly retracted content. Leave @@append empty.
+- You MUST @@revise that sectionId. Under @@revise emit ONLY the new or corrected bullets — do NOT repeat the whole section. The client keeps every existing bullet and folds your lines in. A full rewrite that drops earlier facts is always wrong.
 - Do NOT @@append a new section that restates or continues that topic. A second copy at the bottom is always wrong when the notes already exist.
 - If you are unsure whether it is the same topic, @@revise the closest matching listed section rather than appending.
 
 Only @@append when the slice introduces a topic that has NO matching existing heading.
 
 - If the slice only REPEATS already-captured material → leave @@append empty (still emit the marker). Do NOT @@revise just to rephrase.
-- NEVER @@revise for grammar, punctuation, capitalization, filler words, or OCR/STT flicker. NEVER replace a long section with a short "correction" that drops earlier facts.
-- Narrow factual fix only (lecturer said "not 3mg, 30mg"): @@revise with the full section, changing only that token.
-- Slide DRAFTS (transcript excerpt is "${DECK_DRAFT_EXCERPT}"): speech about that topic MUST @@revise the draft. Additional spoken detail is additive. Do NOT treat "here's more on this" as "delete the draft."
+- NEVER @@revise for grammar, punctuation, capitalization, filler words, or OCR/STT flicker.
+- Narrow factual fix only (lecturer said "not 3mg, 30mg"): @@revise with that one corrected bullet, not the rest of the section.
+- Slide DRAFTS (transcript excerpt is "${DECK_DRAFT_EXCERPT}"): speech about that topic MUST @@revise with the added spoken detail only. Additional information is additive. Do NOT treat "here's more on this" as "delete the draft."
 - Other substantive contradictions (two incompatible things the lecturer said, or live screen vs speech): do NOT pick a winner — @@append an **Open question:** line instead.
 
 Only sections in YOUR RECENT NOTE SECTIONS may be revised. If a matching heading exists but that id is not in YOUR RECENT NOTE SECTIONS, leave @@append empty rather than duplicating it. At most one @@revise per call.
@@ -130,7 +130,7 @@ WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the ro
 OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
 @@thought <optional one short sentence — skip if unnecessary>
 @@revise <sectionId>
-<full rewritten section markdown when continuing/completing/fixing a recent section — usually omit @@revise entirely>
+<ONLY new or corrected bullets for that section — never a wipe / full restatement>
 (at most one @@revise, after @@thought; omit the marker when unused)
 @@append
 <markdown for genuinely new teaching and/or **Open question:** lines, or nothing when the slice was folded into @@revise or was a repeat>
@@ -310,8 +310,8 @@ export async function* streamLiveLectureNotes(input: {
             : null,
           `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
           hasDraft
-            ? "\nEmit the protocol now. If this speech covers a slide-drafted section, @@revise it to FOLD IN new spoken detail while keeping every still-correct bullet. Additional information is not an error — do not replace the section with only the new slice. @@append ONLY for a topic that has no matching existing heading. Empty @@append when the slice was folded in or is a repeat."
-            : "\nEmit the protocol now. If notes already exist for this topic, @@revise that section (keep prior content, add new facts). @@append ONLY for a genuinely new topic with no matching heading. Never wipe a section. Empty @@append when the slice was folded in or is a repeat. **Open question:** only for unclear contradictions in speech/screen.",
+            ? "\nEmit the protocol now. If this speech covers a slide-drafted section, @@revise with ONLY the new spoken bullets (keep nothing you would delete). The client preserves every still-correct bullet. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading. Empty @@append when the slice was folded in or is a repeat."
+            : "\nEmit the protocol now. If notes already exist for this topic, @@revise with ONLY the new or corrected bullets — do not rewrite the whole section. @@append ONLY for a genuinely new topic with no matching heading. Empty @@append when the slice was folded in or is a repeat. **Open question:** only for unclear contradictions in speech/screen.",
         ]
           .filter(Boolean)
           .join("\n\n");

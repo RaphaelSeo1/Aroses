@@ -88,6 +88,112 @@ export function matchHeadingToSections<
   return null;
 }
 
+function lineTokenOverlap(a: string, b: string): number {
+  const ta = new Set(tokenize(a));
+  const tb = tokenize(b);
+  if (ta.size === 0 && tb.length === 0) return 1;
+  if (ta.size === 0 || tb.length === 0) return 0;
+  let overlap = 0;
+  for (const t of tb) {
+    if (ta.has(t)) overlap += 1;
+  }
+  return overlap / Math.max(ta.size, tb.length);
+}
+
+function isTableLine(line: string): boolean {
+  return /^\s*\|/.test(line);
+}
+
+/**
+ * Incoming line is a precise correction of an existing line (same gist,
+ * different number/token) — not a brand-new bullet.
+ */
+export function isCorrectedNoteLine(existing: string, incoming: string): boolean {
+  const na = normalizeLine(existing);
+  const nb = normalizeLine(incoming);
+  if (!na || !nb || na === nb) return false;
+  if (isTableLine(existing) || isTableLine(incoming)) {
+    return lineTokenOverlap(na, nb) >= 0.5;
+  }
+  const overlap = lineTokenOverlap(na, nb);
+  const numsA = (na.match(/\d+(?:\.\d+)?/g) ?? []).join(",");
+  const numsB = (nb.match(/\d+(?:\.\d+)?/g) ?? []).join(",");
+  if (numsA !== numsB) {
+    const restA = na.replace(/\d+(?:\.\d+)?/g, " ").replace(/\s+/g, " ").trim();
+    const restB = nb.replace(/\d+(?:\.\d+)?/g, " ").replace(/\s+/g, " ").trim();
+    const restOverlap = lineTokenOverlap(restA, restB);
+    if (restOverlap >= 0.75 || restA === restB) return true;
+    return false;
+  }
+  return (
+    overlap >= 0.68 &&
+    Math.abs(na.length - nb.length) < Math.max(na.length, nb.length) * 0.45
+  );
+}
+
+export type SurgicalNoteRevision = {
+  markdown: string;
+  /** True when at least one existing body line was rewritten in place. */
+  patched: boolean;
+  extraMarkdown: string;
+};
+
+/**
+ * Fold a @@revise body into the section that is already on the page.
+ * Never drops existing bullets just because the model re-emitted a shorter
+ * rewrite — keep them, replace only near-duplicate corrections, append
+ * genuinely new lines.
+ */
+export function applySurgicalNoteRevision(
+  existingMd: string,
+  incomingMd: string
+): SurgicalNoteRevision {
+  const existing = existingMd.replace(/\s+$/, "");
+  const incoming = incomingMd.trim();
+  if (!incoming) {
+    return { markdown: existing, patched: false, extraMarkdown: "" };
+  }
+
+  const existingLines = existing.split("\n");
+  const incomingLines = incoming.split("\n");
+  const result = [...existingLines];
+  const usedIncoming = new Set<number>();
+  let patched = false;
+
+  for (let i = 0; i < incomingLines.length; i++) {
+    const line = incomingLines[i]!;
+    if (/^#{1,3}\s/.test(line) || isTableLine(line)) continue;
+    const n = normalizeLine(line);
+    if (n.length < 8) continue;
+    for (let j = 0; j < result.length; j++) {
+      const prev = result[j]!;
+      if (/^#{1,3}\s/.test(prev) || isTableLine(prev)) continue;
+      if (isCorrectedNoteLine(prev, line)) {
+        result[j] = line;
+        usedIncoming.add(i);
+        patched = true;
+        break;
+      }
+    }
+  }
+
+  const mergedSoFar = result.join("\n");
+  const extraParts: string[] = [];
+  for (let i = 0; i < incomingLines.length; i++) {
+    if (usedIncoming.has(i)) continue;
+    extraParts.push(incomingLines[i]!);
+  }
+  const extraMarkdown = uniqueIncomingNoteLines(
+    mergedSoFar,
+    extraParts.join("\n")
+  );
+  const markdown = extraMarkdown
+    ? `${mergedSoFar.trimEnd()}\n${extraMarkdown}`
+    : mergedSoFar;
+
+  return { markdown, patched, extraMarkdown };
+}
+
 function normalizeLine(line: string): string {
   return line
     .replace(/^#{1,3}\s+/, "")

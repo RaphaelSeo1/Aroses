@@ -5,6 +5,7 @@ import {
   headingsReferToSameTopic,
   matchHeadingToSections,
   uniqueIncomingNoteLines,
+  applySurgicalNoteRevision,
 } from "./fold-note-markdown";
 
 test("extractNoteHeading reads the first ATX heading", () => {
@@ -50,3 +51,34 @@ test("uniqueIncomingNoteLines is empty when the slice is a restatement", () => {
   const incoming = "## Receptor types\n- Alpha-1 on vessels.\n- Beta-1 on the heart.";
   assert.equal(uniqueIncomingNoteLines(existing, incoming), "");
 });
+
+test("applySurgicalNoteRevision keeps the whole section when the model rewrites a short slice", () => {
+  const existing = [
+    "## Adrenergic receptors",
+    "- Alpha-1 on vessels.",
+    "- Beta-1 on the heart.",
+    "- Beta-2 on the lungs.",
+    "- Used as pressors in shock.",
+  ].join("\n");
+  const incoming = "## Adrenergic receptors\n- Beta-1 on the heart.";
+  const next = applySurgicalNoteRevision(existing, incoming);
+  assert.match(next.markdown, /Alpha-1 on vessels/);
+  assert.match(next.markdown, /Beta-2 on the lungs/);
+  assert.match(next.markdown, /pressors in shock/);
+  assert.equal(next.patched, false);
+  assert.equal(next.extraMarkdown, "");
+});
+
+test("applySurgicalNoteRevision patches a number and appends a new bullet", () => {
+  const existing =
+    "## Dose\n- Give epinephrine 1 mg IV.\n- Repeat every 3–5 minutes.";
+  const incoming =
+    "## Dose\n- Give epinephrine 1.5 mg IV.\n- Flush with saline after.";
+  const next = applySurgicalNoteRevision(existing, incoming);
+  assert.match(next.markdown, /1\.5 mg IV/);
+  assert.doesNotMatch(next.markdown, /1 mg IV/);
+  assert.match(next.markdown, /Repeat every 3–5 minutes/);
+  assert.match(next.markdown, /Flush with saline/);
+  assert.equal(next.patched, true);
+});
+

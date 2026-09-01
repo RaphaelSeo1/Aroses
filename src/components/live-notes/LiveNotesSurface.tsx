@@ -31,6 +31,7 @@ import {
   extractNoteHeading,
   matchHeadingToSections,
   uniqueIncomingNoteLines,
+  applySurgicalNoteRevision,
 } from "@/lib/live-notes/fold-note-markdown";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 import { useT } from "@/lib/i18n/LocaleProvider";
@@ -500,11 +501,31 @@ export function LiveNotesSurface({
           await sleep(TYPE_TICK_MS);
         }
       };
+      const applyBufferedRevision = (sectionId: string, incoming: string) => {
+        const live = writer
+          .listRevisableSections(200)
+          .find((s) => s.sectionId === sectionId);
+        if (!live) return;
+        const next = applySurgicalNoteRevision(live.markdown, incoming);
+        if (next.patched) {
+          if (writer.replaceSectionMarkdown(sectionId, next.markdown)) {
+            gotContent = true;
+            revisedSectionId = sectionId;
+          }
+          return;
+        }
+        if (next.extraMarkdown && writer.extendSection(sectionId, next.extraMarkdown)) {
+          gotContent = true;
+          revisedSectionId = sectionId;
+        }
+      };
       const runPump = async () => {
         let opValid = false;
         let foldIntoId: string | null = null;
         let foldBuf = "";
         let classifyingAppend = false;
+        let surgicalReviseId: string | null = null;
+        let surgicalBuf = "";
         while (true) {
           const item = queue.shift();
           if (!item) {
@@ -513,6 +534,11 @@ export function LiveNotesSurface({
             continue;
           }
           if (item.kind === "append") {
+            if (surgicalReviseId) {
+              applyBufferedRevision(surgicalReviseId, surgicalBuf);
+              surgicalReviseId = null;
+              surgicalBuf = "";
+            }
             // Defer beginAppend until the first text chunk — empty appends
             // (merge-only calls) must leave the document untouched.
             pendingAppend = {
@@ -531,13 +557,23 @@ export function LiveNotesSurface({
             foldBuf = "";
             pendingAppend = null;
             writer.finishOp();
+            // Buffer the revise body and merge it into the existing section.
+            // beginRevision deletes the whole block and retypes it — that is
+            // what made small transcript updates look like the section vanished.
+            if (surgicalReviseId) {
+              applyBufferedRevision(surgicalReviseId, surgicalBuf);
+            }
+            surgicalReviseId = item.sectionId;
+            surgicalBuf = "";
             revisedSectionId = item.sectionId;
-            opValid = await writer.beginRevision(item.sectionId);
-            // Failed revise (missing/student-edited id): drop only that
-            // revise body's text; the next @@append must still be allowed.
+            opValid = Boolean(item.sectionId);
           } else if (item.kind === "text" && !opValid) {
             // Orphan text with no active op — ignore (stale revise body).
           } else if (opValid && item.text) {
+            if (surgicalReviseId) {
+              surgicalBuf += item.text;
+              continue;
+            }
             if (classifyingAppend) {
               foldBuf += item.text;
               const nl = foldBuf.indexOf("\n");
@@ -570,6 +606,11 @@ export function LiveNotesSurface({
             ensureAppendStarted();
             await typewrite(item.text);
           }
+        }
+        if (surgicalReviseId) {
+          applyBufferedRevision(surgicalReviseId, surgicalBuf);
+          surgicalReviseId = null;
+          surgicalBuf = "";
         }
         if (classifyingAppend && foldBuf.trim()) {
           classifyingAppend = false;
