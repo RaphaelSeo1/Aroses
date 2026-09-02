@@ -7,7 +7,26 @@ import {
   type DeckPage,
 } from "@/lib/live-notes/slide-pages";
 
-const MIN_PAGE_CHARS = 12;
+const MAX_PAGE_TEXT = 8_000;
+
+/**
+ * Keep every slide, including title cards and diagram-only pages. Dropping
+ * short text used to make a 60-slide deck show up as ~48.
+ */
+export function deckPageFromExtract(
+  pageNum: number,
+  text: string,
+  titleHint?: string
+): DeckPage {
+  const trimmed = text.trim();
+  const extractedText = trimmed
+    ? trimmed.slice(0, MAX_PAGE_TEXT)
+    : `(Slide ${pageNum} — little selectable text; mostly visual.)`;
+  const title = (
+    titleHint?.trim() || titleFromSlideText(extractedText, `Slide ${pageNum}`)
+  ).slice(0, 120);
+  return { pageNum, title, extractedText };
+}
 
 /**
  * Extract per-page/slide text from an uploaded lecture deck. PDF and PPTX
@@ -32,16 +51,8 @@ export async function extractSlideDeckFromBuffer(input: {
       maxPages: MAX_DECK_PAGES,
     });
     return pages
-      .map((p) => {
-        const text = p.text.trim();
-        if (text.length < MIN_PAGE_CHARS) return null;
-        return {
-          pageNum: p.pageNum,
-          title: titleFromSlideText(text, `Slide ${p.pageNum}`),
-          extractedText: text.slice(0, 8_000),
-        };
-      })
-      .filter((p): p is DeckPage => Boolean(p));
+      .slice(0, MAX_DECK_PAGES)
+      .map((p) => deckPageFromExtract(p.pageNum, p.text));
   }
 
   if (kind === "slides" || ext === "pptx") {
@@ -51,18 +62,12 @@ export async function extractSlideDeckFromBuffer(input: {
       .map((s) => {
         const parts = [s.body.trim()];
         if (s.notes.trim()) parts.push(`(Speaker notes: ${s.notes.trim()})`);
-        const text = parts.filter(Boolean).join("\n").trim();
-        if (text.length < MIN_PAGE_CHARS) return null;
-        return {
-          pageNum: s.index,
-          title: (s.title || titleFromSlideText(text, `Slide ${s.index}`)).slice(
-            0,
-            120
-          ),
-          extractedText: text.slice(0, 8_000),
-        };
-      })
-      .filter((p): p is DeckPage => Boolean(p));
+        return deckPageFromExtract(
+          s.index,
+          parts.filter(Boolean).join("\n"),
+          s.title
+        );
+      });
   }
 
   throw new Error("Upload a PDF or PowerPoint (.pptx) of the lecture slides.");

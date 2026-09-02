@@ -27,13 +27,13 @@ function envPositiveInt(name: string, fallback: number, max: number): number {
 /** Default budgets cover full lecture PDFs with headroom. */
 const MAX_PAGES_RENDERED_PER_PDF = envPositiveInt(
   "PDF_INGEST_MAX_PAGE_RENDERS_PER_PDF",
-  32,
-  80
+  120,
+  250
 );
 const MAX_PAGES_RENDERED_PER_JOB = envPositiveInt(
   "PDF_INGEST_MAX_PAGE_RENDERS_PER_JOB",
-  48,
-  120
+  160,
+  300
 );
 const RENDER_BATCH_SIZE = envPositiveInt(
   "PDF_INGEST_PAGE_RENDER_BATCH_SIZE",
@@ -186,14 +186,14 @@ export function resolveVisionTargetPages(input: {
 }): number[] {
   const fullScanThreshold = envPositiveInt(
     "PDF_INGEST_FULL_VISION_PAGE_THRESHOLD",
-    28,
-    120
+    80,
+    250
   );
   if (isVisionAllPagesEnabled() || input.pageCount <= fullScanThreshold) {
     return targetPdfPagesForVision(input);
   }
 
-  const maxVision = envPositiveInt("PDF_INGEST_MAX_VISION_PAGES", 48, 120);
+  const maxVision = envPositiveInt("PDF_INGEST_MAX_VISION_PAGES", 120, 250);
   const pages = new Set<number>();
 
   const planPages = targetPdfPagesForFile({

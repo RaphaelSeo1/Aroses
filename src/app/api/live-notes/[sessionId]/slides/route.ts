@@ -12,7 +12,7 @@ import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client"
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 type Params = { params: Promise<{ sessionId: string }> };
 
