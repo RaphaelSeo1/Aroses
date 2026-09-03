@@ -140,6 +140,45 @@ export function sanitizeChatNotesMarkdown(markdown: string): string {
     .trim();
 }
 
+const CHATTY_NOTE_LINE =
+  /^(here('s| is)|here you go|great question|good question|not (in|part of) this lecture|let me|i('ll| can| would)|sure[,!]|of course|absolutely|no problem|got it|i added|i've added|updated your notes|added (a |that |this )?(short |brief )?(note|section|bullet))/i;
+
+/**
+ * Keep study-note structure (headings, bullets, tables) and drop the
+ * conversational reply the model often pastes into @@append.
+ */
+function isStudyNoteLine(t: string): boolean {
+  return (
+    /^#{1,3}\s/.test(t) ||
+    /^[-*]\s/.test(t) ||
+    /^\d+\.\s/.test(t) ||
+    /^\|/.test(t) ||
+    /^>\s/.test(t) ||
+    /^\*\*[^*].+\*\*/.test(t)
+  );
+}
+
+export function extractStudyNoteLines(markdown: string): string {
+  const keep: string[] = [];
+  const loose: string[] = [];
+  for (const line of sanitizeChatNotesMarkdown(markdown).split("\n")) {
+    const t = line.trim();
+    if (!t) {
+      if (keep.length > 0 && keep[keep.length - 1] !== "") keep.push("");
+      continue;
+    }
+    if (CHATTY_NOTE_LINE.test(t)) continue;
+    if (isStudyNoteLine(t)) {
+      keep.push(line);
+      continue;
+    }
+    if (t.length <= 180) loose.push(`- ${t}`);
+  }
+  const structured = keep.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (structured) return structured;
+  return loose.slice(0, 6).join("\n").trim();
+}
+
 export function visibleReplyForStream(raw: string, complete: boolean): string {
   if (complete) return splitStudentFacingReply(raw).visible;
   const nl = raw.lastIndexOf("\n");

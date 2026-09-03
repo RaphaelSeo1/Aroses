@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createLectureChatParser,
+  extractStudyNoteLines,
   resolveLectureChatSectionId,
   splitStudentFacingReply,
   visibleReplyForStream,
@@ -248,4 +249,30 @@ test("streaming preamble never hits the reply channel", () => {
   assert.equal(replyText(events).includes("student is right"), false);
   assert.match(replyText(events), /Simplified scarcity/);
   assert.match(thoughts(events).join("\n"), /never used/);
+});
+
+test("extractStudyNoteLines keeps bullets and drops the chat reply", () => {
+  const md = extractStudyNoteLines(`Here's what that means in class.
+
+## Scarcity
+- Resources are limited, so every choice has a trade-off.
+
+Great question — opportunity cost is just the next-best option you give up, which I can walk through with a longer example if you want.
+- Opportunity cost is the next-best option you give up.`);
+  assert.match(md, /## Scarcity/);
+  assert.match(md, /Resources are limited/);
+  assert.match(md, /Opportunity cost/);
+  assert.doesNotMatch(md, /Here's what that means/);
+  assert.doesNotMatch(md, /Great question/);
+});
+
+test("extractStudyNoteLines turns a short fact into a bullet and drops tutoring prose", () => {
+  const md = extractStudyNoteLines(`Sure, I can add that.
+
+Opportunity cost is the next-best option you give up.
+
+Let me walk you through a longer example with movie tickets and wages so it really clicks.`);
+  assert.match(md, /^- Opportunity cost is the next-best option you give up\.$/m);
+  assert.doesNotMatch(md, /Sure,/);
+  assert.doesNotMatch(md, /movie tickets/);
 });

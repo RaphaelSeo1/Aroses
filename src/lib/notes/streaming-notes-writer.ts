@@ -634,7 +634,11 @@ export class StreamingNotesWriter {
    * heading). Used when live speech belongs in a slide-drafted section
    * instead of a duplicate at the bottom of the notes.
    */
-  extendSection(sectionId: string, markdown: string): boolean {
+  extendSection(
+    sectionId: string,
+    markdown: string,
+    opts?: { evenIfStudentEdited?: boolean }
+  ): boolean {
     if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
     const body = markdown.trim().replace(/^#{1,3}\s.+\n?/, "").trim();
     if (!body) return false;
@@ -642,6 +646,7 @@ export class StreamingNotesWriter {
     const blocks = this.sectionBlocks(sectionId);
     if (blocks.length === 0) return false;
     if (
+      !opts?.evenIfStudentEdited &&
       blocks.some(
         (b) =>
           b.node.attrs?.provenance !== "ai" &&

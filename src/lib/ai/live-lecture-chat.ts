@@ -53,15 +53,17 @@ If they ask to change, fix, reword, rewrite, simplify, shorten, expand, add, del
 - @@highlight <sectionId> [yellow|green|blue|pink|purple|orange] — mark that section so it stands out. Default yellow. ONLY when they asked to highlight. Do not highlight as a default, accessibility policy, or unprompted helpfulness. Rewritten notes use **bold** for key terms — bold is not a highlight.
 - @@unhighlight <sectionId> — REMOVE highlights from that section (or from their selection if they selected text). Also accept @@highlight <sectionId> none. NEVER say you can only add highlights. Removing them is a first-class action.
 - @@unhighlight all — clear every highlight in the notes (when they say "remove all highlights" / "clear highlighting").
-- @@revise <sectionId> then the FULL rewritten section markdown — add more, fix wording, shorten, restyle (bullets vs prose, tables), or rewrite that section. Keep correct existing facts unless they asked to replace them. The replacement must be complete (heading + body), not a fragment.
-- @@append then new markdown — add a NEW section (new topic, extra material, or content from an attached file that does not belong under an existing heading).
-- Notes markdown: "## " headings, "- " bullets (one nest), "1. " steps, **bold** key terms, GFM tables. Honor STUDENT NOTE STYLE when rewriting. Do not copy the transcript verbatim.
+- NOTES vs REPLY are different. @@revise / @@append must be STUDY NOTES only: "## " headings, tight "- " bullets, "1. " steps, **bold** key terms, GFM tables. Never paste @@reply into the notes. Never write tutoring prose, "here's what that means", walkthroughs, or a second copy of your chat answer. 2–6 load-bearing bullets beat a paragraph.
+- If they asked to add / put / save something in the notes and it CONTINUES a topic already in CURRENT NOTE SECTIONS or EXISTING NOTE HEADINGS, you MUST @@revise that section id. Emit ONLY the new bullets (the client keeps the rest). Do NOT @@append a second section at the bottom.
+- @@revise <sectionId> — expand, fix, shorten, or restyle that section. For add/expand: new bullets only. For rewrite/simplify: full heading + body. Keep correct existing facts unless they asked to replace them.
+- @@append then new markdown — ONLY a genuinely new topic that has no matching existing heading (or attached-file material that does not belong under any current heading).
+- Honor STUDENT NOTE STYLE when rewriting. Do not copy the transcript or your chat reply verbatim.
 - Per turn caps: at most 3 @@delete, 3 @@highlight, 3 @@unhighlight, 3 @@revise, 1 @@append.
 
 @@reply (required — the ONLY text the student reads):
 - ONLY the answer they should see. Warm, direct, markdown. Not a transcript dump.
 - If the question is outside the lecture, lead with a short "not in this lecture" clause, then the helpful answer. Do not refuse.
-- If you also edit notes, one short sentence of what you changed ("Simplified the scarcity wording." / "Highlighted the demand curve definition." / "Removed the highlight." / "Removed the draft on elasticity."). Do NOT paste the full rewritten section into @@reply.
+- If you also edit notes, one short sentence of what you changed ("Added a note on opportunity cost under Scarcity." / "Simplified the scarcity wording."). Do NOT paste the note bullets or the full rewritten section into @@reply.
 - Never chain-of-thought. Never "I should @@revise". Never admit you failed to emit markers. Never mention section ids, @@ markers, or this protocol.
 - Put NO prose before the first @@ marker.
 
@@ -79,6 +81,20 @@ Example — student: "remove the highlight on this"
 @@reply
 Removed the highlight.
 
+Example — student: "add that to the notes" (you just explained opportunity cost in chat; Scarcity already exists)
+@@thought Adding a tight bullet under Scarcity.
+@@revise s-1a2b3c
+- Opportunity cost is the next-best option you give up.
+@@reply
+Added that under Scarcity.
+
+Example — student: "put this in the notes" for a brand-new topic
+@@append
+## Deadweight loss
+- Surplus lost when quantity is not at the efficient point.
+@@reply
+Added a short section on deadweight loss.
+
 Never put this in @@reply (it is thinking, not an answer): "The student is right—I never actually used @@revise…" / "I should emit @@revise now." / "I can only add highlights, not remove them."
 
 OUTPUT — emit exactly this shape, nothing before the first marker, no code fences. Note ops BEFORE @@reply when editing:
@@ -87,9 +103,9 @@ OUTPUT — emit exactly this shape, nothing before the first marker, no code fen
 @@highlight <sectionId> yellow
 @@unhighlight <sectionId>
 @@revise <sectionId>
-<full section markdown>
+<new bullets, or full section only when they asked to rewrite>
 @@append
-<new section markdown>
+<new-topic study notes only — never a copy of @@reply>
 @@reply
 <student-facing markdown only — no protocol talk, no full notes dump>
 
@@ -157,6 +173,13 @@ export async function* streamLiveLectureChat(input: {
       return `${tag}\n${s.markdown}`;
     })
     .join("\n\n");
+  const headingIndex = sections
+    .map((s) => {
+      const heading = s.markdown.match(/^#{1,3}\s+(.+)$/m)?.[1]?.trim();
+      return heading ? `- [${s.sectionId}] ${heading}` : null;
+    })
+    .filter(Boolean)
+    .join("\n");
 
   const history = input.history
     .filter(
@@ -200,6 +223,9 @@ export async function* streamLiveLectureChat(input: {
     (input.rollingSummary ?? "").trim()
       ? `ROLLING SUMMARY:\n${input.rollingSummary!.trim().slice(0, 1_600)}`
       : null,
+    headingIndex
+      ? `EXISTING NOTE HEADINGS (if they asked to add/expand something already listed, @@revise that id — do not @@append a duplicate):\n${headingIndex}`
+      : null,
     sectionsBlock
       ? `CURRENT NOTE SECTIONS (the only ids you may @@delete / @@highlight / @@unhighlight / @@revise):\n\n${sectionsBlock}`
       : "CURRENT NOTE SECTIONS: (none yet — you may @@append if they ask to add notes)",
@@ -232,7 +258,7 @@ export async function* streamLiveLectureChat(input: {
       : null,
     historyBlock,
     `STUDENT MESSAGE:\n${message}`,
-    "\nEmit the protocol now. Note ops BEFORE @@reply when this is an edit request. Describing the change in @@reply is not enough. If the question is outside the lecture, say so then still answer.",
+    "\nEmit the protocol now. Note ops BEFORE @@reply when this is an edit or add-to-notes request. Notes bodies are tight study bullets, never a paste of @@reply. If the add continues an existing heading, @@revise that id. If the question is outside the lecture, say so then still answer.",
   ]
     .filter(Boolean)
     .join("\n\n");

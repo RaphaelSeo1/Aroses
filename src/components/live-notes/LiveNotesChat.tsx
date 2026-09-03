@@ -19,10 +19,14 @@ import { chatFileKey, lookAtAttachmentPrompt, MAX_CHAT_ATTACHMENT_CHARS } from "
 import { useChatAttachments } from "@/lib/chat/use-chat-attachments";
 import { pumpTypewriterReply } from "@/lib/chat/typewriter-pump";
 import {
-  sanitizeChatNotesMarkdown,
+  extractStudyNoteLines,
   splitStudentFacingReply,
   visibleReplyForStream,
 } from "@/lib/live-notes/lecture-chat-protocol";
+import {
+  applySurgicalNoteRevision,
+  pickNoteFoldTarget,
+} from "@/lib/live-notes/fold-note-markdown";
 
 type ChatTurn = {
   id: string;
@@ -46,16 +50,6 @@ const SUGGESTIONS = [
   "Highlight the key definition",
   "Remove the highlight on this section",
 ];
-
-function looksLikeNotesBody(md: string): boolean {
-  const t = md.trim();
-  if (!t) return false;
-  if (/^#{1,3}\s/m.test(t)) return true;
-  if (/^\s*[-*]\s/m.test(t)) return true;
-  if (/^\s*\d+\.\s/m.test(t)) return true;
-  if (/^\|.+\|/m.test(t)) return true;
-  return t.split("\n").filter((l) => l.trim()).length >= 3;
-}
 
 function looksLikeNoteEditRequest(message: string): boolean {
   const m = message.trim();
@@ -88,13 +82,9 @@ function wantsUnhighlightAll(message: string): boolean {
   );
 }
 
-function wantsAppendToNotes(message: string): boolean {
-  const m = message.trim();
-  if (/\b(add more|more detail|expand|elaborate)\b/i.test(m)) return false;
-  return (
-    /\b(add|put|include|append|write)\b.{0,60}\b(to|in|into) the notes\b/i.test(
-      m
-    ) || /\badd this (pdf|file|handout|worksheet)\b/i.test(m)
+function wantsFullSectionRewrite(message: string): boolean {
+  return /\b(rewrite|reword|rephrase|restyle|simplify|shorten|condense|fix( the)? wording|make (it|this|that) (simpler|shorter|bullets|a list))\b/i.test(
+    message
   );
 }
 
@@ -297,7 +287,7 @@ export function LiveNotesChat({
   }, [sessionId, pending]);
 
   const applyNoteOps = useCallback(
-    async (ops: NoteOp[], fallbackMarkdown = "") => {
+    async (ops: NoteOp[], opts?: { fullRewrite?: boolean }) => {
       const run = async () => {
         const writer = notesRef.current?.getStreamWriter();
         if (!writer) {
@@ -357,12 +347,41 @@ export function LiveNotesChat({
           }
         }
 
-        const fallbackRaw = sanitizeChatNotesMarkdown(fallbackMarkdown);
-        const fallback = looksLikeNotesBody(fallbackRaw) ? fallbackRaw : "";
         notesRef.current?.setStreamingIndicator(true);
         writer.finishOp();
         let applied = 0;
         let failed = 0;
+        const existing = writer.listAllSections(200);
+        const noteBody = (raw: string) => extractStudyNoteLines(raw);
+        const preferredId =
+          notesRef.current?.getSelectedSectionId() ||
+          notesRef.current?.getVisibleSectionId() ||
+          existing[existing.length - 1]?.sectionId;
+
+        const foldBody = (
+          sectionId: string,
+          liveMarkdown: string,
+          md: string,
+          fullRewrite: boolean
+        ): boolean => {
+          if (fullRewrite) {
+            return writer.replaceSectionMarkdown(sectionId, md, {
+              evenIfStudentEdited: true,
+            });
+          }
+          const next = applySurgicalNoteRevision(liveMarkdown, md);
+          if (next.patched) {
+            return writer.replaceSectionMarkdown(sectionId, next.markdown, {
+              evenIfStudentEdited: true,
+            });
+          }
+          if (next.extraMarkdown) {
+            return writer.extendSection(sectionId, next.extraMarkdown, {
+              evenIfStudentEdited: true,
+            });
+          }
+          return true;
+        };
 
         for (const item of coalesced) {
           if (item.kind === "delete") {
@@ -389,29 +408,39 @@ export function LiveNotesChat({
             if (ok) applied += 1;
             else failed += 1;
           } else if (item.kind === "revise") {
-            let md = sanitizeChatNotesMarkdown(item.markdown);
-            if (!md) md = fallback;
-            const ok = md
-              ? writer.replaceSectionMarkdown(item.sectionId, md, {
-                  evenIfStudentEdited: true,
-                })
-              : false;
-            if (ok) {
-              applied += 1;
+            const md = noteBody(item.markdown);
+            const live = existing.find((s) => s.sectionId === item.sectionId);
+            let ok = false;
+            if (md && live) {
+              ok = foldBody(
+                item.sectionId,
+                live.markdown,
+                md,
+                Boolean(opts?.fullRewrite)
+              );
             } else if (md) {
-              const appended = writer.appendMarkdown(item.sectionId, md, {
-                dividerBefore: true,
+              ok = writer.replaceSectionMarkdown(item.sectionId, md, {
+                evenIfStudentEdited: true,
               });
-              if (appended) applied += 1;
-              else failed += 1;
-            } else {
-              failed += 1;
             }
+            if (ok) applied += 1;
+            else failed += 1;
           } else if (item.kind === "append") {
-            let md = sanitizeChatNotesMarkdown(item.markdown);
-            if (!md) md = fallback;
-            if (
-              md &&
+            const md = noteBody(item.markdown);
+            if (!md) {
+              failed += 1;
+              continue;
+            }
+            const match = pickNoteFoldTarget(md, existing, preferredId);
+            if (match) {
+              const ok = foldBody(match.sectionId, match.markdown, md, false);
+              if (ok) {
+                item.sectionId = match.sectionId;
+                applied += 1;
+              } else {
+                failed += 1;
+              }
+            } else if (
               writer.appendMarkdown(item.sectionId, md, {
                 dividerBefore: item.dividerBefore,
               })
@@ -699,10 +728,9 @@ export function LiveNotesChat({
             ? "Updating your notes from chat…"
             : "Applying those note edits…"
         );
-        void applyNoteOps(
-          noteOps,
-          visibleReplyForStream(pendingReply, true)
-        );
+        void applyNoteOps(noteOps, {
+          fullRewrite: wantsFullSectionRewrite(message),
+        });
       } else if (wantsUnhighlight(message)) {
         const targetId = wantsUnhighlightAll(message)
           ? "all"
@@ -727,49 +755,10 @@ export function LiveNotesChat({
           );
         }
       } else if (looksLikeNoteEditRequest(message)) {
-        const replyVisible = visibleReplyForStream(pendingReply, true);
-        const replyNotes = sanitizeChatNotesMarkdown(replyVisible);
-        const targetId =
-          selectedSectionId ||
-          visibleSectionId ||
-          sections[sections.length - 1]?.sectionId ||
-          "";
-        if (looksLikeNotesBody(replyNotes) && (wantsAppendToNotes(message) || targetId)) {
-          const appendId = `s-${crypto.randomUUID().slice(0, 8)}`;
-          if (wantsAppendToNotes(message) || !targetId) {
-            void applyNoteOps(
-              [
-                {
-                  kind: "append",
-                  sectionId: appendId,
-                  dividerBefore: hasNotes || appendStarted,
-                },
-                { kind: "notes", text: `${replyNotes}\n` },
-              ],
-              ""
-            );
-          } else {
-            void applyNoteOps(
-              [
-                { kind: "revise", sectionId: targetId },
-                { kind: "notes", text: `${replyNotes}\n` },
-              ],
-              ""
-            );
-          }
-          if (
-            /^#{1,3}\s/m.test(replyVisible.trim()) ||
-            /^\s*[-*]\s/m.test(replyVisible.trim())
-          ) {
-            revealReply("Updated your notes.");
-            spoken = "Updated your notes.";
-          }
-        } else {
-          onActivity(
-            "error",
-            "I didn't apply that to the notes. Try again, or select the section first."
-          );
-        }
+        onActivity(
+          "error",
+          "I didn't apply that to the notes. Try again, or select the section first."
+        );
       }
       return spoken || null;
     },

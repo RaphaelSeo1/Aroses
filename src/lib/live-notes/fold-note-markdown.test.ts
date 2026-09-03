@@ -4,6 +4,7 @@ import {
   extractNoteHeading,
   headingsReferToSameTopic,
   matchHeadingToSections,
+  pickNoteFoldTarget,
   uniqueIncomingNoteLines,
   applySurgicalNoteRevision,
 } from "./fold-note-markdown";
@@ -35,6 +36,41 @@ test("matchHeadingToSections finds the existing section, not the latest", () => 
   ];
   const hit = matchHeadingToSections("## Adrenergic receptors", sections);
   assert.equal(hit?.sectionId, "early");
+});
+
+test("matchHeadingToSections uses the heading inside a full notes body", () => {
+  const sections = [
+    { sectionId: "s1", markdown: "## Scarcity\n- Resources are limited." },
+    { sectionId: "s2", markdown: "## Demand\n- Buyers want goods." },
+  ];
+  const hit = matchHeadingToSections(
+    "## Scarcity\n- Opportunity cost is the next-best option you give up.",
+    sections
+  );
+  assert.equal(hit?.sectionId, "s1");
+});
+
+test("pickNoteFoldTarget folds bullets into the preferred section", () => {
+  const sections = [
+    { sectionId: "s1", markdown: "## Scarcity\n- Resources are limited." },
+    { sectionId: "s2", markdown: "## Demand\n- Buyers want goods." },
+  ];
+  const hit = pickNoteFoldTarget(
+    "- Opportunity cost is the next-best option you give up.",
+    sections,
+    "s1"
+  );
+  assert.equal(hit?.sectionId, "s1");
+});
+
+test("pickNoteFoldTarget leaves a new heading as a new section", () => {
+  const sections = [
+    { sectionId: "s1", markdown: "## Scarcity\n- Resources are limited." },
+  ];
+  assert.equal(
+    pickNoteFoldTarget("## Deadweight loss\n- Surplus lost at the wrong quantity.", sections),
+    null
+  );
 });
 
 test("uniqueIncomingNoteLines drops restated bullets and keeps new ones", () => {

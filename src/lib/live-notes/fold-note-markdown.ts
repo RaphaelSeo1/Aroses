@@ -76,8 +76,13 @@ export function headingsReferToSameTopic(a: string, b: string): boolean {
 
 export function matchHeadingToSections<
   T extends { sectionId: string; markdown: string },
->(firstLine: string, sections: T[]): T | null {
-  const incoming = firstLine.replace(/^#{1,3}\s+/, "").trim();
+>(markdownOrHeading: string, sections: T[]): T | null {
+  const extracted = extractNoteHeading(markdownOrHeading);
+  const first = markdownOrHeading.trim().split("\n")[0] ?? "";
+  const incoming = (
+    extracted ??
+    (/^#{1,3}\s+/.test(first) ? first.replace(/^#{1,3}\s+/, "") : "")
+  ).trim();
   if (!incoming) return null;
   for (const section of sections) {
     const heading = extractNoteHeading(section.markdown);
@@ -86,6 +91,29 @@ export function matchHeadingToSections<
     }
   }
   return null;
+}
+
+/**
+ * Where chat "add this to the notes" should land.
+ * Matching heading → that section. No heading → the section they are looking
+ * at (or the latest). A heading that matches nothing is a new topic.
+ */
+export function pickNoteFoldTarget<
+  T extends { sectionId: string; markdown: string },
+>(
+  incomingMd: string,
+  sections: T[],
+  preferredSectionId?: string
+): T | null {
+  if (sections.length === 0) return null;
+  const headingHit = matchHeadingToSections(incomingMd, sections);
+  if (headingHit) return headingHit;
+  if (extractNoteHeading(incomingMd)) return null;
+  if (preferredSectionId) {
+    const preferred = sections.find((s) => s.sectionId === preferredSectionId);
+    if (preferred) return preferred;
+  }
+  return sections[sections.length - 1] ?? null;
 }
 
 function lineTokenOverlap(a: string, b: string): number {
