@@ -78,6 +78,9 @@ export function ModuleQuiz({
   const [frFeedback, setFrFeedback] = useState<string | null>(null);
   const [frGraded, setFrGraded] = useState(false);
   const [frCorrect, setFrCorrect] = useState(false);
+  const [frVerdict, setFrVerdict] = useState<
+    "correct" | "mostly_correct" | "needs_work"
+  >("needs_work");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [continueReady, setContinueReady] = useState(false);
 
@@ -110,6 +113,7 @@ export function ModuleQuiz({
     setFrFeedback(null);
     setFrGraded(false);
     setFrCorrect(false);
+    setFrVerdict("needs_work");
     setSubmitError(null);
   }, [index]);
 
@@ -244,7 +248,12 @@ export function ModuleQuiz({
           studentAnswer: answer,
         }),
       });
-      const body = await res.json().catch(() => ({}));
+      const body = (await res.json().catch(() => ({}))) as {
+        correct?: boolean;
+        verdict?: string;
+        feedback?: string;
+        error?: string;
+      };
       if (!res.ok) {
         setSubmitError(
           typeof body.error === "string"
@@ -255,6 +264,14 @@ export function ModuleQuiz({
         return;
       }
       const correct = Boolean(body.correct);
+      const verdict =
+        body.verdict === "correct" ||
+        body.verdict === "mostly_correct" ||
+        body.verdict === "needs_work"
+          ? body.verdict
+          : correct
+            ? "correct"
+            : "needs_work";
       const feedback =
         typeof body.feedback === "string"
           ? body.feedback
@@ -262,6 +279,7 @@ export function ModuleQuiz({
             ? t.study.looksGood
             : t.study.keepRefining;
       setFrCorrect(correct);
+      setFrVerdict(verdict);
       setFrFeedback(feedback);
       setFrGraded(true);
       if (!correct) setWrongAttempts((w) => w + 1);
@@ -559,7 +577,11 @@ export function ModuleQuiz({
                       : "text-zinc-900 dark:text-zinc-100"
                   }`}
                 >
-                  {frCorrect ? t.study.correctWellDone : t.study.feedback}
+                  {frVerdict === "mostly_correct"
+                    ? "Mostly correct"
+                    : frCorrect
+                      ? t.study.correctWellDone
+                      : t.study.feedback}
                 </p>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                   {frFeedback}

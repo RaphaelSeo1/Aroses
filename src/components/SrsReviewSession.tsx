@@ -241,6 +241,9 @@ export function SrsReviewSession({
   const [frBusy, setFrBusy] = useState(false);
   const [frGraded, setFrGraded] = useState(false);
   const [frCorrect, setFrCorrect] = useState(false);
+  const [frVerdict, setFrVerdict] = useState<
+    "correct" | "mostly_correct" | "needs_work"
+  >("needs_work");
   const [frFeedback, setFrFeedback] = useState<string | null>(null);
   const [frSubmitError, setFrSubmitError] = useState<string | null>(null);
   const startedAtRef = useRef<number>(initial.startedAt);
@@ -257,6 +260,7 @@ export function SrsReviewSession({
     setFrBusy(false);
     setFrGraded(false);
     setFrCorrect(false);
+    setFrVerdict("needs_work");
     setFrFeedback(null);
     setFrSubmitError(null);
   }, [current?.cardKey]);
@@ -399,6 +403,7 @@ export function SrsReviewSession({
       });
       const body = (await res.json().catch(() => ({}))) as {
         correct?: boolean;
+        verdict?: string;
         feedback?: string;
         error?: string;
       };
@@ -412,6 +417,14 @@ export function SrsReviewSession({
         return;
       }
       const correct = Boolean(body.correct);
+      const verdict =
+        body.verdict === "correct" ||
+        body.verdict === "mostly_correct" ||
+        body.verdict === "needs_work"
+          ? body.verdict
+          : correct
+            ? "correct"
+            : "needs_work";
       const feedback =
         typeof body.feedback === "string"
           ? body.feedback
@@ -419,6 +432,7 @@ export function SrsReviewSession({
             ? "Looks good."
             : "Keep refining your answer.";
       setFrCorrect(correct);
+      setFrVerdict(verdict);
       setFrFeedback(feedback);
       setFrGraded(true);
       setRevealed(true);
@@ -630,6 +644,7 @@ export function SrsReviewSession({
               {!mcq && frGraded ? (
                 <FrqGradeBlock
                   correct={frCorrect}
+                  verdict={frVerdict}
                   feedback={frFeedback}
                   studentAnswer={frText}
                 />
@@ -817,24 +832,34 @@ function FrqAnswerInput({
 
 function FrqGradeBlock({
   correct,
+  verdict,
   feedback,
   studentAnswer,
 }: {
   correct: boolean;
+  verdict: "correct" | "mostly_correct" | "needs_work";
   feedback: string | null;
   studentAnswer: string;
 }) {
+  const label =
+    verdict === "mostly_correct"
+      ? "Mostly correct"
+      : correct
+        ? "Looks correct"
+        : "Needs review";
   return (
     <div className="mb-4 space-y-3 border-b border-zinc-200 pb-4 dark:border-zinc-800">
       <div className="flex items-center gap-2">
         <span
           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
-            correct
+            verdict === "mostly_correct"
+              ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+              : correct
               ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
               : "bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"
           }`}
         >
-          {correct ? "Looks correct" : "Needs work"}
+          {label}
         </span>
         <span className="text-[11px] text-zinc-500">AI feedback</span>
       </div>
