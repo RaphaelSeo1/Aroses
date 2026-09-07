@@ -105,6 +105,26 @@ const en = {
   questionPreviewCount: "{count} questions in this review.",
   answersHiddenHint: "Answers stay hidden until you choose to reveal one.",
   showAnswer: "Show answer",
+  editQuestion: "Edit",
+  deleteQuestion: "Delete",
+  questionField: "Question",
+  choicesField: "Choices",
+  correctAnswerField: "Correct answer",
+  correctAnswerHint: "Select the radio button beside the correct choice.",
+  answerField: "Answer",
+  explanationField: "Explanation (optional)",
+  saveQuestion: "Save changes",
+  savingQuestion: "Saving…",
+  cancelQuestionEdit: "Cancel",
+  questionSaveError: "Could not save question.",
+  questionSaved: "Question saved.",
+  deleteQuestionConfirm: "Delete this review question?",
+  deleteQuestionWarning:
+    "This permanently removes this card from review. This action cannot be undone.",
+  confirmDeleteQuestion: "Delete question",
+  deletingQuestion: "Deleting…",
+  questionDeleteError: "Could not delete question.",
+  questionDeleted: "Question deleted.",
 };
 
 const ko: typeof en = {
@@ -211,6 +231,26 @@ const ko: typeof en = {
   questionPreviewCount: "이 복습의 질문 {count}개.",
   answersHiddenHint: "답은 직접 펼치기 전까지 숨겨져 있어요.",
   showAnswer: "답 보기",
+  editQuestion: "수정",
+  deleteQuestion: "삭제",
+  questionField: "질문",
+  choicesField: "선택지",
+  correctAnswerField: "정답",
+  correctAnswerHint: "정답인 선택지 옆의 버튼을 선택하세요.",
+  answerField: "답",
+  explanationField: "설명 (선택 사항)",
+  saveQuestion: "변경사항 저장",
+  savingQuestion: "저장 중…",
+  cancelQuestionEdit: "취소",
+  questionSaveError: "질문을 저장하지 못했어요.",
+  questionSaved: "질문을 저장했어요.",
+  deleteQuestionConfirm: "이 복습 질문을 삭제할까요?",
+  deleteQuestionWarning:
+    "이 카드는 복습에서 영구적으로 제거되며 되돌릴 수 없어요.",
+  confirmDeleteQuestion: "질문 삭제",
+  deletingQuestion: "삭제 중…",
+  questionDeleteError: "질문을 삭제하지 못했어요.",
+  questionDeleted: "질문을 삭제했어요.",
 };
 
 export const review = { en, ko };

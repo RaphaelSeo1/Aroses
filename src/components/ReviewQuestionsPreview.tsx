@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { ReviewQuestionControls } from "@/components/ReviewQuestionControls";
 import type { SrsSessionCard } from "@/components/SrsReviewSession";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { buildSrsSessionUrl } from "@/lib/srs-session-query";
-import { isQuizMcq } from "@/types/course";
+import { isQuizMcq, type CourseQuizItem } from "@/types/course";
 
 type PreviewState =
   | { status: "idle" }
@@ -16,17 +17,24 @@ type PreviewState =
 type Props = {
   materialIds: string[];
   scope: "module" | "personal" | "both";
+  onChanged?: () => void;
 };
 
-export function ReviewQuestionsPreview({ materialIds, scope }: Props) {
+export function ReviewQuestionsPreview({
+  materialIds,
+  scope,
+  onChanged,
+}: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<PreviewState>({ status: "idle" });
+  const [notice, setNotice] = useState<string | null>(null);
   const enabled = materialIds.length > 0;
   const previewUrl = buildSrsSessionUrl({ scope, materialIds });
 
   async function loadQuestions() {
     setState({ status: "loading" });
+    setNotice(null);
     try {
       const res = await fetch(previewUrl);
       const body = (await res.json().catch(() => ({}))) as {
@@ -52,6 +60,34 @@ export function ReviewQuestionsPreview({ materialIds, scope }: Props) {
     if (nextOpen && state.status === "idle") {
       void loadQuestions();
     }
+  }
+
+  function updateQuestion(cardKey: string, question: CourseQuizItem) {
+    setState((current) =>
+      current.status === "ready"
+        ? {
+            ...current,
+            cards: current.cards.map((card) =>
+              card.cardKey === cardKey ? { ...card, question } : card
+            ),
+          }
+        : current
+    );
+    setNotice(t.review.questionSaved);
+    onChanged?.();
+  }
+
+  function deleteQuestion(cardKey: string) {
+    setState((current) =>
+      current.status === "ready"
+        ? {
+            ...current,
+            cards: current.cards.filter((card) => card.cardKey !== cardKey),
+          }
+        : current
+    );
+    setNotice(t.review.questionDeleted);
+    onChanged?.();
   }
 
   return (
@@ -104,11 +140,23 @@ export function ReviewQuestionsPreview({ materialIds, scope }: Props) {
               </button>
             </div>
           ) : state.cards.length === 0 ? (
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              {t.review.noQuestionsInReview}
-            </p>
+            <div>
+              {notice ? (
+                <p role="status" className="mb-2 text-sm font-medium text-emerald-700 dark:text-emerald-300">
+                  {notice}
+                </p>
+              ) : null}
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                {t.review.noQuestionsInReview}
+              </p>
+            </div>
           ) : (
             <>
+              {notice ? (
+                <p role="status" className="mb-2 text-sm font-medium text-emerald-700 dark:text-emerald-300">
+                  {notice}
+                </p>
+              ) : null}
               <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
                 {tf(t.review.questionPreviewCount, {
                   count: state.cards.length,
@@ -121,6 +169,10 @@ export function ReviewQuestionsPreview({ materialIds, scope }: Props) {
                     key={card.cardKey}
                     card={card}
                     number={index + 1}
+                    onUpdated={(question) =>
+                      updateQuestion(card.cardKey, question)
+                    }
+                    onDeleted={() => deleteQuestion(card.cardKey)}
                   />
                 ))}
               </ol>
@@ -135,9 +187,13 @@ export function ReviewQuestionsPreview({ materialIds, scope }: Props) {
 function QuestionPreviewItem({
   card,
   number,
+  onUpdated,
+  onDeleted,
 }: {
   card: SrsSessionCard;
   number: number;
+  onUpdated: (question: CourseQuizItem) => void;
+  onDeleted: () => void;
 }) {
   const t = useT();
   const question = card.question;
@@ -193,6 +249,11 @@ function QuestionPreviewItem({
           {question.explanation ? <p>{question.explanation}</p> : null}
         </div>
       </details>
+      <ReviewQuestionControls
+        card={card}
+        onUpdated={onUpdated}
+        onDeleted={onDeleted}
+      />
     </li>
   );
 }

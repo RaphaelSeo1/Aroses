@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
+import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
 import { NOTES_FOCUS_BUCKET_ID } from "@/lib/notes/notes-focus-bucket";
 
 /**
@@ -50,7 +51,9 @@ function validQuestionIndexes(payload: CoursePayload | null): Set<number> {
   if (!payload?.modules) return out;
   for (const mod of payload.modules) {
     const quiz = Array.isArray(mod.quiz) ? mod.quiz : [];
-    for (let i = 0; i < quiz.length; i++) out.add(mod.id * 1000 + i);
+    for (let i = 0; i < quiz.length; i++) {
+      if (isReviewQuestionEnabled(quiz[i])) out.add(mod.id * 1000 + i);
+    }
   }
   return out;
 }

@@ -40,6 +40,7 @@ type RawQuiz = {
   choices?: unknown;
   correct?: unknown;
   explanation?: unknown;
+  reviewDisabled?: unknown;
 };
 
 function normalizeQuizMcq(raw: RawQuiz): CourseQuizMcqItem {
@@ -58,6 +59,7 @@ function normalizeQuizMcq(raw: RawQuiz): CourseQuizMcqItem {
   const correctIndex = resolveCorrectIndex(raw.correct, choices);
   return {
     type: "mcq",
+    ...(raw.reviewDisabled === true ? { reviewDisabled: true } : {}),
     question: raw.question,
     choices,
     correct: raw.correct.trim(),
@@ -88,6 +90,7 @@ function normalizeQuizFree(raw: Record<string, unknown>): CourseQuizFreeItem {
 
   return {
     type: "free_response",
+    ...(raw.reviewDisabled === true ? { reviewDisabled: true } : {}),
     question,
     referenceAnswer,
     explanation,

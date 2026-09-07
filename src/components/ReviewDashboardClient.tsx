@@ -425,6 +425,7 @@ export function ReviewDashboardClient() {
           .join(",")}`}
         materialIds={selectedMaterials.map((material) => material.materialId)}
         scope={kind}
+        onChanged={refresh}
       />
 
       {/* Settings --------------------------------------------------- */}

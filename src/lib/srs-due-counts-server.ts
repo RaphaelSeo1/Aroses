@@ -5,6 +5,8 @@ import {
   NOTES_FOCUS_BUCKET_ID,
 } from "@/lib/notes/notes-focus-bucket";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
+import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
+import type { CoursePayload } from "@/types/course";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -13,6 +15,7 @@ type MaterialRow = {
   id: string;
   file_name: string | null;
   course_id: string | null;
+  course_payload?: CoursePayload | null;
   courses:
     | { id: string; title: string | null }
     | { id: string; title: string | null }[]
@@ -97,12 +100,15 @@ export async function fetchSrsDueCountsForUser(
 
   let matsQuery = supabase
     .from("study_materials")
-    .select("id, file_name, course_id, courses ( id, title )")
+    .select("id, file_name, course_id, course_payload, courses ( id, title )")
     .eq("user_id", userId);
   if (materialFilter) matsQuery = matsQuery.eq("id", materialFilter);
   const { data: matsRaw } = await matsQuery;
 
   const materials = (matsRaw ?? []) as unknown as MaterialRow[];
+  const materialById = new Map(
+    materials.map((material) => [normId(material.id), material])
+  );
 
   const byMaterial = new Map<
     string,
@@ -114,14 +120,24 @@ export async function fetchSrsDueCountsForUser(
 
   let modQ = supabase
     .from("user_module_card_srs")
-    .select("material_id")
+    .select("material_id, question_index")
     .eq("user_id", userId)
     .lte("due_at", nowIso);
   if (materialFilter) modQ = modQ.eq("material_id", materialFilter);
   const { data: modRows } = await modQ;
   for (const row of modRows ?? []) {
     const bucket = byMaterial.get(normId(row.material_id as string));
-    if (bucket) bucket.module += 1;
+    const material = materialById.get(normId(row.material_id as string));
+    if (
+      bucket &&
+      material &&
+      isEnabledModuleIndex(
+        material.course_payload,
+        Number(row.question_index)
+      )
+    ) {
+      bucket.module += 1;
+    }
   }
 
   let perQ = supabase
@@ -208,4 +224,17 @@ export async function fetchSrsDueCountsForUser(
       .filter((b) => b.total > 0 || materialFilter)
       .sort((a, b) => b.total - a.total),
   };
+}
+
+function isEnabledModuleIndex(
+  payload: CoursePayload | null | undefined,
+  questionIndex: number
+): boolean {
+  if (!payload || !Number.isInteger(questionIndex)) return false;
+  const moduleId = Math.floor(questionIndex / 1_000);
+  const quizIndex = questionIndex % 1_000;
+  const question = payload.modules
+    .find((module) => module.id === moduleId)
+    ?.quiz?.[quizIndex];
+  return isReviewQuestionEnabled(question);
 }

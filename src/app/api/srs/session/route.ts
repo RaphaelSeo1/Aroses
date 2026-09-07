@@ -8,6 +8,7 @@ import {
 } from "@/lib/notes/notes-focus-bucket";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
 
 /**
  * GET /api/srs/session
@@ -201,7 +202,7 @@ export async function GET(request: Request) {
           // Cram: skip questions the learner has never attempted.
           if (attemptedKeys && !attemptedKeys.has(`${mat.id}:${qi}`)) continue;
           const question = quiz[i];
-          if (!question) continue;
+          if (!isReviewQuestionEnabled(question)) continue;
           newCandidates.push(
             buildModuleCard(mat, mod.id, i, question, null, true)
           );
@@ -477,7 +478,7 @@ function pluckQuestion(
   const mod = payload.modules?.find((m) => m.id === moduleId);
   if (!mod) return null;
   const q = mod.quiz?.[quizIndex];
-  return q ?? null;
+  return isReviewQuestionEnabled(q) ? q : null;
 }
 
 function lookupModuleTitle(
