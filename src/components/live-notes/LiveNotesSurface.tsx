@@ -34,6 +34,7 @@ import {
   applySurgicalNoteRevision,
 } from "@/lib/live-notes/fold-note-markdown";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
+import { chunkTypewriterText } from "@/lib/live-notes/typewriter-text";
 import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
@@ -501,38 +502,39 @@ export function LiveNotesSurface({
       const typewrite = async (text: string) => {
         if (!text) return;
         const step = charsPerTick();
-        for (let i = 0; i < text.length; i += step) {
-          writer.write(text.slice(i, i + step));
+        for (const chunk of chunkTypewriterText(text, step)) {
+          writer.write(chunk);
           gotContent = true;
           await sleep(TYPE_TICK_MS);
         }
       };
-      const applyBufferedRevision = (sectionId: string, incoming: string) => {
+      const applyBufferedRevision = async (
+        sectionId: string,
+        incoming: string
+      ) => {
         const live = writer
           .listSynthesisSections(200)
           .find((s) => s.sectionId === sectionId);
         if (!live) return;
         const next = applySurgicalNoteRevision(live.markdown, incoming);
         if (next.patched) {
-          if (
-            writer.replaceSectionMarkdown(sectionId, next.markdown, {
-              evenIfStudentEdited: true,
-            })
-          ) {
-            gotContent = true;
-            revisedSectionId = sectionId;
-          }
+          const started = await writer.beginRevision(sectionId, {
+            evenIfStudentEdited: true,
+          });
+          if (!started) return;
+          await typewrite(next.markdown);
+          writer.finishOp();
+          revisedSectionId = sectionId;
           return;
         }
-        if (
-          next.extraMarkdown &&
-          writer.extendSection(sectionId, next.extraMarkdown, {
-            evenIfStudentEdited: true,
-          })
-        ) {
-          gotContent = true;
-          revisedSectionId = sectionId;
-        }
+        if (!next.extraMarkdown) return;
+        const started = writer.beginExtension(sectionId, {
+          evenIfStudentEdited: true,
+        });
+        if (!started) return;
+        await typewrite(next.extraMarkdown);
+        writer.finishOp();
+        revisedSectionId = sectionId;
       };
       const runPump = async () => {
         let opValid = false;
@@ -550,7 +552,7 @@ export function LiveNotesSurface({
           }
           if (item.kind === "append") {
             if (surgicalReviseId) {
-              applyBufferedRevision(surgicalReviseId, surgicalBuf);
+              await applyBufferedRevision(surgicalReviseId, surgicalBuf);
               surgicalReviseId = null;
               surgicalBuf = "";
             }
@@ -572,11 +574,12 @@ export function LiveNotesSurface({
             foldBuf = "";
             pendingAppend = null;
             writer.finishOp();
-            // Buffer the revise body and merge it into the existing section.
-            // beginRevision deletes the whole block and retypes it — that is
-            // what made small transcript updates look like the section vanished.
+            // Buffer enough to classify a surgical correction versus an
+            // additive enrichment. Both paths use the existing writer's
+            // character-by-character rendering; corrections also use its
+            // established fade/retype revision animation.
             if (surgicalReviseId) {
-              applyBufferedRevision(surgicalReviseId, surgicalBuf);
+              await applyBufferedRevision(surgicalReviseId, surgicalBuf);
             }
             surgicalReviseId = item.sectionId;
             surgicalBuf = "";
@@ -623,7 +626,7 @@ export function LiveNotesSurface({
           }
         }
         if (surgicalReviseId) {
-          applyBufferedRevision(surgicalReviseId, surgicalBuf);
+          await applyBufferedRevision(surgicalReviseId, surgicalBuf);
           surgicalReviseId = null;
           surgicalBuf = "";
         }
@@ -638,14 +641,15 @@ export function LiveNotesSurface({
             .listSynthesisSections(200)
             .find((s) => s.sectionId === foldIntoId);
           const extra = uniqueIncomingNoteLines(live?.markdown ?? "", foldBuf);
-          if (
-            extra &&
-            writer.extendSection(foldIntoId, extra, {
+          if (extra) {
+            const started = writer.beginExtension(foldIntoId, {
               evenIfStudentEdited: true,
-            })
-          ) {
-            gotContent = true;
-            revisedSectionId = foldIntoId;
+            });
+            if (started) {
+              await typewrite(extra);
+              writer.finishOp();
+              revisedSectionId = foldIntoId;
+            }
           }
         }
         pendingAppend = null;

@@ -85,7 +85,7 @@ function insertionPoint(tr: Transaction, target: BlockTarget): number {
 }
 
 type ActiveOp = {
-  kind: "append" | "revision";
+  kind: "append" | "extension" | "revision";
   sectionId: string;
   /** Raw incoming chars not yet committed to the doc. */
   buf: string;
@@ -273,6 +273,33 @@ export class StreamingNotesWriter {
     return true;
   }
 
+  /**
+   * Stream an additive fragment into an existing section without deleting or
+   * atomically replacing its current blocks. Uses the same line-buffered
+   * character rendering as a new append, then flashes the revised section.
+   */
+  beginExtension(
+    sectionId: string,
+    opts?: { evenIfStudentEdited?: boolean }
+  ): boolean {
+    if (this.destroyed || this.editor.isDestroyed) return false;
+    this.finishOp();
+    const blocks = this.sectionBlocks(sectionId);
+    if (blocks.length === 0) return false;
+    if (
+      !opts?.evenIfStudentEdited &&
+      blocks.some(
+        (block) =>
+          block.node.attrs?.provenance !== "ai" &&
+          block.node.attrs?.provenance !== "ai-context"
+      )
+    ) {
+      return false;
+    }
+    this.op = this.freshOp("extension", sectionId);
+    return true;
+  }
+
   /** Feed streamed characters into the active op. */
   write(delta: string): void {
     if (!this.op || this.destroyed || this.editor.isDestroyed || !delta) return;
@@ -314,6 +341,8 @@ export class StreamingNotesWriter {
         this.revisionBackup = null;
         this.flashRevision(op.sectionId);
       }
+    } else if (op.kind === "extension" && op.wroteAnything) {
+      this.flashRevision(op.sectionId);
     }
     this.op = null;
   }
