@@ -1,9 +1,15 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import type { MCQuestion } from "@/types/study";
+import {
+  createMcqAttempt,
+  isCorrectMcqChoice,
+  shuffleOrder,
+  type McqAttempt,
+} from "@/lib/quiz-randomization";
 
 type Props = {
   materialId: string;
@@ -12,15 +18,61 @@ type Props = {
 
 export function McqQuiz({ materialId, questions }: Props) {
   const t = useT();
+  const [session, setSession] = useState<
+    { question: MCQuestion; originalIndex: number; attempt: McqAttempt }[] | null
+  >(null);
   const [index, setIndex] = useState(0);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [correctCount, setCorrectCount] = useState(0);
   const [wrongCount, setWrongCount] = useState(0);
   const [finished, setFinished] = useState(false);
 
-  const q = questions[index];
-  const total = questions.length;
+  useEffect(() => {
+    const previous = readLegacyPreviousOrder(materialId);
+    const sourceOrder = questions.map((_, questionIndex) => questionIndex);
+    const previousQuestionOrder = previous?.questionOrder.filter(
+      (questionIndex) => questionIndex >= 0 && questionIndex < questions.length
+    );
+    const questionOrder = shuffleOrder(
+      sourceOrder,
+      previousQuestionOrder?.length === sourceOrder.length
+        ? previousQuestionOrder
+        : undefined
+    );
+    const next = questionOrder.map((originalIndex) => {
+      const question = questions[originalIndex];
+      return {
+        question,
+        originalIndex,
+        attempt: createMcqAttempt(
+          {
+            ...question,
+            correct: question.choices[question.correctIndex] ?? "",
+          },
+          previous?.choiceOrders[String(originalIndex)]
+        ),
+      };
+    });
+    // Client-only session initialization avoids server/client random-order
+    // hydration mismatches; subsequent rerenders keep this snapshot intact.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSession(next);
+    writeLegacyPreviousOrder(materialId, {
+      questionOrder,
+      choiceOrders: Object.fromEntries(
+        next.map((slot) => [
+          String(slot.originalIndex),
+          slot.attempt.sourceOrder,
+        ])
+      ),
+    });
+  }, [materialId, questions]);
+
+  const slot = session?.[index];
+  const q = slot?.question;
+  const displayMcq = slot?.attempt;
+  const total = session?.length ?? questions.length;
   const isLast = index === total - 1;
 
   const recordAttempt = useCallback(
@@ -48,16 +100,18 @@ export function McqQuiz({ materialId, questions }: Props) {
   );
 
   const onChoose = useCallback(
-    async (choiceIndex: number) => {
-      if (revealed || !q) return;
-      setSelected(choiceIndex);
+    async (choiceId: string) => {
+      if (revealed || !slot || !displayMcq) return;
+      const choice = displayMcq.choices.find((item) => item.id === choiceId);
+      if (!choice) return;
+      setSelected(choiceId);
       setRevealed(true);
-      const ok = choiceIndex === q.correctIndex;
+      const ok = isCorrectMcqChoice(displayMcq, choiceId);
       if (ok) setCorrectCount((c) => c + 1);
       else setWrongCount((w) => w + 1);
-      await recordAttempt(index, choiceIndex, ok);
+      await recordAttempt(slot.originalIndex, choice.sourceIndex, ok);
     },
-    [revealed, q, index, recordAttempt]
+    [revealed, slot, displayMcq, recordAttempt]
   );
 
   const goNext = useCallback(() => {
@@ -99,7 +153,11 @@ export function McqQuiz({ materialId, questions }: Props) {
     );
   }
 
-  if (!q) {
+  if (!session) {
+    return <p className="text-zinc-500">Loading quiz…</p>;
+  }
+
+  if (!q || !displayMcq) {
     return (
       <p className="text-zinc-500">{t.study.noQuestionsLoaded}</p>
     );
@@ -120,10 +178,10 @@ export function McqQuiz({ materialId, questions }: Props) {
         </p>
 
         <ul className="mt-5 space-y-2">
-          {q.choices.map((choice, i) => {
+          {displayMcq.choices.map((choice, i) => {
             const letter = String.fromCharCode(65 + i);
-            const isSel = selected === i;
-            const isCorrect = i === q.correctIndex;
+            const isSel = selected === choice.id;
+            const isCorrect = choice.isCorrect;
             let ring =
               "border-zinc-200 hover:border-zinc-400 dark:border-zinc-700 dark:hover:border-zinc-500";
             if (revealed) {
@@ -137,17 +195,17 @@ export function McqQuiz({ materialId, questions }: Props) {
             }
 
             return (
-              <li key={i}>
+              <li key={choice.id}>
                 <button
                   type="button"
                   disabled={revealed}
-                  onClick={() => onChoose(i)}
+                  onClick={() => onChoose(choice.id)}
                   className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm ${ring}`}
                 >
                   <span className="mt-0.5 font-mono text-xs text-zinc-500">
                     {letter}.
                   </span>
-                  <span className="flex-1">{choice}</span>
+                  <span className="flex-1">{choice.text}</span>
                 </button>
               </li>
             );
@@ -157,7 +215,8 @@ export function McqQuiz({ materialId, questions }: Props) {
         {revealed && (
           <div className="mt-6 rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
             <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-              {selected === q.correctIndex ? (
+              {selected != null &&
+              isCorrectMcqChoice(displayMcq, selected) ? (
                 <span className="text-emerald-700 dark:text-emerald-400">
                   {t.study.correct}
                 </span>
@@ -182,4 +241,47 @@ export function McqQuiz({ materialId, questions }: Props) {
       </div>
     </div>
   );
+}
+
+type LegacyPreviousOrder = {
+  questionOrder: number[];
+  choiceOrders: Record<string, number[]>;
+};
+
+function legacyPreviousOrderKey(materialId: string): string {
+  return `aroses.legacy-quiz.previous-order.${materialId}`;
+}
+
+function readLegacyPreviousOrder(
+  materialId: string
+): LegacyPreviousOrder | null {
+  try {
+    const raw = window.localStorage.getItem(legacyPreviousOrderKey(materialId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<LegacyPreviousOrder>;
+    if (!Array.isArray(parsed.questionOrder)) return null;
+    return {
+      questionOrder: parsed.questionOrder.filter(Number.isInteger),
+      choiceOrders:
+        parsed.choiceOrders && typeof parsed.choiceOrders === "object"
+          ? parsed.choiceOrders
+          : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLegacyPreviousOrder(
+  materialId: string,
+  order: LegacyPreviousOrder
+): void {
+  try {
+    window.localStorage.setItem(
+      legacyPreviousOrderKey(materialId),
+      JSON.stringify(order)
+    );
+  } catch {
+    /* Storage may be unavailable in private browsing. */
+  }
 }

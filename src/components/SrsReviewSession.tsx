@@ -18,6 +18,14 @@ import {
 } from "@/lib/srs-sm2";
 import { tf } from "@/lib/i18n/format";
 import { useT } from "@/lib/i18n/LocaleProvider";
+import {
+  createMcqAttempt,
+  getOrCreateMcqAttempt,
+  isCorrectMcqChoice,
+  restoreMcqAttempt,
+  shuffleOrder,
+  type McqAttempt,
+} from "@/lib/quiz-randomization";
 
 /**
  * Flashcard-style review session driver. Implements:
@@ -158,8 +166,14 @@ function ratingLabel(
 type ResumeState = {
   queueKeys: string[]; // remaining card keys in order
   doneKeys: string[]; // finished card keys
+  choiceOrders?: Record<string, number[]>;
   ratings: Record<SrsRating, number>;
   startedAt: number;
+};
+
+type PreviousSessionOrder = {
+  cardKeys: string[];
+  choiceOrders: Record<string, number[]>;
 };
 
 export function SrsReviewSession({
@@ -174,6 +188,7 @@ export function SrsReviewSession({
 }: Props) {
   const t = useT();
   const storageKey = `aroses.srs.session.${sessionKey}`;
+  const previousOrderStorageKey = `aroses.srs.previous-order.${sessionKey}`;
 
   // Build a lookup of all cards we know about (from the prop) so resume
   // can map saved keys back to live objects.
@@ -188,6 +203,7 @@ export function SrsReviewSession({
   const initial = useMemo<{
     queue: SrsSessionCard[];
     done: SrsSessionCard[];
+    mcqAttempts: Map<string, McqAttempt>;
     ratings: Record<SrsRating, number>;
     startedAt: number;
   }>(() => {
@@ -203,9 +219,15 @@ export function SrsReviewSession({
             .map((k) => cardById.get(k))
             .filter(Boolean) as SrsSessionCard[];
           if (queue.length > 0 || done.length > 0) {
+            const previousChoiceOrders = parsed.choiceOrders ?? {};
             return {
               queue,
               done,
+              mcqAttempts: buildMcqAttempts(
+                [...queue, ...done],
+                previousChoiceOrders,
+                false
+              ),
               ratings: { ...emptyRatings(), ...parsed.ratings },
               startedAt: parsed.startedAt || Date.now(),
             };
@@ -215,9 +237,23 @@ export function SrsReviewSession({
         /* corrupt save — fall through to fresh deck */
       }
     }
+    const previous = readPreviousSessionOrder(previousOrderStorageKey);
+    const sourceIndices = cards.map((_, index) => index);
+    const previousIndices = previous?.cardKeys
+      .map((key) => cards.findIndex((card) => card.cardKey === key))
+      .filter((index) => index >= 0);
+    const cardOrder = shuffleOrder(
+      sourceIndices,
+      previousIndices?.length === sourceIndices.length
+        ? previousIndices
+        : undefined
+    );
+    const queue = cardOrder.map((index) => cards[index]);
+    const previousChoiceOrders = previous?.choiceOrders ?? {};
     return {
-      queue: cards.slice(),
+      queue,
       done: [],
+      mcqAttempts: buildMcqAttempts(queue, previousChoiceOrders, true),
       ratings: emptyRatings(),
       startedAt: Date.now(),
     };
@@ -232,11 +268,12 @@ export function SrsReviewSession({
   const [ratings, setRatings] = useState<Record<SrsRating, number>>(
     initial.ratings
   );
+  const [mcqAttempts, setMcqAttempts] = useState(initial.mcqAttempts);
   const [revealed, setRevealed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   // Per-card interactive answer state. Reset on each new card via the
   // effect below that watches `current?.cardKey`.
-  const [mcSelected, setMcSelected] = useState<number | null>(null);
+  const [mcSelected, setMcSelected] = useState<string | null>(null);
   const [frText, setFrText] = useState("");
   const [frBusy, setFrBusy] = useState(false);
   const [frGraded, setFrGraded] = useState(false);
@@ -247,10 +284,17 @@ export function SrsReviewSession({
   const [frFeedback, setFrFeedback] = useState<string | null>(null);
   const [frSubmitError, setFrSubmitError] = useState<string | null>(null);
   const startedAtRef = useRef<number>(initial.startedAt);
+  const initialCardKeysRef = useRef(
+    [...initial.queue, ...initial.done].map((card) => card.cardKey)
+  );
 
   const current = queue[0];
   const total = queue.length + done.length;
   const position = done.length + 1;
+  const displayMcq = useMemo(() => {
+    if (!current || !isQuizMcq(current.question)) return null;
+    return mcqAttempts.get(current.cardKey) ?? null;
+  }, [current, mcqAttempts]);
 
   // Reset all per-card UI when the visible card changes.
   useEffect(() => {
@@ -275,6 +319,7 @@ export function SrsReviewSession({
     const snap: ResumeState = {
       queueKeys: queue.map((c) => c.cardKey),
       doneKeys: done.map((c) => c.cardKey),
+      choiceOrders: serializeMcqAttempts(mcqAttempts),
       ratings,
       startedAt: startedAtRef.current,
     };
@@ -283,7 +328,14 @@ export function SrsReviewSession({
     } catch {
       /* quota / private-browsing — non-fatal */
     }
-  }, [queue, done, ratings, storageKey]);
+  }, [queue, done, ratings, storageKey, mcqAttempts]);
+
+  useEffect(() => {
+    writePreviousSessionOrder(previousOrderStorageKey, {
+      cardKeys: initialCardKeysRef.current,
+      choiceOrders: serializeMcqAttempts(mcqAttempts),
+    });
+  }, [previousOrderStorageKey, queue, mcqAttempts]);
 
   // Compute interval previews for the four buttons based on the live SRS state.
   const previews = useMemo(() => {
@@ -323,6 +375,18 @@ export function SrsReviewSession({
       setRatings((r) => ({ ...r, [rating]: r[rating] + 1 }));
 
       if (rating === "again") {
+        const previousAttempt = mcqAttempts.get(current.cardKey);
+        const currentQuestion = current.question;
+        if (previousAttempt && isQuizMcq(currentQuestion)) {
+          setMcqAttempts((attempts) => {
+            const next = new Map(attempts);
+            next.set(
+              current.cardKey,
+              createMcqAttempt(currentQuestion, previousAttempt.sourceOrder)
+            );
+            return next;
+          });
+        }
         // Reinsert near the front (after a few other cards) so the learner
         // sees it again this session.
         setQueue((q) => {
@@ -357,19 +421,18 @@ export function SrsReviewSession({
       // `current.cardKey` effect once the head of the queue changes.
       window.setTimeout(() => setSubmitting(false), 80);
     },
-    [current, submitting]
+    [current, submitting, mcqAttempts]
   );
 
   // ----------- MC answer click -----------
   const handleMcChoose = useCallback(
-    (idx: number) => {
-      if (!current || revealed) return;
-      if (isQuizMcq(current.question)) {
-        setMcSelected(idx);
-        setRevealed(true);
-      }
+    (choiceId: string) => {
+      if (!current || !displayMcq || revealed) return;
+      if (!displayMcq.choices.some((choice) => choice.id === choiceId)) return;
+      setMcSelected(choiceId);
+      setRevealed(true);
     },
-    [current, revealed]
+    [current, displayMcq, revealed]
   );
 
   // ----------- FRQ submit + AI grade -----------
@@ -617,12 +680,11 @@ export function SrsReviewSession({
           </p>
         </div>
 
-        {mcq ? (
+        {mcq && displayMcq ? (
           <McChoices
-            question={mcq}
-            cardKey={current.cardKey}
+            attempt={displayMcq}
             revealed={revealed}
-            selectedIndex={mcSelected}
+            selectedChoiceId={mcSelected}
             onChoose={handleMcChoose}
           />
         ) : !revealed ? (
@@ -649,7 +711,10 @@ export function SrsReviewSession({
                   studentAnswer={frText}
                 />
               ) : null}
-              <RevealedAnswer question={question} />
+              <RevealedAnswer
+                question={question}
+                mcqAttempt={displayMcq}
+              />
             </div>
           </div>
         ) : null}
@@ -686,25 +751,22 @@ export function SrsReviewSession({
 // ---------- subcomponents --------------------------------------------------
 
 function McChoices({
-  question,
-  cardKey,
+  attempt,
   revealed,
-  selectedIndex,
+  selectedChoiceId,
   onChoose,
 }: {
-  // Narrowed type — caller has already checked isQuizMcq.
-  question: import("@/types/course").CourseQuizMcqItem;
-  cardKey: string;
+  attempt: McqAttempt;
   revealed: boolean;
-  selectedIndex: number | null;
-  onChoose: (index: number) => void;
+  selectedChoiceId: string | null;
+  onChoose: (choiceId: string) => void;
 }) {
   return (
     <ul className="mt-3 shrink-0 space-y-1.5">
-      {question.choices.map((choice, i) => {
+      {attempt.choices.map((choice, i) => {
         const letter = String.fromCharCode(65 + i);
-        const isCorrect = i === question.correctIndex;
-        const isSelected = selectedIndex === i;
+        const isCorrect = choice.isCorrect;
+        const isSelected = selectedChoiceId === choice.id;
 
         // Color rules:
         // - while answering: hover/active styles, no green/red
@@ -725,11 +787,11 @@ function McChoices({
         }
 
         return (
-          <li key={`${cardKey}-${i}`}>
+          <li key={choice.id}>
             <button
               type="button"
               disabled={revealed}
-              onClick={() => onChoose(i)}
+              onClick={() => onChoose(choice.id)}
               className={`flex w-full min-w-0 items-start gap-2 rounded-lg border px-3 py-2 text-left text-sm leading-snug transition-colors ${stateClasses} ${
                 !revealed
                   ? "hover:border-zinc-400 hover:bg-zinc-50 active:bg-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-900"
@@ -740,7 +802,7 @@ function McChoices({
                 {letter}.
               </span>
               <span className="min-w-0 flex-1 break-words text-zinc-800 dark:text-zinc-200 [overflow-wrap:anywhere]">
-                {choice}
+                {choice.text}
               </span>
               {revealed && isCorrect ? (
                 <span
@@ -898,13 +960,23 @@ function looksLikeSlug(text: string): boolean {
   return /[a-z]_[a-z]/i.test(trimmed);
 }
 
-function RevealedAnswer({ question }: { question: CourseQuizItem }) {
+function RevealedAnswer({
+  question,
+  mcqAttempt,
+}: {
+  question: CourseQuizItem;
+  mcqAttempt: McqAttempt | null;
+}) {
   if (isQuizMcq(question)) {
+    const correctDisplayIndex =
+      mcqAttempt?.choices.findIndex((choice) =>
+        isCorrectMcqChoice(mcqAttempt, choice.id)
+      ) ?? question.correctIndex;
     return (
       <>
         <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
           Correct answer:{" "}
-          {String.fromCharCode(65 + question.correctIndex)}
+          {String.fromCharCode(65 + correctDisplayIndex)}
         </p>
         <p className="mt-1.5 break-words text-sm leading-snug text-zinc-600 dark:text-zinc-400 [overflow-wrap:anywhere]">
           {question.explanation}
@@ -1011,6 +1083,78 @@ function SessionHeader({
 
 function emptyRatings(): Record<SrsRating, number> {
   return { again: 0, hard: 0, good: 0, easy: 0 };
+}
+
+function buildMcqAttempts(
+  cards: readonly SrsSessionCard[],
+  previousChoiceOrders: Record<string, number[]>,
+  avoidPrevious: boolean
+): Map<string, McqAttempt> {
+  const attempts = new Map<string, McqAttempt>();
+  for (const card of cards) {
+    if (!isQuizMcq(card.question)) continue;
+    const previousOrder = previousChoiceOrders[card.cardKey];
+    if (previousOrder && !avoidPrevious) {
+      attempts.set(
+        card.cardKey,
+        restoreMcqAttempt(card.question, previousOrder)
+      );
+    } else {
+      getOrCreateMcqAttempt(
+        attempts,
+        card.cardKey,
+        card.question,
+        previousOrder
+      );
+    }
+  }
+  return attempts;
+}
+
+function serializeMcqAttempts(
+  attempts: ReadonlyMap<string, McqAttempt>
+): Record<string, number[]> {
+  return Object.fromEntries(
+    [...attempts].map(([cardKey, attempt]) => [
+      cardKey,
+      attempt.sourceOrder,
+    ])
+  );
+}
+
+function readPreviousSessionOrder(
+  storageKey: string
+): PreviousSessionOrder | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PreviousSessionOrder>;
+    if (!Array.isArray(parsed.cardKeys)) return null;
+    return {
+      cardKeys: parsed.cardKeys.filter(
+        (key): key is string => typeof key === "string"
+      ),
+      choiceOrders:
+        parsed.choiceOrders && typeof parsed.choiceOrders === "object"
+          ? parsed.choiceOrders
+          : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writePreviousSessionOrder(
+  storageKey: string,
+  order: PreviousSessionOrder
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(order));
+  } catch {
+    /* Storage may be unavailable in private browsing. */
+  }
 }
 
 async function postRating(card: SrsSessionCard, rating: SrsRating) {

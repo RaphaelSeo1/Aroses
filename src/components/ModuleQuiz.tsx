@@ -4,13 +4,16 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type KeyboardEvent,
 } from "react";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
-import { shuffleMcqChoices, type QuizSessionItem } from "@/lib/quiz-session";
+import type { QuizSessionItem } from "@/lib/quiz-session";
+import {
+  createMcqAttempt,
+  isCorrectMcqChoice,
+} from "@/lib/quiz-randomization";
 import { isQuizMcq } from "@/types/course";
 
 type Props = {
@@ -65,11 +68,10 @@ export function ModuleQuiz({
   // session from being silently reshuffled by mid-quiz refetches of
   // missed-question indices, which used to swap the current question out
   // from under the learner the moment they answered.
-  const sessionItemsRef = useRef(items);
-  const sessionItems = sessionItemsRef.current;
+  const [sessionItems] = useState(items);
 
   /** Multiple choice */
-  const [mcSelected, setMcSelected] = useState<number | null>(null);
+  const [mcSelected, setMcSelected] = useState<string | null>(null);
   const [mcRevealed, setMcRevealed] = useState(false);
 
   /** Free response */
@@ -91,15 +93,22 @@ export function ModuleQuiz({
   const isLast = index === total - 1;
   const isMc = q ? isQuizMcq(q) : false;
 
-  /** Fresh permutation of A–D each question / session (not taken from stored JSON order). */
+  /** One stable choice permutation per question for this mounted attempt. */
   const displayMcq = useMemo(() => {
     const slot = sessionItems[index];
     const slotQ = slot?.question;
     if (!slotQ || !isQuizMcq(slotQ)) return null;
-    return shuffleMcqChoices(slotQ);
+    const questionKey = `${materialId}:${moduleId}:${slot.originalIndex}`;
+    return createMcqAttempt(slotQ, readPreviousChoiceOrder(questionKey));
     // sessionItems is locked at mount, so it is intentionally not a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, shuffleEpoch]);
+
+  useEffect(() => {
+    if (!displayMcq || !q || !isQuizMcq(q)) return;
+    const questionKey = `${materialId}:${moduleId}:${originalQuizIndex}`;
+    writePreviousChoiceOrder(questionKey, displayMcq.sourceOrder);
+  }, [displayMcq, materialId, moduleId, originalQuizIndex, q]);
 
   // Reset transient per-question UI when (and only when) the learner
   // advances to a new question. Do NOT also key this on originalQuizIndex —
@@ -195,14 +204,18 @@ export function ModuleQuiz({
   );
 
   const onMcChoose = useCallback(
-    async (choiceIndex: number) => {
+    async (choiceId: string) => {
       if (!displayMcq || mcRevealed) return;
+      const selectedChoice = displayMcq.choices.find(
+        (choice) => choice.id === choiceId
+      );
+      if (!selectedChoice) return;
       setContinueReady(false);
-      setMcSelected(choiceIndex);
+      setMcSelected(choiceId);
       setMcRevealed(true);
-      const ok = choiceIndex === displayMcq.correctIndex;
+      const ok = isCorrectMcqChoice(displayMcq, choiceId);
       if (!ok) setWrongAttempts((w) => w + 1);
-      void recordMcAttempt(originalQuizIndex, choiceIndex, ok);
+      void recordMcAttempt(originalQuizIndex, selectedChoice.sourceIndex, ok);
     },
     [displayMcq, mcRevealed, originalQuizIndex, recordMcAttempt]
   );
@@ -465,8 +478,8 @@ export function ModuleQuiz({
             <ul className="mt-5 space-y-2">
               {displayMcq.choices.map((choice, i) => {
                 const letter = String.fromCharCode(65 + i);
-                const isSel = mcSelected === i;
-                const isCorr = i === displayMcq.correctIndex;
+                const isSel = mcSelected === choice.id;
+                const isCorr = choice.isCorrect;
                 let ring =
                   "border-zinc-200 hover:border-zinc-400 dark:border-zinc-700 dark:hover:border-zinc-500";
                 if (mcRevealed) {
@@ -482,17 +495,17 @@ export function ModuleQuiz({
                 }
 
                 return (
-                  <li key={`${originalQuizIndex}-${shuffleEpoch}-${i}-${choice.slice(0, 24)}`}>
+                  <li key={choice.id}>
                     <button
                       type="button"
                       disabled={mcRevealed}
-                      onClick={() => void onMcChoose(i)}
+                      onClick={() => void onMcChoose(choice.id)}
                       className={`transition-none flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm ${ring}`}
                     >
                       <span className="mt-0.5 font-mono text-xs text-zinc-500">
                         {letter}.
                       </span>
-                      <span className="flex-1">{choice}</span>
+                      <span className="flex-1">{choice.text}</span>
                     </button>
                   </li>
                 );
@@ -502,7 +515,8 @@ export function ModuleQuiz({
             {mcRevealed && (
               <div className="mt-6 rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
                 <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                  {mcSelected === displayMcq.correctIndex ? (
+                  {mcSelected != null &&
+                  isCorrectMcqChoice(displayMcq, mcSelected) ? (
                     <span className="text-emerald-700 dark:text-emerald-400">
                       {t.study.correct}
                     </span>
@@ -513,7 +527,7 @@ export function ModuleQuiz({
                   )}
                 </p>
                 <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                  {displayMcq.explanation}
+                  {q.explanation}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button
@@ -613,4 +627,37 @@ export function ModuleQuiz({
       </div>
     </div>
   );
+}
+
+const PREVIOUS_CHOICE_ORDER_PREFIX = "aroses.quiz.previous-choice-order.";
+
+function readPreviousChoiceOrder(questionKey: string): number[] | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const raw = window.localStorage.getItem(
+      `${PREVIOUS_CHOICE_ORDER_PREFIX}${questionKey}`
+    );
+    if (!raw) return undefined;
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every(Number.isInteger)
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writePreviousChoiceOrder(
+  questionKey: string,
+  sourceOrder: readonly number[]
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      `${PREVIOUS_CHOICE_ORDER_PREFIX}${questionKey}`,
+      JSON.stringify(sourceOrder)
+    );
+  } catch {
+    /* Storage may be unavailable in private browsing. */
+  }
 }
