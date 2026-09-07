@@ -50,12 +50,13 @@ import { useT } from "@/lib/i18n/LocaleProvider";
 /**
  * Synthesis cadence. A short heartbeat plus every committed segment attempt a
  * synthesis; the char thresholds below decide whether one actually fires:
- *   - first section quickly (~100 chars — proof of life),
- *   - then whenever ~240 new chars (~15–20s of speech) have accumulated.
- * Smaller batches = more fluid notes and less pressure to rewrite big chunks.
+ *   - first section after enough context for a real outline (~220 chars),
+ *   - then whenever ~480 new chars (~30–40s of speech) have accumulated.
+ * The larger default matches normal generated-note depth and prevents every
+ * short utterance from becoming another top-level bullet.
  */
-const SYNTH_TARGET_CHARS = 240;
-const SYNTH_FIRST_SECTION_CHARS = 100;
+const SYNTH_TARGET_CHARS = 480;
+const SYNTH_FIRST_SECTION_CHARS = 220;
 const SYNTH_MIN_CHARS = 100;
 
 const APPEND_STATUS_LINES = [
@@ -416,9 +417,13 @@ export function LiveNotesSurface({
 
       // Revisable = AI sections the new speech might belong to. Match by
       // overlap so a late mention can still @@revise an early slide draft,
-      // not only the last few sections. Cap at 6 for the model.
+      // not only the last few sections. Six receive transcript excerpts;
+      // the complete document is sent separately for global comparison.
       const excerpts = sectionExcerptsRef.current;
-      const allSections = writer.listRevisableSections(200);
+      // Include the complete hydrated document, not only sections created by
+      // the live writer. Material-generated notes can predate section IDs;
+      // listSynthesisSections assigns stable addresses for merge operations.
+      const allSections = writer.listSynthesisSections(200);
       const revisable = (
         seedFromDeck
           ? []
@@ -426,6 +431,7 @@ export function LiveNotesSurface({
       ).map((s) => ({
         sectionId: s.sectionId,
         markdown: s.markdown,
+        studentEdited: s.studentEdited,
         transcriptExcerpt: excerpts.get(s.sectionId),
       }));
       const existingHeadings = allSections
@@ -436,7 +442,7 @@ export function LiveNotesSurface({
             : null;
         })
         .filter((h): h is { sectionId: string; heading: string } => Boolean(h))
-        .slice(0, 40);
+        .slice(0, 200);
       const recentHeadings = revisable
         .map((s) => extractNoteHeading(s.markdown))
         .filter((h): h is string => Boolean(h));
@@ -503,18 +509,27 @@ export function LiveNotesSurface({
       };
       const applyBufferedRevision = (sectionId: string, incoming: string) => {
         const live = writer
-          .listRevisableSections(200)
+          .listSynthesisSections(200)
           .find((s) => s.sectionId === sectionId);
         if (!live) return;
         const next = applySurgicalNoteRevision(live.markdown, incoming);
         if (next.patched) {
-          if (writer.replaceSectionMarkdown(sectionId, next.markdown)) {
+          if (
+            writer.replaceSectionMarkdown(sectionId, next.markdown, {
+              evenIfStudentEdited: true,
+            })
+          ) {
             gotContent = true;
             revisedSectionId = sectionId;
           }
           return;
         }
-        if (next.extraMarkdown && writer.extendSection(sectionId, next.extraMarkdown)) {
+        if (
+          next.extraMarkdown &&
+          writer.extendSection(sectionId, next.extraMarkdown, {
+            evenIfStudentEdited: true,
+          })
+        ) {
           gotContent = true;
           revisedSectionId = sectionId;
         }
@@ -620,10 +635,15 @@ export function LiveNotesSurface({
         }
         if (foldIntoId) {
           const live = writer
-            .listRevisableSections(200)
+            .listSynthesisSections(200)
             .find((s) => s.sectionId === foldIntoId);
           const extra = uniqueIncomingNoteLines(live?.markdown ?? "", foldBuf);
-          if (extra && writer.extendSection(foldIntoId, extra)) {
+          if (
+            extra &&
+            writer.extendSection(foldIntoId, extra, {
+              evenIfStudentEdited: true,
+            })
+          ) {
             gotContent = true;
             revisedSectionId = foldIntoId;
           }
@@ -682,6 +702,7 @@ export function LiveNotesSurface({
             seedFromDeck: seedFromDeck || undefined,
             recentHeadings,
             existingHeadings,
+            existingSections: allSections,
             revisable,
             screenContext: seedFromDeck
               ? undefined

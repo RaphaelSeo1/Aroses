@@ -249,7 +249,9 @@ export function uniqueIncomingNoteLines(
   );
   const extra: string[] = [];
   for (const line of incomingMd.split("\n")) {
-    if (/^#{1,3}\s/.test(line)) continue;
+    // Drop a repeated document/section heading, but preserve H3 subtopics
+    // that organize an enrichment inside the existing H2 section.
+    if (/^#{1,2}\s/.test(line)) continue;
     const n = normalizeLine(line);
     if (!n) {
       if (extra.length > 0 && extra[extra.length - 1] !== "") extra.push("");

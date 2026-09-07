@@ -7,6 +7,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { AutoGenerateBlock } from "@/components/immersive/NotesPanel";
 import type { TutorSessionMessage } from "@/types/tutor-session";
 import {
+  DEFAULT_NOTES_OUTLINE_RULES,
   TUTOR_NOTES_JSON_SHAPE,
   TUTOR_NOTES_QUALITY_RULES,
 } from "@/lib/ai/tutor-notes-quality";
@@ -186,6 +187,8 @@ export function normalizeBlock(raw: unknown): AutoGenerateBlock | null {
 const SYNTHESIS_SYSTEM = `You convert a tutor's SPOKEN explanation into ONE polished study-notes section for the student's notebook.
 
 ${TUTOR_NOTES_QUALITY_RULES}
+
+${DEFAULT_NOTES_OUTLINE_RULES}
 
 SECTION STRUCTURE:
 - heading: short topic title (3–8 words), not Rose's first sentence.

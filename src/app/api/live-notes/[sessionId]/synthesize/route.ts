@@ -23,8 +23,10 @@ export const maxDuration = 60;
 type Params = { params: Promise<{ sessionId: string }> };
 
 const MAX_INPUT_CHARS = 12_000;
-const MAX_SECTION_CHARS = 5_000;
+const MAX_SECTION_CHARS = 8_000;
 const MAX_EXCERPT_CHARS = 3_000;
+const MAX_EXISTING_SECTIONS = 200;
+const MAX_EXISTING_NOTES_CHARS = 100_000;
 /**
  * Hard per-session cap on Haiku note calls (runaway guard). The client
  * fires roughly every ~45–60s of continuous speech (5s heartbeat gated on
@@ -40,7 +42,8 @@ const MAX_SYNTHESIZE_CALLS = 200;
  *   newSegmentText?: string,          // required unless seedFromDeck
  *   seedFromDeck?: boolean,           // draft notes from the next unseeded slides
  *   recentHeadings?: string[],
- *   revisable?: [{ sectionId, markdown, transcriptExcerpt? }]  // last ≤4
+ *   existingSections?: [{ sectionId, markdown, studentEdited? }],
+ *   revisable?: [{ sectionId, markdown, transcriptExcerpt? }]  // relevant ≤6
  * }
  *
  * Streams (text/event-stream):
@@ -81,6 +84,7 @@ export async function POST(request: Request, ctx: Params) {
     newSegmentText?: unknown;
     recentHeadings?: unknown;
     existingHeadings?: unknown;
+    existingSections?: unknown;
     revisable?: unknown;
     screenContext?: unknown;
     noteInstruction?: unknown;
@@ -114,16 +118,52 @@ export async function POST(request: Request, ctx: Params) {
             typeof (h as { heading?: unknown }).heading === "string" &&
             (h as { heading: string }).heading.trim().length > 0
         )
-        .slice(0, 40)
+        .slice(0, MAX_EXISTING_SECTIONS)
         .map((h) => ({
           sectionId: h.sectionId,
           heading: h.heading.trim().slice(0, 120),
         }))
     : [];
+  let existingChars = 0;
+  const existingSections = Array.isArray(b.existingSections)
+    ? b.existingSections
+        .filter(
+          (s): s is {
+            sectionId: string;
+            markdown: string;
+            studentEdited?: boolean;
+          } =>
+            !!s &&
+            typeof s === "object" &&
+            typeof (s as { sectionId?: unknown }).sectionId === "string" &&
+            (s as { sectionId: string }).sectionId.length > 0 &&
+            (s as { sectionId: string }).sectionId.length <= 64 &&
+            typeof (s as { markdown?: unknown }).markdown === "string"
+        )
+        .slice(0, MAX_EXISTING_SECTIONS)
+        .flatMap((s) => {
+          const remaining = MAX_EXISTING_NOTES_CHARS - existingChars;
+          if (remaining <= 0) return [];
+          const markdown = s.markdown.slice(0, Math.min(MAX_SECTION_CHARS, remaining));
+          existingChars += markdown.length;
+          return [
+            {
+              sectionId: s.sectionId,
+              markdown,
+              studentEdited: s.studentEdited === true,
+            },
+          ];
+        })
+    : [];
   const revisable: RevisableSection[] = Array.isArray(b.revisable)
     ? b.revisable
         .filter(
-          (s): s is { sectionId: string; markdown: string; transcriptExcerpt?: string } =>
+          (s): s is {
+            sectionId: string;
+            markdown: string;
+            studentEdited?: boolean;
+            transcriptExcerpt?: string;
+          } =>
             !!s &&
             typeof s === "object" &&
             typeof (s as { sectionId?: unknown }).sectionId === "string" &&
@@ -135,6 +175,7 @@ export async function POST(request: Request, ctx: Params) {
         .map((s) => ({
           sectionId: s.sectionId,
           markdown: s.markdown.slice(0, MAX_SECTION_CHARS),
+          studentEdited: s.studentEdited === true,
           transcriptExcerpt:
             typeof s.transcriptExcerpt === "string"
               ? s.transcriptExcerpt.slice(0, MAX_EXCERPT_CHARS)
@@ -258,6 +299,7 @@ export async function POST(request: Request, ctx: Params) {
           rollingSummary,
           recentHeadings,
           existingHeadings,
+          existingSections,
           revisable: seedFromDeck ? [] : revisable,
           appendSectionId,
           lectureTitle,

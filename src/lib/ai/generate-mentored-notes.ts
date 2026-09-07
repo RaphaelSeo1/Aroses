@@ -8,6 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { KeyTerm } from "@/types/course";
 import type { MentoredLessonChunk } from "@/types/mentored";
 import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
+import { DEFAULT_NOTES_OUTLINE_RULES } from "@/lib/ai/tutor-notes-quality";
 
 const MODEL =
   process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
@@ -29,6 +30,8 @@ export type MentoredNotesInput = {
 const SYSTEM = `You write excellent study notes for a student learning from a live tutoring session.
 
 Your job: produce specific, in-depth notes about what is being taught — the kind a thoughtful student would want before an exam.
+
+${DEFAULT_NOTES_OUTLINE_RULES}
 
 Guidelines:
 - Write from the student's perspective. Be concrete: explain what things are, how they work, why they matter, and how ideas connect.

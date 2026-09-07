@@ -118,3 +118,23 @@ test("applySurgicalNoteRevision patches a number and appends a new bullet", () =
   assert.equal(next.patched, true);
 });
 
+test("live enrichment preserves the section outline and nested structure", () => {
+  const existing = [
+    "## Membrane transport",
+    "Cells regulate movement across the membrane.",
+    "- **Passive transport:** Does not require cellular energy.",
+  ].join("\n");
+  const incoming = [
+    "### Active transport",
+    "Active transport moves material against its gradient.",
+    "- **Energy source:** The process requires cellular energy.",
+    "  - ATP can power a membrane pump shown in the lecture.",
+  ].join("\n");
+  const next = applySurgicalNoteRevision(existing, incoming);
+  assert.match(next.markdown, /^## Membrane transport/m);
+  assert.match(next.markdown, /Cells regulate movement/);
+  assert.match(next.markdown, /^### Active transport/m);
+  assert.match(next.markdown, /^  - ATP can power/m);
+  assert.equal((next.markdown.match(/^## /gm) ?? []).length, 1);
+});
+

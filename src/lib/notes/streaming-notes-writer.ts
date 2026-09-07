@@ -23,6 +23,7 @@ import {
   type NoteLineKind,
   type NoteNodeJson,
 } from "@/lib/notes/notes-markdown";
+import { addressExistingNoteNodes } from "@/lib/live-notes/existing-note-sections";
 
 /**
  * StreamingNotesWriter — the ONE token-streaming renderer for AI notes,
@@ -544,6 +545,48 @@ export class StreamingNotesWriter {
   }
 
   /**
+   * Every heading-delimited section in the hydrated document, including
+   * legacy material-generated notes that predate live section IDs.
+   *
+   * Missing IDs are stamped once while preserving provenance. This makes the
+   * sections addressable by the synthesis protocol without pretending that
+   * imported or student-authored blocks are fresh live-AI output.
+   */
+  listSynthesisSections(limit: number): StreamedSection[] {
+    if (this.editor.isDestroyed) return [];
+    const source: NoteNodeJson[] = [];
+    const positions: number[] = [];
+    this.editor.state.doc.forEach((node, offset) => {
+      source.push(node.toJSON() as NoteNodeJson);
+      positions.push(offset);
+    });
+    const addressed = addressExistingNoteNodes(source);
+    if (addressed.changed) {
+      this.dispatchDoc((tr) => {
+        addressed.nodes.forEach((node, index) => {
+          const current = source[index]?.attrs?.sectionId;
+          const sectionId = node.attrs?.sectionId;
+          if (
+            (typeof current !== "string" || !current) &&
+            typeof sectionId === "string" &&
+            sectionId
+          ) {
+            const pos = positions[index];
+            if (typeof pos !== "number") return;
+            const liveNode = tr.doc.nodeAt(pos);
+            if (!liveNode) return;
+            tr.setNodeMarkup(pos, undefined, {
+              ...liveNode.attrs,
+              sectionId,
+            });
+          }
+        });
+      });
+    }
+    return this.listAllSections(limit);
+  }
+
+  /**
    * Section id under the current selection (or caret). Used so chat "this"
    * lands on the section the student is looking at, not always the last one.
    */
@@ -612,13 +655,37 @@ export class StreamingNotesWriter {
     }
     const pmNodes = this.pmNodesFromMarkdown(body, sectionId);
     if (pmNodes.length === 0) return false;
+    // Surgical revisions of imported/student-touched sections retain the
+    // original ownership attrs for structurally corresponding blocks. New
+    // blocks remain AI-owned. This prevents one factual correction from
+    // reclassifying the student's entire section as replaceable AI output.
+    const replacementNodes = opts?.evenIfStudentEdited
+      ? pmNodes.map((node, index) => {
+          const previous = blocks[index]?.node;
+          const provenance =
+            previous?.type === node.type ? previous.attrs?.provenance : undefined;
+          if (provenance === undefined) return node;
+          try {
+            return node.type.create(
+              { ...node.attrs, provenance },
+              node.content,
+              node.marks
+            );
+          } catch {
+            return node;
+          }
+        })
+      : pmNodes;
     const firstPos = blocks[0]!.pos;
     this.dispatchDoc((tr) => {
       for (let i = blocks.length - 1; i >= 0; i--) {
         const b = blocks[i]!;
         tr.delete(b.pos, b.pos + b.node.nodeSize);
       }
-      tr.insert(Math.min(firstPos, tr.doc.content.size), Fragment.from(pmNodes));
+      tr.insert(
+        Math.min(firstPos, tr.doc.content.size),
+        Fragment.from(replacementNodes)
+      );
     });
     this.dispatchDeco({ set: { [sectionId]: "rose-note-revised" } });
     window.setTimeout(() => {
@@ -640,7 +707,7 @@ export class StreamingNotesWriter {
     opts?: { evenIfStudentEdited?: boolean }
   ): boolean {
     if (this.destroyed || this.editor.isDestroyed || !sectionId) return false;
-    const body = markdown.trim().replace(/^#{1,3}\s.+\n?/, "").trim();
+    const body = markdown.trim().replace(/^#{1,2}\s.+\n?/, "").trim();
     if (!body) return false;
     this.finishOp();
     const blocks = this.sectionBlocks(sectionId);
@@ -656,7 +723,7 @@ export class StreamingNotesWriter {
       return false;
     }
     const pmNodes = this.pmNodesFromMarkdown(body, sectionId).filter(
-      (n) => n.type.name !== "heading"
+      (n) => n.type.name !== "heading" || Number(n.attrs?.level) >= 3
     );
     if (pmNodes.length === 0) return false;
     const last = blocks[blocks.length - 1]!;
