@@ -93,6 +93,18 @@ const en = {
     "This permanently deletes the selected courses, including uploads, lessons, quizzes, and review cards. This cannot be undone.",
   deleteSelectedError: "Could not delete some courses. Try again.",
   notesFocusDeck: "From notes",
+  questionsInReview: "Questions in this review",
+  questionsInReviewHint:
+    "Preview the cards for your current course and type selection.",
+  viewQuestions: "View questions",
+  hideQuestions: "Hide questions",
+  loadingQuestions: "Loading review questions…",
+  questionPreviewError: "Could not load the review questions.",
+  tryAgain: "Try again",
+  noQuestionsInReview: "No questions are included in this review.",
+  questionPreviewCount: "{count} questions in this review.",
+  answersHiddenHint: "Answers stay hidden until you choose to reveal one.",
+  showAnswer: "Show answer",
 };
 
 const ko: typeof en = {
@@ -188,6 +200,17 @@ const ko: typeof en = {
     "선택한 코스와 업로드, 레슨, 퀴즈, 복습 카드가 영구적으로 삭제돼요. 되돌릴 수 없어요.",
   deleteSelectedError: "일부 코스를 삭제하지 못했어요. 다시 시도해 주세요.",
   notesFocusDeck: "노트에서",
+  questionsInReview: "이 복습의 질문",
+  questionsInReviewHint: "현재 선택한 코스와 유형의 카드를 미리 확인하세요.",
+  viewQuestions: "질문 보기",
+  hideQuestions: "질문 숨기기",
+  loadingQuestions: "복습 질문을 불러오는 중…",
+  questionPreviewError: "복습 질문을 불러오지 못했어요.",
+  tryAgain: "다시 시도",
+  noQuestionsInReview: "이 복습에 포함된 질문이 없어요.",
+  questionPreviewCount: "이 복습의 질문 {count}개.",
+  answersHiddenHint: "답은 직접 펼치기 전까지 숨겨져 있어요.",
+  showAnswer: "답 보기",
 };
 
 export const review = { en, ko };

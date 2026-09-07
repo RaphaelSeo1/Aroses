@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { FreePracticePanel } from "@/components/FreePracticePanel";
+import { ReviewQuestionsPreview } from "@/components/ReviewQuestionsPreview";
 import { ReviewSettingsPanel } from "@/components/ReviewSettingsPanel";
 import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
 import { useT } from "@/lib/i18n/LocaleProvider";
@@ -417,6 +418,14 @@ export function ReviewDashboardClient() {
           ))}
         </div>
       </div>
+
+      <ReviewQuestionsPreview
+        key={`${kind}:${selectedMaterials
+          .map((material) => material.materialId)
+          .join(",")}`}
+        materialIds={selectedMaterials.map((material) => material.materialId)}
+        scope={kind}
+      />
 
       {/* Settings --------------------------------------------------- */}
       <ReviewSettingsPanel onChanged={refresh} />
