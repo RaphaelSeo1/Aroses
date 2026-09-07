@@ -7,7 +7,7 @@ import Placeholder from "@tiptap/extension-placeholder";
 import Underline from "@tiptap/extension-underline";
 import Highlight from "@tiptap/extension-highlight";
 import Link from "@tiptap/extension-link";
-import Image from "@tiptap/extension-image";
+import { ResizableNoteImage } from "./notes/ResizableNoteImage";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Typography from "@tiptap/extension-typography";
@@ -522,7 +522,7 @@ export function NotesPanel({
           target: "_blank",
         },
       }),
-      Image.configure({
+      ResizableNoteImage.configure({
         inline: false,
         allowBase64: false,
         HTMLAttributes: { class: "tn-img" },
@@ -2285,7 +2285,29 @@ export function NotesPanel({
           }
         }
 
-        /* Images / screenshots */
+        /* Images / screenshots — resize, align, or drag between note blocks */
+        .tn-prose [data-resize-container][data-node="image"] {
+          position: relative;
+          display: flex;
+          justify-content: flex-start;
+          max-width: 100%;
+          margin: 0.85rem 0;
+          visibility: visible !important;
+          pointer-events: auto !important;
+        }
+        .tn-prose [data-resize-container][data-node="image"][data-align="center"] {
+          justify-content: center;
+        }
+        .tn-prose [data-resize-container][data-node="image"][data-align="right"] {
+          justify-content: flex-end;
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-resize-wrapper] {
+          position: relative;
+          display: inline-block;
+          max-width: 100%;
+          line-height: 0;
+          border-radius: 0.65rem;
+        }
         .tn-prose img.tn-img,
         .tn-prose img {
           display: block;
@@ -2295,6 +2317,93 @@ export function NotesPanel({
           border-radius: 0.65rem;
           border: 1px solid #ececec;
           background: #fafafa;
+        }
+        .tn-prose [data-resize-container][data-node="image"] img.tn-img,
+        .tn-prose [data-resize-container][data-node="image"] img {
+          margin: 0;
+        }
+        .tn-prose [data-resize-container][data-node="image"].ProseMirror-selectednode [data-resize-wrapper] {
+          outline: 2px solid #7c3aed;
+          outline-offset: 2px;
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-image-move-handle] {
+          position: absolute;
+          top: 8px;
+          left: 50%;
+          z-index: 4;
+          display: inline-flex;
+          width: 30px;
+          height: 24px;
+          align-items: center;
+          justify-content: center;
+          transform: translateX(-50%);
+          border: 1px solid rgba(24, 24, 27, 0.14);
+          border-radius: 7px;
+          background: rgba(255, 255, 255, 0.94);
+          box-shadow: 0 2px 8px rgba(24, 24, 27, 0.12);
+          color: #52525b;
+          cursor: grab;
+          font-size: 18px;
+          line-height: 1;
+          opacity: 0;
+          pointer-events: none;
+          user-select: none;
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-image-move-handle]:active {
+          cursor: grabbing;
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-resize-handle] {
+          position: absolute;
+          width: 11px;
+          height: 11px;
+          box-sizing: border-box;
+          background: #fff;
+          border: 2px solid #7c3aed;
+          border-radius: 2px;
+          z-index: 3;
+          opacity: 0;
+          pointer-events: none;
+          box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-resize-handle]::after {
+          content: "";
+          position: absolute;
+          inset: -8px;
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-resize-handle="top-left"] {
+          top: 0;
+          left: 0;
+          cursor: nwse-resize;
+          transform: translate(-35%, -35%);
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-resize-handle="top-right"] {
+          top: 0;
+          right: 0;
+          cursor: nesw-resize;
+          transform: translate(35%, -35%);
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-resize-handle="bottom-left"] {
+          bottom: 0;
+          left: 0;
+          cursor: nesw-resize;
+          transform: translate(-35%, 35%);
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-resize-handle="bottom-right"] {
+          bottom: 0;
+          right: 0;
+          cursor: nwse-resize;
+          transform: translate(35%, 35%);
+        }
+        .tn-prose [data-resize-container][data-node="image"]:hover [data-resize-handle],
+        .tn-prose [data-resize-container][data-node="image"].ProseMirror-selectednode [data-resize-handle],
+        .tn-prose [data-resize-container][data-node="image"][data-resize-state="true"] [data-resize-handle] {
+          opacity: 1;
+          pointer-events: auto;
+        }
+        .tn-prose [data-resize-container][data-node="image"]:hover [data-image-move-handle],
+        .tn-prose [data-resize-container][data-node="image"].ProseMirror-selectednode [data-image-move-handle] {
+          opacity: 1;
+          pointer-events: auto;
         }
 
         /* Tables — extra columns scroll instead of being crushed to 3-wide. */

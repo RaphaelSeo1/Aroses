@@ -58,6 +58,21 @@ function Divider() {
   return <span className="mx-0.5 h-4 w-px shrink-0 bg-zinc-200 dark:bg-zinc-700" />;
 }
 
+function bumpSelectedImageSize(editor: Editor, factor: number) {
+  const attrs = editor.getAttributes("image");
+  const max = Math.max(160, editor.view.dom.clientWidth - 16);
+  const current =
+    typeof attrs.width === "number" && attrs.width > 0
+      ? attrs.width
+      : Math.min(max, 520);
+  const next = Math.round(Math.min(max, Math.max(64, current * factor)));
+  editor
+    .chain()
+    .focus()
+    .updateAttributes("image", { width: next, height: null })
+    .run();
+}
+
 /** Persistent Docs-style formatting bar for the notes editor. */
 export function NotesFormatToolbar({
   editor,
@@ -86,24 +101,49 @@ export function NotesFormatToolbar({
 }) {
   const s = useEditorState({
     editor,
-    selector: ({ editor: ed }) => ({
-      h1: ed.isActive("heading", { level: 1 }),
-      h2: ed.isActive("heading", { level: 2 }),
-      h3: ed.isActive("heading", { level: 3 }),
-      bold: ed.isActive("bold"),
-      italic: ed.isActive("italic"),
-      underline: ed.isActive("underline"),
-      strike: ed.isActive("strike"),
-      bullet: ed.isActive("bulletList"),
-      ordered: ed.isActive("orderedList"),
-      task: ed.isActive("taskList"),
-      left: ed.isActive({ textAlign: "left" }),
-      center: ed.isActive({ textAlign: "center" }),
-      right: ed.isActive({ textAlign: "right" }),
-      code: ed.isActive("code"),
-      link: ed.isActive("link"),
-    }),
+    selector: ({ editor: ed }) => {
+      const image = ed.isActive("image");
+      const imageAlign = image
+        ? (ed.getAttributes("image").align ?? "left")
+        : null;
+      return {
+        h1: ed.isActive("heading", { level: 1 }),
+        h2: ed.isActive("heading", { level: 2 }),
+        h3: ed.isActive("heading", { level: 3 }),
+        bold: ed.isActive("bold"),
+        italic: ed.isActive("italic"),
+        underline: ed.isActive("underline"),
+        strike: ed.isActive("strike"),
+        bullet: ed.isActive("bulletList"),
+        ordered: ed.isActive("orderedList"),
+        task: ed.isActive("taskList"),
+        left: image
+          ? imageAlign === "left"
+          : ed.isActive({ textAlign: "left" }),
+        center: image
+          ? imageAlign === "center"
+          : ed.isActive({ textAlign: "center" }),
+        right: image
+          ? imageAlign === "right"
+          : ed.isActive({ textAlign: "right" }),
+        code: ed.isActive("code"),
+        link: ed.isActive("link"),
+        image,
+      };
+    },
   });
+
+  const setAlignment = (align: "left" | "center" | "right") => {
+    if (s.image) {
+      editor
+        .chain()
+        .focus()
+        .updateAttributes("image", { align })
+        .run();
+      return;
+    }
+    editor.chain().focus().setTextAlign(align).run();
+  };
 
   return (
     <div
@@ -276,27 +316,27 @@ export function NotesFormatToolbar({
       </ToolBtn>
       <Divider />
       <ToolBtn
-        title="Align left"
+        title={s.image ? "Move image left" : "Align left"}
         active={s.left}
-        onClick={() => editor.chain().focus().setTextAlign("left").run()}
+        onClick={() => setAlignment("left")}
       >
         <Icon>
           <path d="M2 3.5h12M2 6.5h8M2 9.5h12M2 12.5h8" />
         </Icon>
       </ToolBtn>
       <ToolBtn
-        title="Align center"
+        title={s.image ? "Center image" : "Align center"}
         active={s.center}
-        onClick={() => editor.chain().focus().setTextAlign("center").run()}
+        onClick={() => setAlignment("center")}
       >
         <Icon>
           <path d="M2 3.5h12M4 6.5h8M2 9.5h12M4 12.5h8" />
         </Icon>
       </ToolBtn>
       <ToolBtn
-        title="Align right"
+        title={s.image ? "Move image right" : "Align right"}
         active={s.right}
-        onClick={() => editor.chain().focus().setTextAlign("right").run()}
+        onClick={() => setAlignment("right")}
       >
         <Icon>
           <path d="M2 3.5h12M6 6.5h8M2 9.5h12M6 12.5h8" />
@@ -333,6 +373,22 @@ export function NotesFormatToolbar({
           </Icon>
         )}
       </ToolBtn>
+      {s.image ? (
+        <>
+          <ToolBtn
+            title="Make image smaller"
+            onClick={() => bumpSelectedImageSize(editor, 0.85)}
+          >
+            <span className="text-[11px] font-bold leading-none">−</span>
+          </ToolBtn>
+          <ToolBtn
+            title="Make image larger"
+            onClick={() => bumpSelectedImageSize(editor, 1.18)}
+          >
+            <span className="text-[11px] font-bold leading-none">+</span>
+          </ToolBtn>
+        </>
+      ) : null}
       </div>
       {onAddToFocus ? (
         <button
