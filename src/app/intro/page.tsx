@@ -9,7 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export default async function IntroPage() {
   const t = await getT();
-  const supabase = await createClient();
+  const supabase = await createClient({ timeoutMs: 5_000 });
   const {
     data: { user },
   } = await supabase.auth.getUser();

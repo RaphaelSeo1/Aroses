@@ -7,7 +7,7 @@ import {
   isUiLocale,
   type UiLocale,
 } from "@/lib/i18n/config";
-import { getServerAuth } from "@/lib/supabase/server-auth-cache";
+import { createClient } from "@/lib/supabase/server";
 import { getDictionary, type Dictionary } from "@/locales";
 
 /**
@@ -20,7 +20,10 @@ export const getUiLocale = cache(async (): Promise<UiLocale> => {
   if (isUiLocale(fromCookie)) return fromCookie;
 
   try {
-    const { supabase, user } = await getServerAuth();
+    const supabase = await createClient({ timeoutMs: 5_000 });
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     if (user) {
       const { data } = await supabase
         .from("profiles")

@@ -6,10 +6,18 @@ export const runtime = "nodejs";
 
 /** Badge counts for Social: unread DMs + incoming friend requests. */
 export async function GET() {
-  const supabase = await createClient();
+  const supabase = await createClient({ timeoutMs: 5_000 });
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser();
+  if (authError) {
+    console.error("[social/badge-counts] auth unavailable:", authError.message);
+    return NextResponse.json(
+      { error: "Authentication service temporarily unavailable." },
+      { status: 503, headers: { "Retry-After": "5" } }
+    );
+  }
   if (!user) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }

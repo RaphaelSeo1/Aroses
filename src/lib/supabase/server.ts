@@ -1,13 +1,21 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { createBoundedSupabaseFetch } from "@/lib/supabase/bounded-fetch";
 
-export async function createClient() {
+export async function createClient(options?: { timeoutMs?: number }) {
   const cookieStore = await cookies();
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      ...(options?.timeoutMs
+        ? {
+            global: {
+              fetch: createBoundedSupabaseFetch(options.timeoutMs),
+            },
+          }
+        : {}),
       cookies: {
         getAll() {
           return cookieStore.getAll();

@@ -98,14 +98,38 @@ export async function fetchSrsDueCountsForUser(
 
   const nowIso = new Date().toISOString();
 
-  let matsQuery = supabase
-    .from("study_materials")
-    .select("id, file_name, course_id, course_payload, courses ( id, title )")
-    .eq("user_id", userId);
-  if (materialFilter) matsQuery = matsQuery.eq("id", materialFilter);
-  const { data: matsRaw } = await matsQuery;
+  let modQ = supabase
+    .from("user_module_card_srs")
+    .select("material_id, question_index")
+    .eq("user_id", userId)
+    .lte("due_at", nowIso);
+  if (materialFilter) modQ = modQ.eq("material_id", materialFilter);
+  const { data: modRows, error: modError } = await modQ;
+  if (modError) {
+    throw new Error(`Could not load module review cards: ${modError.message}`);
+  }
 
-  const materials = (matsRaw ?? []) as unknown as MaterialRow[];
+  // course_payload can be large. Only hydrate materials that have due module
+  // cards (plus an explicit filter) instead of loading every upload on each
+  // badge poll.
+  const materialIds = new Set(
+    (modRows ?? []).map((row) => normId(row.material_id as string))
+  );
+  if (materialFilter) materialIds.add(materialFilter);
+
+  let materials: MaterialRow[] = [];
+  if (materialIds.size > 0) {
+    const { data: matsRaw, error: matsError } = await supabase
+      .from("study_materials")
+      .select("id, file_name, course_id, course_payload, courses ( id, title )")
+      .eq("user_id", userId)
+      .in("id", [...materialIds]);
+    if (matsError) {
+      throw new Error(`Could not load review materials: ${matsError.message}`);
+    }
+    materials = (matsRaw ?? []) as unknown as MaterialRow[];
+  }
+
   const materialById = new Map(
     materials.map((material) => [normId(material.id), material])
   );
@@ -118,13 +142,6 @@ export async function fetchSrsDueCountsForUser(
     ensureBucket(byMaterial, m.id, m);
   }
 
-  let modQ = supabase
-    .from("user_module_card_srs")
-    .select("material_id, question_index")
-    .eq("user_id", userId)
-    .lte("due_at", nowIso);
-  if (materialFilter) modQ = modQ.eq("material_id", materialFilter);
-  const { data: modRows } = await modQ;
   for (const row of modRows ?? []) {
     const bucket = byMaterial.get(normId(row.material_id as string));
     const material = materialById.get(normId(row.material_id as string));
@@ -168,8 +185,7 @@ export async function fetchSrsDueCountsForUser(
     }));
   }
   if (perErr) {
-    console.error("[srs due counts personal]", perErr);
-    perRows = [];
+    throw new Error(`Could not load personal review cards: ${perErr.message}`);
   }
 
   // Personal focus cards can sit on materials the user doesn't own (Explore /
@@ -184,10 +200,15 @@ export async function fetchSrsDueCountsForUser(
     }
   }
   if (missingIds.size > 0) {
-    const { data: extraMats } = await supabase
+    const { data: extraMats, error: extraMatsError } = await supabase
       .from("study_materials")
       .select("id, file_name, course_id, courses ( id, title )")
       .in("id", [...missingIds]);
+    if (extraMatsError) {
+      throw new Error(
+        `Could not load shared review materials: ${extraMatsError.message}`
+      );
+    }
     for (const raw of extraMats ?? []) {
       const m = raw as unknown as MaterialRow;
       ensureBucket(byMaterial, m.id, m);

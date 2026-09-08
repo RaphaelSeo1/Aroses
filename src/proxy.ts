@@ -7,9 +7,38 @@ import {
   isAuthEmailDomainAllowlistEnforced,
   parseAllowedAuthEmailDomains,
 } from "@/lib/school-email-policy";
-import { profileNeedsOnboarding } from "@/lib/onboarding-gate";
+import { getProfileOnboardingState } from "@/lib/onboarding-gate";
+import { createBoundedSupabaseFetch } from "@/lib/supabase/bounded-fetch";
 
-export async function middleware(request: NextRequest) {
+function unavailableResponse(baseResponse: NextResponse): NextResponse {
+  const response = NextResponse.json(
+    { error: "Authentication service temporarily unavailable." },
+    {
+      status: 503,
+      headers: {
+        "Cache-Control": "no-store",
+        "Retry-After": "5",
+      },
+    }
+  );
+  baseResponse.cookies.getAll().forEach((cookie) => {
+    response.cookies.set(cookie.name, cookie.value);
+  });
+  return response;
+}
+
+export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+
+  // API handlers perform their own user/authorization checks. The optional
+  // email-domain gate is the only cross-cutting API policy retained here.
+  if (
+    pathname.startsWith("/api/") &&
+    !isAuthEmailDomainAllowlistEnforced()
+  ) {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   });
@@ -18,6 +47,9 @@ export async function middleware(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      global: {
+        fetch: createBoundedSupabaseFetch(),
+      },
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -37,34 +69,50 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const pathname = request.nextUrl.pathname;
+  let user;
+  try {
+    const result = await supabase.auth.getUser();
+    if (result.error) {
+      console.error("[proxy] Supabase auth unavailable:", result.error.message);
+      return unavailableResponse(supabaseResponse);
+    }
+    user = result.data.user;
+  } catch (error) {
+    console.error("[proxy] Supabase auth request failed:", error);
+    return unavailableResponse(supabaseResponse);
+  }
 
   function pathAllowedDuringOnboarding(p: string) {
     return (
       p === "/onboarding" ||
       p.startsWith("/onboarding/") ||
-      p.startsWith("/auth/") ||
       p.startsWith("/api/") ||
       p.startsWith("/legal/") ||
       p === "/help"
     );
   }
 
-  const needsOnboarding = user?.id
-    ? await profileNeedsOnboarding(supabase, user.id)
-    : false;
+  let onboardingState: "complete" | "required" | "unavailable" = "complete";
+  try {
+    if (user?.id) {
+      onboardingState = await getProfileOnboardingState(supabase, user.id);
+    }
+  } catch (error) {
+    console.error("[proxy] Supabase profile request failed:", error);
+    return unavailableResponse(supabaseResponse);
+  }
+  if (onboardingState === "unavailable") {
+    return unavailableResponse(supabaseResponse);
+  }
+  const needsOnboarding = onboardingState === "required";
 
   if (user && needsOnboarding && !pathAllowedDuringOnboarding(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/onboarding";
     url.search = "";
     const redirectResponse = NextResponse.redirect(url);
-    supabaseResponse.cookies.getAll().forEach((c) => {
-      redirectResponse.cookies.set(c.name, c.value);
+    supabaseResponse.cookies.getAll().forEach((cookie) => {
+      redirectResponse.cookies.set(cookie.name, cookie.value);
     });
     return redirectResponse;
   }
@@ -74,9 +122,7 @@ export async function middleware(request: NextRequest) {
     ? parseAllowedAuthEmailDomains()
     : [];
   const authPublicRoutes =
-    pathname.startsWith("/login") ||
-    pathname.startsWith("/signup") ||
-    pathname.startsWith("/auth/");
+    pathname.startsWith("/login") || pathname.startsWith("/signup");
 
   if (
     user &&
@@ -84,14 +130,23 @@ export async function middleware(request: NextRequest) {
     !emailMatchesAllowedDomains(user.email, allowedDomains) &&
     !authPublicRoutes
   ) {
-    await supabase.auth.signOut();
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error("[proxy] Supabase sign-out unavailable:", error.message);
+        return unavailableResponse(supabaseResponse);
+      }
+    } catch (error) {
+      console.error("[proxy] Supabase sign-out request failed:", error);
+      return unavailableResponse(supabaseResponse);
+    }
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/login";
     loginUrl.search = "";
     loginUrl.searchParams.set("auth_error", "school_email");
     const redirectResponse = NextResponse.redirect(loginUrl);
-    supabaseResponse.cookies.getAll().forEach((c) => {
-      redirectResponse.cookies.set(c.name, c.value);
+    supabaseResponse.cookies.getAll().forEach((cookie) => {
+      redirectResponse.cookies.set(cookie.name, cookie.value);
     });
     return redirectResponse;
   }
@@ -123,7 +178,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (user && !needsOnboarding && (pathname === "/login" || pathname === "/signup")) {
+  if (
+    user &&
+    !needsOnboarding &&
+    (pathname === "/login" || pathname === "/signup")
+  ) {
     const next = parseSafeInternalNext(
       request.nextUrl.searchParams.get("next")
     );
@@ -144,6 +203,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!intro(?:/|$)|help(?:/|$)|legal(?:/|$)|auth(?:/|$)|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

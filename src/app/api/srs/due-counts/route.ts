@@ -30,10 +30,18 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(request: Request) {
-  const supabase = await createClient();
+  const supabase = await createClient({ timeoutMs: 5_000 });
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser();
+  if (authError) {
+    console.error("[srs/due-counts] auth unavailable:", authError.message);
+    return NextResponse.json(
+      { error: "Authentication service temporarily unavailable." },
+      { status: 503, headers: { "Retry-After": "5" } }
+    );
+  }
   if (!user) {
     // Public callers (e.g. dashboard SSR before sign-in) get zero counts so
     // the badge silently disappears rather than 401-ing.
@@ -50,11 +58,20 @@ export async function GET(request: Request) {
   const materialFilter =
     materialIdRaw && UUID_RE.test(materialIdRaw) ? materialIdRaw : null;
 
-  const counts = await fetchSrsDueCountsForUser(
-    supabase,
-    user.id,
-    materialFilter
-  );
+  let counts;
+  try {
+    counts = await fetchSrsDueCountsForUser(
+      supabase,
+      user.id,
+      materialFilter
+    );
+  } catch (error) {
+    console.error("[srs/due-counts] database unavailable:", error);
+    return NextResponse.json(
+      { error: "Review counts temporarily unavailable." },
+      { status: 503, headers: { "Retry-After": "5" } }
+    );
+  }
 
   return NextResponse.json(counts);
 }
