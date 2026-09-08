@@ -19,6 +19,10 @@ import { chatFileKey, lookAtAttachmentPrompt, MAX_CHAT_ATTACHMENT_CHARS } from "
 import { useChatAttachments } from "@/lib/chat/use-chat-attachments";
 import { pumpTypewriterReply } from "@/lib/chat/typewriter-pump";
 import {
+  buildNotesChatHistory,
+  NotesChatInterruptionCoordinator,
+} from "@/lib/live-notes/chat-interruption";
+import {
   extractStudyNoteLines,
   splitStudentFacingReply,
   visibleReplyForStream,
@@ -34,6 +38,7 @@ type ChatTurn = {
   content: string;
   thoughts?: string[];
   attachmentName?: string;
+  interrupted?: "send" | "stop";
 };
 
 type NoteOp =
@@ -153,6 +158,13 @@ function loadTurns(sessionId: string): ChatTurn[] {
           typeof t.attachmentName === "string" && t.attachmentName.trim()
             ? t.attachmentName.trim().slice(0, 200)
             : undefined,
+        interrupted:
+          ((t as { interrupted?: unknown }).interrupted === "stop"
+            ? ("stop" as const)
+            : (t as { interrupted?: unknown }).interrupted === "send" ||
+                (t as { interrupted?: unknown }).interrupted === true
+              ? ("send" as const)
+              : undefined),
       }))
       .slice(-40);
   } catch {
@@ -192,6 +204,7 @@ export function LiveNotesChat({
   const [turns, setTurns] = useState<ChatTurn[]>(() => loadTurns(sessionId));
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [handingOff, setHandingOff] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const attach = useChatAttachments({
     disabled: busy,
@@ -219,11 +232,25 @@ export function LiveNotesChat({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const turnsRef = useRef(turns);
-  turnsRef.current = turns;
+  const streamingIdRef = useRef(streamingId);
+  const coordinatorRef = useRef(new NotesChatInterruptionCoordinator());
+  const lastSendIntentRef = useRef<{ message: string; at: number } | null>(null);
   const noteInstructionRef = useRef(noteInstruction);
-  noteInstructionRef.current = noteInstruction;
   const voiceActiveRef = useRef(false);
   const t = useT();
+
+  useEffect(() => {
+    noteInstructionRef.current = noteInstruction;
+  }, [noteInstruction]);
+
+  const updateTurns = useCallback(
+    (update: (current: ChatTurn[]) => ChatTurn[]) => {
+      const next = update(turnsRef.current);
+      turnsRef.current = next;
+      setTurns(next);
+    },
+    []
+  );
 
   const stickToLatest = useCallback(() => {
     const el = scrollRef.current;
@@ -287,8 +314,12 @@ export function LiveNotesChat({
   }, [sessionId, pending]);
 
   const applyNoteOps = useCallback(
-    async (ops: NoteOp[], opts?: { fullRewrite?: boolean }) => {
+    async (
+      ops: NoteOp[],
+      opts?: { fullRewrite?: boolean; isCurrent?: () => boolean }
+    ) => {
       const run = async () => {
+        if (opts?.isCurrent && !opts.isCurrent()) return;
         const writer = notesRef.current?.getStreamWriter();
         if (!writer) {
           onActivity(
@@ -347,6 +378,7 @@ export function LiveNotesChat({
           }
         }
 
+        if (opts?.isCurrent && !opts.isCurrent()) return;
         notesRef.current?.setStreamingIndicator(true);
         writer.finishOp();
         let applied = 0;
@@ -452,6 +484,7 @@ export function LiveNotesChat({
           }
         }
 
+        if (opts?.isCurrent && !opts.isCurrent()) return;
         notesRef.current?.setStreamingIndicator(false);
         let jumpId: string | undefined;
         for (const item of coalesced) {
@@ -484,7 +517,7 @@ export function LiveNotesChat({
   const send = useCallback(
     async (text: string): Promise<string | null> => {
       const typed = text.trim();
-      if (busy || attaching) return null;
+      if (attaching) return null;
       let pdf = pendingRef.current;
       if (queuedRef.current.length > 0) {
         const attached = await confirmQueued();
@@ -493,11 +526,35 @@ export function LiveNotesChat({
       }
       if (!typed && !pdf) return null;
       const message = typed || lookAtAttachmentPrompt(pdf!.fileName);
-      setDraft("");
-      setBusy(true);
+      const now = Date.now();
+      const previousIntent = lastSendIntentRef.current;
+      if (
+        previousIntent?.message === message &&
+        now - previousIntent.at < 750
+      ) {
+        return null;
+      }
+      lastSendIntentRef.current = { message, at: now };
+      const coordinator = coordinatorRef.current!;
+      const wasActive = coordinator.isActive;
+      if (wasActive) setHandingOff(true);
+      const lease = await coordinator.beginSend(() => {
+        const interruptedId = streamingIdRef.current;
+        if (!interruptedId) return;
+        updateTurns((current) =>
+          current.map((turn) =>
+            turn.id === interruptedId
+              ? { ...turn, interrupted: "send" }
+              : turn
+          )
+        );
+        streamingIdRef.current = null;
+        setStreamingId(null);
+      });
+      if (!lease) return null;
 
       const userTurn: ChatTurn = {
-        id: `u-${Date.now()}`,
+        id: `u-${crypto.randomUUID()}`,
         role: "user",
         content: typed
           ? pdf
@@ -506,17 +563,18 @@ export function LiveNotesChat({
           : `📎 ${pdf!.fileName}`,
         attachmentName: pdf?.fileName,
       };
-      const assistantId = `a-${Date.now()}`;
-      const history = turnsRef.current
-        .filter((t) => t.content.trim())
-        .slice(-12)
-        .map((t) => ({ role: t.role, content: t.content }));
+      const assistantId = `a-${crypto.randomUUID()}`;
+      const history = buildNotesChatHistory(turnsRef.current);
 
-      setTurns((prev) => [
-        ...prev,
+      updateTurns((current) => [
+        ...current,
         userTurn,
         { id: assistantId, role: "assistant", content: "" },
       ]);
+      setDraft((current) => (current === text ? "" : current));
+      setBusy(true);
+      setHandingOff(false);
+      streamingIdRef.current = assistantId;
       setStreamingId(assistantId);
 
       const writer = notesRef.current?.getStreamWriter();
@@ -542,8 +600,9 @@ export function LiveNotesChat({
         fallbackReply ?? visibleReplyForStream(pendingReply, sseDone);
 
       const syncThoughts = () => {
-        setTurns((prev) =>
-          prev.map((t) =>
+        if (!lease.isCurrent()) return;
+        updateTurns((current) =>
+          current.map((t) =>
             t.id === assistantId ? { ...t, thoughts: [...thoughtAcc] } : t
           )
         );
@@ -565,8 +624,9 @@ export function LiveNotesChat({
       };
 
       const revealReply = (next: string) => {
-        setTurns((prev) =>
-          prev.map((t) =>
+        if (!lease.isCurrent()) return;
+        updateTurns((current) =>
+          current.map((t) =>
             t.id === assistantId ? { ...t, content: next } : t
           )
         );
@@ -576,7 +636,7 @@ export function LiveNotesChat({
         getSource: visibleSource,
         reveal: revealReply,
         isDone: () => sseDone,
-        isCancelled: () => cancelled,
+        isCancelled: () => cancelled || !lease.isCurrent(),
         skipAnimation: () => voiceActiveRef.current,
         onTick: harvestLeaks,
       });
@@ -601,6 +661,7 @@ export function LiveNotesChat({
               ? [{ name: pdf.fileName, text: pdf.text }]
               : undefined,
           }),
+          signal: lease.signal,
         });
         const contentType = res.headers.get("content-type") ?? "";
         if (!res.ok || !contentType.includes("text/event-stream")) {
@@ -614,6 +675,7 @@ export function LiveNotesChat({
         let buf = "";
 
         const handleEvent = (event: string, parsed: Record<string, unknown>) => {
+          if (!lease.isCurrent()) return;
           if (event === "thought") {
             if (typeof parsed.message === "string" && parsed.message.trim()) {
               pushThought(parsed.message, true);
@@ -668,6 +730,7 @@ export function LiveNotesChat({
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          if (!lease.isCurrent()) break;
           buf += decoder.decode(value, { stream: true });
           let sepIdx: number;
           while ((sepIdx = buf.indexOf("\n\n")) >= 0) {
@@ -693,13 +756,20 @@ export function LiveNotesChat({
       } catch (e) {
         failed = true;
         cancelled = true;
+        if (lease.signal.aborted || !lease.isCurrent()) {
+          return null;
+        }
         const msg =
           e instanceof Error && e.message
             ? e.message
             : "Could not answer just now.";
+        lastSendIntentRef.current = null;
+        if (typed) {
+          setDraft((current) => current || text);
+        }
         onActivity("error", msg);
-        setTurns((prev) =>
-          prev.map((t) =>
+        updateTurns((current) =>
+          current.map((t) =>
             t.id === assistantId
               ? { ...t, content: t.content.trim() || msg }
               : t
@@ -708,17 +778,22 @@ export function LiveNotesChat({
       } finally {
         sseDone = true;
         await pump;
-        if (!failed) {
+        if (!failed && lease.isCurrent()) {
           harvestLeaks();
           const final = visibleSource();
           if (final.trim()) revealReply(final);
         }
-        setStreamingId(null);
-        setBusy(false);
-        inputRef.current?.focus();
+        if (lease.isCurrent()) {
+          streamingIdRef.current = null;
+          setStreamingId(null);
+          setBusy(false);
+          inputRef.current?.focus();
+        }
+        lease.finish();
       }
 
       if (failed) return null;
+      if (!lease.isCurrent()) return null;
       let spoken = visibleSource().trim();
 
       if (noteOps.length > 0) {
@@ -730,6 +805,7 @@ export function LiveNotesChat({
         );
         void applyNoteOps(noteOps, {
           fullRewrite: wantsFullSectionRewrite(message),
+          isCurrent: lease.isCurrent,
         });
       } else if (wantsUnhighlight(message)) {
         const targetId = wantsUnhighlightAll(message)
@@ -740,7 +816,9 @@ export function LiveNotesChat({
             "";
         if (targetId) {
           onActivity("status", "Removing the highlight…");
-          void applyNoteOps([{ kind: "unhighlight", sectionId: targetId }]);
+          void applyNoteOps([{ kind: "unhighlight", sectionId: targetId }], {
+            isCurrent: lease.isCurrent,
+          });
           if (
             !spoken ||
             /\b(can('t|not)|only) (add|highlight)\b/i.test(spoken)
@@ -765,28 +843,61 @@ export function LiveNotesChat({
     [
       applyNoteOps,
       attaching,
-      busy,
       confirmQueued,
       notesRef,
       onActivity,
+      pendingRef,
+      queuedRef,
       recentTranscript,
       screenContext,
       sessionId,
+      updateTurns,
     ]
   );
 
   const sendRef = useRef(send);
-  sendRef.current = send;
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
+
+  const stopResponse = useCallback(async () => {
+    setHandingOff(false);
+    await coordinatorRef.current?.stop(() => {
+      const interruptedId = streamingIdRef.current;
+      if (!interruptedId) return;
+      updateTurns((current) =>
+        current.map((turn) =>
+          turn.id === interruptedId
+            ? { ...turn, interrupted: "stop" }
+            : turn
+        )
+      );
+      streamingIdRef.current = null;
+      setStreamingId(null);
+    });
+    setBusy(false);
+    inputRef.current?.focus();
+  }, [updateTurns]);
+
+  useEffect(
+    () => () => {
+      void coordinatorRef.current?.stop();
+    },
+    []
+  );
+
   const voice = useChatVoiceTutor({
     sessionId,
     sendAndWait: (text) => sendRef.current(text),
     blocked: voiceCapped,
   });
-  voiceActiveRef.current = voice.active;
+  useEffect(() => {
+    voiceActiveRef.current = voice.active;
+  }, [voice.active]);
 
   useEffect(() => {
     if (!active && voice.active) voice.exit();
-  }, [active, voice.active, voice.exit]);
+  }, [active, voice]);
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -844,6 +955,11 @@ export function LiveNotesChat({
                   <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] opacity-70">
                     {t.role === "user" ? "You" : "Rose"}
                     {t.id === streamingId ? " · …" : ""}
+                    {t.interrupted === "stop"
+                      ? " · Stopped"
+                      : t.interrupted
+                        ? " · Interrupted"
+                        : ""}
                   </p>
                   {t.role === "assistant" ? (
                     <div className="text-[12px] leading-snug">
@@ -966,7 +1082,7 @@ export function LiveNotesChat({
           ref={inputRef}
           rows={2}
           value={draft}
-          disabled={busy || attaching}
+          disabled={attaching}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -1041,20 +1157,25 @@ export function LiveNotesChat({
               }
               onClick={voice.toggle}
             />
+            {busy && !handingOff ? (
+              <button
+                type="button"
+                onClick={() => void stopResponse()}
+                className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                Stop
+              </button>
+            ) : null}
             <button
               type="submit"
               disabled={
-                busy ||
+                handingOff ||
                 attaching ||
                 (!draft.trim() && !pending && queued.length === 0)
               }
               className="rounded-full bg-rose-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
             >
-              {busy
-                ? turns.some((turn) => turn.id === streamingId && turn.content)
-                  ? "Writing…"
-                  : "Thinking…"
-                : "Send"}
+              {handingOff ? "Switching…" : busy ? "Interrupt & send" : "Send"}
             </button>
           </div>
         </div>
