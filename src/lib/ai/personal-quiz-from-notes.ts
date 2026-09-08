@@ -4,8 +4,12 @@ import {
   stripJsonFence,
 } from "@/lib/ai/course-payload";
 import { tutorChatModel } from "@/lib/ai/anthropic-models";
-import type { CourseQuizItem, CourseQuizMcqItem } from "@/types/course";
-import { isQuizMcq } from "@/types/course";
+import type {
+  CourseQuizFreeItem,
+  CourseQuizItem,
+  CourseQuizMcqItem,
+} from "@/types/course";
+import { isQuizFreeResponse, isQuizMcq } from "@/types/course";
 
 const QUIZ_ARRAY_KEYS = [
   "questions",
@@ -16,6 +20,86 @@ const QUIZ_ARRAY_KEYS = [
 ] as const;
 
 const MAX_CONTEXT_CHARS = 12_000;
+
+export type PersonalQuizType = "mcq" | "free_response";
+
+export type PersonalQuizTypeCounts = {
+  mcq: number;
+  freeResponse: number;
+};
+
+const EMPTY_TYPE_COUNTS: PersonalQuizTypeCounts = {
+  mcq: 0,
+  freeResponse: 0,
+};
+
+function targetQuestionCount(count: number): number {
+  return Math.min(12, Math.max(3, Math.floor(count)));
+}
+
+/**
+ * Build a balanced batch. For an odd batch, give the extra slot to the
+ * learner's currently underrepresented type; an exact tie starts with FRQ.
+ * The next odd batch then favors MCQ, so repeated actions alternate naturally.
+ */
+export function planPersonalQuizTypes(
+  count: number,
+  existing: PersonalQuizTypeCounts = EMPTY_TYPE_COUNTS
+): PersonalQuizType[] {
+  const total = targetQuestionCount(count);
+  const half = Math.floor(total / 2);
+  let mcq = half;
+  let freeResponse = half;
+
+  if (total % 2 === 1) {
+    if (existing.mcq < existing.freeResponse) mcq += 1;
+    else freeResponse += 1;
+  }
+
+  const first: PersonalQuizType =
+    freeResponse > mcq ||
+    (freeResponse === mcq && existing.freeResponse <= existing.mcq)
+      ? "free_response"
+      : "mcq";
+  const plan: PersonalQuizType[] = [];
+  let next = first;
+  while (mcq > 0 || freeResponse > 0) {
+    if (next === "mcq" && mcq > 0) {
+      plan.push("mcq");
+      mcq -= 1;
+    } else if (next === "free_response" && freeResponse > 0) {
+      plan.push("free_response");
+      freeResponse -= 1;
+    } else if (mcq > 0) {
+      plan.push("mcq");
+      mcq -= 1;
+    } else {
+      plan.push("free_response");
+      freeResponse -= 1;
+    }
+    next = next === "mcq" ? "free_response" : "mcq";
+  }
+  return plan;
+}
+
+export function countPersonalQuizTypes(
+  rows: Array<{ item?: unknown }>
+): PersonalQuizTypeCounts {
+  const counts = { ...EMPTY_TYPE_COUNTS };
+  for (const row of rows) {
+    const item = row.item;
+    if (
+      item &&
+      typeof item === "object" &&
+      (item as { type?: unknown }).type === "free_response"
+    ) {
+      counts.freeResponse += 1;
+    } else {
+      counts.mcq += 1;
+    }
+  }
+  return counts;
+}
 
 /** Common words dropped when comparing question stems for near-duplicates. */
 const STOPWORDS = new Set([
@@ -87,10 +171,7 @@ function normalizeStem(q: string): string {
     .replace(/\s+/g, " ");
 }
 
-/**
- * Drop MCQs whose stems target the same underlying fact as an earlier item
- * (paraphrases, “what is… / which best describes…”, same gist).
- */
+/** Drop MCQs whose stems target the same underlying fact as an earlier item. */
 export function dedupePersonalMcqs(
   items: CourseQuizMcqItem[],
   opts?: { jaccardThreshold?: number; minStemChars?: number }
@@ -282,6 +363,34 @@ export function parsePersonalQuizModelText(raw: string): unknown[] {
 function softenQuizItem(raw: unknown): unknown {
   if (!raw || typeof raw !== "object") return raw;
   const o = { ...(raw as Record<string, unknown>) };
+  const rawType =
+    typeof o.type === "string" ? o.type.trim().toLowerCase() : "";
+  const isFreeResponse = new Set([
+    "free_response",
+    "short_answer",
+    "written",
+    "essay",
+    "open_ended",
+    "long_answer",
+    "frq",
+    "open",
+  ]).has(rawType);
+
+  if (isFreeResponse) {
+    if (
+      typeof o.reference_answer !== "string" ||
+      !o.reference_answer.trim()
+    ) {
+      if (typeof o.referenceAnswer === "string") {
+        o.reference_answer = o.referenceAnswer;
+      } else if (typeof o.answer === "string") {
+        o.reference_answer = o.answer;
+      } else if (typeof o.correct_answer === "string") {
+        o.reference_answer = o.correct_answer;
+      }
+    }
+    o.type = "free_response";
+  }
   if (typeof o.correct !== "string" || !o.correct.trim()) {
     if (typeof o.answer === "string") o.correct = o.answer;
     else if (typeof o.correct_answer === "string") o.correct = o.correct_answer;
@@ -296,17 +405,143 @@ function softenQuizItem(raw: unknown): unknown {
   if (Array.isArray(o.choices) && o.choices.length > 4) {
     o.choices = o.choices.slice(0, 4);
   }
-  if (typeof o.type !== "string") o.type = "mcq";
+  if (typeof o.type !== "string") {
+    const ref =
+      typeof o.reference_answer === "string"
+        ? o.reference_answer.trim()
+        : typeof o.referenceAnswer === "string"
+          ? o.referenceAnswer.trim()
+          : "";
+    o.type = ref.length >= 6 ? "free_response" : "mcq";
+  }
   if (typeof o.explanation !== "string") o.explanation = "";
   return o;
 }
 
 /**
- * Generate MCQ-style practice items from the learner's own highlights/notes only.
+ * Normalize model candidates and fill only their planned type slots.
+ * A malformed FRQ is dropped; an extra MCQ can never silently replace it.
  */
+export function selectPersonalQuizItems(
+  raw: unknown[],
+  plan: PersonalQuizType[]
+): CourseQuizItem[] {
+  const normalized = normalizeQuizItemsLoose(raw.map(softenQuizItem));
+  const mcqs = dedupePersonalMcqs(normalized.filter(isQuizMcq));
+  const freeResponses = dedupePersonalFreeResponses(
+    normalized.filter(isQuizFreeResponse)
+  );
+  const usedStems: string[] = [];
+  const usedTokens: Set<string>[] = [];
+
+  const takeDistinct = <T extends CourseQuizItem>(bucket: T[]): T | undefined => {
+    while (bucket.length > 0) {
+      const item = bucket.shift()!;
+      const stem = normalizeStem(item.question);
+      const tokens = significantTokens(item.question);
+      const duplicate = usedStems.some(
+        (usedStem, i) =>
+          stem === usedStem ||
+          tokenJaccard(tokens, usedTokens[i]!) >= 0.4
+      );
+      if (duplicate) continue;
+      usedStems.push(stem);
+      usedTokens.push(tokens);
+      return item;
+    }
+    return undefined;
+  };
+
+  const selected: CourseQuizItem[] = [];
+  for (const type of plan) {
+    const item =
+      type === "mcq"
+        ? takeDistinct(mcqs)
+        : takeDistinct(freeResponses);
+    if (item) selected.push(item);
+  }
+  return selected;
+}
+
+function dedupePersonalFreeResponses(
+  items: CourseQuizFreeItem[]
+): CourseQuizFreeItem[] {
+  const kept: CourseQuizFreeItem[] = [];
+  const tokens: Set<string>[] = [];
+  for (const item of items) {
+    const current = significantTokens(item.question);
+    if (tokens.some((seen) => tokenJaccard(current, seen) >= 0.34)) continue;
+    kept.push(item);
+    tokens.push(current);
+  }
+  return kept;
+}
+
+function typeCounts(plan: PersonalQuizType[]): PersonalQuizTypeCounts {
+  return {
+    mcq: plan.filter((type) => type === "mcq").length,
+    freeResponse: plan.filter((type) => type === "free_response").length,
+  };
+}
+
+function missingTypes(
+  selected: CourseQuizItem[],
+  plan: PersonalQuizType[]
+): PersonalQuizTypeCounts {
+  const wanted = typeCounts(plan);
+  const have = {
+    mcq: selected.filter(isQuizMcq).length,
+    freeResponse: selected.filter(isQuizFreeResponse).length,
+  };
+  return {
+    mcq: Math.max(0, wanted.mcq - have.mcq),
+    freeResponse: Math.max(0, wanted.freeResponse - have.freeResponse),
+  };
+}
+
+function generationPrompt(opts: {
+  corpus: string;
+  mcq: number;
+  freeResponse: number;
+  avoidQuestions?: string[];
+  brokenOutput?: string;
+}): string {
+  const total = opts.mcq + opts.freeResponse;
+  const avoid =
+    opts.avoidQuestions && opts.avoidQuestions.length > 0
+      ? `\nDo not repeat these already accepted questions:\n${opts.avoidQuestions
+          .map((question) => `- ${question}`)
+          .join("\n")}\n`
+      : "";
+  const broken = opts.brokenOutput
+    ? `\nThe previous output was malformed or had the wrong type mix. Do not copy its structural errors:\n${opts.brokenOutput.slice(0, 6_000)}\n`
+    : "";
+
+  return `You are writing practice quiz questions for ONE learner. Use ONLY the excerpts below — do not invent facts not grounded in this text.
+
+LEARNER NOTES / HIGHLIGHTS:
+${opts.corpus}
+
+Task: Output a JSON array of EXACTLY ${total} questions: EXACTLY ${opts.mcq} multiple-choice and EXACTLY ${opts.freeResponse} free-response. Output ONLY the JSON array — no markdown fences, no commentary, no trailing text.
+MCQ object: { "type": "mcq", "question": string, "choices": [4 strings], "correct": "A"|"B"|"C"|"D", "explanation": string }
+Free-response object: { "type": "free_response", "question": string, "reference_answer": string, "explanation": string }
+
+Strict rules (follow all):
+1) TYPE COUNTS: Preserve the exact requested split. Never turn a free-response slot into multiple choice.
+2) REFERENCE RUBRIC: Every free-response item must have a substantive natural-language reference_answer (1–3 sentences) stating the key ideas a correct answer should cover. It is used by a concept-focused AI grader.
+3) DISTINCT FACTS: Each question must test a different main idea from the notes. Do not ask the same underlying fact twice using different wording.
+4) ONE PROBE PER QUESTION: Pick one concrete concept per item — mechanism, definition term, cause→effect link, contrast, or example.
+5) ELABORATE STEMS: Write clear, specific stems. Use the explanation to justify the answer briefly.
+6) COVERAGE: Spread questions across separated ideas instead of staying on one sentence.
+7) MCQ CHOICES: Every MCQ must have exactly four plausible choices and one clearly correct answer grounded in the excerpt.
+8) JSON: Double-quoted keys and strings. No trailing commas. Stop after the closing ].${avoid}${broken}`;
+}
+
+/** Generate a balanced batch from the learner's own highlights/notes only. */
 export async function generatePersonalQuizFromNotes(
   learnerNotes: string,
-  count: number
+  count: number,
+  opts?: { existingCounts?: PersonalQuizTypeCounts }
 ): Promise<CourseQuizItem[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -318,27 +553,14 @@ export async function generatePersonalQuizFromNotes(
     throw new Error("Add a bit more text — paste a highlight or note first.");
   }
 
-  const targetOut = Math.min(12, Math.max(3, Math.floor(count)));
-  /** Ask for a few extras so we can filter overlaps and still return `targetOut`. */
-  const askCount = Math.min(8, targetOut + 2);
-
-  const prompt = `You are writing practice quiz questions for ONE learner. Use ONLY the excerpts below — do not invent facts not grounded in this text.
-
-LEARNER NOTES / HIGHLIGHTS:
-${corpus}
-
-Task: Output a JSON array of EXACTLY ${askCount} multiple-choice questions. Output ONLY the JSON array — no markdown fences, no commentary, no trailing text.
-Each object: { "type": "mcq", "question": string, "choices": [4 strings], "correct": "A"|"B"|"C"|"D", "explanation": string }
-
-Strict rules (follow all):
-1) DISTINCT FACTS: Each question must test a different main idea from the notes. Do not ask the same underlying fact twice using different wording (e.g. avoid both “what is the purpose of X?” and “what does X help maintain?” if they have the same answer).
-2) ONE PROBE PER QUESTION: Pick one concrete concept per item — mechanism, definition term, cause→effect link, contrast, or example — not a vague repeat of the theme.
-3) ELABORATE STEMS: Write clear, specific stems (context in the question itself). Put teaching detail in the stem where helpful; use the explanation to justify the correct answer briefly.
-4) COVERAGE: If the notes contain several separated ideas (e.g. blocks separated by "---"), spread questions across those ideas instead of staying on one sentence.
-5) WRONG CHOICES: Distractors must be plausible but clearly wrong given the excerpt; avoid copying phrases from the stem verbatim into all choices.
-6) JSON: Double-quoted keys and strings. No trailing commas. Stop after the closing ].
-
-Quality over repetition — fewer strong, distinct questions beats many duplicates.`;
+  const plan = planPersonalQuizTypes(count, opts?.existingCounts);
+  const wanted = typeCounts(plan);
+  // One backup of each type lets dedupe discard overlap without changing the mix.
+  const prompt = generationPrompt({
+    corpus,
+    mcq: wanted.mcq + 1,
+    freeResponse: wanted.freeResponse + 1,
+  });
 
   const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 1 });
   const model = tutorChatModel();
@@ -356,7 +578,12 @@ Quality over repetition — fewer strong, distinct questions beats many duplicat
   }
 
   let parsed = parsePersonalQuizModelText(block.text);
-  if (parsed.length === 0) {
+  let selected = selectPersonalQuizItems(parsed, plan);
+  const missing = missingTypes(selected, plan);
+  if (missing.mcq > 0 || missing.freeResponse > 0) {
+    const repairMcq = missing.mcq > 0 ? missing.mcq + 1 : 0;
+    const repairFreeResponse =
+      missing.freeResponse > 0 ? missing.freeResponse + 1 : 0;
     const repair = await anthropic.messages.create({
       model,
       max_tokens: 4096,
@@ -364,29 +591,43 @@ Quality over repetition — fewer strong, distinct questions beats many duplicat
       messages: [
         {
           role: "user",
-          content: `You previously returned text that was not valid JSON. Output ONLY a JSON array of MCQ objects (no markdown, no commentary). Each object: { "type": "mcq", "question": string, "choices": [4 strings], "correct": "A"|"B"|"C"|"D", "explanation": string }
-
-Broken output:
-${block.text.slice(0, 12_000)}`,
+          content: generationPrompt({
+            corpus,
+            mcq: repairMcq,
+            freeResponse: repairFreeResponse,
+            avoidQuestions: selected.map((item) => item.question),
+            brokenOutput: block.text,
+          }),
         },
       ],
     });
     const repaired = repair.content.find((b) => b.type === "text");
     if (repaired && repaired.type === "text") {
-      parsed = parsePersonalQuizModelText(repaired.text);
+      parsed = [
+        ...parsed,
+        ...parsePersonalQuizModelText(repaired.text),
+      ];
+      selected = selectPersonalQuizItems(parsed, plan);
     }
   }
 
-  if (parsed.length === 0) {
+  if (selected.length !== plan.length) {
     console.error(
-      "[personal-quiz-from-notes] unusable model JSON",
-      block.text.slice(0, 400)
+      "[personal-quiz-from-notes] could not satisfy balanced type plan",
+      {
+        wanted,
+        selected: typeCounts(
+          selected.map((item) =>
+            isQuizFreeResponse(item) ? "free_response" : "mcq"
+          )
+        ),
+        output: block.text.slice(0, 400),
+      }
     );
-    throw new Error("Could not build questions from that note. Try a slightly longer selection.");
+    throw new Error(
+      "Could not build a balanced question set from that note. Try a slightly longer selection."
+    );
   }
 
-  const normalized = normalizeQuizItemsLoose(parsed.map(softenQuizItem));
-  const mcqs = normalized.filter(isQuizMcq);
-  const distinct = dedupePersonalMcqs(mcqs);
-  return distinct.slice(0, targetOut);
+  return selected;
 }

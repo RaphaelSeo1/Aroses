@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { generatePersonalQuizFromNotes } from "@/lib/ai/personal-quiz-from-notes";
+import {
+  countPersonalQuizTypes,
+  generatePersonalQuizFromNotes,
+} from "@/lib/ai/personal-quiz-from-notes";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import type { CourseQuizItem } from "@/types/course";
@@ -90,9 +93,19 @@ export async function POST(request: Request, ctx: Params) {
     corpus = corpus ? `${corpus}\n\n---\n\n${extra}` : extra;
   }
 
+  const { data: existingRows, error: existingError } = await supabase
+    .from("user_personal_quiz_items")
+    .select("item")
+    .eq("user_id", user.id);
+  if (existingError) {
+    console.error("[personal-quiz generate counts]", existingError);
+  }
+
   let items: CourseQuizItem[];
   try {
-    items = await generatePersonalQuizFromNotes(corpus, count);
+    items = await generatePersonalQuizFromNotes(corpus, count, {
+      existingCounts: countPersonalQuizTypes(existingRows ?? []),
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Generation failed.";
     return NextResponse.json({ error: msg }, { status: 400 });

@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { generatePersonalQuizFromNotes } from "@/lib/ai/personal-quiz-from-notes";
+import {
+  countPersonalQuizTypes,
+  generatePersonalQuizFromNotes,
+} from "@/lib/ai/personal-quiz-from-notes";
 import { NOTES_FOCUS_BUCKET_ID } from "@/lib/notes/notes-focus-bucket";
 import { insertPersonalQuizItems } from "@/lib/notes/personal-quiz-insert";
 import { resolveFocusDestination } from "@/lib/notes/resolve-focus-destination";
@@ -75,11 +78,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: dest.error }, { status: dest.status });
   }
 
+  const { data: existingRows, error: existingError } = await supabase
+    .from("user_personal_quiz_items")
+    .select("item")
+    .eq("user_id", user.id);
+  if (existingError) {
+    console.error("[notes/focus-questions counts]", existingError);
+  }
+
   let items;
   try {
     items = await generatePersonalQuizFromNotes(
       excerpt.slice(0, MAX_CORPUS),
-      countForCorpus(excerpt.length)
+      countForCorpus(excerpt.length),
+      {
+        existingCounts: countPersonalQuizTypes(existingRows ?? []),
+      }
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Generation failed.";
