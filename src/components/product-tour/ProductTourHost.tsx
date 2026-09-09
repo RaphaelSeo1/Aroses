@@ -37,9 +37,7 @@ import {
   type ProductTourStep,
 } from "@/lib/product-tour/steps";
 import { writeTourDemoCookie } from "@/lib/product-tour/tour-demo-cookie";
-import { createClient } from "@/lib/supabase/client";
 import { TourGuideOrb } from "./TourGuideOrb";
-import { hasPaidProductAccess } from "@/lib/billing/paid-access";
 
 const CELEBRATE_FLAG = "aroses_product_tour_celebrate";
 
@@ -240,7 +238,6 @@ function ProductTourInner() {
   const scrolledForStepRef = useRef<string | null>(null);
   const confettiFiredRef = useRef(false);
   const forceUpgradePreviewRef = useRef(false);
-  const billingEnabled = isBillingUiEnabled();
 
   const steps = useMemo(
     () => buildProductTourSteps(courseId, courseAvailable),
@@ -262,6 +259,7 @@ function ProductTourInner() {
     setVh(window.innerHeight);
     if (readCelebrateFlag()) {
       setCelebrating(true);
+      if (isBillingUiEnabled()) setShowUpgradeOffer(true);
     }
   }, []);
 
@@ -270,49 +268,6 @@ function ProductTourInner() {
     confettiFiredRef.current = true;
     void fireTourConfetti();
   }, [celebrating]);
-
-  // After setup, show the upgrade card immediately when billing is on, then
-  // hide it only once we confirm the user is already on a paid plan.
-  // `?setupUpgrade=1` keeps it visible for preview even if subscribed.
-  useEffect(() => {
-    if (!celebrating || !billingEnabled) {
-      if (!forceUpgradePreviewRef.current) setShowUpgradeOffer(false);
-      return;
-    }
-    setShowUpgradeOffer(true);
-    if (forceUpgradePreviewRef.current) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const supabase = createClient();
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user || cancelled) return;
-        const { data } = await supabase
-          .from("user_subscriptions")
-          .select("tier, status, admin_granted")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        if (cancelled || forceUpgradePreviewRef.current) return;
-        const tier = (data?.tier as string | undefined) ?? "free";
-        const status = (data?.status as string | undefined) ?? "inactive";
-        const paid = hasPaidProductAccess({
-          tier,
-          status,
-          adminGranted: Boolean(
-            (data as { admin_granted?: boolean } | null)?.admin_granted
-          ),
-        });
-        if (paid) setShowUpgradeOffer(false);
-      } catch {
-        /* keep offer visible */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [billingEnabled, celebrating]);
 
   const startTour = useCallback(
     (startStep = 0, tourCourseId = courseId, available = courseAvailable) => {
@@ -416,6 +371,7 @@ function ProductTourInner() {
 
   const dismissCelebration = useCallback(() => {
     writeCelebrateFlag(false);
+    writeTourDemoCookie(null);
     confettiFiredRef.current = false;
     forceUpgradePreviewRef.current = false;
     setCelebrating(false);
@@ -443,6 +399,7 @@ function ProductTourInner() {
           throw new Error(data.error ?? t.productTour.upgradeCheckoutError);
         }
         writeCelebrateFlag(false);
+        writeTourDemoCookie(null);
         window.location.href = data.url;
       } catch (err) {
         setCheckoutError(
@@ -460,7 +417,6 @@ function ProductTourInner() {
     async (opts?: { celebrate?: boolean }) => {
       setBusy(true);
       clearTourSession();
-      writeTourDemoCookie(null);
       setActive(false);
       setRect(null);
       scrolledForStepRef.current = null;
@@ -468,8 +424,12 @@ function ProductTourInner() {
         writeCelebrateFlag(true);
         confettiFiredRef.current = false;
         setCelebrating(true);
+        if (isBillingUiEnabled()) setShowUpgradeOffer(true);
+        // Keep the tour cookie until checkout or dismiss so the paywall
+        // proxy does not yank this page out from under the popup.
       } else {
         writeCelebrateFlag(false);
+        writeTourDemoCookie(null);
         setCelebrating(false);
       }
       try {
