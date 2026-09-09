@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
@@ -5,15 +6,30 @@ import { BillingClient } from "@/components/billing/BillingClient";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { ProfileSettingsForm } from "@/components/ProfileSettingsForm";
 import { ProgressDashboardContent } from "@/components/progress/ProgressDashboardContent";
+import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { reconcileUserSubscription } from "@/lib/billing/subscription";
+import {
+  hasPaidProductAccess,
+  isStripeCheckoutSuccessStatus,
+  UPGRADE_POPUP_PATH,
+  unpaidUserHasTourAccess,
+} from "@/lib/billing/paid-access";
+import {
+  getUserSubscription,
+  reconcileUserSubscription,
+} from "@/lib/billing/subscription";
 import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
+import { TOUR_DEMO_COOKIE } from "@/lib/product-tour/tour-demo-cookie";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 import type { UserProfileRow } from "@/types/profile";
 
 type PageProps = {
-  searchParams: Promise<{ tab?: string; conversation?: string }>;
+  searchParams: Promise<{
+    tab?: string;
+    conversation?: string;
+    status?: string;
+  }>;
 };
 
 function ProfileBodySkeleton() {
@@ -49,6 +65,30 @@ export default async function ProfilePage({ searchParams }: PageProps) {
   }
 
   const billingEnabled = isBillingUiEnabled();
+  if (
+    sp.tab === "billing" &&
+    billingEnabled &&
+    !isStripeCheckoutSuccessStatus(sp.status) &&
+    !isAppAdminEnvUser(user)
+  ) {
+    const cookieStore = await cookies();
+    const tourOk = unpaidUserHasTourAccess(
+      cookieStore.get(TOUR_DEMO_COOKIE)?.value ?? null
+    );
+    if (!tourOk) {
+      const sub = await getUserSubscription(user.id);
+      if (
+        !hasPaidProductAccess({
+          tier: sub.tier,
+          status: sub.status,
+          adminGranted: sub.adminGranted,
+        })
+      ) {
+        redirect(UPGRADE_POPUP_PATH);
+      }
+    }
+  }
+
   const initialPanel =
     sp.tab === "progress"
       ? ("progress" as const)

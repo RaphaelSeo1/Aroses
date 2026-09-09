@@ -1,7 +1,7 @@
 import { isBillingUiEnabled } from "../billing/feature-flag.ts";
 import { PAID_ACCESS_REDIRECT } from "../billing/paid-access.ts";
 
-/** Plans & billing (Profile → billing tab). Used when unpaid users leave the tour. */
+/** Upgrade popup on Home. Unpaid users should not land on Plans & billing. */
 export const SUBSCRIPTION_ACCESS_PATH = PAID_ACCESS_REDIRECT;
 
 /** After the profile wizard, start the original site tour on Home. */

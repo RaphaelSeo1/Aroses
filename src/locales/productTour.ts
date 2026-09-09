@@ -10,7 +10,8 @@ const en = {
   plansHeading: "Choose your plan",
   choosePlan: "Choose {name}",
   choosePlanBusy: "Redirecting…",
-  upgradeCheckoutError: "Could not start checkout. Try Plans & billing.",
+  upgradeCheckoutError: "Could not start checkout. Try again.",
+  lookAroundFirst: "Look around first",
   upgradeBest: "BEST",
   newFeatureBadge: "New feature!",
   steps: {
@@ -73,7 +74,8 @@ const ko: typeof en = {
   plansHeading: "요금제 선택",
   choosePlan: "{name} 선택",
   choosePlanBusy: "이동 중…",
-  upgradeCheckoutError: "결제를 시작하지 못했어요. 요금제 및 결제에서 다시 시도해 주세요.",
+  upgradeCheckoutError: "결제를 시작하지 못했어요. 다시 시도해 주세요.",
+  lookAroundFirst: "먼저 둘러볼게요",
   upgradeBest: "BEST",
   newFeatureBadge: "새로운 기능!",
   steps: {

@@ -18,8 +18,10 @@ import {
 } from "@/lib/auth/public-routes";
 import {
   hasPaidProductAccess,
-  isUnpaidProductAllowedPath,
-  PAID_ACCESS_REDIRECT,
+  isUnpaidMutationAllowedApi,
+  PAID_PLAN_REQUIRED_CODE,
+  UPGRADE_POPUP_PATH,
+  unpaidBillingSettingsShouldRedirect,
   unpaidUserHasTourAccess,
 } from "@/lib/billing/paid-access";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
@@ -45,11 +47,18 @@ function unavailableResponse(baseResponse: NextResponse): NextResponse {
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
-  // API handlers perform their own user/authorization checks. The optional
-  // email-domain gate is the only cross-cutting API policy retained here.
+  const mutatingApi =
+    pathname.startsWith("/api/") &&
+    request.method !== "GET" &&
+    request.method !== "HEAD" &&
+    request.method !== "OPTIONS";
+
+  // API GET/HEAD (and allowed unpaid mutations like checkout) skip the
+  // global user gate; mutating product APIs still need a paid check below.
   if (
     pathname.startsWith("/api/") &&
-    !isAuthEmailDomainAllowlistEnforced()
+    !isAuthEmailDomainAllowlistEnforced() &&
+    (!mutatingApi || isUnpaidMutationAllowedApi(pathname))
   ) {
     return NextResponse.next({ request });
   }
@@ -197,8 +206,7 @@ export async function proxy(request: NextRequest) {
     user &&
     !needsOnboarding &&
     isBillingUiEnabled() &&
-    !isAppAdminEnvUser(user) &&
-    !pathname.startsWith("/api/")
+    !isAppAdminEnvUser(user)
   ) {
     let paid = false;
     try {
@@ -230,12 +238,34 @@ export async function proxy(request: NextRequest) {
 
     const tourCookie = request.cookies.get(TOUR_DEMO_COOKIE)?.value ?? null;
     const search = request.nextUrl.search.replace(/^\?/, "");
+    const tourOk = unpaidUserHasTourAccess(tourCookie);
+
+    if (
+      mutatingApi &&
+      !paid &&
+      !tourOk &&
+      !isUnpaidMutationAllowedApi(pathname)
+    ) {
+      const response = NextResponse.json(
+        {
+          error: "Choose a plan to use Aroses.",
+          code: PAID_PLAN_REQUIRED_CODE,
+        },
+        { status: 402 }
+      );
+      supabaseResponse.cookies.getAll().forEach((cookie) => {
+        response.cookies.set(cookie.name, cookie.value);
+      });
+      return response;
+    }
+
     if (
       !paid &&
-      !unpaidUserHasTourAccess(tourCookie) &&
-      !isUnpaidProductAllowedPath(pathname, search)
+      !tourOk &&
+      !pathname.startsWith("/api/") &&
+      unpaidBillingSettingsShouldRedirect(pathname, search)
     ) {
-      const dest = new URL(PAID_ACCESS_REDIRECT, request.nextUrl.origin);
+      const dest = new URL(UPGRADE_POPUP_PATH, request.nextUrl.origin);
       const redirectResponse = NextResponse.redirect(dest);
       supabaseResponse.cookies.getAll().forEach((cookie) => {
         redirectResponse.cookies.set(cookie.name, cookie.value);

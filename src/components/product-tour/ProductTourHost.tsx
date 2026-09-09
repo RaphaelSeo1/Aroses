@@ -12,6 +12,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
+import { OPEN_UPGRADE_EVENT } from "@/lib/billing/paid-access";
 import {
   CHECKOUT_PLAN_ORDER,
   PLANS,
@@ -254,6 +255,8 @@ function ProductTourInner() {
   }, [step.copyKey, t.productTour.steps]);
 
   useEffect(() => {
+    // Portal needs a client-only mount; viewport size is not known on the server.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- client mount + restore celebration flag
     setMounted(true);
     setVw(window.innerWidth);
     setVh(window.innerHeight);
@@ -287,9 +290,32 @@ function ProductTourInner() {
     [courseAvailable, courseId]
   );
 
-  // Preview: `?setupUpgrade=1` can re-fire anytime (even after boot).
+  const openUpgradePopup = useCallback((opts?: { confetti?: boolean }) => {
+    writeCelebrateFlag(true);
+    if (opts?.confetti) {
+      confettiFiredRef.current = false;
+    }
+    setCelebrating(true);
+    if (isBillingUiEnabled()) setShowUpgradeOffer(true);
+  }, []);
+
+  const dismissCelebration = useCallback(() => {
+    writeCelebrateFlag(false);
+    writeTourDemoCookie(null);
+    confettiFiredRef.current = false;
+    forceUpgradePreviewRef.current = false;
+    setCelebrating(false);
+    setShowUpgradeOffer(false);
+    setBusyTier(null);
+    setCheckoutError(null);
+  }, []);
+
+  // Preview: `?setupUpgrade=1` / `?upgrade=1` can re-fire anytime (even after boot).
   useEffect(() => {
-    if (searchParams.get("setupUpgrade") !== "1") return;
+    const wantsUpgrade =
+      searchParams.get("setupUpgrade") === "1" ||
+      searchParams.get("upgrade") === "1";
+    if (!wantsUpgrade) return;
     if (
       pathname === "/onboarding" ||
       pathname === "/intro" ||
@@ -298,15 +324,30 @@ function ProductTourInner() {
       return;
     }
     forceUpgradePreviewRef.current = true;
-    writeCelebrateFlag(true);
-    confettiFiredRef.current = false;
-    setCelebrating(true);
-    setShowUpgradeOffer(true);
+    // Sync popup visibility from the URL (same pattern as ?tour=1).
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- open plans popup from ?upgrade=1 / ?setupUpgrade=1
+    openUpgradePopup({ confetti: true });
     const params = new URLSearchParams(searchParams.toString());
     params.delete("setupUpgrade");
+    params.delete("upgrade");
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [pathname, router, searchParams]);
+  }, [openUpgradePopup, pathname, router, searchParams]);
+
+  useEffect(() => {
+    const onUpgrade = () => {
+      if (
+        pathname === "/onboarding" ||
+        pathname === "/intro" ||
+        pathname === "/login"
+      ) {
+        return;
+      }
+      openUpgradePopup({ confetti: false });
+    };
+    window.addEventListener(OPEN_UPGRADE_EVENT, onUpgrade);
+    return () => window.removeEventListener(OPEN_UPGRADE_EVENT, onUpgrade);
+  }, [openUpgradePopup, pathname]);
 
   // Boot once from ?tour=1 or an in-progress session.
   useEffect(() => {
@@ -368,17 +409,6 @@ function ProductTourInner() {
       }
     })();
   }, [pathname, router, searchParams, startTour]);
-
-  const dismissCelebration = useCallback(() => {
-    writeCelebrateFlag(false);
-    writeTourDemoCookie(null);
-    confettiFiredRef.current = false;
-    forceUpgradePreviewRef.current = false;
-    setCelebrating(false);
-    setShowUpgradeOffer(false);
-    setBusyTier(null);
-    setCheckoutError(null);
-  }, []);
 
   const startCheckout = useCallback(
     async (tier: PlanTier) => {
@@ -482,14 +512,14 @@ function ProductTourInner() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (celebrating) {
-        if (!showUpgradeOffer) dismissCelebration();
+        dismissCelebration();
         return;
       }
       void completeTour({ celebrate: true });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, celebrating, completeTour, dismissCelebration, showUpgradeOffer]);
+  }, [active, celebrating, completeTour, dismissCelebration]);
 
   // Measure the spotlight target — scroll once per step (instant), then track rect.
   useLayoutEffect(() => {
@@ -567,7 +597,10 @@ function ProductTourInner() {
 
   if (celebrating) {
     return createPortal(
-      <div className="fixed inset-0 z-[9998] flex items-center justify-center overflow-y-auto bg-zinc-950/55 p-4 backdrop-blur-[2px]">
+      <div
+        data-upgrade-modal
+        className="fixed inset-0 z-[9998] flex items-center justify-center overflow-y-auto bg-zinc-950/55 p-4 backdrop-blur-[2px]"
+      >
         <div
           role="dialog"
           aria-modal="true"
@@ -711,6 +744,13 @@ function ProductTourInner() {
                   {checkoutError}
                 </p>
               ) : null}
+              <button
+                type="button"
+                onClick={dismissCelebration}
+                className="mt-5 inline-flex w-full items-center justify-center rounded-full px-4 py-2.5 text-sm font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+              >
+                {t.productTour.lookAroundFirst}
+              </button>
             </div>
           ) : null}
 

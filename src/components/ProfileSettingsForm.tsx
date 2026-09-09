@@ -571,6 +571,7 @@ export function ProfileSettingsForm({
             <button
               type="button"
               onClick={() => goPanel("billing")}
+              data-requires-paid
               className={`${navBtn} shrink-0 ${panel === "billing" ? navBtnActive : ""}`}
             >
               <IconCard className="h-5 w-5 shrink-0 opacity-70" />

@@ -98,7 +98,7 @@ test("missing Bio 1A keeps the site tour without a fake course id", () => {
 test("finishing the tour stays on the celebration popup instead of billing", () => {
   assert.equal(afterOnboardingDestination(), "/?tour=1");
   assert.equal(afterTourSkipDestination(), "/?setupUpgrade=1");
-  assert.equal(SUBSCRIPTION_ACCESS_PATH, "/dashboard/profile?tab=billing");
+  assert.equal(SUBSCRIPTION_ACCESS_PATH, "/?upgrade=1");
   assert.equal(tourCompletionShouldRedirectToSubscription(false), false);
   assert.equal(tourCompletionShouldRedirectToSubscription(true), false);
 });

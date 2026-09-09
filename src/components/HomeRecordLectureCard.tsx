@@ -68,6 +68,7 @@ export function HomeRecordLectureCard() {
       type="button"
       onClick={() => void start()}
       disabled={busy}
+      data-requires-paid
       className="group relative flex h-full w-full flex-col justify-between overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-sky-50/80 via-white to-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-md disabled:opacity-70 dark:border-zinc-800 dark:from-sky-950/30 dark:via-zinc-950 dark:to-zinc-950 dark:hover:border-sky-800"
     >
       <div

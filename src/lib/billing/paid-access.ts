@@ -18,36 +18,79 @@ export function hasPaidProductAccess(sub: PaidAccessSnapshot | null | undefined)
   return PAID_STATUSES.has(status);
 }
 
-/**
- * Signed-in users without a paid plan may still hit onboarding, billing,
- * help, and an in-progress product tour — nothing else.
- */
-export function isUnpaidProductAllowedPath(
-  pathname: string,
-  search = ""
+export const OPEN_UPGRADE_EVENT = "aroses:upgrade";
+
+export function requestUpgradePopup(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(OPEN_UPGRADE_EVENT));
+}
+
+export const PAID_PLAN_REQUIRED_CODE = "paid_plan_required";
+
+/** Unpaid users should see the upgrade popup, not the billing settings page. */
+export const UPGRADE_POPUP_PATH = "/?upgrade=1";
+
+/** Stripe Checkout success return. Cancel still opens the upgrade popup. */
+export function isStripeCheckoutSuccessStatus(
+  status: string | null | undefined
 ): boolean {
-  if (pathname === "/onboarding" || pathname.startsWith("/onboarding/")) {
+  return status === "success";
+}
+
+export function isBillingSettingsPath(pathname: string, search = ""): boolean {
+  if (pathname === "/dashboard/billing" || pathname.startsWith("/dashboard/billing/")) {
     return true;
   }
   if (
     pathname === "/dashboard/profile" ||
     pathname.startsWith("/dashboard/profile/")
   ) {
-    return true;
+    const raw = search.startsWith("?") ? search.slice(1) : search;
+    return new URLSearchParams(raw).get("tab") === "billing";
   }
-  if (
-    pathname === "/dashboard/billing" ||
-    pathname.startsWith("/dashboard/billing/")
-  ) {
-    return true;
-  }
-  if (pathname === "/help" || pathname.startsWith("/help/")) return true;
-  if (pathname.startsWith("/legal")) return true;
-  if (pathname.startsWith("/api/")) return true;
+  return false;
+}
 
+/** Unpaid users may not sit on Plans & billing unless Checkout just succeeded. */
+export function unpaidBillingSettingsShouldRedirect(
+  pathname: string,
+  search = ""
+): boolean {
+  if (!isBillingSettingsPath(pathname, search)) return false;
   const raw = search.startsWith("?") ? search.slice(1) : search;
-  const params = new URLSearchParams(raw);
-  if (params.get("tour") === "1" || params.get("setupUpgrade") === "1") {
+  return !isStripeCheckoutSuccessStatus(new URLSearchParams(raw).get("status"));
+}
+
+/** Feature routes unpaid users should not enter (client gate + link intercept). */
+export function unpaidUserShouldBlockFeaturePath(
+  pathname: string,
+  search = ""
+): boolean {
+  if (isBillingSettingsPath(pathname, search)) {
+    return unpaidBillingSettingsShouldRedirect(pathname, search);
+  }
+  return isPaidFeaturePath(pathname, search);
+}
+
+/**
+ * Routes that actually use the product (create, study, record, quiz, billing).
+ * Unpaid users may still *view* hubs like Home, Notes, and Explore.
+ */
+export function isPaidFeaturePath(pathname: string, search = ""): boolean {
+  if (isBillingSettingsPath(pathname, search)) return true;
+  if (pathname.startsWith("/dashboard/courses/new")) return true;
+  if (/\/study(?:\/|$)/.test(pathname)) return true;
+  if (/\/quiz(?:\/|$)/.test(pathname)) return true;
+  if (/\/record(?:\/|$)/.test(pathname)) return true;
+  return false;
+}
+
+/** Mutations unpaid users may still perform (checkout, tour, setup). */
+export function isUnpaidMutationAllowedApi(pathname: string): boolean {
+  if (pathname.startsWith("/api/billing")) return true;
+  if (pathname.startsWith("/api/product-tour")) return true;
+  if (pathname.startsWith("/api/onboarding")) return true;
+  if (pathname === "/api/ui-locale" || pathname.startsWith("/api/ui-locale/")) {
     return true;
   }
   return false;
@@ -57,4 +100,28 @@ export function unpaidUserHasTourAccess(cookieValue: string | null | undefined):
   return parseTourDemoCookie(cookieValue) != null;
 }
 
-export const PAID_ACCESS_REDIRECT = "/dashboard/profile?tab=billing";
+/** @deprecated Unpaid users can browse; kept for older tests. */
+export function isUnpaidProductAllowedPath(
+  pathname: string,
+  search = ""
+): boolean {
+  if (pathname === "/onboarding" || pathname.startsWith("/onboarding/")) {
+    return true;
+  }
+  if (pathname === "/help" || pathname.startsWith("/help/")) return true;
+  if (pathname.startsWith("/legal")) return true;
+  if (pathname.startsWith("/api/")) return true;
+  const raw = search.startsWith("?") ? search.slice(1) : search;
+  const params = new URLSearchParams(raw);
+  if (
+    params.get("tour") === "1" ||
+    params.get("setupUpgrade") === "1" ||
+    params.get("upgrade") === "1"
+  ) {
+    return true;
+  }
+  if (isBillingSettingsPath(pathname, search)) return false;
+  return true;
+}
+
+export const PAID_ACCESS_REDIRECT = UPGRADE_POPUP_PATH;
