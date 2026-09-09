@@ -26,7 +26,9 @@ function hrefFromClick(event: MouseEvent): { pathname: string; search: string } 
   if (!(target instanceof Element)) return null;
   const anchor = target.closest("a[href]");
   if (!(anchor instanceof HTMLAnchorElement)) return null;
-  if (anchor.closest("[data-upgrade-modal]")) return null;
+  if (anchor.closest("[data-upgrade-modal], [data-tour-celebration]")) {
+    return null;
+  }
   const raw = anchor.getAttribute("href");
   if (!raw || raw.startsWith("#") || raw.startsWith("mailto:")) return null;
   try {
@@ -96,7 +98,12 @@ function PaidFeatureGateInner() {
         return;
       }
       const el = event.target;
-      if (el instanceof Element && el.closest("[data-upgrade-modal]")) return;
+      if (
+        el instanceof Element &&
+        el.closest("[data-upgrade-modal], [data-tour-celebration]")
+      ) {
+        return;
+      }
 
       if (el instanceof Element && el.closest("[data-requires-paid]")) {
         event.preventDefault();

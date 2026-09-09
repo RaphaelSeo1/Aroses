@@ -12,7 +12,10 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { OPEN_UPGRADE_EVENT } from "@/lib/billing/paid-access";
+import {
+  OPEN_UPGRADE_EVENT,
+  unpaidUserShouldBlockFeaturePath,
+} from "@/lib/billing/paid-access";
 import {
   CHECKOUT_PLAN_ORDER,
   PLANS,
@@ -41,6 +44,7 @@ import { writeTourDemoCookie } from "@/lib/product-tour/tour-demo-cookie";
 import { TourGuideOrb } from "./TourGuideOrb";
 
 const CELEBRATE_FLAG = "aroses_product_tour_celebrate";
+const UPGRADE_FLAG = "aroses_upgrade_required";
 
 const PAD = 10;
 const TOOLTIP_GAP = 14;
@@ -48,7 +52,7 @@ const TOOLTIP_EST_HEIGHT = 230;
 
 type Rect = { top: number; left: number; width: number; height: number };
 
-function celebrationPlanCopy(
+function planCardCopy(
   billing: {
     planFree: string;
     planStudent: string;
@@ -117,20 +121,20 @@ function celebrationPlanCopy(
   };
 }
 
-function readCelebrateFlag(): boolean {
+function readSessionFlag(key: string): boolean {
   if (typeof window === "undefined") return false;
   try {
-    return sessionStorage.getItem(CELEBRATE_FLAG) === "1";
+    return sessionStorage.getItem(key) === "1";
   } catch {
     return false;
   }
 }
 
-function writeCelebrateFlag(on: boolean): void {
+function writeSessionFlag(key: string, on: boolean): void {
   if (typeof window === "undefined") return;
   try {
-    if (on) sessionStorage.setItem(CELEBRATE_FLAG, "1");
-    else sessionStorage.removeItem(CELEBRATE_FLAG);
+    if (on) sessionStorage.setItem(key, "1");
+    else sessionStorage.removeItem(key);
   } catch {
     /* ignore */
   }
@@ -217,13 +221,159 @@ function rectFromEl(el: Element): Rect {
   };
 }
 
+function UpgradePlanCards({
+  billing,
+  plansHeading,
+  upgradeBest,
+  choosePlan,
+  choosePlanBusy,
+  perMonthLabel,
+  saleBadge,
+  busyTier,
+  checkoutError,
+  onCheckout,
+  dismissLabel,
+  onDismiss,
+}: {
+  billing: Parameters<typeof planCardCopy>[0];
+  plansHeading: string;
+  upgradeBest: string;
+  choosePlan: string;
+  choosePlanBusy: string;
+  perMonthLabel: string;
+  saleBadge: string;
+  busyTier: PlanTier | null;
+  checkoutError: string | null;
+  onCheckout: (tier: PlanTier) => void;
+  dismissLabel: string;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="mt-6 text-left">
+      <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+        {plansHeading}
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {CHECKOUT_PLAN_ORDER.map((tier) => {
+          const plan = PLANS[tier];
+          const price = plan.priceMonthly;
+          const wasPrice = compareAtPriceMonthly(tier);
+          const showSale =
+            isPaidTier(tier) &&
+            price > 0 &&
+            wasPrice != null &&
+            wasPrice > price;
+          const salePrice = showSale ? salePriceMonthly(tier) : price;
+          const salePercent = showSale ? salePercentForTier(tier) : 0;
+          const isBest = tier === "advanced";
+          const { name, tagline, highlights } = planCardCopy(billing, tier);
+          return (
+            <div
+              key={tier}
+              className={`relative flex flex-col rounded-2xl border p-4 ${
+                isBest
+                  ? "plan-card-best"
+                  : "border-zinc-200/90 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/50"
+              }`}
+            >
+              {isBest ? (
+                <span className="plan-best-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-[0.14em]">
+                  {upgradeBest}
+                </span>
+              ) : null}
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
+                  {name}
+                </h3>
+                {showSale ? (
+                  <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+                    {tf(saleBadge, {
+                      percent: String(salePercent),
+                    })}
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400">
+                {tagline}
+              </p>
+              <p className="mt-2">
+                {showSale ? (
+                  <>
+                    <span className="mr-1 text-sm font-medium text-zinc-400 line-through dark:text-zinc-500">
+                      ${wasPrice}
+                    </span>
+                    <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                      ${salePrice}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                    ${price}
+                  </span>
+                )}
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {" "}
+                  {perMonthLabel}
+                </span>
+              </p>
+              <ul className="mt-3 flex-1 space-y-1.5 text-xs leading-snug text-zinc-600 dark:text-zinc-300">
+                {highlights.map((h) => (
+                  <li key={h} className="flex items-start gap-1.5">
+                    <span
+                      className="mt-0.5 text-brand dark:text-brand-soft"
+                      aria-hidden
+                    >
+                      ✓
+                    </span>
+                    <span>{h}</span>
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                disabled={busyTier != null}
+                onClick={() => onCheckout(tier)}
+                className={`mt-4 inline-flex w-full items-center justify-center rounded-full px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
+                  isBest
+                    ? "bg-violet-600 text-white hover:bg-violet-700"
+                    : "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
+                }`}
+              >
+                {busyTier === tier
+                  ? choosePlanBusy
+                  : tf(choosePlan, { name })}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {checkoutError ? (
+        <p
+          className="mt-3 text-center text-xs font-medium text-red-600 dark:text-red-400"
+          role="alert"
+        >
+          {checkoutError}
+        </p>
+      ) : null}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="mt-5 inline-flex w-full items-center justify-center rounded-full px-4 py-2.5 text-sm font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+      >
+        {dismissLabel}
+      </button>
+    </div>
+  );
+}
+
 function ProductTourInner() {
   const t = useT();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [active, setActive] = useState(false);
-  const [celebrating, setCelebrating] = useState(false);
+  const [tourCompleteCelebration, setTourCompleteCelebration] = useState(false);
+  const [upgradeRequired, setUpgradeRequired] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -238,7 +388,6 @@ function ProductTourInner() {
   const bootedRef = useRef(false);
   const scrolledForStepRef = useRef<string | null>(null);
   const confettiFiredRef = useRef(false);
-  const forceUpgradePreviewRef = useRef(false);
 
   const steps = useMemo(
     () => buildProductTourSteps(courseId, courseAvailable),
@@ -256,30 +405,38 @@ function ProductTourInner() {
 
   useEffect(() => {
     // Portal needs a client-only mount; viewport size is not known on the server.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- client mount + restore celebration flag
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- client mount + restore modal flags
     setMounted(true);
     setVw(window.innerWidth);
     setVh(window.innerHeight);
-    if (readCelebrateFlag()) {
-      setCelebrating(true);
+    if (readSessionFlag(CELEBRATE_FLAG)) {
+      setTourCompleteCelebration(true);
+      setUpgradeRequired(false);
+      if (isBillingUiEnabled()) setShowUpgradeOffer(true);
+    } else if (readSessionFlag(UPGRADE_FLAG)) {
+      setUpgradeRequired(true);
+      setTourCompleteCelebration(false);
       if (isBillingUiEnabled()) setShowUpgradeOffer(true);
     }
   }, []);
 
   useEffect(() => {
-    if (!celebrating || confettiFiredRef.current) return;
+    if (!tourCompleteCelebration || confettiFiredRef.current) return;
     confettiFiredRef.current = true;
     void fireTourConfetti();
-  }, [celebrating]);
+  }, [tourCompleteCelebration]);
 
   const startTour = useCallback(
     (startStep = 0, tourCourseId = courseId, available = courseAvailable) => {
       const built = buildProductTourSteps(tourCourseId, available);
       const next = clampTourStep(startStep, built.length);
       scrolledForStepRef.current = null;
-      writeCelebrateFlag(false);
+      writeSessionFlag(CELEBRATE_FLAG, false);
+      writeSessionFlag(UPGRADE_FLAG, false);
       confettiFiredRef.current = false;
-      setCelebrating(false);
+      setTourCompleteCelebration(false);
+      setUpgradeRequired(false);
+      setShowUpgradeOffer(false);
       setCourseId(tourCourseId);
       setCourseAvailable(available);
       setStepIndex(next);
@@ -290,27 +447,41 @@ function ProductTourInner() {
     [courseAvailable, courseId]
   );
 
-  const openUpgradePopup = useCallback((opts?: { confetti?: boolean }) => {
-    writeCelebrateFlag(true);
-    if (opts?.confetti) {
-      confettiFiredRef.current = false;
-    }
-    setCelebrating(true);
+  const openUpgradeRequired = useCallback(() => {
+    writeSessionFlag(CELEBRATE_FLAG, false);
+    writeSessionFlag(UPGRADE_FLAG, true);
+    setTourCompleteCelebration(false);
+    setUpgradeRequired(true);
     if (isBillingUiEnabled()) setShowUpgradeOffer(true);
   }, []);
 
-  const dismissCelebration = useCallback(() => {
-    writeCelebrateFlag(false);
+  const openTourCelebration = useCallback(() => {
+    writeSessionFlag(CELEBRATE_FLAG, true);
+    writeSessionFlag(UPGRADE_FLAG, false);
+    confettiFiredRef.current = false;
+    setUpgradeRequired(false);
+    setTourCompleteCelebration(true);
+    if (isBillingUiEnabled()) setShowUpgradeOffer(true);
+  }, []);
+
+  const dismissUpgradeModals = useCallback(() => {
+    const search = searchParams.toString();
+    const leavePaidRoute = unpaidUserShouldBlockFeaturePath(pathname, search);
+    writeSessionFlag(CELEBRATE_FLAG, false);
+    writeSessionFlag(UPGRADE_FLAG, false);
     writeTourDemoCookie(null);
     confettiFiredRef.current = false;
-    forceUpgradePreviewRef.current = false;
-    setCelebrating(false);
+    setTourCompleteCelebration(false);
+    setUpgradeRequired(false);
     setShowUpgradeOffer(false);
     setBusyTier(null);
     setCheckoutError(null);
-  }, []);
+    if (leavePaidRoute) {
+      router.replace("/");
+    }
+  }, [pathname, router, searchParams]);
 
-  // Preview: `?setupUpgrade=1` / `?upgrade=1` can re-fire anytime (even after boot).
+  // `?setupUpgrade=1` / `?upgrade=1` reopen the unpaid upgrade modal (not celebration).
   useEffect(() => {
     const wantsUpgrade =
       searchParams.get("setupUpgrade") === "1" ||
@@ -323,16 +494,15 @@ function ProductTourInner() {
     ) {
       return;
     }
-    forceUpgradePreviewRef.current = true;
     // Sync popup visibility from the URL (same pattern as ?tour=1).
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- open plans popup from ?upgrade=1 / ?setupUpgrade=1
-    openUpgradePopup({ confetti: true });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- open upgrade popup from ?upgrade=1 / ?setupUpgrade=1
+    openUpgradeRequired();
     const params = new URLSearchParams(searchParams.toString());
     params.delete("setupUpgrade");
     params.delete("upgrade");
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [openUpgradePopup, pathname, router, searchParams]);
+  }, [openUpgradeRequired, pathname, router, searchParams]);
 
   useEffect(() => {
     const onUpgrade = () => {
@@ -343,11 +513,11 @@ function ProductTourInner() {
       ) {
         return;
       }
-      openUpgradePopup({ confetti: false });
+      openUpgradeRequired();
     };
     window.addEventListener(OPEN_UPGRADE_EVENT, onUpgrade);
     return () => window.removeEventListener(OPEN_UPGRADE_EVENT, onUpgrade);
-  }, [openUpgradePopup, pathname]);
+  }, [openUpgradeRequired, pathname]);
 
   // Boot once from ?tour=1 or an in-progress session.
   useEffect(() => {
@@ -428,7 +598,8 @@ function ProductTourInner() {
         if (!res.ok || !data.url) {
           throw new Error(data.error ?? t.productTour.upgradeCheckoutError);
         }
-        writeCelebrateFlag(false);
+        writeSessionFlag(CELEBRATE_FLAG, false);
+        writeSessionFlag(UPGRADE_FLAG, false);
         writeTourDemoCookie(null);
         window.location.href = data.url;
       } catch (err) {
@@ -451,16 +622,12 @@ function ProductTourInner() {
       setRect(null);
       scrolledForStepRef.current = null;
       if (opts?.celebrate !== false) {
-        writeCelebrateFlag(true);
-        confettiFiredRef.current = false;
-        setCelebrating(true);
-        if (isBillingUiEnabled()) setShowUpgradeOffer(true);
+        openTourCelebration();
         // Keep the tour cookie until checkout or dismiss so the paywall
         // proxy does not yank this page out from under the popup.
       } else {
-        writeCelebrateFlag(false);
-        writeTourDemoCookie(null);
-        setCelebrating(false);
+        writeSessionFlag(CELEBRATE_FLAG, false);
+        setTourCompleteCelebration(false);
       }
       try {
         await fetch("/api/product-tour/complete", { method: "POST" });
@@ -470,7 +637,7 @@ function ProductTourInner() {
         setBusy(false);
       }
     },
-    []
+    [openTourCelebration]
   );
 
   const finishTour = useCallback(() => {
@@ -508,18 +675,27 @@ function ProductTourInner() {
   }, [active, pathname, router, step]);
 
   useEffect(() => {
-    if (!active && !celebrating) return;
+    if (!active && !tourCompleteCelebration && !upgradeRequired) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (celebrating) {
-        dismissCelebration();
+      if (tourCompleteCelebration || upgradeRequired) {
+        dismissUpgradeModals();
         return;
       }
-      void completeTour({ celebrate: true });
+      void completeTour({ celebrate: false }).then(() => {
+        if (isBillingUiEnabled()) openUpgradeRequired();
+      });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, celebrating, completeTour, dismissCelebration]);
+  }, [
+    active,
+    completeTour,
+    dismissUpgradeModals,
+    openUpgradeRequired,
+    tourCompleteCelebration,
+    upgradeRequired,
+  ]);
 
   // Measure the spotlight target — scroll once per step (instant), then track rect.
   useLayoutEffect(() => {
@@ -595,10 +771,31 @@ function ProductTourInner() {
 
   if (!mounted) return null;
 
-  if (celebrating) {
+  const planCards = showUpgradeOffer ? (
+    <UpgradePlanCards
+      billing={t.billing}
+      plansHeading={t.productTour.plansHeading}
+      upgradeBest={t.productTour.upgradeBest}
+      choosePlan={t.productTour.choosePlan}
+      choosePlanBusy={t.productTour.choosePlanBusy}
+      perMonthLabel={t.billing.perMonthLabel}
+      saleBadge={t.billing.saleBadge}
+      busyTier={busyTier}
+      checkoutError={checkoutError}
+      onCheckout={(tier) => void startCheckout(tier)}
+      dismissLabel={
+        tourCompleteCelebration
+          ? t.productTour.celebrationDismiss
+          : t.productTour.lookAroundFirst
+      }
+      onDismiss={dismissUpgradeModals}
+    />
+  ) : null;
+
+  if (tourCompleteCelebration) {
     return createPortal(
       <div
-        data-upgrade-modal
+        data-tour-celebration
         className="fixed inset-0 z-[9998] flex items-center justify-center overflow-y-auto bg-zinc-950/55 p-4 backdrop-blur-[2px]"
       >
         <div
@@ -635,135 +832,54 @@ function ProductTourInner() {
           <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
             {t.productTour.celebrationBody}
           </p>
-
-          {showUpgradeOffer ? (
-            <div className="mt-6 text-left">
-              <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-                {t.productTour.plansHeading}
-              </p>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {CHECKOUT_PLAN_ORDER.map((tier) => {
-                  const plan = PLANS[tier];
-                  const price = plan.priceMonthly;
-                  const wasPrice = compareAtPriceMonthly(tier);
-                  const showSale =
-                    isPaidTier(tier) &&
-                    price > 0 &&
-                    wasPrice != null &&
-                    wasPrice > price;
-                  const salePrice = showSale ? salePriceMonthly(tier) : price;
-                  const salePercent = showSale ? salePercentForTier(tier) : 0;
-                  const isBest = tier === "advanced";
-                  const copy = celebrationPlanCopy(t.billing, tier);
-                  const { name, tagline, highlights } = copy;
-                  return (
-                    <div
-                      key={tier}
-                      className={`relative flex flex-col rounded-2xl border p-4 ${
-                        isBest
-                          ? "plan-card-best"
-                          : "border-zinc-200/90 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/50"
-                      }`}
-                    >
-                      {isBest ? (
-                        <span className="plan-best-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-[0.14em]">
-                          {t.productTour.upgradeBest}
-                        </span>
-                      ) : null}
-                      <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
-                          {name}
-                        </h3>
-                        {showSale ? (
-                          <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
-                            {tf(t.billing.saleBadge, {
-                              percent: String(salePercent),
-                            })}
-                          </span>
-                        ) : null}
-                      </div>
-                      <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400">
-                        {tagline}
-                      </p>
-                      <p className="mt-2">
-                        {showSale ? (
-                          <>
-                            <span className="mr-1 text-sm font-medium text-zinc-400 line-through dark:text-zinc-500">
-                              ${wasPrice}
-                            </span>
-                            <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                              ${salePrice}
-                            </span>
-                          </>
-                        ) : (
-                          <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                            ${price}
-                          </span>
-                        )}
-                        <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                          {" "}
-                          {t.billing.perMonthLabel}
-                        </span>
-                      </p>
-                      <ul className="mt-3 flex-1 space-y-1.5 text-xs leading-snug text-zinc-600 dark:text-zinc-300">
-                        {highlights.map((h) => (
-                          <li key={h} className="flex items-start gap-1.5">
-                            <span
-                              className="mt-0.5 text-brand dark:text-brand-soft"
-                              aria-hidden
-                            >
-                              ✓
-                            </span>
-                            <span>{h}</span>
-                          </li>
-                        ))}
-                      </ul>
-                      <button
-                        type="button"
-                        disabled={busyTier != null}
-                        onClick={() => void startCheckout(tier)}
-                        className={`mt-4 inline-flex w-full items-center justify-center rounded-full px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
-                          isBest
-                            ? "bg-violet-600 text-white hover:bg-violet-700"
-                            : "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
-                        }`}
-                      >
-                        {busyTier === tier
-                          ? t.productTour.choosePlanBusy
-                          : tf(t.productTour.choosePlan, { name })}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-              {checkoutError ? (
-                <p
-                  className="mt-3 text-center text-xs font-medium text-red-600 dark:text-red-400"
-                  role="alert"
-                >
-                  {checkoutError}
-                </p>
-              ) : null}
-              <button
-                type="button"
-                onClick={dismissCelebration}
-                className="mt-5 inline-flex w-full items-center justify-center rounded-full px-4 py-2.5 text-sm font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
-              >
-                {t.productTour.lookAroundFirst}
-              </button>
-            </div>
-          ) : null}
-
+          {planCards}
           {!showUpgradeOffer ? (
             <button
               type="button"
               onClick={() => {
-                dismissCelebration();
+                dismissUpgradeModals();
                 router.replace("/");
               }}
               className="mt-6 inline-flex w-full items-center justify-center rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-hover"
             >
               {t.productTour.celebrationCta}
+            </button>
+          ) : null}
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  if (upgradeRequired) {
+    return createPortal(
+      <div
+        data-upgrade-modal
+        className="fixed inset-0 z-[9998] flex items-center justify-center overflow-y-auto bg-zinc-950/55 p-4 backdrop-blur-[2px]"
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="upgrade-required-title"
+          className="my-6 w-full max-w-4xl rounded-3xl border border-zinc-200 bg-white p-6 text-center shadow-2xl shadow-zinc-950/30 dark:border-zinc-700 dark:bg-zinc-950 sm:p-8"
+        >
+          <h2
+            id="upgrade-required-title"
+            className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
+          >
+            {t.productTour.upgradeRequiredTitle}
+          </h2>
+          <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+            {t.productTour.upgradeRequiredBody}
+          </p>
+          {planCards}
+          {!showUpgradeOffer ? (
+            <button
+              type="button"
+              onClick={dismissUpgradeModals}
+              className="mt-6 inline-flex w-full items-center justify-center rounded-full px-4 py-2.5 text-sm font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
+            >
+              {t.productTour.lookAroundFirst}
             </button>
           ) : null}
         </div>
@@ -911,7 +1027,11 @@ function ProductTourInner() {
             <button
               type="button"
               disabled={busy}
-              onClick={() => void completeTour({ celebrate: true })}
+              onClick={() => {
+                void completeTour({ celebrate: false }).then(() => {
+                  if (isBillingUiEnabled()) openUpgradeRequired();
+                });
+              }}
               className="inline-flex w-full items-center justify-center rounded-full px-4 py-2 text-sm font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
             >
               {t.productTour.skip}

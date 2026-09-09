@@ -7,6 +7,10 @@ const en = {
   celebrationTagline: "The edge for the class that's breaking you.",
   celebrationBody: "Pick a plan to start using Aroses — every feature unlocks with a subscription.",
   celebrationCta: "Let's go",
+  celebrationDismiss: "Not now",
+  upgradeRequiredTitle: "Upgrade to access features",
+  upgradeRequiredBody:
+    "Subscribe to unlock courses, live notes, tutoring, and study tools.",
   plansHeading: "Choose your plan",
   choosePlan: "Choose {name}",
   choosePlanBusy: "Redirecting…",
@@ -71,6 +75,10 @@ const ko: typeof en = {
   celebrationTagline: "당신을 힘들게 하는 그 수업을 이기기 위한 엣지.",
   celebrationBody: "요금제를 고르면 Aroses의 모든 기능을 쓸 수 있어요. 구독 후에 이용이 시작됩니다.",
   celebrationCta: "시작하기",
+  celebrationDismiss: "나중에",
+  upgradeRequiredTitle: "기능을 이용하려면 업그레이드하세요",
+  upgradeRequiredBody:
+    "구독하면 코스, 라이브 노트, 튜터링, 학습 도구를 모두 쓸 수 있어요.",
   plansHeading: "요금제 선택",
   choosePlan: "{name} 선택",
   choosePlanBusy: "이동 중…",

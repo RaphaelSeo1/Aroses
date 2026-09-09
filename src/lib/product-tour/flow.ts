@@ -39,3 +39,17 @@ export function tourCompletionShouldRedirectToSubscription(
   void alreadySubscribed;
   return false;
 }
+
+/** Why an unpaid user is seeing plan cards. */
+export type UnpaidUpgradeSource =
+  | "tourComplete"
+  | "upgradeQuery"
+  | "setupUpgradeQuery"
+  | "upgradeEvent";
+
+/** Confetti + finish-the-tour copy only after they actually complete the tour. */
+export function unpaidUpgradeIsTourCelebration(
+  source: UnpaidUpgradeSource
+): boolean {
+  return source === "tourComplete";
+}

@@ -17,6 +17,7 @@ import {
   shouldForceOnboarding,
   SUBSCRIPTION_ACCESS_PATH,
   tourCompletionShouldRedirectToSubscription,
+  unpaidUpgradeIsTourCelebration,
 } from "./flow.ts";
 import { buildFallbackProductTourSteps, buildProductTourSteps } from "./steps.ts";
 import { isTourDemoAccessForCourse, parseTourDemoCookie } from "./tour-demo-cookie.ts";
@@ -101,6 +102,10 @@ test("finishing the tour stays on the celebration popup instead of billing", () 
   assert.equal(SUBSCRIPTION_ACCESS_PATH, "/?upgrade=1");
   assert.equal(tourCompletionShouldRedirectToSubscription(false), false);
   assert.equal(tourCompletionShouldRedirectToSubscription(true), false);
+  assert.equal(unpaidUpgradeIsTourCelebration("tourComplete"), true);
+  assert.equal(unpaidUpgradeIsTourCelebration("upgradeQuery"), false);
+  assert.equal(unpaidUpgradeIsTourCelebration("setupUpgradeQuery"), false);
+  assert.equal(unpaidUpgradeIsTourCelebration("upgradeEvent"), false);
 });
 
 test("already-onboarded users are not forced through setup again", () => {
