@@ -12,6 +12,7 @@ const en = {
   choosePlanBusy: "Redirecting…",
   upgradeCheckoutError: "Could not start checkout. Try Plans & billing.",
   upgradeBest: "BEST",
+  newFeatureBadge: "New feature!",
   steps: {
     welcome: {
       title: "Welcome to your workspace",
@@ -34,8 +35,8 @@ const en = {
       body: "All your notes in one place — live lectures, tutor sessions, and handwritten notes. Next we'll open the Notes hub.",
     },
     notesHub: {
-      title: "Your Notes hub",
-      body: "Browse and organize notes from lectures and tutoring. Start a Live Notes capture when you want to record a class.",
+      title: "Live lecture notes",
+      body: "Share a lecture tab or capture audio from your mic — Aroses transcribes as you go and auto-generates structured notes from the recording. Screen capture works the same way, so you can keep listening while the notes write themselves.",
     },
     explore: {
       title: "Explore",
@@ -74,6 +75,7 @@ const ko: typeof en = {
   choosePlanBusy: "이동 중…",
   upgradeCheckoutError: "결제를 시작하지 못했어요. 요금제 및 결제에서 다시 시도해 주세요.",
   upgradeBest: "BEST",
+  newFeatureBadge: "새로운 기능!",
   steps: {
     welcome: {
       title: "워크스페이스에 오신 것을 환영해요",
@@ -96,8 +98,8 @@ const ko: typeof en = {
       body: "라이브 강의, 튜터 세션, 직접 쓴 노트까지 한곳에 모여 있어요. 다음으로 노트 허브를 열어볼게요.",
     },
     notesHub: {
-      title: "노트 허브",
-      body: "강의와 튜터링에서 쌓인 노트를 보고 정리할 수 있어요. 수업을 녹음하고 싶으면 Live Notes로 시작하세요.",
+      title: "라이브 강의 노트",
+      body: "강의 탭을 공유하거나 마이크 오디오를 캡처하면, Aroses가 실시간으로 받아 적고 녹음에서 구조화된 노트를 자동으로 만들어요. 화면 녹화도 같아서, 듣기만 해도 노트가 알아서 작성됩니다.",
     },
     explore: {
       title: "Explore",

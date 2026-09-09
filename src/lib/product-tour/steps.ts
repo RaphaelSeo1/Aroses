@@ -16,6 +16,8 @@ export type ProductTourStep = {
   fallbackTarget?: string;
   /** Key under `t.productTour.steps`. */
   copyKey: string;
+  /** Optional callout chip, e.g. a colorful "New feature!" badge. */
+  badge?: "newFeature";
 };
 
 export const PRODUCT_TOUR_STORAGE_KEY = "aroses_product_tour";
@@ -65,6 +67,7 @@ function siteTourSteps(): ProductTourStep[] {
       route: "/notes",
       target: "notes-hub",
       copyKey: "notesHub",
+      badge: "newFeature",
     },
     {
       id: "explore",

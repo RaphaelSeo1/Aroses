@@ -79,6 +79,8 @@ test("site tour comes first, then a short Bio 1A dip at Explore", () => {
   assert.ok(ids.includes("tutor"));
   assert.ok(ids.includes("account"));
   assert.ok(steps.length <= 12);
+  const notesHub = steps.find((s) => s.id === "notes-hub");
+  assert.equal(notesHub?.badge, "newFeature");
   assert.equal(productTourStartHref(BIO_1A_COURSE_ID), "/?tour=1");
 });
 

@@ -810,19 +810,41 @@ function ProductTourInner() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="product-tour-title"
-        className="absolute z-10 rounded-2xl border border-zinc-200 bg-white p-5 shadow-2xl shadow-zinc-950/25 transition-[top,left] duration-300 ease-out dark:border-zinc-700 dark:bg-zinc-950"
+        className={`absolute z-10 rounded-2xl p-5 shadow-2xl transition-[top,left] duration-300 ease-out ${
+          step.badge === "newFeature"
+            ? "border border-violet-200/90 bg-gradient-to-br from-violet-50 via-white to-rose-50 shadow-violet-950/20 dark:border-violet-700/60 dark:from-violet-950/50 dark:via-zinc-950 dark:to-rose-950/30 dark:shadow-violet-950/40"
+            : "border border-zinc-200 bg-white shadow-zinc-950/25 dark:border-zinc-700 dark:bg-zinc-950"
+        }`}
         style={{
           top: tipTop,
           left: tipLeft,
           width: tooltipWidth,
         }}
       >
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
-          {tf(t.productTour.stepOf, {
-            current: stepIndex + 1,
-            total,
-          })}
-        </p>
+        {step.badge === "newFeature" ? (
+          <p className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-violet-600 via-fuchsia-500 to-rose-500 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-white shadow-[0_6px_16px_rgba(139,92,246,0.45)]">
+            <span
+              className="h-1.5 w-1.5 animate-soft-pulse rounded-full bg-white"
+              aria-hidden
+            />
+            {t.productTour.newFeatureBadge}
+          </p>
+        ) : (
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
+            {tf(t.productTour.stepOf, {
+              current: stepIndex + 1,
+              total,
+            })}
+          </p>
+        )}
+        {step.badge === "newFeature" ? (
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-violet-500 dark:text-violet-300">
+            {tf(t.productTour.stepOf, {
+              current: stepIndex + 1,
+              total,
+            })}
+          </p>
+        ) : null}
         <h2
           id="product-tour-title"
           className="mt-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
