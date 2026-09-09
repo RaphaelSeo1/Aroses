@@ -13,7 +13,7 @@ import {
 import { createPortal } from "react-dom";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import {
-  PLAN_ORDER,
+  CHECKOUT_PLAN_ORDER,
   PLANS,
   isPaidTier,
   type PlanTier,
@@ -27,10 +27,6 @@ import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { configuredTourCourseId } from "@/lib/product-tour/bio-1a";
 import {
-  afterOnboardingDestination,
-  tourCompletionShouldRedirectToSubscription,
-} from "@/lib/product-tour/flow";
-import {
   buildProductTourSteps,
   clearTourSession,
   clampTourStep,
@@ -42,6 +38,8 @@ import {
 } from "@/lib/product-tour/steps";
 import { writeTourDemoCookie } from "@/lib/product-tour/tour-demo-cookie";
 import { createClient } from "@/lib/supabase/client";
+import { TourGuideOrb } from "./TourGuideOrb";
+import { hasPaidProductAccess } from "@/lib/billing/paid-access";
 
 const CELEBRATE_FLAG = "aroses_product_tour_celebrate";
 
@@ -293,15 +291,19 @@ function ProductTourInner() {
         if (!user || cancelled) return;
         const { data } = await supabase
           .from("user_subscriptions")
-          .select("tier, status")
+          .select("tier, status, admin_granted")
           .eq("user_id", user.id)
           .maybeSingle();
         if (cancelled || forceUpgradePreviewRef.current) return;
         const tier = (data?.tier as string | undefined) ?? "free";
         const status = (data?.status as string | undefined) ?? "inactive";
-        const paid =
-          tier !== "free" &&
-          (status === "active" || status === "trialing" || status === "past_due");
+        const paid = hasPaidProductAccess({
+          tier,
+          status,
+          adminGranted: Boolean(
+            (data as { admin_granted?: boolean } | null)?.admin_granted
+          ),
+        });
         if (paid) setShowUpgradeOffer(false);
       } catch {
         /* keep offer visible */
@@ -324,7 +326,7 @@ function ProductTourInner() {
       setCourseAvailable(available);
       setStepIndex(next);
       setActive(true);
-      writeTourDemoCookie(available ? tourCourseId : null);
+      writeTourDemoCookie(tourCourseId || configuredTourCourseId());
       writeTourSession({ active: true, step: next, courseId: tourCourseId });
     },
     [courseAvailable, courseId]
@@ -400,7 +402,7 @@ function ProductTourInner() {
 
       if (session?.active) {
         scrolledForStepRef.current = null;
-        writeTourDemoCookie(available ? tourCourseId : null);
+        writeTourDemoCookie(tourCourseId || configuredTourCourseId());
         setStepIndex(
           clampTourStep(
             session.step,
@@ -455,15 +457,14 @@ function ProductTourInner() {
   );
 
   const completeTour = useCallback(
-    async (opts?: { celebrate?: boolean; redirectToPlans?: boolean }) => {
+    async (opts?: { celebrate?: boolean }) => {
       setBusy(true);
       clearTourSession();
       writeTourDemoCookie(null);
       setActive(false);
       setRect(null);
       scrolledForStepRef.current = null;
-      const goToPlans = opts?.redirectToPlans !== false;
-      if (opts?.celebrate) {
+      if (opts?.celebrate !== false) {
         writeCelebrateFlag(true);
         confettiFiredRef.current = false;
         setCelebrating(true);
@@ -478,18 +479,12 @@ function ProductTourInner() {
       } finally {
         setBusy(false);
       }
-      if (goToPlans && !opts?.celebrate) {
-        const dest = tourCompletionShouldRedirectToSubscription(false)
-          ? afterOnboardingDestination()
-          : "/";
-        router.replace(dest);
-      }
     },
-    [router]
+    []
   );
 
   const finishTour = useCallback(() => {
-    void completeTour({ redirectToPlans: true });
+    void completeTour({ celebrate: true });
   }, [completeTour]);
 
   const goToStep = useCallback(
@@ -527,14 +522,14 @@ function ProductTourInner() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (celebrating) {
-        dismissCelebration();
+        if (!showUpgradeOffer) dismissCelebration();
         return;
       }
-      void completeTour({ celebrate: false, redirectToPlans: false });
+      void completeTour({ celebrate: true });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, celebrating, completeTour, dismissCelebration]);
+  }, [active, celebrating, completeTour, dismissCelebration, showUpgradeOffer]);
 
   // Measure the spotlight target — scroll once per step (instant), then track rect.
   useLayoutEffect(() => {
@@ -653,8 +648,8 @@ function ProductTourInner() {
               <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                 {t.productTour.plansHeading}
               </p>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {PLAN_ORDER.map((tier) => {
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {CHECKOUT_PLAN_ORDER.map((tier) => {
                   const plan = PLANS[tier];
                   const price = plan.priceMonthly;
                   const wasPrice = compareAtPriceMonthly(tier);
@@ -730,33 +725,20 @@ function ProductTourInner() {
                           </li>
                         ))}
                       </ul>
-                      {isPaidTier(tier) ? (
-                        <button
-                          type="button"
-                          disabled={busyTier != null}
-                          onClick={() => void startCheckout(tier)}
-                          className={`mt-4 inline-flex w-full items-center justify-center rounded-full px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
-                            isBest
-                              ? "bg-violet-600 text-white hover:bg-violet-700"
-                              : "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
-                          }`}
-                        >
-                          {busyTier === tier
-                            ? t.productTour.choosePlanBusy
-                            : tf(t.productTour.choosePlan, { name })}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            dismissCelebration();
-                            router.replace(afterOnboardingDestination());
-                          }}
-                          className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
-                        >
-                          {t.productTour.celebrationCta}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        disabled={busyTier != null}
+                        onClick={() => void startCheckout(tier)}
+                        className={`mt-4 inline-flex w-full items-center justify-center rounded-full px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
+                          isBest
+                            ? "bg-violet-600 text-white hover:bg-violet-700"
+                            : "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
+                        }`}
+                      >
+                        {busyTier === tier
+                          ? t.productTour.choosePlanBusy
+                          : tf(t.productTour.choosePlan, { name })}
+                      </button>
                     </div>
                   );
                 })}
@@ -777,7 +759,7 @@ function ProductTourInner() {
               type="button"
               onClick={() => {
                 dismissCelebration();
-                router.replace(afterOnboardingDestination());
+                router.replace("/");
               }}
               className="mt-6 inline-flex w-full items-center justify-center rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-hover"
             >
@@ -845,7 +827,7 @@ function ProductTourInner() {
 
       {hole ? (
         <div
-          className="pointer-events-none absolute rounded-2xl ring-2 ring-white shadow-[0_0_0_1px_rgba(0,0,0,0.15)] dark:ring-brand-soft"
+          className="pointer-events-none absolute rounded-2xl ring-2 ring-white shadow-[0_0_0_1px_rgba(0,0,0,0.15)] transition-[top,left,width,height] duration-300 ease-out dark:ring-brand-soft"
           style={{
             top: hole.top,
             left: hole.left,
@@ -856,11 +838,19 @@ function ProductTourInner() {
         />
       ) : null}
 
+      <TourGuideOrb
+        hole={
+          hole
+            ? { top: hole.top, left: hole.left + hole.width }
+            : null
+        }
+      />
+
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="product-tour-title"
-        className="absolute z-10 rounded-2xl border border-zinc-200 bg-white p-5 shadow-2xl shadow-zinc-950/25 dark:border-zinc-700 dark:bg-zinc-950"
+        className="absolute z-10 rounded-2xl border border-zinc-200 bg-white p-5 shadow-2xl shadow-zinc-950/25 transition-[top,left] duration-300 ease-out dark:border-zinc-700 dark:bg-zinc-950"
         style={{
           top: tipTop,
           left: tipLeft,
@@ -899,7 +889,7 @@ function ProductTourInner() {
             <button
               type="button"
               disabled={busy}
-              onClick={() => void completeTour({ redirectToPlans: true })}
+              onClick={() => void completeTour({ celebrate: true })}
               className="inline-flex w-full items-center justify-center rounded-full px-4 py-2 text-sm font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
             >
               {t.productTour.skip}

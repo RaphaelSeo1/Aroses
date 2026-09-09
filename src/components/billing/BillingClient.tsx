@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   PLANS,
-  PLAN_ORDER,
+  CHECKOUT_PLAN_ORDER,
   isPaidTier,
   type PlanTier,
 } from "@/lib/billing/plans";
@@ -205,7 +205,7 @@ export function BillingClient({
             {t.billing.currentPlan}
           </p>
           <p className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-            {currentPlan.name}
+            {currentTier === "free" ? t.billing.noActiveSub : currentPlan.name}
             {currentTier !== "free" ? (
               <span className="ml-2 text-sm font-normal text-zinc-500">
                 ·{" "}
@@ -258,8 +258,8 @@ export function BillingClient({
       </div>
 
       {/* Plan cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {PLAN_ORDER.map((tier) => {
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {CHECKOUT_PLAN_ORDER.map((tier) => {
           const plan = planStrings(t.billing, tier);
           const price = PLANS[tier].priceMonthly;
           const isCurrent = tier === currentTier;

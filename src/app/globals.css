@@ -567,3 +567,35 @@ html.dark .plan-card-best {
   }
 }
 
+@keyframes tourGuideOrbRing {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.85);
+    opacity: 0;
+  }
+}
+
+.tour-guide-orb-ring {
+  border: 2px solid rgb(225 29 72 / 0.45);
+  animation: tourGuideOrbRing 1.8s ease-out infinite;
+}
+
+.tour-guide-orb-ring-delay {
+  animation-delay: 0.7s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-guide-orb-ring,
+  .tour-guide-orb-ring-delay {
+    animation: none;
+    opacity: 0.35;
+    transform: scale(1.15);
+  }
+}
+
+
+
+

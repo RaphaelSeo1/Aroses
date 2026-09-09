@@ -11,13 +11,14 @@ import {
 } from "./bio-1a.ts";
 import {
   afterOnboardingDestination,
+  afterTourSkipDestination,
   completedOnboardingRedirectPath,
   productTourStartHref,
   shouldForceOnboarding,
   SUBSCRIPTION_ACCESS_PATH,
   tourCompletionShouldRedirectToSubscription,
 } from "./flow.ts";
-import { buildFallbackProductTourSteps, buildProductTourSteps, hrefForTourStep } from "./steps.ts";
+import { buildFallbackProductTourSteps, buildProductTourSteps } from "./steps.ts";
 import { isTourDemoAccessForCourse, parseTourDemoCookie } from "./tour-demo-cookie.ts";
 
 test("Bio 1A identity matches founder titles and the live course id", () => {
@@ -56,35 +57,47 @@ test("pickTourCourseFromList falls back to a Bio 1A title when the live id is mi
   assert.equal(pickTourCourseFromList([{ id: localId, title: "Chem 1A" }]), null);
 });
 
-test("onboarding tour steps walk Explore Bio 1A modules, notes, quiz, and review", () => {
+test("site tour comes first, then a short Bio 1A dip at Explore", () => {
   const steps = buildProductTourSteps(BIO_1A_COURSE_ID);
-  const routes = steps.map((s) => s.route);
-  assert.ok(routes.includes("/explore"));
-  assert.ok(routes.includes(`/explore/${BIO_1A_COURSE_ID}`));
-  assert.ok(routes.includes(`/explore/${BIO_1A_COURSE_ID}/study`));
-  assert.ok(routes.includes(`/explore/${BIO_1A_COURSE_ID}/study/quiz`));
-  assert.ok(routes.includes("/notes"));
-  assert.ok(routes.includes("/dashboard/review"));
+  const ids = steps.map((s) => s.id);
+  assert.deepEqual(ids.slice(0, 7), [
+    "welcome",
+    "create-course",
+    "course-modes",
+    "library-courses",
+    "notes-tile",
+    "notes-hub",
+    "explore",
+  ]);
+  const bioStart = ids.indexOf("explore-bio-1a");
+  assert.ok(bioStart > ids.indexOf("explore"));
+  assert.equal(ids[bioStart + 1], "course-overview");
   assert.equal(
-    hrefForTourStep(steps.find((s) => s.id === "lesson-content")!),
-    `/explore/${BIO_1A_COURSE_ID}/study?mode=learn`
+    ids.filter((id) => id === "explore-bio-1a" || id === "course-overview").length,
+    2
   );
-  assert.equal(productTourStartHref(BIO_1A_COURSE_ID), `/explore/${BIO_1A_COURSE_ID}?tour=1`);
+  assert.ok(ids.includes("tutor"));
+  assert.ok(ids.includes("account"));
+  assert.ok(steps.length <= 12);
+  assert.equal(productTourStartHref(BIO_1A_COURSE_ID), "/?tour=1");
 });
 
-test("missing Bio 1A falls back to Explore, notes, and review without a fake course id", () => {
+test("missing Bio 1A keeps the site tour without a fake course id", () => {
   const steps = buildProductTourSteps(null, false);
   assert.deepEqual(
-    steps.map((s) => s.route),
-    buildFallbackProductTourSteps().map((s) => s.route)
+    steps.map((s) => s.id),
+    buildFallbackProductTourSteps().map((s) => s.id)
   );
   assert.ok(!steps.some((s) => s.route.startsWith("/explore/")));
+  assert.ok(steps.some((s) => s.id === "welcome"));
+  assert.ok(steps.some((s) => s.id === "explore"));
 });
 
-test("finishing onboarding or the tour sends new users to subscription access", () => {
-  assert.equal(afterOnboardingDestination(), SUBSCRIPTION_ACCESS_PATH);
+test("finishing the tour stays on the celebration popup instead of billing", () => {
+  assert.equal(afterOnboardingDestination(), "/?tour=1");
+  assert.equal(afterTourSkipDestination(), "/?setupUpgrade=1");
   assert.equal(SUBSCRIPTION_ACCESS_PATH, "/dashboard/profile?tab=billing");
-  assert.equal(tourCompletionShouldRedirectToSubscription(false), true);
+  assert.equal(tourCompletionShouldRedirectToSubscription(false), false);
   assert.equal(tourCompletionShouldRedirectToSubscription(true), false);
 });
 

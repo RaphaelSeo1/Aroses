@@ -65,7 +65,7 @@ export async function assertCanCreateCourse(
             ? `Your ${planName} plan includes up to ${cap} courses. Upgrade to Premium for unlimited course building.`
             : tier === "student"
               ? `Your ${planName} plan includes up to ${cap} courses. Upgrade to Advanced for 5 courses, or Premium for unlimited.`
-              : `Free includes ${cap} course. Upgrade to Student for 2, Advanced for 5, or Premium for unlimited.`,
+              : `A paid plan is required to create courses. Upgrade to Student for 2, Advanced for 5, or Premium for unlimited.`,
       tier,
       used,
       cap,

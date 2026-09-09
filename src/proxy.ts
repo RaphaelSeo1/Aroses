@@ -16,6 +16,14 @@ import {
   unauthenticatedHomePath,
   unauthenticatedProductEntryPath,
 } from "@/lib/auth/public-routes";
+import {
+  hasPaidProductAccess,
+  isUnpaidProductAllowedPath,
+  PAID_ACCESS_REDIRECT,
+  unpaidUserHasTourAccess,
+} from "@/lib/billing/paid-access";
+import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
+import { TOUR_DEMO_COOKIE } from "@/lib/product-tour/tour-demo-cookie";
 
 function unavailableResponse(baseResponse: NextResponse): NextResponse {
   const response = NextResponse.json(
@@ -182,6 +190,57 @@ export async function proxy(request: NextRequest) {
       url.pathname = "/";
       url.search = "";
       return NextResponse.redirect(url);
+    }
+  }
+
+  if (
+    user &&
+    !needsOnboarding &&
+    isBillingUiEnabled() &&
+    !isAppAdminEnvUser(user) &&
+    !pathname.startsWith("/api/")
+  ) {
+    let paid = false;
+    try {
+      const { data, error } = await supabase
+        .from("user_subscriptions")
+        .select("tier, status, admin_granted")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (error && /admin_granted|schema cache/i.test(error.message ?? "")) {
+        const legacy = await supabase
+          .from("user_subscriptions")
+          .select("tier, status")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        paid = hasPaidProductAccess(legacy.data);
+      } else if (!error) {
+        paid = hasPaidProductAccess({
+          tier: data?.tier,
+          status: data?.status,
+          adminGranted: Boolean(
+            (data as { admin_granted?: boolean } | null)?.admin_granted
+          ),
+        });
+      }
+    } catch (error) {
+      console.error("[proxy] subscription lookup failed:", error);
+      return unavailableResponse(supabaseResponse);
+    }
+
+    const tourCookie = request.cookies.get(TOUR_DEMO_COOKIE)?.value ?? null;
+    const search = request.nextUrl.search.replace(/^\?/, "");
+    if (
+      !paid &&
+      !unpaidUserHasTourAccess(tourCookie) &&
+      !isUnpaidProductAllowedPath(pathname, search)
+    ) {
+      const dest = new URL(PAID_ACCESS_REDIRECT, request.nextUrl.origin);
+      const redirectResponse = NextResponse.redirect(dest);
+      supabaseResponse.cookies.getAll().forEach((cookie) => {
+        redirectResponse.cookies.set(cookie.name, cookie.value);
+      });
+      return redirectResponse;
     }
   }
 

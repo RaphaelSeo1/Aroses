@@ -52,10 +52,10 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     name: "Free",
     priceMonthly: 0,
     stripePriceId: null,
-    voiceHours: 0.5,
-    maxCourses: 1,
-    maxLectureRecordingsPerMonth: 1,
-    tagline: "Everything to start learning, on us.",
+    voiceHours: 0,
+    maxCourses: 0,
+    maxLectureRecordingsPerMonth: 0,
+    tagline: "Unpaid default — not offered at checkout.",
     highlights: [
       "30 minutes of voice tutoring / month",
       "Build 1 course · 1 lecture recording / month",
@@ -110,8 +110,11 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
   },
 };
 
-/** Display / iteration order, cheapest first. */
+/** Internal order including the unpaid default (not shown at checkout). */
 export const PLAN_ORDER: PlanTier[] = ["free", "student", "advanced", "premium"];
+
+/** Plans students can buy. Free is not offered. */
+export const CHECKOUT_PLAN_ORDER: PlanTier[] = ["student", "advanced", "premium"];
 
 /**
  * À-la-carte voice top-up (placeholder). The purchase flow is a follow-up; the

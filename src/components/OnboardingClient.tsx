@@ -20,7 +20,7 @@ import {
   type OnboardingReferral,
 } from "@/lib/onboarding";
 import { filterSchoolSuggestions } from "@/lib/school-suggestions";
-import { productTourStartHref, afterOnboardingDestination } from "@/lib/product-tour/flow";
+import { productTourStartHref, afterTourSkipDestination } from "@/lib/product-tour/flow";
 import { configuredTourCourseId } from "@/lib/product-tour/bio-1a";
 import { writeTourDemoCookie } from "@/lib/product-tour/tour-demo-cookie";
 
@@ -780,7 +780,7 @@ export function OnboardingClient() {
                         /* still leave onboarding */
                       }
                       writeTourDemoCookie(null);
-                      router.replace(afterOnboardingDestination());
+                      router.replace(afterTourSkipDestination());
                       router.refresh();
                     })();
                   }}

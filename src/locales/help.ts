@@ -10,7 +10,7 @@ const en = {
   subtitle:
     "Everything in one place — with UI previews of what you'll see on screen. Video walkthroughs are coming soon; the written guide is kept up to date with the app.",
   replayTour: "Replay site tour",
-  replayTourHint: "Walk through the published Bio 1A course, notes, quiz, and Review again.",
+  replayTourHint: "Replay the site walkthrough, including a short look at Bio 1A.",
   ...helpContent.en,
 };
 
@@ -24,7 +24,7 @@ const ko: typeof en = {
   subtitle:
     "화면에서 보게 될 UI 미리보기와 함께 모든 내용을 한곳에 모았어요. 영상 워크스루는 곧 제공될 예정이며, 작성 가이드는 앱과 함께 업데이트돼요.",
   replayTour: "사이트 둘러보기 다시 보기",
-  replayTourHint: "공개된 Bio 1A 코스와 노트, 퀴즈, Review를 다시 한 번 둘러봐요.",
+  replayTourHint: "사이트 둘러보기와 Bio 1A 짧은 코스 투어를 다시 볼 수 있어요.",
   ...helpContent.ko,
 };
 

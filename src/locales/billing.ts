@@ -40,7 +40,7 @@ const en = {
   planPremiumHighlight3: "Priority features (coming soon)",
   perMonthLabel: "/ month",
   subtitleLong:
-    "Voice tutoring and lecture recordings are metered monthly. Free includes 1 course and 1 lecture recording; Student up to 2 courses and 5 recordings; Advanced up to 5 courses and 10 recordings; Premium unlimited courses and 20 recordings. Quizzes, spaced repetition, and text tutoring stay unlimited. When voice hours run out, voice switches to free text mode — you're never blocked mid-study.",
+    "Voice tutoring and lecture recordings are metered monthly. Student includes up to 2 courses and 5 recordings; Advanced up to 5 courses and 10 recordings; Premium unlimited courses and 20 recordings. Quizzes, spaced repetition, and text tutoring stay unlimited. When voice hours run out, voice switches to text mode — you're never blocked mid-study.",
   lectureCapBanner:
     "You've used all lecture recordings on your plan for this period ({used} / {cap}). Upgrade for more, or wait until your next billing period.",
   checkoutSuccessLong:
@@ -106,7 +106,7 @@ const ko: typeof en = {
   planPremiumHighlight3: "우선 기능 (곧 제공)",
   perMonthLabel: "/ 월",
   subtitleLong:
-    "음성 튜터링과 강의 녹음은 월간으로 제한돼요. 무료는 코스 1개·녹음 1회, 스튜던트는 코스 최대 2개·녹음 5회, 어드밴스드는 코스 최대 5개·녹음 10회, 프리미엄은 무제한 코스·녹음 20회예요. 퀴즈·간격 반복·텍스트 튜터링은 무제한이며, 음성을 다 쓰면 무료 텍스트 모드로 전환돼요 — 학습이 중단되지는 않아요.",
+    "음성 튜터링과 강의 녹음은 월간으로 제한돼요. 스튜던트는 코스 최대 2개·녹음 5회, 어드밴스드는 코스 최대 5개·녹음 10회, 프리미엄은 무제한 코스·녹음 20회예요. 퀴즈·간격 반복·텍스트 튜터링은 무제한이며, 음성을 다 쓰면 텍스트 모드로 전환돼요 — 학습이 중단되지는 않아요.",
   lectureCapBanner:
     "이번 기간 강의 녹음 한도를 모두 사용했어요 ({used} / {cap}). 업그레이드하거나 다음 결제주기가 될 때까지 기다려 주세요.",
   checkoutSuccessLong:
