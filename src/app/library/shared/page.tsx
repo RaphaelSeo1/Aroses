@@ -51,6 +51,7 @@ export default async function LibrarySharedPage() {
                 <li key={course.id}>
                   <Link
                     href={`/dashboard/courses/${course.id}`}
+                    data-requires-paid
                     className="block rounded-2xl border border-zinc-200/90 bg-white p-4 shadow-sm transition hover:border-indigo-200 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-indigo-900/50"
                   >
                     <p className="font-semibold text-zinc-900 dark:text-zinc-50">

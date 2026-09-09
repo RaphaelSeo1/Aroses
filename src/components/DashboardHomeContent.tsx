@@ -122,6 +122,7 @@ export async function DashboardHomeContent({
                 <div className="grid gap-4 md:grid-cols-3">
                   <Link
                     href="/dashboard/courses/new"
+                    data-requires-paid
                     data-tour="home-create-course"
                     className={[
                       "group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md",
@@ -165,6 +166,7 @@ export async function DashboardHomeContent({
 
                   <Link
                     href="/tutor-session"
+                    data-requires-paid
                     className="group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-violet-50/80 via-white to-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:border-zinc-800 dark:from-violet-950/30 dark:via-zinc-950 dark:to-zinc-950 dark:hover:border-violet-800"
                   >
                     <div
@@ -215,6 +217,7 @@ export async function DashboardHomeContent({
                   <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
                     <Link
                       href="/dashboard/courses/new"
+                      data-requires-paid
                       className="inline-flex justify-center rounded-full bg-zinc-900 px-8 py-3 text-sm font-semibold text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
                     >
                       {t.dashboard.createACourse}

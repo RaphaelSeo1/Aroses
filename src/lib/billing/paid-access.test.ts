@@ -109,6 +109,10 @@ test("learn, tutor, live notes, review, and note-doc routes are paid features", 
   );
   assert.equal(isPaidFeaturePath("/dashboard/review"), true);
   assert.equal(isPaidFeaturePath("/notes/doc/abc"), true);
+  assert.equal(isPaidFeaturePath("/notes/tutor/sess"), true);
+  assert.equal(isPaidFeaturePath("/notes/material/mat"), true);
+  assert.equal(isPaidFeaturePath("/dashboard/courses/abc"), true);
+  assert.equal(isPaidFeaturePath("/dashboard/courses/abc/settings"), true);
   assert.equal(
     isPaidFeaturePath("/dashboard/courses/abc/study/quiz"),
     true
@@ -126,19 +130,27 @@ test("learn, tutor, live notes, review, and note-doc routes are paid features", 
     unpaidUserShouldBlockFeaturePath("/dashboard/courses/abc/learn"),
     true
   );
+  assert.equal(
+    unpaidUserShouldBlockFeaturePath("/dashboard/courses/abc"),
+    true
+  );
+  assert.equal(unpaidUserShouldBlockFeaturePath("/notes/tutor/sess"), true);
+  assert.equal(unpaidUserShouldBlockFeaturePath("/notes/material/mat"), true);
+  assert.equal(unpaidUserShouldBlockFeaturePath("/dashboard/courses"), false);
 });
 
 test("hubs, profile, help, and public pages stay browseable", () => {
   assert.equal(isPaidFeaturePath("/"), false);
   assert.equal(isPaidFeaturePath("/notes"), false);
-  assert.equal(isPaidFeaturePath("/notes/tutor/sess"), false);
-  assert.equal(isPaidFeaturePath("/notes/material/mat"), false);
+  assert.equal(isPaidFeaturePath("/notes/"), false);
   assert.equal(isPaidFeaturePath("/explore"), false);
   assert.equal(
     isPaidFeaturePath("/explore/4b2be649-2da4-4790-a71c-36de0adf704e"),
     false
   );
-  assert.equal(isPaidFeaturePath("/dashboard/courses/abc"), false);
+  assert.equal(isPaidFeaturePath("/dashboard"), false);
+  assert.equal(isPaidFeaturePath("/dashboard/courses"), false);
+  assert.equal(isPaidFeaturePath("/dashboard/courses/"), false);
   assert.equal(isPaidFeaturePath("/dashboard/profile"), false);
   assert.equal(isPaidFeaturePath("/dashboard/profile", "tab=general"), false);
   assert.equal(isPaidFeaturePath("/help"), false);
@@ -173,7 +185,10 @@ test("unpaid mutations may still hit billing, tour, onboarding, and ui-locale AP
   assert.equal(isUnpaidMutationAllowedApi("/api/onboarding"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/ui-locale"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/notes"), false);
+  assert.equal(isUnpaidMutationAllowedApi("/api/notes/bulk"), false);
   assert.equal(isUnpaidMutationAllowedApi("/api/courses"), false);
+  assert.equal(isUnpaidMutationAllowedApi("/api/courses/reorder"), false);
+  assert.equal(isUnpaidMutationAllowedApi("/api/live-notes"), false);
 });
 
 test("a tour demo cookie unlocks the in-progress walkthrough", () => {

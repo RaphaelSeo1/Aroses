@@ -166,6 +166,7 @@ export default async function ExploreCoursePage({ params }: Props) {
               <>
                 <Link
                   href={studyHref}
+                  data-requires-paid
                   data-tour="explore-start-learning"
                   className="inline-flex w-full items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/30 ring-2 ring-white/25 transition hover:bg-brand-hover sm:w-auto dark:bg-brand dark:hover:bg-brand-soft"
                 >

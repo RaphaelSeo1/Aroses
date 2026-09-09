@@ -100,17 +100,22 @@ export function unpaidGateShouldRedirect(
 }
 
 /**
- * Routes that actually use the product (learn, tutor, study, quiz, record,
- * create, review, billing). Unpaid users may still *view* hubs like Home,
- * Notes, Explore, and the courses list.
+ * Routes that actually use the product (workspace, learn, tutor, study, quiz,
+ * record, create, review, note editors, billing). Unpaid users may still
+ * *view* hubs like Home, Notes, Explore, and the courses list.
  */
 export function isPaidFeaturePath(pathname: string, search = ""): boolean {
   if (isBillingSettingsPath(pathname, search)) return true;
-  if (isPathOrPrefix(pathname, "/dashboard/courses/new")) return true;
+  if (pathname === "/dashboard/courses" || pathname === "/dashboard/courses/") {
+    return false;
+  }
+  if (isPathOrPrefix(pathname, "/dashboard/courses")) return true;
   if (isPathOrPrefix(pathname, "/tutor-session")) return true;
   if (isPathOrPrefix(pathname, "/sessions")) return true;
   if (isPathOrPrefix(pathname, "/dashboard/review")) return true;
   if (isPathOrPrefix(pathname, "/notes/doc")) return true;
+  if (isPathOrPrefix(pathname, "/notes/tutor")) return true;
+  if (isPathOrPrefix(pathname, "/notes/material")) return true;
   if (/\/study(?:\/|$)/.test(pathname)) return true;
   if (/\/quiz(?:\/|$)/.test(pathname)) return true;
   if (/\/record(?:\/|$)/.test(pathname)) return true;

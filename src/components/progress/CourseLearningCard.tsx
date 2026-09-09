@@ -39,6 +39,7 @@ export function CourseLearningCard({
           <h2 className="truncate text-base font-semibold text-brand-ink dark:text-white">
             <Link
               href={workspaceHref}
+              data-requires-paid={!explore ? true : undefined}
               className="hover:text-brand dark:hover:text-brand-soft"
             >
               {course.title}
@@ -55,6 +56,7 @@ export function CourseLearningCard({
             <button
               type="button"
               onClick={onRemove}
+              data-requires-paid
               className="rounded-full border border-zinc-300/90 bg-white/90 px-3 py-1.5 text-xs font-semibold text-zinc-700 shadow-sm transition hover:border-red-300 hover:bg-red-50 hover:text-red-700 dark:border-zinc-600 dark:bg-zinc-900/80 dark:text-zinc-200 dark:hover:border-red-800 dark:hover:bg-red-950/50 dark:hover:text-red-300"
             >
               Remove
@@ -62,6 +64,7 @@ export function CourseLearningCard({
           ) : null}
           <Link
             href={studyHref}
+            data-requires-paid
             className="inline-flex justify-center rounded-full bg-brand px-3.5 py-1.5 text-center text-xs font-semibold text-white hover:bg-brand-hover dark:bg-brand"
           >
             Study
@@ -111,6 +114,7 @@ export function CourseLearningCard({
         </span>
         <Link
           href={workspaceHref}
+          data-requires-paid={!explore ? true : undefined}
           className="ml-auto text-xs font-medium text-brand-muted hover:text-brand-ink dark:text-brand-soft dark:hover:text-white"
         >
           {explore ? "Explore" : "Workspace"} →
@@ -140,6 +144,7 @@ export function CourseLearningCard({
                       ? `/explore/${course.courseId}/study?material=${m.materialId}&mode=learn`
                       : `/dashboard/courses/${course.courseId}/study?material=${m.materialId}&mode=learn`
                   }
+                  data-requires-paid
                   className="text-xs font-semibold text-brand hover:underline dark:text-brand-soft"
                 >
                   Open

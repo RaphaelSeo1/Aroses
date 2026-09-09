@@ -131,6 +131,7 @@ export function NoteDocCard({
       <button
         type="button"
         onClick={onToggleSelect}
+        data-requires-paid
         className={`${cardShell} text-left hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md dark:hover:border-violet-800 ${
           selected
             ? "border-violet-400 ring-2 ring-violet-400/40"
@@ -166,6 +167,7 @@ export function NoteDocCard({
     <div
       ref={canDrag ? setNodeRef : undefined}
       style={dragStyle}
+      data-requires-paid
       className="group relative h-full"
     >
       <Link

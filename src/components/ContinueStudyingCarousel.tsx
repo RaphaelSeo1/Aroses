@@ -185,6 +185,7 @@ export function ContinueStudyingCarousel({
                           isExploreLearner: e.isExploreLearner,
                         })
                       }
+                      data-requires-paid
                       className="rounded-full border border-zinc-300/90 bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-zinc-700 shadow-sm transition hover:border-red-300 hover:bg-red-50 hover:text-red-700 dark:border-zinc-600 dark:bg-zinc-900/80 dark:text-zinc-200 dark:hover:border-red-800 dark:hover:bg-red-950/50 dark:hover:text-red-300"
                     >
                       {t.dashboard.remove}
@@ -225,12 +226,14 @@ export function ContinueStudyingCarousel({
                 <div className="relative mt-5 flex items-center justify-between gap-3 px-5 pb-5">
                   <Link
                     href={href}
+                    data-requires-paid
                     className="inline-flex items-center justify-center rounded-full border border-emerald-200/70 bg-emerald-50/80 px-4 py-2 text-sm font-semibold text-emerald-950 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-100 dark:border-emerald-900/50 dark:bg-emerald-950/35 dark:text-emerald-100 dark:hover:bg-emerald-950/55"
                   >
                     {t.dashboard.openCta} →
                   </Link>
                   <Link
                     href={detailsHref}
+                    data-requires-paid={!e.isExploreLearner ? true : undefined}
                     className="text-xs font-semibold text-zinc-600 underline-offset-2 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-zinc-100"
                   >
                     {t.dashboard.details}

@@ -110,7 +110,7 @@ function ItemMoreMenu({
   }, [open]);
 
   return (
-    <div ref={rootRef} className="relative shrink-0">
+    <div ref={rootRef} data-requires-paid className="relative shrink-0">
       <button
         type="button"
         onClick={(e) => {
@@ -405,6 +405,7 @@ function NoteListItem({
       <button
         type="button"
         onClick={onToggleSelect}
+        data-requires-paid
         className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition ${
           selected
             ? "bg-violet-100 text-violet-900 dark:bg-violet-950/50 dark:text-violet-200"
@@ -427,7 +428,12 @@ function NoteListItem({
 
   if (canDrag) {
     return (
-      <div ref={setNodeRef} style={style} className="group flex items-center gap-0.5">
+      <div
+        ref={setNodeRef}
+        style={style}
+        data-requires-paid
+        className="group flex items-center gap-0.5"
+      >
         <span
           {...listeners}
           {...attributes}
@@ -448,7 +454,7 @@ function NoteListItem({
   }
 
   return (
-    <div className="group flex items-center gap-0.5">
+    <div data-requires-paid className="group flex items-center gap-0.5">
       <Link
         href={card.href}
         className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-2 transition hover:bg-zinc-100 dark:hover:bg-zinc-800/80"

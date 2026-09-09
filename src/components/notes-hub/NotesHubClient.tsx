@@ -883,6 +883,7 @@ export function NotesHubClient({
                 <li key={hit.card.key}>
                   <Link
                     href={hit.card.href}
+                    data-requires-paid
                     className="block px-4 py-3.5 transition hover:bg-zinc-50 dark:hover:bg-zinc-900/60"
                   >
                     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">

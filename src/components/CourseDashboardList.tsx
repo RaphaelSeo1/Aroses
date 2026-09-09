@@ -111,6 +111,7 @@ function AddCoursePlaceholderCard({
     <li className="flex h-full min-h-0">
       <Link
         href={href}
+        data-requires-paid
         className={[
           "group relative flex w-full min-h-[14.5rem] flex-1 flex-col overflow-hidden rounded-2xl border-2 border-dashed shadow-sm ring-1 transition-[transform,box-shadow,border-color,background-color] duration-300 motion-reduce:hover:translate-y-0",
           borderRing,
@@ -510,6 +511,7 @@ export function CourseDashboardList({
             </p>
             <Link
               href="/dashboard/courses/new"
+              data-requires-paid
               className="mt-4 inline-flex text-sm font-semibold text-brand hover:underline dark:text-brand-soft"
             >
               {t.dashboard.createCoursePlus}
@@ -684,6 +686,7 @@ export function CourseDashboardList({
             </p>
             <Link
               href="/dashboard/courses/new?mode=selfStudy"
+              data-requires-paid
               className="mt-4 inline-flex text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
             >
               {t.dashboard.startSelfStudy} →
@@ -882,6 +885,7 @@ function CourseCard({
       ].join(" ")}
     >
       <div
+        data-requires-paid
         className={[
           "group relative flex h-full flex-col overflow-hidden rounded-2xl border shadow-md ring-1 transition-[box-shadow,transform,border-color] duration-300 motion-reduce:hover:translate-y-0",
           visualVariant === "selfStudy"
@@ -1207,6 +1211,7 @@ export function StudyingCoursesSection({
               <div className="mt-auto flex flex-wrap gap-3 px-6 pb-6 pt-4">
                 <Link
                   href={`/explore/${c.id}/study`}
+                  data-requires-paid
                   className="inline-flex items-center gap-1 rounded-full border border-brand/30 bg-white/90 px-4 py-2 text-sm font-semibold text-brand shadow-sm transition hover:border-brand hover:bg-brand hover:text-white dark:border-brand-border/40 dark:bg-zinc-900/80 dark:text-brand-soft dark:hover:bg-brand dark:hover:text-white"
                 >
                   {t.dashboard.continueStudying}

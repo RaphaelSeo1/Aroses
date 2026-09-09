@@ -73,6 +73,7 @@ export function HomeResumeHero({
           </div>
           <Link
             href="/dashboard/courses/new"
+            data-requires-paid
             className="inline-flex shrink-0 items-center justify-center rounded-full bg-brand px-7 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/30 ring-2 ring-white/20 transition hover:bg-brand-hover hover:shadow-xl hover:shadow-red-600/35 dark:bg-brand dark:ring-white/10 dark:hover:bg-brand-soft"
           >
             {copy.createCourseCta}
@@ -146,6 +147,7 @@ export function HomeResumeHero({
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <Link
             href={resumeTarget.href}
+            data-requires-paid
             className={
               resumeIsPrimary
                 ? "inline-flex items-center justify-center rounded-full bg-brand px-7 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/30 ring-2 ring-white/20 transition hover:bg-brand-hover dark:ring-white/10 dark:hover:bg-brand-soft"
@@ -157,6 +159,7 @@ export function HomeResumeHero({
           {reviewDueTotal > 0 ? (
             <Link
               href="/dashboard/review"
+              data-requires-paid
               className={
                 reviewIsPrimary
                   ? "inline-flex items-center justify-center rounded-full bg-brand px-7 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/30 transition hover:bg-brand-hover"
@@ -168,6 +171,7 @@ export function HomeResumeHero({
           ) : null}
           <Link
             href="/dashboard/courses/new"
+            data-requires-paid
             className="inline-flex items-center justify-center rounded-full px-4 py-2.5 text-sm font-medium text-zinc-500 underline-offset-2 hover:text-zinc-800 hover:underline dark:text-zinc-500 dark:hover:text-zinc-200"
           >
             {copy.createCourseSecondary}

@@ -80,6 +80,7 @@ export function PendingCollaboratorInvites() {
                 type="button"
                 disabled={busyId === invite.id}
                 onClick={() => void respond(invite.id, "decline")}
+                data-requires-paid
                 className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
               >
                 Decline
@@ -88,12 +89,14 @@ export function PendingCollaboratorInvites() {
                 type="button"
                 disabled={busyId === invite.id}
                 onClick={() => void respond(invite.id, "accept")}
+                data-requires-paid
                 className="rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover"
               >
                 Accept
               </button>
               <Link
                 href={`/dashboard/courses/${invite.courseId}`}
+                data-requires-paid
                 className="text-xs font-medium text-brand hover:underline dark:text-brand-soft"
               >
                 View

@@ -63,6 +63,7 @@ export function ProgressDashboardContent({
             </Link>
             <Link
               href="/dashboard/courses/new"
+              data-requires-paid
               className="inline-flex items-center justify-center rounded-full border border-zinc-300 bg-white px-5 py-2.5 text-sm font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
             >
               {t.progress.createCourse}
@@ -88,6 +89,7 @@ export function ProgressDashboardContent({
             </Link>
             <Link
               href="/dashboard/courses/new"
+              data-requires-paid
               className="inline-flex justify-center rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white hover:bg-brand-hover"
             >
               {t.progress.createCourse}
