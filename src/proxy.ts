@@ -21,8 +21,8 @@ import {
   isUnpaidMutationAllowedApi,
   PAID_PLAN_REQUIRED_CODE,
   UPGRADE_POPUP_PATH,
-  unpaidBillingSettingsShouldRedirect,
   unpaidUserHasTourAccess,
+  unpaidUserShouldBlockFeaturePath,
 } from "@/lib/billing/paid-access";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { TOUR_DEMO_COOKIE } from "@/lib/product-tour/tour-demo-cookie";
@@ -263,7 +263,7 @@ export async function proxy(request: NextRequest) {
       !paid &&
       !tourOk &&
       !pathname.startsWith("/api/") &&
-      unpaidBillingSettingsShouldRedirect(pathname, search)
+      unpaidUserShouldBlockFeaturePath(pathname, search)
     ) {
       const dest = new URL(UPGRADE_POPUP_PATH, request.nextUrl.origin);
       const redirectResponse = NextResponse.redirect(dest);

@@ -72,16 +72,50 @@ export function unpaidUserShouldBlockFeaturePath(
   return isPaidFeaturePath(pathname, search);
 }
 
+function isPathOrPrefix(pathname: string, base: string): boolean {
+  return pathname === base || pathname.startsWith(`${base}/`);
+}
+
 /**
- * Routes that actually use the product (create, study, record, quiz, billing).
- * Unpaid users may still *view* hubs like Home, Notes, and Explore.
+ * Client subscription lookup has not finished. Treat as unpaid for link
+ * intercept so we never flash a feature; only redirect after a real unpaid
+ * result so a paid user is not bounced home.
+ */
+export type PaidGateAccess = "unknown" | "unpaid" | "paid";
+
+export function unpaidGateShouldIntercept(
+  access: PaidGateAccess,
+  tourRunning: boolean
+): boolean {
+  if (tourRunning) return false;
+  return access !== "paid";
+}
+
+export function unpaidGateShouldRedirect(
+  access: PaidGateAccess,
+  tourRunning: boolean
+): boolean {
+  if (tourRunning) return false;
+  return access === "unpaid";
+}
+
+/**
+ * Routes that actually use the product (learn, tutor, study, quiz, record,
+ * create, review, billing). Unpaid users may still *view* hubs like Home,
+ * Notes, Explore, and the courses list.
  */
 export function isPaidFeaturePath(pathname: string, search = ""): boolean {
   if (isBillingSettingsPath(pathname, search)) return true;
-  if (pathname.startsWith("/dashboard/courses/new")) return true;
+  if (isPathOrPrefix(pathname, "/dashboard/courses/new")) return true;
+  if (isPathOrPrefix(pathname, "/tutor-session")) return true;
+  if (isPathOrPrefix(pathname, "/sessions")) return true;
+  if (isPathOrPrefix(pathname, "/dashboard/review")) return true;
+  if (isPathOrPrefix(pathname, "/notes/doc")) return true;
   if (/\/study(?:\/|$)/.test(pathname)) return true;
   if (/\/quiz(?:\/|$)/.test(pathname)) return true;
   if (/\/record(?:\/|$)/.test(pathname)) return true;
+  if (/\/learn(?:\/|$)/.test(pathname)) return true;
+  if (/\/live-notes(?:\/|$)/.test(pathname)) return true;
   return false;
 }
 

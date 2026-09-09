@@ -7,8 +7,11 @@ import {
   hasPaidProductAccess,
   PAID_PLAN_REQUIRED_CODE,
   requestUpgradePopup,
+  unpaidGateShouldIntercept,
+  unpaidGateShouldRedirect,
   unpaidUserShouldBlockFeaturePath,
   UPGRADE_POPUP_PATH,
+  type PaidGateAccess,
 } from "@/lib/billing/paid-access";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { readTourSession } from "@/lib/product-tour/steps";
@@ -43,12 +46,12 @@ function PaidFeatureGateInner() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [locked, setLocked] = useState(false);
-  const lockedRef = useRef(false);
+  const [access, setAccess] = useState<PaidGateAccess>("unknown");
+  const accessRef = useRef<PaidGateAccess>("unknown");
 
   useEffect(() => {
-    lockedRef.current = locked;
-  }, [locked]);
+    accessRef.current = access;
+  }, [access]);
 
   useEffect(() => {
     if (!isBillingUiEnabled()) return;
@@ -62,8 +65,8 @@ function PaidFeatureGateInner() {
         } = await supabase.auth.getUser();
         if (!user || cancelled) return;
         if (isAppAdminEnvUser(user)) {
-          lockedRef.current = false;
-          setLocked(false);
+          accessRef.current = "paid";
+          setAccess("paid");
           return;
         }
         const { data } = await supabase
@@ -72,22 +75,26 @@ function PaidFeatureGateInner() {
           .eq("user_id", user.id)
           .maybeSingle();
         if (cancelled) return;
-        const nextLocked = !hasPaidProductAccess({
+        const nextAccess: PaidGateAccess = hasPaidProductAccess({
           tier: data?.tier,
           status: data?.status,
           adminGranted: Boolean(
             (data as { admin_granted?: boolean } | null)?.admin_granted
           ),
-        });
-        lockedRef.current = nextLocked;
-        setLocked(nextLocked);
+        })
+          ? "paid"
+          : "unpaid";
+        accessRef.current = nextAccess;
+        setAccess(nextAccess);
       } catch {
-        /* leave unlocked on lookup failure so a blip doesn't brick the UI */
+        /* stay unknown: intercept clicks, do not bounce the current page */
       }
     })();
 
     const onClick = (event: MouseEvent) => {
-      if (!lockedRef.current || tourIsRunning()) return;
+      if (!unpaidGateShouldIntercept(accessRef.current, tourIsRunning())) {
+        return;
+      }
       const el = event.target;
       if (el instanceof Element && el.closest("[data-upgrade-modal]")) return;
 
@@ -110,7 +117,10 @@ function PaidFeatureGateInner() {
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (...args) => {
       const res = await originalFetch(...args);
-      if (lockedRef.current && !tourIsRunning() && res.status === 402) {
+      if (
+        unpaidGateShouldIntercept(accessRef.current, tourIsRunning()) &&
+        res.status === 402
+      ) {
         try {
           const body = (await res.clone().json()) as { code?: string };
           if (
@@ -136,12 +146,12 @@ function PaidFeatureGateInner() {
   }, []);
 
   useEffect(() => {
-    if (!locked || tourIsRunning()) return;
+    if (!unpaidGateShouldRedirect(access, tourIsRunning())) return;
     const search = searchParams.toString();
     if (!unpaidUserShouldBlockFeaturePath(pathname, search)) return;
     requestUpgradePopup();
     router.replace(UPGRADE_POPUP_PATH);
-  }, [locked, pathname, router, searchParams]);
+  }, [access, pathname, router, searchParams]);
 
   return null;
 }
