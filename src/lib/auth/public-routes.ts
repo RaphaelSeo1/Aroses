@@ -54,3 +54,24 @@ export function nextPathForUnauthenticated(pathname: string, fullPath: string): 
   }
   return fullPath;
 }
+
+/**
+ * `getUser()` reports a missing cookie/session as an error in some @supabase/ssr
+ * versions. That is a logged-out guest, not an auth outage — keep 503 for
+ * timeouts and upstream failures only.
+ */
+export function isMissingAuthSessionError(error: {
+  message?: string;
+  name?: string;
+  code?: string;
+} | null | undefined): boolean {
+  if (!error) return false;
+  const msg = error.message ?? "";
+  const name = error.name ?? "";
+  const code = error.code ?? "";
+  return (
+    /auth session missing/i.test(msg) ||
+    name === "AuthSessionMissingError" ||
+    code === "session_not_found"
+  );
+}

@@ -10,6 +10,7 @@ import {
 import { getProfileOnboardingState } from "@/lib/onboarding-gate";
 import { createBoundedSupabaseFetch } from "@/lib/supabase/bounded-fetch";
 import {
+  isMissingAuthSessionError,
   isPublicUnauthenticatedPath,
   nextPathForUnauthenticated,
   unauthenticatedHomePath,
@@ -78,7 +79,7 @@ export async function proxy(request: NextRequest) {
   let user;
   try {
     const result = await supabase.auth.getUser();
-    if (result.error) {
+    if (result.error && !isMissingAuthSessionError(result.error)) {
       console.error("[proxy] Supabase auth unavailable:", result.error.message);
       return unavailableResponse(supabaseResponse);
     }

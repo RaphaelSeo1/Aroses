@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isMissingAuthSessionError } from "@/lib/auth/public-routes";
 import { fetchSrsDueCountsForUser } from "@/lib/srs-due-counts-server";
 import { createClient } from "@/lib/supabase/server";
 
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
     data: { user },
     error: authError,
   } = await supabase.auth.getUser();
-  if (authError) {
+  if (authError && !isMissingAuthSessionError(authError)) {
     console.error("[srs/due-counts] auth unavailable:", authError.message);
     return NextResponse.json(
       { error: "Authentication service temporarily unavailable." },

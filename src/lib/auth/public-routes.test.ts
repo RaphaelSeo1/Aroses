@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isMissingAuthSessionError,
   isPublicUnauthenticatedPath,
   nextPathForUnauthenticated,
   unauthenticatedHomePath,
@@ -55,5 +56,20 @@ test("guests hitting the product hub land on intro; other product URLs go to sig
   assert.equal(
     nextPathForUnauthenticated("/notes", "/notes"),
     "/notes"
+  );
+});
+
+test("a missing auth session is a guest, not an auth outage", () => {
+  assert.equal(
+    isMissingAuthSessionError({ message: "Auth session missing!" }),
+    true
+  );
+  assert.equal(
+    isMissingAuthSessionError({ name: "AuthSessionMissingError" }),
+    true
+  );
+  assert.equal(
+    isMissingAuthSessionError({ message: "fetch failed" }),
+    false
   );
 });
