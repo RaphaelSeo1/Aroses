@@ -14,7 +14,7 @@ import {
 } from "@/lib/supabase/fetch-explore-study-material";
 import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
-import { loadExploreStudyCourse } from "@/lib/marketplace/explore-study-guard";
+import { loadExploreStudyCourse, readTourDemoForCourse } from "@/lib/marketplace/explore-study-guard";
 import { createClient } from "@/lib/supabase/server";
 import { parseCoursePayload } from "@/lib/ai/course-payload";
 import type { CoursePayload } from "@/types/course";
@@ -74,7 +74,10 @@ export default async function ExploreLearnPage({
     );
   }
 
-  const courseRow = await loadExploreStudyCourse(supabase, user.id, courseId);
+  const tourSandbox = await readTourDemoForCourse(courseId);
+  const courseRow = await loadExploreStudyCourse(supabase, user.id, courseId, {
+    tourSandbox,
+  });
 
   const savedProgress = await loadCourseProgress(
     supabase,
@@ -276,11 +279,13 @@ export default async function ExploreLearnPage({
     redirect(`/explore/${courseId}/study?${qs.toString()}`);
   }
 
-  await upsertCourseProgress(supabase, user.id, courseRow.id, {
-    materialId,
-    lastModuleId: initialModuleId,
-    lastMode: "mentored",
-  });
+  if (!tourSandbox) {
+    await upsertCourseProgress(supabase, user.id, courseRow.id, {
+      materialId,
+      lastModuleId: initialModuleId,
+      lastMode: "mentored",
+    });
+  }
 
   // Ordered material ids (section, then position) so the runner can advance
   // into the next material once this one is finished. Uses the explore helpers

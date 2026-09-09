@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getHelpVideos } from "@/lib/help-videos";
+import { productTourStartHref } from "@/lib/product-tour/flow";
+import { configuredTourCourseId } from "@/lib/product-tour/bio-1a";
+import { writeTourDemoCookie } from "@/lib/product-tour/tour-demo-cookie";
 import { HonestFaqSection } from "@/components/help/HonestFaqSection";
 import { HelpRichText } from "@/components/help/HelpRichText";
 import {
@@ -145,7 +148,8 @@ export function HelpPageContent() {
             {t.replayTourHint}
           </p>
           <Link
-            href="/?tour=1"
+            href={productTourStartHref(undefined)}
+            onClick={() => writeTourDemoCookie(configuredTourCourseId())}
             className="mt-3 inline-flex rounded-full bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover"
           >
             {t.replayTour}

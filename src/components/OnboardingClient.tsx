@@ -20,6 +20,9 @@ import {
   type OnboardingReferral,
 } from "@/lib/onboarding";
 import { filterSchoolSuggestions } from "@/lib/school-suggestions";
+import { productTourStartHref, afterOnboardingDestination } from "@/lib/product-tour/flow";
+import { configuredTourCourseId } from "@/lib/product-tour/bio-1a";
+import { writeTourDemoCookie } from "@/lib/product-tour/tour-demo-cookie";
 
 const HEADING_SERIF =
   "font-serif tracking-tight text-brand-ink text-balance dark:text-brand-ink";
@@ -757,8 +760,9 @@ export function OnboardingClient() {
               </p>
               <div className="mx-auto mt-10 flex max-w-md flex-col gap-3">
                 <Link
-                  href="/?tour=1"
+                  href={productTourStartHref(configuredTourCourseId())}
                   className={`${BTN_PRIMARY} w-full gap-2`}
+                  onClick={() => writeTourDemoCookie(configuredTourCourseId())}
                 >
                   {t.onboarding.takeTour}
                   <IconArrowRight className="h-4 w-4" />
@@ -775,17 +779,8 @@ export function OnboardingClient() {
                       } catch {
                         /* still leave onboarding */
                       }
-                      // Surface the post-setup upgrade popup on home (same as
-                      // finishing/skipping the product tour).
-                      try {
-                        sessionStorage.setItem(
-                          "aroses_product_tour_celebrate",
-                          "1"
-                        );
-                      } catch {
-                        /* ignore private mode */
-                      }
-                      router.replace("/");
+                      writeTourDemoCookie(null);
+                      router.replace(afterOnboardingDestination());
                       router.refresh();
                     })();
                   }}

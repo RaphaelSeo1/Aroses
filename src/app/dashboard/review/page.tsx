@@ -21,7 +21,10 @@ async function ReviewPageContent() {
   const { user } = await getServerAuth();
   if (!user?.id) redirect("/intro");
   return (
-    <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
+    <main
+      className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-10"
+      data-tour="review-dashboard"
+    >
       <ReviewDashboardClient />
     </main>
   );

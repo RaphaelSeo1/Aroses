@@ -9,6 +9,12 @@ import {
 } from "@/lib/school-email-policy";
 import { getProfileOnboardingState } from "@/lib/onboarding-gate";
 import { createBoundedSupabaseFetch } from "@/lib/supabase/bounded-fetch";
+import {
+  isPublicUnauthenticatedPath,
+  nextPathForUnauthenticated,
+  unauthenticatedHomePath,
+  unauthenticatedProductEntryPath,
+} from "@/lib/auth/public-routes";
 
 function unavailableResponse(baseResponse: NextResponse): NextResponse {
   const response = NextResponse.json(
@@ -118,6 +124,24 @@ export async function proxy(request: NextRequest) {
   }
   const fullPath = `${pathname}${request.nextUrl.search}`;
 
+  if (!user && !pathname.startsWith("/api/")) {
+    if (!isPublicUnauthenticatedPath(pathname)) {
+      const url = request.nextUrl.clone();
+      if (pathname === "/" || pathname === "") {
+        url.pathname = unauthenticatedHomePath();
+        url.search = "";
+      } else {
+        url.pathname = unauthenticatedProductEntryPath();
+        url.search = "";
+        url.searchParams.set(
+          "next",
+          nextPathForUnauthenticated(pathname, fullPath)
+        );
+      }
+      return NextResponse.redirect(url);
+    }
+  }
+
   const allowedDomains = isAuthEmailDomainAllowlistEnforced()
     ? parseAllowedAuthEmailDomains()
     : [];
@@ -151,17 +175,6 @@ export async function proxy(request: NextRequest) {
     return redirectResponse;
   }
 
-  if (!user && pathname.startsWith("/dashboard")) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    const nextPath =
-      pathname === "/dashboard" || pathname === "/dashboard/"
-        ? "/"
-        : fullPath;
-    url.searchParams.set("next", nextPath);
-    return NextResponse.redirect(url);
-  }
-
   if (user && pathname.startsWith("/dashboard/admin")) {
     if (!isAppAdminEnvUser(user)) {
       const url = request.nextUrl.clone();
@@ -169,13 +182,6 @@ export async function proxy(request: NextRequest) {
       url.search = "";
       return NextResponse.redirect(url);
     }
-  }
-
-  if (!user && pathname.startsWith("/explore")) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/signup";
-    url.searchParams.set("next", fullPath);
-    return NextResponse.redirect(url);
   }
 
   if (

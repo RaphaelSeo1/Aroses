@@ -207,7 +207,7 @@ export function ReviewDashboardClient() {
   // ----------- loading skeleton -----------
   if (loading && !counts) {
     return (
-      <section className="space-y-4">
+      <section className="space-y-4" data-tour="review-dashboard">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
           {t.review.title}
         </h1>
@@ -220,7 +220,7 @@ export function ReviewDashboardClient() {
   if (counts && materials.length === 0) {
     return (
       <section className="space-y-6">
-        <header>
+        <header data-tour="review-dashboard">
           <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
             {t.review.title}
           </h1>
@@ -272,7 +272,7 @@ export function ReviewDashboardClient() {
   // ----------- normal dashboard -----------
   return (
     <section className="space-y-8">
-      <header className="space-y-2">
+      <header className="space-y-2" data-tour="review-dashboard">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
           {t.review.title}
         </h1>

@@ -18,6 +18,7 @@ import {
 import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { isMarketplacePaymentsEnabled } from "@/lib/marketplace/platform-fee";
 import { hasPurchasedCourse } from "@/lib/marketplace/purchases";
+import { readTourDemoForCourse } from "@/lib/marketplace/explore-study-guard";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
@@ -64,11 +65,12 @@ export default async function ExploreCoursePage({ params }: Props) {
 
   const isOwner = user.id === course.user_id;
   const isForSale = course.kind === "for_sale";
+  const tourDemo = await readTourDemoForCourse(courseId);
   const hasPurchased =
     !isOwner && isForSale
       ? await hasPurchasedCourse(supabase, user.id, courseId)
       : false;
-  const canStudy = isOwner || !isForSale || hasPurchased;
+  const canStudy = isOwner || !isForSale || hasPurchased || tourDemo;
   const paymentsEnabled =
     isMarketplaceUiEnabled() && isMarketplacePaymentsEnabled();
   const studyHref = `/explore/${courseId}/study?mode=learn`;
@@ -117,7 +119,10 @@ export default async function ExploreCoursePage({ params }: Props) {
               <p className="text-xs font-bold uppercase tracking-[0.14em] text-zinc-500 dark:text-zinc-400">
                 {isForSale ? t.explore.courseForSale : t.explore.communityCourse}
               </p>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-4xl">
+              <h1
+                data-tour="explore-course-title"
+                className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50 sm:text-4xl"
+              >
                 {course.title}
               </h1>
               <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
@@ -161,6 +166,7 @@ export default async function ExploreCoursePage({ params }: Props) {
               <>
                 <Link
                   href={studyHref}
+                  data-tour="explore-start-learning"
                   className="inline-flex w-full items-center justify-center rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/30 ring-2 ring-white/25 transition hover:bg-brand-hover sm:w-auto dark:bg-brand dark:hover:bg-brand-soft"
                 >
                   {isOwner ? t.explore.openAsCreator : t.explore.startLearning}
@@ -187,7 +193,7 @@ export default async function ExploreCoursePage({ params }: Props) {
           ) : null}
         </div>
 
-        <div className="mx-auto max-w-5xl px-4 sm:px-6">
+        <div className="mx-auto max-w-5xl px-4 sm:px-6" data-tour="explore-course-outline">
           <ExploreCourseOutline groups={outlineGroups} />
         </div>
 

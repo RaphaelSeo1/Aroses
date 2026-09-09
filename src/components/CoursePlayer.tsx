@@ -1513,6 +1513,7 @@ export function CoursePlayer({
       }
     >
       <aside
+        data-tour="course-modules"
         className={`border-zinc-200/90 bg-white transition-[width] duration-300 ease-out dark:border-zinc-800 dark:bg-zinc-950 ${
           sidebarOpen
             ? // Sticky viewport-height column + inner scroll — do NOT put
@@ -2052,7 +2053,10 @@ export function CoursePlayer({
             {t.study.showModules}
           </button>
         ) : null}
-        <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6 lg:px-8">
+        <div
+          className="mx-auto max-w-5xl px-4 py-4 sm:px-6 lg:px-8"
+          data-tour={mode === "quiz" ? "course-quiz" : undefined}
+        >
           {mode === "quiz" ? (
             <div className="mb-3">
               <Link
@@ -2106,7 +2110,10 @@ export function CoursePlayer({
                 }}
                 hint={t.study.modeToggleHint}
               />
-              <header className="border-b border-zinc-100 pb-4 dark:border-zinc-900">
+              <header
+                data-tour="course-lesson"
+                className="border-b border-zinc-100 pb-4 dark:border-zinc-900"
+              >
                 <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
                   {tf(t.study.moduleLabel, { id: activeModule.id })}
                 </p>
@@ -2187,12 +2194,14 @@ export function CoursePlayer({
                           : null
                       }
                     />
-                    <LessonNotesCapture
-                      materialId={materialId}
-                      moduleId={activeModule.id}
-                      lessonIndex={li}
-                      lessonTitle={lesson.title}
-                    />
+                    <div data-tour={li === 0 ? "course-notes" : undefined}>
+                      <LessonNotesCapture
+                        materialId={materialId}
+                        moduleId={activeModule.id}
+                        lessonIndex={li}
+                        lessonTitle={lesson.title}
+                      />
+                    </div>
                   </div>
                 ))}
 
@@ -2226,6 +2235,7 @@ export function CoursePlayer({
                 <div className="mt-5 flex flex-wrap gap-3">
                   <Link
                     href={moduleQuizPageHref}
+                    data-tour="course-quiz"
                     className="inline-flex items-center justify-center rounded-full bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-soft"
                   >
                     {t.study.goToPracticeRoom}
@@ -2476,6 +2486,7 @@ export function CoursePlayer({
                             : undefined
                         }
                         className="mt-6 inline-flex items-center justify-center gap-2 rounded-full bg-brand px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
+                        data-tour="course-quiz"
                       >
                         {t.study.startModuleQuiz}
                       </button>

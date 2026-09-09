@@ -1,6 +1,6 @@
+import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 import { ForumApp } from "@/components/forum/ForumApp";
-import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { HeaderNavLoggedInServer } from "@/components/HeaderNavLoggedInServer";
 import { APP_NAME } from "@/lib/brand";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
@@ -14,6 +14,9 @@ export const metadata = {
 
 export default async function ForumPage() {
   const { supabase, user } = await getServerAuth();
+  if (!user) {
+    redirect("/signup?next=/forum");
+  }
 
   const { data: posts } = await supabase
     .from("forum_posts")
@@ -51,26 +54,11 @@ export default async function ForumPage() {
 
   return (
     <>
-      <AppHeader
-        right={
-          user ? (
-            <HeaderNavLoggedInServer />
-          ) : (
-            <>
-              <HeaderNavLink href="/explore">Explore</HeaderNavLink>
-              <HeaderNavLink href="/forum">Forum</HeaderNavLink>
-              <HeaderNavLink href="/login">Log in</HeaderNavLink>
-              <HeaderNavLink href="/signup" variant="primary">
-                Sign up
-              </HeaderNavLink>
-            </>
-          )
-        }
-      />
+      <AppHeader right={<HeaderNavLoggedInServer />} />
       <ForumApp
         initialPosts={list}
         votedPostIds={votedPostIds}
-        currentUserId={user?.id ?? null}
+        currentUserId={user.id}
         isAdmin={isAdmin}
       />
     </>

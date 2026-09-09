@@ -9,6 +9,8 @@ import { APP_NAME } from "@/lib/brand";
 import { getT } from "@/lib/i18n/server";
 import { fetchExploreCatalog } from "@/lib/marketplace/fetch-explore-catalog";
 import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
+import { BIO_1A_OWNER_ID } from "@/lib/product-tour/bio-1a";
+import { resolveTourCourse } from "@/lib/product-tour/resolve-tour-course";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
 
 export async function generateMetadata() {
@@ -52,7 +54,31 @@ async function ExploreCoursesSection() {
   const t = await getT();
   const { supabase, user } = await getServerAuth();
   const marketplaceEnabled = isMarketplaceUiEnabled();
-  const { courses, error: coursesError } = await fetchExploreCatalog(supabase);
+  const [{ courses, error: coursesError }, tourCourse] = await Promise.all([
+    fetchExploreCatalog(supabase),
+    resolveTourCourse(supabase),
+  ]);
+  const listedCourses = (() => {
+    const list = [...courses];
+    if (!tourCourse.available) return list;
+    const existing = list.findIndex((c) => c.id === tourCourse.id);
+    if (existing > 0) {
+      const [hit] = list.splice(existing, 1);
+      return [hit, ...list];
+    }
+    if (existing === 0) return list;
+    return [
+      {
+        id: tourCourse.id,
+        title: tourCourse.title,
+        description: "General Biology",
+        created_at: new Date().toISOString(),
+        user_id: BIO_1A_OWNER_ID,
+        listingKind: "for_sale" as const,
+      },
+      ...list,
+    ];
+  })();
 
   let viewerSchoolName: string | null = null;
   if (user) {
@@ -87,7 +113,7 @@ async function ExploreCoursesSection() {
             <code className="text-xs">057_course_listings.sql</code>{" "}
             {t.explore.loadErrorSuffix}
           </p>
-        ) : courses.length === 0 ? (
+        ) : listedCourses.length === 0 ? (
           <div className="mx-auto mt-16 max-w-md rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center dark:border-zinc-800 dark:bg-zinc-950/90">
             <p className="font-medium text-zinc-900 dark:text-zinc-50">
               {t.explore.emptyTitle}
@@ -106,7 +132,7 @@ async function ExploreCoursesSection() {
           </div>
         ) : (
           <ExploreCoursesBoard
-            courses={courses}
+            courses={listedCourses}
             currentUserId={user?.id}
             marketplaceEnabled={marketplaceEnabled}
             viewerSchoolName={viewerSchoolName}

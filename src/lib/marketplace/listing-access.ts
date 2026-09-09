@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ListingStatus } from "@/lib/marketplace/types";
 import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
 import { hasPurchasedCourse } from "@/lib/marketplace/purchases";
+import { isBio1ATitle, isTourDemoCourseId } from "@/lib/product-tour/bio-1a";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export type CourseExploreMode =
   | { kind: "private" }
@@ -99,11 +101,25 @@ export async function resolveExploreCourse(
     })
   | null
 > {
-  const { data: course } = await supabase
+  const select =
+    "id, title, description, created_at, user_id, is_public, is_self_study";
+  let { data: course } = await supabase
     .from("courses")
-    .select("id, title, description, created_at, user_id, is_public, is_self_study")
+    .select(select)
     .eq("id", courseId)
     .maybeSingle();
+
+  if (!course) {
+    const admin = createAdminClient();
+    if (admin) {
+      const adminRow = await admin
+        .from("courses")
+        .select(select)
+        .eq("id", courseId)
+        .maybeSingle();
+      course = adminRow.data;
+    }
+  }
   if (!course || course.is_self_study) return null;
 
   const { data: listing } = await supabase
@@ -120,7 +136,11 @@ export async function resolveExploreCourse(
   };
 
   if (listing?.status === "approved") {
-    if (!isMarketplaceUiEnabled()) {
+    if (
+      !isMarketplaceUiEnabled() &&
+      !isTourDemoCourseId(courseId) &&
+      !isBio1ATitle(course.title)
+    ) {
       return null;
     }
     return {

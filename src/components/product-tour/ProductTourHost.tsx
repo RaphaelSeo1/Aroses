@@ -25,14 +25,22 @@ import {
 } from "@/lib/billing/sale";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
+import { configuredTourCourseId } from "@/lib/product-tour/bio-1a";
 import {
+  afterOnboardingDestination,
+  tourCompletionShouldRedirectToSubscription,
+} from "@/lib/product-tour/flow";
+import {
+  buildProductTourSteps,
   clearTourSession,
   clampTourStep,
-  PRODUCT_TOUR_STEPS,
+  hrefForTourStep,
   readTourSession,
+  stepRouteMatches,
   writeTourSession,
   type ProductTourStep,
 } from "@/lib/product-tour/steps";
+import { writeTourDemoCookie } from "@/lib/product-tour/tour-demo-cookie";
 import { createClient } from "@/lib/supabase/client";
 
 const CELEBRATE_FLAG = "aroses_product_tour_celebrate";
@@ -228,17 +236,22 @@ function ProductTourInner() {
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [vw, setVw] = useState(0);
   const [vh, setVh] = useState(0);
+  const [courseId, setCourseId] = useState(configuredTourCourseId);
+  const [courseAvailable, setCourseAvailable] = useState(true);
   const bootedRef = useRef(false);
   const scrolledForStepRef = useRef<string | null>(null);
   const confettiFiredRef = useRef(false);
   const forceUpgradePreviewRef = useRef(false);
   const billingEnabled = isBillingUiEnabled();
 
-  const steps = PRODUCT_TOUR_STEPS;
-  const step = steps[clampTourStep(stepIndex)]!;
+  const steps = useMemo(
+    () => buildProductTourSteps(courseId, courseAvailable),
+    [courseId, courseAvailable]
+  );
+  const step = steps[clampTourStep(stepIndex, steps.length)]!;
   const total = steps.length;
   const isLast = stepIndex >= total - 1;
-  const onCorrectRoute = pathname === step.route;
+  const onCorrectRoute = stepRouteMatches(pathname, step);
 
   const copy = useMemo(() => {
     const key = step.copyKey as keyof typeof t.productTour.steps;
@@ -299,16 +312,23 @@ function ProductTourInner() {
     };
   }, [billingEnabled, celebrating]);
 
-  const startTour = useCallback((startStep = 0) => {
-    const next = clampTourStep(startStep);
-    scrolledForStepRef.current = null;
-    writeCelebrateFlag(false);
-    confettiFiredRef.current = false;
-    setCelebrating(false);
-    setStepIndex(next);
-    setActive(true);
-    writeTourSession({ active: true, step: next });
-  }, []);
+  const startTour = useCallback(
+    (startStep = 0, tourCourseId = courseId, available = courseAvailable) => {
+      const built = buildProductTourSteps(tourCourseId, available);
+      const next = clampTourStep(startStep, built.length);
+      scrolledForStepRef.current = null;
+      writeCelebrateFlag(false);
+      confettiFiredRef.current = false;
+      setCelebrating(false);
+      setCourseId(tourCourseId);
+      setCourseAvailable(available);
+      setStepIndex(next);
+      setActive(true);
+      writeTourDemoCookie(available ? tourCourseId : null);
+      writeTourSession({ active: true, step: next, courseId: tourCourseId });
+    },
+    [courseAvailable, courseId]
+  );
 
   // Preview: `?setupUpgrade=1` can re-fire anytime (even after boot).
   useEffect(() => {
@@ -337,28 +357,59 @@ function ProductTourInner() {
     if (
       pathname === "/onboarding" ||
       pathname === "/intro" ||
-      pathname === "/login"
+      pathname === "/login" ||
+      pathname === "/signup"
     ) {
       return;
     }
     bootedRef.current = true;
 
     const wantsTour = searchParams.get("tour") === "1";
-    if (wantsTour) {
-      startTour(0);
-      const params = new URLSearchParams(searchParams.toString());
-      params.delete("tour");
-      const qs = params.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-      return;
-    }
-
     const session = readTourSession();
-    if (session?.active) {
-      scrolledForStepRef.current = null;
-      setStepIndex(clampTourStep(session.step));
-      setActive(true);
-    }
+
+    void (async () => {
+      let tourCourseId =
+        session?.courseId?.trim() || configuredTourCourseId();
+      let available = true;
+      try {
+        const res = await fetch("/api/product-tour/demo-course");
+        if (res.ok) {
+          const data = (await res.json()) as {
+            id?: string;
+            available?: boolean;
+          };
+          if (typeof data.id === "string" && data.id.length > 0) {
+            tourCourseId = data.id;
+          }
+          if (data.available === false) available = false;
+        }
+      } catch {
+        /* keep configured id */
+      }
+      setCourseId(tourCourseId);
+      setCourseAvailable(available);
+
+      if (wantsTour) {
+        startTour(0, tourCourseId, available);
+        const params = new URLSearchParams(searchParams.toString());
+        params.delete("tour");
+        const qs = params.toString();
+        router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+        return;
+      }
+
+      if (session?.active) {
+        scrolledForStepRef.current = null;
+        writeTourDemoCookie(available ? tourCourseId : null);
+        setStepIndex(
+          clampTourStep(
+            session.step,
+            buildProductTourSteps(tourCourseId, available).length
+          )
+        );
+        setActive(true);
+      }
+    })();
   }, [pathname, router, searchParams, startTour]);
 
   const dismissCelebration = useCallback(() => {
@@ -403,33 +454,42 @@ function ProductTourInner() {
     [busyTier, t.productTour.upgradeCheckoutError]
   );
 
-  const completeTour = useCallback(async (opts?: { celebrate?: boolean }) => {
-    setBusy(true);
-    clearTourSession();
-    setActive(false);
-    setRect(null);
-    scrolledForStepRef.current = null;
-    // Finish + Skip both celebrate so the upgrade offer isn't buried; Escape
-    // can pass celebrate:false for a quiet dismiss.
-    if (opts?.celebrate !== false) {
-      writeCelebrateFlag(true);
-      confettiFiredRef.current = false;
-      setCelebrating(true);
-    } else {
-      writeCelebrateFlag(false);
-      setCelebrating(false);
-    }
-    try {
-      await fetch("/api/product-tour/complete", { method: "POST" });
-    } catch {
-      /* still dismiss locally */
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+  const completeTour = useCallback(
+    async (opts?: { celebrate?: boolean; redirectToPlans?: boolean }) => {
+      setBusy(true);
+      clearTourSession();
+      writeTourDemoCookie(null);
+      setActive(false);
+      setRect(null);
+      scrolledForStepRef.current = null;
+      const goToPlans = opts?.redirectToPlans !== false;
+      if (opts?.celebrate) {
+        writeCelebrateFlag(true);
+        confettiFiredRef.current = false;
+        setCelebrating(true);
+      } else {
+        writeCelebrateFlag(false);
+        setCelebrating(false);
+      }
+      try {
+        await fetch("/api/product-tour/complete", { method: "POST" });
+      } catch {
+        /* still dismiss locally */
+      } finally {
+        setBusy(false);
+      }
+      if (goToPlans && !opts?.celebrate) {
+        const dest = tourCompletionShouldRedirectToSubscription(false)
+          ? afterOnboardingDestination()
+          : "/";
+        router.replace(dest);
+      }
+    },
+    [router]
+  );
 
   const finishTour = useCallback(() => {
-    void completeTour({ celebrate: true });
+    void completeTour({ redirectToPlans: true });
   }, [completeTour]);
 
   const goToStep = useCallback(
@@ -438,26 +498,29 @@ function ProductTourInner() {
         finishTour();
         return;
       }
-      const next = clampTourStep(nextIndex);
+      const next = clampTourStep(nextIndex, steps.length);
       const nextStep = steps[next]!;
       scrolledForStepRef.current = null;
       setRect(null);
       setStepIndex(next);
-      writeTourSession({ active: true, step: next });
+      writeTourSession({ active: true, step: next, courseId });
+      const dest = hrefForTourStep(nextStep);
       if (pathname !== nextStep.route) {
-        router.push(nextStep.route);
+        router.push(dest);
+      } else if (nextStep.search) {
+        router.replace(dest, { scroll: false });
       }
     },
-    [finishTour, pathname, router, steps]
+    [courseId, finishTour, pathname, router, steps]
   );
 
   // Navigate when the active step lives on another route.
   useEffect(() => {
     if (!active) return;
-    if (pathname !== step.route) {
-      router.push(step.route);
+    if (!stepRouteMatches(pathname, step)) {
+      router.push(hrefForTourStep(step));
     }
-  }, [active, pathname, router, step.route]);
+  }, [active, pathname, router, step]);
 
   useEffect(() => {
     if (!active && !celebrating) return;
@@ -467,7 +530,7 @@ function ProductTourInner() {
         dismissCelebration();
         return;
       }
-      void completeTour({ celebrate: false });
+      void completeTour({ celebrate: false, redirectToPlans: false });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -685,7 +748,10 @@ function ProductTourInner() {
                       ) : (
                         <button
                           type="button"
-                          onClick={dismissCelebration}
+                          onClick={() => {
+                            dismissCelebration();
+                            router.replace(afterOnboardingDestination());
+                          }}
                           className="mt-4 inline-flex w-full items-center justify-center rounded-full border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
                         >
                           {t.productTour.celebrationCta}
@@ -709,7 +775,10 @@ function ProductTourInner() {
           {!showUpgradeOffer ? (
             <button
               type="button"
-              onClick={dismissCelebration}
+              onClick={() => {
+                dismissCelebration();
+                router.replace(afterOnboardingDestination());
+              }}
               className="mt-6 inline-flex w-full items-center justify-center rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-hover"
             >
               {t.productTour.celebrationCta}
@@ -830,7 +899,7 @@ function ProductTourInner() {
             <button
               type="button"
               disabled={busy}
-              onClick={() => void completeTour({ celebrate: true })}
+              onClick={() => void completeTour({ redirectToPlans: true })}
               className="inline-flex w-full items-center justify-center rounded-full px-4 py-2 text-sm font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-200"
             >
               {t.productTour.skip}

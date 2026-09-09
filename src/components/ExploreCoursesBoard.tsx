@@ -5,8 +5,8 @@ import { formatPrice } from "@/lib/marketplace/listing-access";
 import { schoolChipClassName } from "@/lib/school-chip-style";
 import { useMemo, useState } from "react";
 import { useT } from "@/lib/i18n/LocaleProvider";
-
 import type { ExploreListingCard } from "@/lib/marketplace/types";
+import { isBio1ATitle, isConfiguredTourCourseId } from "@/lib/product-tour/bio-1a";
 
 export type ExploreCourseCard = ExploreListingCard;
 
@@ -103,10 +103,14 @@ export function ExploreCoursesBoard({
   }, [marketplaceEnabled, t.explore, hasSchool]);
   const [filter, setFilter] = useState<ExploreFilter>("all");
 
-  const visible = useMemo(
-    () => applyFilter(courses, filter, viewerSchoolName),
-    [courses, filter, viewerSchoolName]
-  );
+  const visible = useMemo(() => {
+    const filtered = applyFilter(courses, filter, viewerSchoolName);
+    const tour = courses.find(
+      (c) => isConfiguredTourCourseId(c.id) || isBio1ATitle(c.title)
+    );
+    if (!tour) return filtered;
+    return [tour, ...filtered.filter((c) => c.id !== tour.id)];
+  }, [courses, filter, viewerSchoolName]);
 
   return (
     <div className="mt-10 flex flex-col gap-10 lg:flex-row lg:items-start lg:gap-12">
@@ -124,6 +128,11 @@ export function ExploreCoursesBoard({
                 <li key={c.id}>
                   <Link
                     href={`/explore/${c.id}`}
+                    data-tour={
+                      isConfiguredTourCourseId(c.id) || isBio1ATitle(c.title)
+                        ? "explore-bio-1a"
+                        : undefined
+                    }
                     className={`group relative flex min-h-[158px] flex-col overflow-hidden rounded-2xl border border-white/40 bg-gradient-to-br ${g} p-5 shadow-sm ring-1 ring-zinc-900/[0.04] transition hover:-translate-y-0.5 hover:shadow-md hover:ring-brand/20 dark:border-zinc-700/50 dark:ring-white/[0.06] dark:hover:ring-brand-soft/25`}
                   >
                     <span

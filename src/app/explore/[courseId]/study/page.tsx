@@ -26,7 +26,10 @@ import { resolveMentoredModuleForMaterial } from "@/lib/study/resolve-mentored-m
 import { resolveResumeTarget } from "@/lib/study/resolve-resume-target";
 import { displayMaterialSectionLabel } from "@/lib/study-material-display-name";
 import { createClient } from "@/lib/supabase/server";
-import { loadExploreStudyCourse } from "@/lib/marketplace/explore-study-guard";
+import {
+  loadExploreStudyCourse,
+  readTourDemoForCourse,
+} from "@/lib/marketplace/explore-study-guard";
 import {
   fetchExamGroupsForSidebar,
   fetchStudyMaterialForPublicExplore,
@@ -46,6 +49,7 @@ type Props = {
     mode?: string;
     lesson?: string;
     scroll?: string;
+    tour?: string;
   }>;
 };
 
@@ -89,7 +93,10 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
     redirect(`/login?next=${encodeURIComponent(studyNext)}`);
   }
 
-  const courseRow = await loadExploreStudyCourse(supabase, user.id, courseId);
+  const tourSandbox = await readTourDemoForCourse(courseId, sp.tour);
+  const courseRow = await loadExploreStudyCourse(supabase, user.id, courseId, {
+    tourSandbox,
+  });
 
   const learnMode = sp.mode === "learn";
   const savedProgress = await loadCourseProgress(
@@ -126,7 +133,7 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
   // page used to grab whatever fetchStudyMaterialForPublicExplore picked
   // first (sort_order asc, then a created_at tiebreak), which felt
   // random as soon as the user had history elsewhere in the course.
-  if (!materialId && initialModuleFromUrl == null) {
+  if (!tourSandbox && !materialId && initialModuleFromUrl == null) {
     const target = await resolveResumeTarget(supabase, courseRow.id, user.id);
     if (target) {
       const qs = new URLSearchParams();
@@ -326,7 +333,7 @@ export default async function ExploreStudyPage({ params, searchParams }: Props) 
         payload.modules.some((m) => m.id === initialModuleFromUrl) &&
         initialModuleFromUrl) ||
       payload.modules[0]?.id;
-    if (openModuleId != null) {
+    if (openModuleId != null && !tourSandbox) {
       await upsertCourseProgress(supabase, user.id, courseRow.id, {
         materialId: row.id,
         lastModuleId: openModuleId,
