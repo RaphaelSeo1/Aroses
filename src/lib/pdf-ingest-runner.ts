@@ -1957,6 +1957,19 @@ export async function reapStaleIngestJobs(options?: {
       );
       continue;
     }
+    if (phase === "reviewing_transcript") {
+      continue;
+    }
+    if (phase === "digesting_full_pdf") {
+      tasks.push(
+        runPdfIngestContinueAfterTranscript(row.id, {
+          driveModules: true,
+        }).catch((e) =>
+          console.warn("[pdf-ingest] reaper digest resume failed", e)
+        )
+      );
+      continue;
+    }
     // Safe for any other phase: expand returns "not ready" cheaply if the job
     // isn't in writing_modules yet, and advances one batch when it is.
     tasks.push(

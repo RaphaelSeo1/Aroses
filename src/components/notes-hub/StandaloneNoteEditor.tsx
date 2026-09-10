@@ -171,13 +171,6 @@ export function StandaloneNoteEditor({
     if (building) return;
     setError(null);
 
-    if (ingestJobId && courseId) {
-      router.push(
-        `/dashboard/courses/${courseId}/study/build?pdfJobs=${ingestJobId}`
-      );
-      return;
-    }
-
     const courseTitle = await promptDialog({
       title: "Build a course from these notes",
       label: "Course title",
@@ -187,10 +180,10 @@ export function StandaloneNoteEditor({
     if (!courseTitle) return;
 
     const ok = await confirmDialog({
-      title: "Start course build?",
+      title: ingestJobId ? "Retry course build?" : "Start course build?",
       body:
         "Your notes will become the source material for a new course. You can review and edit the text before generation starts. The note itself stays here either way.",
-      confirmLabel: "Build course",
+      confirmLabel: ingestJobId ? "Retry build" : "Build course",
     });
     if (!ok) return;
 
@@ -266,16 +259,19 @@ export function StandaloneNoteEditor({
             >
               View course build
             </Link>
-          ) : (
-            <button
-              type="button"
-              onClick={() => void handleBuildCourse()}
-              disabled={building}
-              className="rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:from-violet-700 hover:to-fuchsia-700 disabled:opacity-60"
-            >
-              {building ? "Starting…" : "Build course from notes"}
-            </button>
-          )}
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void handleBuildCourse()}
+            disabled={building}
+            className="rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:from-violet-700 hover:to-fuchsia-700 disabled:opacity-60"
+          >
+            {building
+              ? "Starting…"
+              : ingestJobId
+                ? "Retry course build"
+                : "Build course from notes"}
+          </button>
         </div>
       </div>
       {error ? (

@@ -12,6 +12,11 @@ import {
   formatDeckForWrapUp,
   loadSessionDeckPages,
 } from "@/lib/live-notes/slide-pages";
+import { supersedeIngestJob } from "@/lib/notes/create-ingest-job-from-text";
+import {
+  ingestJobRowToRetryView,
+  shouldReuseExistingIngestJob,
+} from "@/lib/notes/ingest-job-retry";
 import { report } from "@/lib/report-error";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -43,7 +48,8 @@ function formatTimestamp(ms: number): string {
  * Optional JSON body: `{ attachedPdfText?, attachedPdfName? }` — chat-attached
  * handout still sitting in the client's sessionStorage.
  *
- * Idempotent: a second call on a completed session returns the same jobId.
+ * Idempotent when the existing ingest job is still healthy. Failed or stale
+ * jobs are replaced so the student can retry while notes still exist.
  */
 export async function POST(request: Request, ctx: Params) {
   const { sessionId } = await ctx.params;
@@ -102,17 +108,21 @@ export async function POST(request: Request, ctx: Params) {
 
   const courseId = session.course_id as string;
 
-  if (session.status === "completed" && session.ingest_job_id) {
-    return NextResponse.json({
-      jobId: session.ingest_job_id,
-      redirect: `/dashboard/courses/${courseId}/study/build?pdfJobs=${session.ingest_job_id}`,
-    });
-  }
-  if (session.status === "failed") {
-    return NextResponse.json(
-      { error: "This session already failed. Start a new recording." },
-      { status: 409 }
-    );
+  let replaceJobId: string | null = null;
+  if (typeof session.ingest_job_id === "string" && session.ingest_job_id) {
+    const { data: existingJob } = await supabase
+      .from("pdf_ingest_jobs")
+      .select("status, updated_at, ingest_phase, ingest_epoch")
+      .eq("id", session.ingest_job_id)
+      .maybeSingle();
+    const view = ingestJobRowToRetryView(existingJob);
+    if (shouldReuseExistingIngestJob(view)) {
+      return NextResponse.json({
+        jobId: session.ingest_job_id,
+        redirect: `/dashboard/courses/${courseId}/study/build?pdfJobs=${session.ingest_job_id}`,
+      });
+    }
+    replaceJobId = session.ingest_job_id;
   }
 
   // ── Compose the transcript ────────────────────────────────────────────────
@@ -439,6 +449,10 @@ export async function POST(request: Request, ctx: Params) {
       userId: user.id,
       detail: { sessionId, jobId },
     });
+  }
+
+  if (replaceJobId && replaceJobId !== jobId) {
+    await supersedeIngestJob(replaceJobId);
   }
 
   return NextResponse.json({

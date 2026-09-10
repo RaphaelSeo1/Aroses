@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { confirmDialog } from "@/components/AppDialogs";
+import { confirmDialog, promptDialog } from "@/components/AppDialogs";
 import {
   NotesPanel,
   type NotesPanelHandle,
@@ -136,6 +136,11 @@ export type LiveNotesInitialSession = {
   status: "recording" | "paused" | "completed" | "failed";
   durationSeconds: number;
   ingestJobId: string | null;
+  /**
+   * False when the linked ingest job failed, went stale, or is missing — the
+   * Finish control should retry instead of only opening a dead build.
+   */
+  ingestJobReusable?: boolean;
   lastSegmentSeq: number;
   /** Per-session "tell the AI how to write these notes" free text. */
   noteInstruction?: string;
@@ -1241,6 +1246,47 @@ export function LiveNotesSurface({
     router,
   ]);
 
+  const handleBuildCourseFromNotes = useCallback(async () => {
+    if (!isStandalone || !session.userNoteId || finishing) return;
+    setError(null);
+    const courseTitle = await promptDialog({
+      title: "Build a course from these notes",
+      label: "Course title",
+      placeholder: liveTitleRef.current || "Notes course",
+      defaultValue: liveTitleRef.current || "",
+    });
+    if (!courseTitle) return;
+    const ok = await confirmDialog({
+      title: "Start course build?",
+      body:
+        "Your notes will become the source material for a new course. You can review the text before generation starts. The note itself stays here.",
+      confirmLabel: "Build course",
+    });
+    if (!ok) return;
+    setFinishing(true);
+    try {
+      await flushNow();
+      const res = await fetch(`/api/notes/${session.userNoteId}/to-course`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ courseTitle }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        redirect?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.redirect) {
+        setError(data.error || "Could not start the course build.");
+        setFinishing(false);
+        return;
+      }
+      router.push(data.redirect);
+    } catch {
+      setError("Could not start the course build. Check your connection.");
+      setFinishing(false);
+    }
+  }, [isStandalone, session.userNoteId, finishing, flushNow, router]);
+
   const handleDelete = useCallback(async () => {
     if (deleting || finishing) return;
     const ok = await confirmDialog({
@@ -1283,7 +1329,14 @@ export function LiveNotesSurface({
   ]);
 
   const alreadyCompleted =
-    !isStandalone && session.status === "completed" && session.ingestJobId;
+    !isStandalone &&
+    session.status === "completed" &&
+    Boolean(session.ingestJobId) &&
+    session.ingestJobReusable !== false;
+  const canRetryCourseBuild =
+    !isStandalone &&
+    Boolean(session.ingestJobId) &&
+    session.ingestJobReusable === false;
   const isLive = status === "recording" || status === "reconnecting";
   const canResumeCapture =
     started &&
@@ -1471,6 +1524,7 @@ export function LiveNotesSurface({
           ) : null}
 
           {alreadyCompleted ||
+          canRetryCourseBuild ||
           (!isStandalone && (started || segments.length > 0)) ||
           (isStandalone && isLive) ? (
             confirmFinish ? (
@@ -1487,7 +1541,9 @@ export function LiveNotesSurface({
                       : "Building…"
                     : isStandalone
                       ? "Confirm — stop & stay"
-                      : "Confirm — build course"}
+                      : canRetryCourseBuild
+                        ? "Confirm — retry course"
+                        : "Confirm — build course"}
                 </button>
                 <button
                   type="button"
@@ -1515,6 +1571,10 @@ export function LiveNotesSurface({
               >
                 {alreadyCompleted
                   ? "View course build"
+                  : canRetryCourseBuild
+                    ? finishing
+                      ? "Retrying…"
+                      : "Retry course build"
                   : finishing
                     ? isStandalone
                       ? "Saving…"
@@ -1524,6 +1584,17 @@ export function LiveNotesSurface({
                       : "Finish & build course"}
               </button>
             )
+          ) : null}
+
+          {isStandalone && session.userNoteId ? (
+            <button
+              type="button"
+              onClick={() => void handleBuildCourseFromNotes()}
+              disabled={finishing || deleting}
+              className="rounded-full border border-violet-200 bg-violet-50 px-4 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100 disabled:opacity-60 dark:border-violet-900/50 dark:bg-violet-950/40 dark:text-violet-200"
+            >
+              {finishing ? "Starting…" : "Build course from notes"}
+            </button>
           ) : null}
 
           <button

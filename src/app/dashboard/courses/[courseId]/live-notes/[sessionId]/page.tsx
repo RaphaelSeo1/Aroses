@@ -5,6 +5,10 @@ import {
 } from "@/components/live-notes/LiveNotesSurface";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { loadSessionDeckMeta } from "@/lib/live-notes/slide-pages";
+import {
+  ingestJobRowToRetryView,
+  shouldReuseExistingIngestJob,
+} from "@/lib/notes/ingest-job-retry";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
 
@@ -55,6 +59,20 @@ export default async function LiveNotesSessionPage({ params }: Props) {
     atMs: (s.at_ms as number) ?? 0,
   }));
 
+  const ingestJobId =
+    typeof session.ingest_job_id === "string" ? session.ingest_job_id : null;
+  let ingestJobReusable = false;
+  if (ingestJobId) {
+    const { data: ingestJob } = await supabase
+      .from("pdf_ingest_jobs")
+      .select("status, updated_at, ingest_phase")
+      .eq("id", ingestJobId)
+      .maybeSingle();
+    ingestJobReusable = shouldReuseExistingIngestJob(
+      ingestJobRowToRetryView(ingestJob)
+    );
+  }
+
   const initialSession: LiveNotesInitialSession = {
     id: session.id,
     courseId,
@@ -67,8 +85,8 @@ export default async function LiveNotesSessionPage({ params }: Props) {
       typeof session.duration_seconds === "number"
         ? session.duration_seconds
         : 0,
-    ingestJobId:
-      typeof session.ingest_job_id === "string" ? session.ingest_job_id : null,
+    ingestJobId,
+    ingestJobReusable,
     lastSegmentSeq:
       initialSegments.length > 0
         ? initialSegments[initialSegments.length - 1].seq

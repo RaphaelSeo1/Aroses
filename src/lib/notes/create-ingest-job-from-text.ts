@@ -163,3 +163,30 @@ export async function ensureExamGroupForCourse(
     .maybeSingle();
   return (created?.id as string) ?? null;
 }
+
+/** Mark a dead/failed ingest job so a retry can attach a new job to the note. */
+export async function supersedeIngestJob(jobId: string): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+  const { data: row } = await admin
+    .from("pdf_ingest_jobs")
+    .select("status, ingest_epoch")
+    .eq("id", jobId)
+    .maybeSingle();
+  if (!row || row.status === "complete") return;
+  const prevEpoch =
+    typeof row.ingest_epoch === "number" && Number.isFinite(row.ingest_epoch)
+      ? row.ingest_epoch
+      : 0;
+  await admin
+    .from("pdf_ingest_jobs")
+    .update({
+      status: "failed",
+      error_message: "Replaced by a retry because the previous build stopped.",
+      ingest_phase: null,
+      ingest_epoch: prevEpoch + 1,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .neq("status", "complete");
+}

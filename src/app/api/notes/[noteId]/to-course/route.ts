@@ -7,7 +7,12 @@ import {
 import {
   createIngestJobFromText,
   ensureExamGroupForCourse,
+  supersedeIngestJob,
 } from "@/lib/notes/create-ingest-job-from-text";
+import {
+  ingestJobRowToRetryView,
+  shouldReuseExistingIngestJob,
+} from "@/lib/notes/ingest-job-retry";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
@@ -17,7 +22,8 @@ type Params = { params: Promise<{ noteId: string }> };
  * POST /api/notes/[noteId]/to-course
  *
  * Converts a standalone note into a course build (review transcript first).
- * Idempotent when ingest_job_id is already set.
+ * Reuses a healthy in-progress or complete job. Failed or stale jobs are
+ * replaced so the student can retry whenever the note still exists.
  *
  * Body: { courseTitle?: string, courseId?: string }
  */
@@ -48,12 +54,26 @@ export async function POST(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  if (note.ingest_job_id && note.course_id) {
-    return NextResponse.json({
-      jobId: note.ingest_job_id,
-      courseId: note.course_id,
-      redirect: `/dashboard/courses/${note.course_id}/study/build?pdfJobs=${note.ingest_job_id}`,
-    });
+  let replaceJobId: string | null = null;
+  if (typeof note.ingest_job_id === "string" && note.ingest_job_id) {
+    const { data: existingJob } = await supabase
+      .from("pdf_ingest_jobs")
+      .select("status, updated_at, ingest_phase, ingest_epoch")
+      .eq("id", note.ingest_job_id)
+      .maybeSingle();
+    const view = ingestJobRowToRetryView(existingJob);
+    if (
+      shouldReuseExistingIngestJob(view) &&
+      typeof note.course_id === "string" &&
+      note.course_id
+    ) {
+      return NextResponse.json({
+        jobId: note.ingest_job_id,
+        courseId: note.course_id,
+        redirect: `/dashboard/courses/${note.course_id}/study/build?pdfJobs=${note.ingest_job_id}`,
+      });
+    }
+    replaceJobId = note.ingest_job_id;
   }
 
   let body: { courseTitle?: unknown; courseId?: unknown };
@@ -66,7 +86,9 @@ export async function POST(request: Request, ctx: Params) {
   let courseId =
     typeof body.courseId === "string" && isUuid(body.courseId)
       ? body.courseId
-      : null;
+      : typeof note.course_id === "string" && note.course_id
+        ? (note.course_id as string)
+        : null;
 
   const courseTitle =
     typeof body.courseTitle === "string" && body.courseTitle.trim()
@@ -141,12 +163,27 @@ export async function POST(request: Request, ctx: Params) {
     lectureTitle: courseTitle,
   });
 
+  let bodyText = (note.content_text as string) || "";
+  if (bodyText.trim().length < 80) {
+    const { data: live } = await supabase
+      .from("live_lecture_sessions")
+      .select("notes_text")
+      .eq("user_note_id", noteId)
+      .eq("user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (typeof live?.notes_text === "string" && live.notes_text.trim()) {
+      bodyText = live.notes_text;
+    }
+  }
+
   const result = await createIngestJobFromText(supabase, {
     userId: user.id,
     courseId,
     examGroupId,
     title: courseTitle,
-    body: (note.content_text as string) || "",
+    body: bodyText,
     studyContext: studyContext || undefined,
   });
 
@@ -166,6 +203,10 @@ export async function POST(request: Request, ctx: Params) {
     })
     .eq("id", noteId)
     .eq("user_id", user.id);
+
+  if (replaceJobId && replaceJobId !== result.jobId) {
+    await supersedeIngestJob(replaceJobId);
+  }
 
   return NextResponse.json({
     jobId: result.jobId,

@@ -1,8 +1,14 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { after, NextResponse } from "next/server";
+import {
+  ingestJobRowToRetryView,
+  resolveIngestRetrySource,
+  type LinkedNotesSource,
+} from "@/lib/notes/ingest-job-retry";
 import { runPdfIngestJob } from "@/lib/pdf-ingest-runner";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 
 export const runtime = "nodejs";
@@ -13,8 +19,57 @@ const UUID_RE =
 
 type Params = { params: Promise<{ jobId: string }> };
 
+async function loadLinkedNotesSource(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+): Promise<LinkedNotesSource | null> {
+  const noteQuery = admin
+    .from("user_notes")
+    .select("id, content_text, deleted_at")
+    .eq("ingest_job_id", jobId)
+    .limit(1)
+    .maybeSingle();
+  let { data: note, error: noteErr } = await noteQuery;
+  if (noteErr && /deleted_at/i.test(noteErr.message ?? "")) {
+    ({ data: note, error: noteErr } = await admin
+      .from("user_notes")
+      .select("id, content_text")
+      .eq("ingest_job_id", jobId)
+      .limit(1)
+      .maybeSingle());
+  }
+
+  const { data: session } = await admin
+    .from("live_lecture_sessions")
+    .select("id, notes_text")
+    .eq("ingest_job_id", jobId)
+    .limit(1)
+    .maybeSingle();
+
+  const noteAlive =
+    note &&
+    typeof note.id === "string" &&
+    (note as { deleted_at?: string | null }).deleted_at == null;
+  const sessionAlive = session && typeof session.id === "string";
+  if (!noteAlive && !sessionAlive) return null;
+
+  const noteBody =
+    note && noteAlive && typeof note.content_text === "string"
+      ? note.content_text
+      : "";
+  const sessionBody =
+    session && sessionAlive && typeof session.notes_text === "string"
+      ? session.notes_text
+      : "";
+  const body =
+    noteBody.trim().length >= sessionBody.trim().length ? noteBody : sessionBody;
+  return { exists: true, body };
+}
+
 /**
- * Reset a stuck PDF ingest job to `pending` and re-queue phase 1.
+ * Reset a stuck or failed ingest job to `pending` and re-queue phase 1.
+ * Notes/live-lecture text jobs restore from transcript or the still-present
+ * note even when failure cleanup deleted the storage object.
  * When a completed job is restarted the old study_materials row is deleted
  * first so the next build doesn't leave a duplicate in the course.
  */
@@ -49,7 +104,6 @@ export async function POST(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Need admin client for storage checks and the cleanup delete below.
   const admin = createAdminClient();
   if (!admin) {
     return NextResponse.json(
@@ -58,30 +112,76 @@ export async function POST(_request: Request, ctx: Params) {
     );
   }
 
-  const { data: job, error: selErr } = await supabase
+  const JOB_RETRY_SELECT =
+    "id, status, material_id, storage_path, ingest_epoch, ingest_transcript, source_format, original_file_name";
+  let { data: job, error: selErr } = await supabase
     .from("pdf_ingest_jobs")
-    .select("id, status, material_id, storage_path, ingest_epoch")
+    .select(JOB_RETRY_SELECT)
     .eq("id", jobId)
     .maybeSingle();
+
+  if (selErr && isMissingDbColumnError(selErr, "ingest_transcript", "source_format")) {
+    ({ data: job, error: selErr } = await supabase
+      .from("pdf_ingest_jobs")
+      .select("id, status, material_id, storage_path, ingest_epoch, original_file_name")
+      .eq("id", jobId)
+      .maybeSingle());
+  }
 
   if (selErr || !job) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
-  if (job.status === "failed") {
-    return NextResponse.json(
-      {
-        error:
-          "This build failed and the uploaded copy was removed from storage. Upload the PDF again from your course page.",
-      },
-      { status: 400 }
-    );
+  const view = ingestJobRowToRetryView(job);
+  if (!view) {
+    return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
-  const storagePath =
+  let storagePath =
     typeof job.storage_path === "string" && job.storage_path.length > 0
       ? job.storage_path
       : null;
+
+  let storagePresent = false;
+  if (storagePath) {
+    const { error: dlErr } = await admin.storage
+      .from(STUDY_PDF_INGEST_BUCKET)
+      .download(storagePath);
+    storagePresent = !dlErr;
+  }
+
+  if (!storagePresent) {
+    const linkedNote = await loadLinkedNotesSource(admin, jobId);
+    const decision = resolveIngestRetrySource({
+      storagePresent: false,
+      job: view,
+      linkedNote,
+    });
+    if (decision.action === "reject") {
+      return NextResponse.json({ error: decision.error }, { status: 400 });
+    }
+    if (decision.action === "restore_text") {
+      const path = storagePath ?? `${user.id}/${crypto.randomUUID()}.txt`;
+      const { error: uploadErr } = await admin.storage
+        .from(STUDY_PDF_INGEST_BUCKET)
+        .upload(path, new Blob([decision.text], { type: "text/plain" }), {
+          contentType: "text/plain",
+          upsert: true,
+        });
+      if (uploadErr) {
+        console.error("[process-pdf/retry] restore upload", jobId, uploadErr);
+        return NextResponse.json(
+          {
+            error:
+              "Could not restore the notes file. Try building the course from your notes again.",
+          },
+          { status: 500 }
+        );
+      }
+      storagePath = path;
+    }
+  }
+
   if (!storagePath) {
     return NextResponse.json(
       { error: "Job has no stored file path." },
@@ -89,21 +189,6 @@ export async function POST(_request: Request, ctx: Params) {
     );
   }
 
-  const { error: dlErr } = await admin.storage
-    .from(STUDY_PDF_INGEST_BUCKET)
-    .download(storagePath);
-  if (dlErr) {
-    return NextResponse.json(
-      {
-        error:
-          "The original PDF is no longer in storage, so this build cannot be restarted. Upload the file again from your course page.",
-      },
-      { status: 400 }
-    );
-  }
-
-  // If a previous run already produced a study_materials row, delete it before
-  // resetting so the fresh rebuild doesn't leave a duplicate in the course.
   const oldMaterialId =
     typeof job.material_id === "string" && job.material_id.length > 0
       ? job.material_id
@@ -130,6 +215,7 @@ export async function POST(_request: Request, ctx: Params) {
       status: "pending",
       error_message: null,
       material_id: null,
+      storage_path: storagePath,
       ingest_source_text: null,
       ingest_outline: null,
       ingest_modules: [],
@@ -149,9 +235,6 @@ export async function POST(_request: Request, ctx: Params) {
     );
   }
 
-  // Same scheduling as POST /api/process-pdf: chunked, server-driven build.
-  // (The old env-dependent monolith path diverged from the main route and is
-  // gone; retries now always behave like fresh uploads.)
   after(() => {
     void runPdfIngestJob(jobId, { driveModules: true }).catch((e) =>
       console.error("[process-pdf/retry] after()", jobId, e)
