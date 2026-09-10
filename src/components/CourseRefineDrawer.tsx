@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLogo } from "@/components/BrandLogo";
+import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { RoseAssistantTabs } from "@/components/RoseAssistantTabs";
 import type { RefinePlan } from "@/lib/ai/refine-course-planner";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
@@ -742,9 +743,12 @@ ${notes.map((n, i) => `${i + 1}. ${n.trim()}`).join("\n")}`;
           )}
 
           {error ? (
-            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+            <DismissibleInlineBanner
+              className="px-3 py-2 text-[13px]"
+              onDismiss={() => setError(null)}
+            >
               {error}
-            </p>
+            </DismissibleInlineBanner>
           ) : null}
         </div>
 

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { formatPrice } from "@/lib/marketplace/listing-access";
+import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import type {
@@ -111,9 +112,12 @@ export function SellerSalesClient({
       </header>
 
       {payoutError ? (
-        <p className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+        <DismissibleInlineBanner
+          className="mb-6"
+          onDismiss={() => setPayoutError(null)}
+        >
           {payoutError}
-        </p>
+        </DismissibleInlineBanner>
       ) : null}
 
       <div className="mb-8 grid gap-3 sm:grid-cols-3">

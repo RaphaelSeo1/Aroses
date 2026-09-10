@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { TutorSessionModeTag } from "@/types/tutor-session";
+import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { promptDialog } from "@/components/AppDialogs";
@@ -499,9 +500,12 @@ export function TutorSessionStartScreen() {
         </div>
 
         {error ? (
-          <p className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
+          <DismissibleInlineBanner
+            className="mt-5"
+            onDismiss={() => setError(null)}
+          >
             {error}
-          </p>
+          </DismissibleInlineBanner>
         ) : null}
 
         {/* Submit */}

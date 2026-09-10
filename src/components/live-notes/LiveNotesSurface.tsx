@@ -35,6 +35,7 @@ import {
 } from "@/lib/live-notes/fold-note-markdown";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 import { chunkTypewriterText } from "@/lib/live-notes/typewriter-text";
+import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { useT } from "@/lib/i18n/LocaleProvider";
 
 /**
@@ -1604,15 +1605,22 @@ export function LiveNotesSurface({
 
       {/* ── Error / cap banners ────────────────────────────────────────── */}
       {voiceCapped ? (
-        <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100 sm:px-6">
+        <DismissibleInlineBanner
+          tone="warning"
+          layout="bar"
+          onDismiss={() => setVoiceCapped(false)}
+        >
           You&apos;ve reached this month&apos;s voice limit, so live transcription is
           unavailable. Your notes and transcript so far are saved — you can
           still finish and build the course.
-        </p>
+        </DismissibleInlineBanner>
       ) : error ? (
-        <p className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-900 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-100 sm:px-6">
+        <DismissibleInlineBanner
+          layout="bar"
+          onDismiss={() => setError(null)}
+        >
           {error}
-        </p>
+        </DismissibleInlineBanner>
       ) : null}
 
       {/* ── Body ───────────────────────────────────────────────────────── */}

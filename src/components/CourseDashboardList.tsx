@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import type { StudyingCourse } from "@/lib/load-dashboard-courses";
 
@@ -479,9 +480,9 @@ export function CourseDashboardList({
   return (
     <div className={`space-y-4 ${className ?? "mt-12"}`}>
       {listError && (
-        <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200">
+        <DismissibleInlineBanner onDismiss={() => setListError(null)}>
           {listError}
-        </p>
+        </DismissibleInlineBanner>
       )}
 
       <section className="space-y-5">

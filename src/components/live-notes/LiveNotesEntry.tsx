@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { confirmDialog } from "@/components/AppDialogs";
+import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 
 export type LiveNotesActiveSession = {
   id: string;
@@ -193,7 +194,12 @@ export function LiveNotesEntry({
       ) : null}
 
       {error ? (
-        <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{error}</p>
+        <DismissibleInlineBanner
+          className="mt-2 px-3 py-2 text-xs"
+          onDismiss={() => setError(null)}
+        >
+          {error}
+        </DismissibleInlineBanner>
       ) : null}
     </div>
   );

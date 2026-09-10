@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { INTRO_HREF } from "@/lib/brand";
 import { useLocale, useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
@@ -792,12 +793,12 @@ export function OnboardingClient() {
           ) : null}
 
           {submitError ? (
-            <div
-              className="mx-auto mt-8 max-w-lg rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-center text-sm leading-relaxed text-red-800 dark:border-red-200 dark:bg-red-50 dark:text-red-900"
-              role="alert"
+            <DismissibleInlineBanner
+              className="mx-auto mt-8 max-w-lg text-center leading-relaxed"
+              onDismiss={() => setSubmitError(null)}
             >
               {submitError}
-            </div>
+            </DismissibleInlineBanner>
           ) : null}
 
           {phase !== "welcome" &&

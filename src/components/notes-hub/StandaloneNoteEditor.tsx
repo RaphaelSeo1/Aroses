@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { confirmDialog, promptDialog } from "@/components/AppDialogs";
+import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { NotesDocView } from "@/components/notes-hub/NotesDocView";
 
 /**
@@ -278,7 +279,12 @@ export function StandaloneNoteEditor({
         </div>
       </div>
       {error ? (
-        <p className="mb-3 text-sm text-rose-600 dark:text-rose-400">{error}</p>
+        <DismissibleInlineBanner
+          className="mb-3"
+          onDismiss={() => setError(null)}
+        >
+          {error}
+        </DismissibleInlineBanner>
       ) : null}
       <p className="mb-4 text-xs text-zinc-500 dark:text-zinc-400">
         Record a lecture with tab, system, or mic audio — Rose transcribes and
