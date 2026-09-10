@@ -454,11 +454,13 @@ export function NotesPanel({
   // Live handle to the editor so the (synchronously-defined) key handler can
   // reach commands without a use-before-define on `editor`.
   const editorInstanceRef = useRef<Editor | null>(null);
-  /** Drag-to-highlight: paint this color when the student drags a selection. */
-  const highlightPaintColorRef = useRef<string | null>(KEY_TERM_HIGHLIGHT_COLOR);
+  // Drag-to-highlight is opt-in on notes: the student must pick a color
+  // first. Course lessons still auto-paint on drag-select
+  // (`LessonQuoteCaptureRegion`).
+  const highlightPaintColorRef = useRef<string | null>(null);
   const highlightDragStartRef = useRef<{ x: number; y: number } | null>(null);
   const [highlightPaintColor, setHighlightPaintColor] = useState<string | null>(
-    KEY_TERM_HIGHLIGHT_COLOR
+    null
   );
   highlightPaintColorRef.current = highlightPaintColor;
   const imageInputRef = useRef<HTMLInputElement | null>(null);
