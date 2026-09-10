@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { relinkNoteFocusQuestionsForExistingMaterial } from "@/lib/notes/attach-focus-questions-to-course";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import type { CourseQuizItem } from "@/types/course";
@@ -31,6 +32,16 @@ export async function GET(request: Request, ctx: Params) {
   const ok = await canAccessStudyMaterial(supabase, user.id, materialId);
   if (!ok) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
+  }
+
+  try {
+    await relinkNoteFocusQuestionsForExistingMaterial(supabase, {
+      userId: user.id,
+      materialId,
+      mergeIntoQuiz: true,
+    });
+  } catch (e) {
+    console.error("[personal-quiz-items] focus relink", e);
   }
 
   const { data, error } = await supabase

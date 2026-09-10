@@ -13,6 +13,7 @@ import {
   loadSessionDeckPages,
 } from "@/lib/live-notes/slide-pages";
 import { supersedeIngestJob } from "@/lib/notes/create-ingest-job-from-text";
+import { relinkNoteFocusQuestionsForExistingMaterial } from "@/lib/notes/attach-focus-questions-to-course";
 import {
   ingestJobRowToRetryView,
   shouldReuseExistingIngestJob,
@@ -112,11 +113,28 @@ export async function POST(request: Request, ctx: Params) {
   if (typeof session.ingest_job_id === "string" && session.ingest_job_id) {
     const { data: existingJob } = await supabase
       .from("pdf_ingest_jobs")
-      .select("status, updated_at, ingest_phase, ingest_epoch")
+      .select("status, updated_at, ingest_phase, ingest_epoch, material_id")
       .eq("id", session.ingest_job_id)
       .maybeSingle();
     const view = ingestJobRowToRetryView(existingJob);
     if (shouldReuseExistingIngestJob(view)) {
+      const materialId =
+        typeof (existingJob as { material_id?: unknown } | null)?.material_id ===
+        "string"
+          ? ((existingJob as { material_id: string }).material_id)
+          : null;
+      if (view?.status === "complete" && materialId) {
+        try {
+          await relinkNoteFocusQuestionsForExistingMaterial(supabase, {
+            userId: user.id,
+            materialId,
+            jobId: session.ingest_job_id,
+            mergeIntoQuiz: true,
+          });
+        } catch (e) {
+          console.error("[live-notes/complete] focus relink", e);
+        }
+      }
       return NextResponse.json({
         jobId: session.ingest_job_id,
         redirect: `/dashboard/courses/${courseId}/study/build?pdfJobs=${session.ingest_job_id}`,

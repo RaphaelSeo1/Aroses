@@ -79,6 +79,14 @@ import type {
 } from "@/lib/ai/course-payload";
 import type { CoursePayload } from "@/types/course";
 import {
+  persistNoteFocusQuestionLinks,
+  planNoteFocusQuestionsForJob,
+} from "@/lib/notes/attach-focus-questions-to-course";
+import {
+  mergeFocusQuestionsIntoModuleQuizzes,
+  type FocusQuestionMapping,
+} from "@/lib/notes/map-focus-questions-to-modules";
+import {
   assembleModuleSourcesFromPlan,
   generateCourseModuleFromMaterial,
   type ModuleGenerationOptions,
@@ -890,7 +898,7 @@ async function finalizePdfIngest(
     );
   }
 
-  const payload: CoursePayload = localizedMaterial
+  let payload: CoursePayload = localizedMaterial
     ? localizedMaterial.display
     : {
         title: outline.title,
@@ -919,6 +927,39 @@ async function finalizePdfIngest(
       "Could not resolve course owner for this upload."
     );
     return null;
+  }
+
+  let importedFocusMappings: FocusQuestionMapping[] = [];
+  try {
+    const planned = await planNoteFocusQuestionsForJob(admin, {
+      userId: materialOwnerId,
+      jobId,
+      modules: payload.modules,
+    });
+    if (planned && planned.mappings.length > 0) {
+      importedFocusMappings = planned.mappings;
+      payload = { ...payload, modules: planned.modules };
+      if (localizedMaterial) {
+        const canonicalModules =
+          localizedMaterial.canonical === localizedMaterial.display
+            ? planned.modules
+            : mergeFocusQuestionsIntoModuleQuizzes(
+                localizedMaterial.canonical.modules,
+                planned.mappings
+              );
+        localizedMaterial = {
+          ...localizedMaterial,
+          display: payload,
+          canonical: {
+            ...localizedMaterial.canonical,
+            modules: canonicalModules,
+          },
+        };
+      }
+    }
+  } catch (e) {
+    await report("pdf-ingest.note_focus_import_failed", e, { jobId });
+    void addJobDegradedReason(admin, jobId, "note_focus_import_failed");
   }
 
   // Resolve this material's sidebar position so the section stays in UPLOAD
@@ -1233,6 +1274,22 @@ async function finalizePdfIngest(
       detail: { materialId: row.id },
     });
     throw e;
+  }
+
+  if (importedFocusMappings.length > 0) {
+    try {
+      await persistNoteFocusQuestionLinks(admin, {
+        userId: materialOwnerId,
+        materialId: row.id,
+        mappings: importedFocusMappings,
+      });
+    } catch (e) {
+      await report("pdf-ingest.note_focus_attach_failed", e, {
+        jobId,
+        detail: { materialId: row.id },
+      });
+      void addJobDegradedReason(admin, jobId, "note_focus_attach_failed");
+    }
   }
 
   await removeIngestObject(admin, storagePath, {

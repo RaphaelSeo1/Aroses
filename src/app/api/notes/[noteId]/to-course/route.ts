@@ -4,6 +4,7 @@ import {
   buildLiveNotesStudyContext,
   extractLiveNotesEmphasis,
 } from "@/lib/live-notes/notes-emphasis";
+import { relinkNoteFocusQuestionsForExistingMaterial } from "@/lib/notes/attach-focus-questions-to-course";
 import {
   createIngestJobFromText,
   ensureExamGroupForCourse,
@@ -58,7 +59,7 @@ export async function POST(request: Request, ctx: Params) {
   if (typeof note.ingest_job_id === "string" && note.ingest_job_id) {
     const { data: existingJob } = await supabase
       .from("pdf_ingest_jobs")
-      .select("status, updated_at, ingest_phase, ingest_epoch")
+      .select("status, updated_at, ingest_phase, ingest_epoch, material_id")
       .eq("id", note.ingest_job_id)
       .maybeSingle();
     const view = ingestJobRowToRetryView(existingJob);
@@ -67,6 +68,23 @@ export async function POST(request: Request, ctx: Params) {
       typeof note.course_id === "string" &&
       note.course_id
     ) {
+      const materialId =
+        typeof (existingJob as { material_id?: unknown } | null)?.material_id ===
+        "string"
+          ? ((existingJob as { material_id: string }).material_id)
+          : null;
+      if (view?.status === "complete" && materialId) {
+        try {
+          await relinkNoteFocusQuestionsForExistingMaterial(supabase, {
+            userId: user.id,
+            materialId,
+            jobId: note.ingest_job_id,
+            mergeIntoQuiz: true,
+          });
+        } catch (e) {
+          console.error("[notes/to-course] focus relink", e);
+        }
+      }
       return NextResponse.json({
         jobId: note.ingest_job_id,
         courseId: note.course_id,
