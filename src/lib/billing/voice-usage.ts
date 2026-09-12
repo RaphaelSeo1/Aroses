@@ -1,5 +1,6 @@
 import "server-only";
 import { isAppAdminEnvUser } from "@/lib/app-admin-env";
+import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import { getUserSubscription } from "@/lib/billing/subscription";
 import { voiceCapSeconds, type PlanTier } from "@/lib/billing/plans";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -37,6 +38,8 @@ export type VoiceAllowance = {
   remainingSeconds: number;
   periodStart: string;
   periodEnd: string | null;
+  /** App admin / super-admin — Stripe voice hours do not apply. */
+  unlimited: boolean;
 };
 
 /**
@@ -64,26 +67,6 @@ function resolvePeriod(sub: {
   return { start, end: end.toISOString() };
 }
 
-async function isVoiceCapExemptUser(
-  userId: string,
-  email?: string | null
-): Promise<boolean> {
-  // Local dev: never meter voice — avoids false 402s when admin env isn't wired.
-  if (process.env.NODE_ENV === "development") return true;
-
-  if (isAppAdminEnvUser({ id: userId, email })) return true;
-
-  const admin = createAdminClient();
-  if (!admin) return false;
-
-  const { data } = await admin
-    .from("app_super_admins")
-    .select("user_id")
-    .eq("user_id", userId)
-    .maybeSingle();
-  return Boolean(data);
-}
-
 /** Check whether the user may use voice right now (reads usage, doesn't mutate). */
 export async function checkVoiceAllowance(
   userId: string,
@@ -103,6 +86,7 @@ export async function checkVoiceAllowance(
       remainingSeconds: Number.MAX_SAFE_INTEGER,
       periodStart: start.toISOString(),
       periodEnd: null,
+      unlimited: isAppAdminEnvUser({ id: userId, email: opts?.email }),
     };
   }
 
@@ -110,7 +94,7 @@ export async function checkVoiceAllowance(
   const capSeconds = voiceCapSeconds(sub.tier);
   const { start, end } = resolvePeriod(sub);
 
-  if (await isVoiceCapExemptUser(userId, opts?.email)) {
+  if (await isUnlimitedPlanMeterUser(userId, opts?.email)) {
     return {
       allowed: true,
       tier: sub.tier,
@@ -119,6 +103,7 @@ export async function checkVoiceAllowance(
       remainingSeconds: Number.MAX_SAFE_INTEGER,
       periodStart: start.toISOString(),
       periodEnd: end,
+      unlimited: true,
     };
   }
 
@@ -133,6 +118,7 @@ export async function checkVoiceAllowance(
       remainingSeconds: capSeconds,
       periodStart: start.toISOString(),
       periodEnd: end,
+      unlimited: false,
     };
   }
 
@@ -153,6 +139,7 @@ export async function checkVoiceAllowance(
     remainingSeconds: remaining,
     periodStart: start.toISOString(),
     periodEnd: end,
+    unlimited: false,
   };
 }
 

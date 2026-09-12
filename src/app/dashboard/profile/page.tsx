@@ -145,7 +145,7 @@ async function ProfilePageBody({
     includeBilling
       ? Promise.all([
           reconcileUserSubscription(userId),
-          checkVoiceAllowance(userId),
+          checkVoiceAllowance(userId, { email: userEmail }),
         ])
       : Promise.resolve(null),
   ]);
@@ -179,7 +179,9 @@ async function ProfilePageBody({
           cancelAtPeriodEnd={billingBundle[0].cancelAtPeriodEnd}
           hasCustomer={Boolean(billingBundle[0].stripeCustomerId)}
           voiceUsedSeconds={billingBundle[1].usedSeconds}
-          voiceCapSeconds={billingBundle[1].capSeconds}
+          voiceCapSeconds={
+            billingBundle[1].unlimited ? null : billingBundle[1].capSeconds
+          }
         />
       </Suspense>
     ) : undefined;

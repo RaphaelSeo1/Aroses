@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isAppAdminEnvUser, requireAppAdminUser } from "./app-admin-env.ts";
+import {
+  BUILT_IN_APP_ADMIN_EMAILS,
+  isAppAdminEnvUser,
+  requireAppAdminUser,
+} from "./app-admin-env.ts";
 
 const ENV_KEYS = [
   "APP_ADMIN_USER_IDS",
@@ -68,6 +72,29 @@ test("requireAppAdminUser rejects non-admin users (API guard)", () => {
       );
     }
   );
+});
+
+test("built-in founder email is always an app admin", () => {
+  withAdminEnv({}, () => {
+    assert.equal(
+      isAppAdminEnvUser({
+        id: OTHER_ID,
+        email: BUILT_IN_APP_ADMIN_EMAILS[0],
+      }),
+      true
+    );
+    assert.equal(
+      isAppAdminEnvUser({
+        id: OTHER_ID,
+        email: "RaphaelXSeo@gmail.com",
+      }),
+      true
+    );
+    assert.equal(
+      isAppAdminEnvUser({ id: OTHER_ID, email: "student@example.com" }),
+      false
+    );
+  });
 });
 
 test("requireAppAdminUser allows allowlisted id or email", () => {

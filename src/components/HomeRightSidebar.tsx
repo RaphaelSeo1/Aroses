@@ -132,9 +132,12 @@ export function HomeRightSidebar({
   const voiceUsedMin = planUsage
     ? Math.floor(planUsage.voiceUsedSeconds / 60)
     : 0;
-  const voiceCapMin = planUsage
-    ? Math.round(planUsage.voiceCapSeconds / 60)
-    : 0;
+  const voiceUnlimited = planUsage?.voiceCapSeconds == null;
+  const recordingsUnlimited = planUsage?.recordingsCap == null;
+  const voiceCapMin =
+    planUsage && planUsage.voiceCapSeconds != null
+      ? Math.round(planUsage.voiceCapSeconds / 60)
+      : 0;
   const coursesPct = planUsage
     ? usagePct(planUsage.coursesUsed, planUsage.coursesCap)
     : 0;
@@ -164,7 +167,12 @@ export function HomeRightSidebar({
               </p>
               <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                 {planDisplayName(t.billing, planUsage.tier)}
-                {planUsage.tier !== "free" ? (
+                {voiceUnlimited ? (
+                  <span className="text-zinc-400 dark:text-zinc-500">
+                    {" "}
+                    · {t.billing.voiceHoursUnlimited}
+                  </span>
+                ) : planUsage.tier !== "free" ? (
                   <span className="text-zinc-400 dark:text-zinc-500">
                     {" "}
                     ·{" "}
@@ -210,19 +218,33 @@ export function HomeRightSidebar({
             />
             <UsageMeter
               label={t.dashboard.planUsageVoice}
-              valueLabel={tf(t.dashboard.planUsageMinutes, {
-                used: voiceUsedMin,
-                cap: voiceCapMin,
-              })}
+              valueLabel={
+                voiceUnlimited
+                  ? tf(t.dashboard.planUsageUnlimited, {
+                      used: voiceUsedMin,
+                    })
+                  : tf(t.dashboard.planUsageMinutes, {
+                      used: voiceUsedMin,
+                      cap: voiceCapMin,
+                    })
+              }
               pct={voicePct}
+              unlimited={voiceUnlimited}
             />
             <UsageMeter
               label={t.dashboard.planUsageRecordings}
-              valueLabel={tf(t.dashboard.planUsageOf, {
-                used: planUsage.recordingsUsed,
-                cap: planUsage.recordingsCap,
-              })}
+              valueLabel={
+                recordingsUnlimited
+                  ? tf(t.dashboard.planUsageUnlimited, {
+                      used: planUsage.recordingsUsed,
+                    })
+                  : tf(t.dashboard.planUsageOf, {
+                      used: planUsage.recordingsUsed,
+                      cap: planUsage.recordingsCap ?? 0,
+                    })
+              }
               pct={recordingsPct}
+              unlimited={recordingsUnlimited}
             />
           </div>
         </section>

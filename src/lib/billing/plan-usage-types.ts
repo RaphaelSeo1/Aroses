@@ -4,10 +4,12 @@ import type { PlanTier } from "@/lib/billing/plans";
 export type PlanUsageSummary = {
   tier: PlanTier;
   coursesUsed: number;
-  /** `null` = unlimited (Premium). */
+  /** `null` = unlimited (Premium or app admin). */
   coursesCap: number | null;
   voiceUsedSeconds: number;
-  voiceCapSeconds: number;
+  /** `null` = unlimited (app admin). */
+  voiceCapSeconds: number | null;
   recordingsUsed: number;
-  recordingsCap: number;
+  /** `null` = unlimited (app admin). */
+  recordingsCap: number | null;
 };

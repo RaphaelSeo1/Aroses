@@ -1,4 +1,5 @@
 import "server-only";
+import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import {
   lectureRecordingCap,
   PLANS,
@@ -13,7 +14,8 @@ export type LectureRecordingCapOk = {
   ok: true;
   tier: PlanTier;
   used: number;
-  cap: number;
+  /** `null` = unlimited (app admin). */
+  cap: number | null;
   periodStart: string;
 };
 
@@ -58,11 +60,13 @@ function resolvePeriod(sub: {
  * Reopening an existing session does not consume another slot.
  */
 export async function assertCanStartLectureRecording(
-  userId: string
+  userId: string,
+  opts?: { email?: string | null }
 ): Promise<LectureRecordingCapOk | LectureRecordingCapBlocked> {
   const sub = await getUserSubscription(userId);
   const tier = sub.tier;
-  const cap = lectureRecordingCap(tier);
+  const unlimited = await isUnlimitedPlanMeterUser(userId, opts?.email);
+  const cap = unlimited ? null : lectureRecordingCap(tier);
   const { start } = resolvePeriod(sub);
   const periodStart = start.toISOString();
 
@@ -71,7 +75,7 @@ export async function assertCanStartLectureRecording(
     return { ok: true, tier, used: 0, cap, periodStart };
   }
 
-  let query = admin
+  const query = admin
     .from("live_lecture_sessions")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
@@ -94,7 +98,7 @@ export async function assertCanStartLectureRecording(
   }
 
   const used = count ?? 0;
-  if (used >= cap) {
+  if (cap != null && used >= cap) {
     const planName = PLANS[tier].name;
     const upgradeHint =
       tier === "premium"

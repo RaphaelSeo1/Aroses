@@ -91,7 +91,7 @@ export function BillingClient({
   cancelAtPeriodEnd: boolean;
   hasCustomer: boolean;
   voiceUsedSeconds: number;
-  voiceCapSeconds: number;
+  voiceCapSeconds: number | null;
 }) {
   const t = useT();
   const searchParams = useSearchParams();
@@ -161,12 +161,15 @@ export function BillingClient({
     : null;
 
   const usedMinutes = Math.floor(voiceUsedSeconds / 60);
-  const capMinutes = Math.round(voiceCapSeconds / 60);
-  const usedPct =
-    voiceCapSeconds > 0
+  const voiceUnlimited = voiceCapSeconds == null;
+  const capMinutes = voiceUnlimited ? 0 : Math.round(voiceCapSeconds / 60);
+  const usedPct = voiceUnlimited
+    ? 100
+    : voiceCapSeconds > 0
       ? Math.min(100, Math.round((voiceUsedSeconds / voiceCapSeconds) * 100))
       : 0;
-  const capReached = voiceCapSeconds > 0 && voiceUsedSeconds >= voiceCapSeconds;
+  const capReached =
+    !voiceUnlimited && voiceCapSeconds > 0 && voiceUsedSeconds >= voiceCapSeconds;
 
   const currentPlan = planStrings(t.billing, currentTier);
 
@@ -206,7 +209,11 @@ export function BillingClient({
           </p>
           <p className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
             {currentTier === "free" ? t.billing.noActiveSub : currentPlan.name}
-            {currentTier !== "free" ? (
+            {voiceUnlimited ? (
+              <span className="ml-2 text-sm font-normal text-zinc-500">
+                · {t.billing.voiceHoursUnlimited}
+              </span>
+            ) : currentTier !== "free" ? (
               <span className="ml-2 text-sm font-normal text-zinc-500">
                 ·{" "}
                 {tf(t.billing.voiceHoursMonth, {
@@ -227,7 +234,9 @@ export function BillingClient({
             <div className="flex w-full items-center justify-between gap-3 text-[11px] text-zinc-500 dark:text-zinc-400">
               <span className="shrink-0">{t.billing.voiceThisPeriod}</span>
               <span className="shrink-0 tabular-nums">
-                {usedMinutes} / {capMinutes} min
+                {voiceUnlimited
+                  ? tf(t.billing.voiceUsedUnlimited, { used: usedMinutes })
+                  : `${usedMinutes} / ${capMinutes} min`}
               </span>
             </div>
             <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">

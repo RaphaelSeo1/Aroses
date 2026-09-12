@@ -1,4 +1,5 @@
 import "server-only";
+import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import { courseCap, PLANS, type PlanTier } from "@/lib/billing/plans";
 import { getUserSubscription } from "@/lib/billing/subscription";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -28,11 +29,13 @@ export type CourseCapBlocked = {
  * course is not gated here.
  */
 export async function assertCanCreateCourse(
-  userId: string
+  userId: string,
+  opts?: { email?: string | null }
 ): Promise<CourseCapOk | CourseCapBlocked> {
   const sub = await getUserSubscription(userId);
   const tier = sub.tier;
-  const cap = courseCap(tier);
+  const unlimited = await isUnlimitedPlanMeterUser(userId, opts?.email);
+  const cap = unlimited ? null : courseCap(tier);
 
   const admin = createAdminClient();
   if (!admin) {

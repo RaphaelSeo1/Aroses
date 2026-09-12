@@ -3,13 +3,17 @@
  *
  * Use comma-separated auth user UUIDs in `APP_ADMIN_USER_IDS` and/or
  * `NEXT_PUBLIC_APP_ADMIN_USER_IDS`. Emails: `APP_ADMIN_EMAILS` and/or
- * `NEXT_PUBLIC_APP_ADMIN_EMAILS`.
+ * `NEXT_PUBLIC_APP_ADMIN_EMAILS`. `BUILT_IN_APP_ADMIN_EMAILS` (founder) is
+ * always included so plan meters stay unlimited even if env is unset.
  *
  * On Vercel, **middleware runs on Edge** and often cannot read non-`NEXT_PUBLIC_`
  * variables from `.env`; `next.config.ts` mirrors the private vars into the
  * `NEXT_PUBLIC_*` keys at build time so the gate still works when you only set
  * `APP_ADMIN_USER_IDS` in project settings.
  */
+
+/** Always treated as app admins (unlimited plan meters + admin UI). */
+export const BUILT_IN_APP_ADMIN_EMAILS = ["raphaelxseo@gmail.com"] as const;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -43,7 +47,7 @@ export function getAppAdminUserIdSet(): Set<string> {
 export function getAppAdminEmailSet(): Set<string> {
   const a = parseEmailList(process.env.APP_ADMIN_EMAILS?.trim());
   const b = parseEmailList(process.env.NEXT_PUBLIC_APP_ADMIN_EMAILS?.trim());
-  return new Set([...a, ...b]);
+  return new Set([...a, ...b, ...BUILT_IN_APP_ADMIN_EMAILS]);
 }
 
 export function isAppAdminEnvUser(user: {
