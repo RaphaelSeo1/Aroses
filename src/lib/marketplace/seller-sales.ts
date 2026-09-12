@@ -123,7 +123,7 @@ export async function loadSellerSalesAnalytics(
           "id, course_id, buyer_user_id, price_cents, platform_fee_cents, currency, status, purchased_at, courses(title)"
         )
         .eq("seller_user_id", sellerUserId)
-        .in("status", ["completed", "refunded"])
+        .in("status", ["completed", "refunded", "pending"])
         .order("purchased_at", { ascending: false }),
       supabase
         .from("course_listings")

@@ -57,3 +57,26 @@ export function sortAdminPlanSubscriptionRows(
     return bt - at;
   });
 }
+
+const CURRENT_PLAN_STATUSES = new Set(["active", "trialing"]);
+
+export type AdminPlanSubscriptionSummary = {
+  subscriberCount: number;
+  payingCount: number;
+  mrrCents: number;
+  currency: "usd";
+};
+
+/** Current subscribers + list-price MRR (excludes admin-granted comps). */
+export function summarizeAdminPlanSubscriptions(
+  rows: AdminPlanSubscriptionRow[]
+): AdminPlanSubscriptionSummary {
+  const current = rows.filter((row) => CURRENT_PLAN_STATUSES.has(row.status));
+  const paying = current.filter((row) => !row.adminGranted);
+  return {
+    subscriberCount: current.length,
+    payingCount: paying.length,
+    mrrCents: paying.reduce((sum, row) => sum + row.amountCents, 0),
+    currency: "usd",
+  };
+}

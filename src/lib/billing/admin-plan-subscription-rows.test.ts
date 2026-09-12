@@ -6,6 +6,7 @@ import {
   sortAdminPlanSubscriptionRows,
   startedAtFromSubscription,
   subscriberLabelFromParts,
+  summarizeAdminPlanSubscriptions,
   type AdminPlanSubscriptionRow,
 } from "./admin-plan-subscription-rows.ts";
 
@@ -54,6 +55,59 @@ test("started date falls back to updated_at", () => {
     }),
     "2026-02-01T00:00:00.000Z"
   );
+});
+
+test("plan KPIs count current subscribers and paying MRR only", () => {
+  const base = {
+    email: null,
+    displayName: null,
+    currency: "usd",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    periodEnd: null,
+    cancelAtPeriodEnd: false,
+    adminGranted: false,
+  } as const;
+
+  const rows: AdminPlanSubscriptionRow[] = [
+    {
+      ...base,
+      userId: "a",
+      subscriberLabel: "a",
+      tier: "student",
+      amountCents: 2900,
+      status: "active",
+    },
+    {
+      ...base,
+      userId: "b",
+      subscriberLabel: "b",
+      tier: "premium",
+      amountCents: 5900,
+      status: "trialing",
+    },
+    {
+      ...base,
+      userId: "c",
+      subscriberLabel: "c",
+      tier: "advanced",
+      amountCents: 500,
+      status: "active",
+      adminGranted: true,
+    },
+    {
+      ...base,
+      userId: "d",
+      subscriberLabel: "d",
+      tier: "student",
+      amountCents: 2900,
+      status: "canceled",
+    },
+  ];
+
+  const summary = summarizeAdminPlanSubscriptions(rows);
+  assert.equal(summary.subscriberCount, 3);
+  assert.equal(summary.payingCount, 2);
+  assert.equal(summary.mrrCents, 8800);
 });
 
 test("rows sort newest started first", () => {

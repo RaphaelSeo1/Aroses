@@ -34,7 +34,7 @@ export default async function SellerSalesPage() {
     <>
       <AppHeader right={<HeaderNavLoggedInServer />} />
       <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-        <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14">
+        <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
           <SellerSalesClient
             analytics={analytics}
             planSubscriptions={planSubscriptions}
