@@ -11,7 +11,10 @@ import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown"
 import { chatFileKey, lookAtAttachmentPrompt } from "@/lib/chat/chat-attachment-formats";
 import { useChatAttachments } from "@/lib/chat/use-chat-attachments";
 import { typewriteKnownText } from "@/lib/chat/typewriter-pump";
-import { useChatVoiceTutor } from "@/lib/chat-voice/use-chat-voice-tutor";
+import {
+  useChatVoiceTutor,
+  type ChatVoiceSendContext,
+} from "@/lib/chat-voice/use-chat-voice-tutor";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { AI_ASSISTANT_NAME } from "@/lib/brand";
 import {
@@ -634,7 +637,10 @@ export function StudyChatDrawer({
     [navigateTo]
   );
 
-  const send = useCallback(async (textOverride?: string): Promise<string | null> => {
+  const send = useCallback(async (
+    textOverride?: string,
+    ctx?: ChatVoiceSendContext
+  ): Promise<string | null> => {
     const typed = (textOverride ?? input).trim();
     if (loading || actionMode === "navigating" || isStreamingReply || attaching) {
       return null;
@@ -689,6 +695,7 @@ export function StudyChatDrawer({
             ? [{ name: pdf.fileName, text: pdf.text }]
             : undefined,
         }),
+        signal: ctx?.signal,
       });
       const body = await res.json().catch(() => ({}));
 
@@ -813,7 +820,10 @@ export function StudyChatDrawer({
         }
       }
       return reply;
-    } catch {
+    } catch (e) {
+      if (ctx?.signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
+        return null;
+      }
       setError("Network error.");
       setMessages(prevSnapshot);
       if (!textOverride) setInput(typed);
@@ -837,12 +847,16 @@ export function StudyChatDrawer({
   ]);
 
   const sendRef = useRef(send);
-  sendRef.current = send;
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
   const voice = useChatVoiceTutor({
     materialId,
-    sendAndWait: (text) => sendRef.current(text),
+    sendAndWait: (text, ctx) => sendRef.current(text, ctx),
   });
-  voiceActiveRef.current = voice.active;
+  useEffect(() => {
+    voiceActiveRef.current = voice.active;
+  }, [voice.active]);
 
   useEffect(() => {
     if (!open && voice.active) voice.exit();

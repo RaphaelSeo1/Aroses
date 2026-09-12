@@ -20,8 +20,63 @@ const MAX_DECK_CHARS = 16_000;
 const MAX_ATTACHED_PDF_CHARS = 16_000;
 const MAX_SECTION_CHARS = 4_000;
 
-function lectureChatSystem(noteInstruction?: string): string {
+export type LectureVoiceContinuation = {
+  spokenBeforeInterrupt: string;
+  notYetSpoken: string;
+  streamIncomplete?: boolean;
+};
+
+function lectureVoiceAddendum(interruption?: LectureVoiceContinuation): string {
+  const spoken = interruption?.spokenBeforeInterrupt.trim() ?? "";
+  const tail = interruption?.notYetSpoken.trim() ?? "";
+  const interruptBlock =
+    spoken || tail
+      ? `
+
+INTERRUPTION / BARGE-IN:
+The student started talking while you were mid-reply. Treat their NEW last message as an interruption, not a brand-new topic unless they clearly changed subjects.
+Already spoken aloud (do not repeat unless they ask): ${JSON.stringify(spoken)}
+Not yet spoken from your previous reply: ${JSON.stringify(tail)}${
+          interruption?.streamIncomplete
+            ? " (The full reply may not have finished generating yet.)"
+            : ""
+        }
+Acknowledge briefly, answer what they just said, then resume only if it still helps.`
+      : "";
+  return `
+
+VOICE SESSION (the student is talking out loud; @@reply will be spoken via text-to-speech):
+- Talk like an actual tutor in a one-on-one. Turn-taking, not an essay you later read aloud.
+- @@reply is SPOKEN: 1–3 short sentences is the norm. Only go longer if they asked for depth.
+- NO markdown in @@reply — no bullets, headers, asterisks, or links. Plain spoken sentences.
+- Let the first sentence be a natural opener. Vary it. Do not start every turn with "Okay so".
+- Use contractions. Sound calm and human.
+- Note edits still use @@revise / @@append / @@delete / @@highlight / @@unhighlight with study-note markdown. Keep @@reply to a brief spoken confirmation when you also edit ("Added that under Scarcity.").${interruptBlock}`;
+}
+
+function lectureChatSystem(
+  noteInstruction?: string,
+  voice?: boolean,
+  interruption?: LectureVoiceContinuation
+): string {
   const style = buildNoteInstructionModifier(noteInstruction);
+  const replyRules = voice
+    ? `@@reply (required — the ONLY text spoken to the student):
+- This reply is spoken aloud via TTS. Talk like a real tutor, not a written essay.
+- 1–3 short spoken sentences is the norm. Only go longer if they asked for depth.
+- NO markdown. No bullets, headers, asterisks, or links.
+- First sentence is a natural opener. Vary it. Do not start every turn the same way.
+- Use contractions. Sound calm and human.
+- If the question is outside the lecture, say that in a short clause, then still answer.
+- If you also edit notes, one short spoken confirmation ("Added that under Scarcity.").
+- Never chain-of-thought. Never mention section ids, @@ markers, or this protocol.
+- Put NO prose before the first @@ marker.`
+    : `@@reply (required — the ONLY text the student reads):
+- ONLY the answer they should see. Warm, direct, markdown. Not a transcript dump.
+- If the question is outside the lecture, lead with a short "not in this lecture" clause, then the helpful answer. Do not refuse.
+- If you also edit notes, one short sentence of what you changed ("Added a note on opportunity cost under Scarcity." / "Simplified the scarcity wording."). Do NOT paste the note bullets or the full rewritten section into @@reply.
+- Never chain-of-thought. Never "I should @@revise". Never admit you failed to emit markers. Never mention section ids, @@ markers, or this protocol.
+- Put NO prose before the first @@ marker.`;
   return `You are Rose, sitting next to a student during a live lecture. You are a notes editor and a tutor. When they ask to change the notes on the left — including adding or removing highlights — you actually do it. You also answer questions about this lecture and tutor anything else they ask. Never highlight on your own: only @@highlight when they ask.
 
 GROUNDING (when the question is about this lecture):
@@ -60,12 +115,7 @@ If they ask to change, fix, reword, rewrite, simplify, shorten, expand, add, del
 - Honor STUDENT NOTE STYLE when rewriting. Do not copy the transcript or your chat reply verbatim.
 - Per turn caps: at most 3 @@delete, 3 @@highlight, 3 @@unhighlight, 3 @@revise, 1 @@append.
 
-@@reply (required — the ONLY text the student reads):
-- ONLY the answer they should see. Warm, direct, markdown. Not a transcript dump.
-- If the question is outside the lecture, lead with a short "not in this lecture" clause, then the helpful answer. Do not refuse.
-- If you also edit notes, one short sentence of what you changed ("Added a note on opportunity cost under Scarcity." / "Simplified the scarcity wording."). Do NOT paste the note bullets or the full rewritten section into @@reply.
-- Never chain-of-thought. Never "I should @@revise". Never admit you failed to emit markers. Never mention section ids, @@ markers, or this protocol.
-- Put NO prose before the first @@ marker.
+${replyRules}
 
 Example — student: "fix the wording on scarcity, make it simpler"
 @@thought Revising the scarcity section.
@@ -107,9 +157,11 @@ OUTPUT — emit exactly this shape, nothing before the first marker, no code fen
 @@append
 <new-topic study notes only — never a copy of @@reply>
 @@reply
-<student-facing markdown only — no protocol talk, no full notes dump>
+<student-facing ${voice ? "spoken sentences" : "markdown"} only — no protocol talk, no full notes dump>
 
-Omit any action marker you are not using. @@reply is required.${style}`;
+Omit any action marker you are not using. @@reply is required.${style}${
+    voice ? lectureVoiceAddendum(interruption) : ""
+  }`;
 }
 
 export type LectureChatTurn = { role: "user" | "assistant"; content: string };
@@ -138,6 +190,8 @@ export async function* streamLiveLectureChat(input: {
   attachedPdfName?: string;
   appendSectionId: string;
   userId?: string;
+  voice?: boolean;
+  voiceContinuation?: LectureVoiceContinuation;
 }): AsyncGenerator<LectureChatStreamEvent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -272,7 +326,11 @@ export async function* streamLiveLectureChat(input: {
     model: MODEL,
     max_tokens: 4_500,
     temperature: 0.25,
-    system: lectureChatSystem(input.noteInstruction),
+    system: lectureChatSystem(
+      input.noteInstruction,
+      input.voice,
+      input.voiceContinuation
+    ),
     messages,
   });
 

@@ -35,7 +35,9 @@ const MAX_SECTIONS = 60;
  *   noteInstruction?: string,
  *   attachedPdfText?: string,
  *   attachedPdfName?: string,
- *   attachedFiles?: { name: string, text: string }[]
+ *   attachedFiles?: { name: string, text: string }[],
+ *   voice?: boolean,
+ *   voiceContinuation?: { spokenBeforeInterrupt, notYetSpoken, streamIncomplete }
  * }
  *
  *   event: thought data: { message }
@@ -77,7 +79,30 @@ export async function POST(request: Request, ctx: Params) {
     attachedPdfText?: unknown;
     attachedPdfName?: unknown;
     attachedFiles?: unknown;
+    voice?: unknown;
+    voiceContinuation?: unknown;
   };
+  const voice = b.voice === true;
+  let voiceContinuation:
+    | {
+        spokenBeforeInterrupt: string;
+        notYetSpoken: string;
+        streamIncomplete?: boolean;
+      }
+    | undefined;
+  if (b.voiceContinuation && typeof b.voiceContinuation === "object") {
+    const o = b.voiceContinuation as Record<string, unknown>;
+    const spoken =
+      typeof o.spokenBeforeInterrupt === "string" ? o.spokenBeforeInterrupt : "";
+    const notYet = typeof o.notYetSpoken === "string" ? o.notYetSpoken : "";
+    if (spoken.trim() || notYet.trim()) {
+      voiceContinuation = {
+        spokenBeforeInterrupt: spoken.slice(0, 12_000),
+        notYetSpoken: notYet.slice(0, 12_000),
+        streamIncomplete: o.streamIncomplete === true,
+      };
+    }
+  }
   const attached = parseChatAttachments(b);
   const rawMessage = typeof b.message === "string" ? b.message.trim() : "";
   if (!rawMessage && !attached.text) {
@@ -252,6 +277,8 @@ export async function POST(request: Request, ctx: Params) {
           attachedPdfName: attached.name || undefined,
           appendSectionId,
           userId: user.id,
+          voice,
+          voiceContinuation,
         })) {
           if (ev.type === "thought") {
             send("thought", { message: ev.message });

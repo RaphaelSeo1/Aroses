@@ -13,7 +13,10 @@ import { ChatVoiceTutorButton } from "@/components/chat-voice/ChatVoiceTutorButt
 import { ChatVoiceTutorOrb } from "@/components/chat-voice/ChatVoiceTutorOrb";
 import type { NotesPanelHandle } from "@/components/immersive/NotesPanel";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
-import { useChatVoiceTutor } from "@/lib/chat-voice/use-chat-voice-tutor";
+import {
+  useChatVoiceTutor,
+  type ChatVoiceSendContext,
+} from "@/lib/chat-voice/use-chat-voice-tutor";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { chatFileKey, lookAtAttachmentPrompt, MAX_CHAT_ATTACHMENT_CHARS } from "@/lib/chat/chat-attachment-formats";
 import { useChatAttachments } from "@/lib/chat/use-chat-attachments";
@@ -515,7 +518,10 @@ export function LiveNotesChat({
   );
 
   const send = useCallback(
-    async (text: string): Promise<string | null> => {
+    async (
+      text: string,
+      ctx?: ChatVoiceSendContext
+    ): Promise<string | null> => {
       const typed = text.trim();
       if (attaching) return null;
       let pdf = pendingRef.current;
@@ -660,8 +666,13 @@ export function LiveNotesChat({
             attachedFiles: pdf
               ? [{ name: pdf.fileName, text: pdf.text }]
               : undefined,
+            voice: Boolean(ctx?.onReplyDelta),
+            voiceContinuation: ctx?.interruption,
           }),
-          signal: lease.signal,
+          signal:
+            ctx?.signal && typeof AbortSignal.any === "function"
+              ? AbortSignal.any([lease.signal, ctx.signal])
+              : lease.signal,
         });
         const contentType = res.headers.get("content-type") ?? "";
         if (!res.ok || !contentType.includes("text/event-stream")) {
@@ -687,6 +698,7 @@ export function LiveNotesChat({
               noteOps.push({ kind: "notes", text: delta });
             } else {
               pendingReply += delta;
+              ctx?.onReplyDelta?.(delta);
             }
           } else if (event === "op") {
             const sectionId =
@@ -860,24 +872,29 @@ export function LiveNotesChat({
     sendRef.current = send;
   }, [send]);
 
-  const stopResponse = useCallback(async () => {
-    setHandingOff(false);
-    await coordinatorRef.current?.stop(() => {
-      const interruptedId = streamingIdRef.current;
-      if (!interruptedId) return;
-      updateTurns((current) =>
-        current.map((turn) =>
-          turn.id === interruptedId
-            ? { ...turn, interrupted: "stop" }
-            : turn
-        )
-      );
-      streamingIdRef.current = null;
-      setStreamingId(null);
-    });
-    setBusy(false);
-    inputRef.current?.focus();
-  }, [updateTurns]);
+  const stopResponse = useCallback(
+    async (reason: "stop" | "send" = "stop") => {
+      setHandingOff(false);
+      await coordinatorRef.current?.stop(() => {
+        const interruptedId = streamingIdRef.current;
+        if (!interruptedId) return;
+        updateTurns((current) =>
+          current.map((turn) =>
+            turn.id === interruptedId ? { ...turn, interrupted: reason } : turn
+          )
+        );
+        streamingIdRef.current = null;
+        setStreamingId(null);
+      });
+      setBusy(false);
+      inputRef.current?.focus();
+    },
+    [updateTurns]
+  );
+  const stopResponseRef = useRef(stopResponse);
+  useEffect(() => {
+    stopResponseRef.current = stopResponse;
+  }, [stopResponse]);
 
   useEffect(
     () => () => {
@@ -888,7 +905,10 @@ export function LiveNotesChat({
 
   const voice = useChatVoiceTutor({
     sessionId,
-    sendAndWait: (text) => sendRef.current(text),
+    sendAndWait: (text, ctx) => sendRef.current(text, ctx),
+    onVoiceInterrupt: (reason) => {
+      void stopResponseRef.current(reason);
+    },
     blocked: voiceCapped,
   });
   useEffect(() => {
@@ -1137,15 +1157,17 @@ export function LiveNotesChat({
               )}
             </button>
             <p className="truncate text-[10px] text-zinc-400 dark:text-zinc-500">
-              {attaching
-                ? queued.length > 1
-                  ? "Reading files…"
-                  : "Reading file…"
-                : dragOver
-                  ? "Drop files to add"
-                  : queued.length > 0
-                    ? "Add more, then confirm"
-                    : "PDF, Word, slides, images, text · Enter to send"}
+              {voice.phase === "speaking"
+                ? "Talk over Rose or hit Stop to interrupt"
+                : attaching
+                  ? queued.length > 1
+                    ? "Reading files…"
+                    : "Reading file…"
+                  : dragOver
+                    ? "Drop files to add"
+                    : queued.length > 0
+                      ? "Add more, then confirm"
+                      : "PDF, Word, slides, images, text · Enter to send"}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -1157,10 +1179,16 @@ export function LiveNotesChat({
               }
               onClick={voice.toggle}
             />
-            {busy && !handingOff ? (
+            {(busy && !handingOff) || voice.phase === "speaking" ? (
               <button
                 type="button"
-                onClick={() => void stopResponse()}
+                onClick={() => {
+                  if (voice.active) {
+                    voice.interrupt("stop");
+                    return;
+                  }
+                  void stopResponse("stop");
+                }}
                 className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
               >
                 Stop
