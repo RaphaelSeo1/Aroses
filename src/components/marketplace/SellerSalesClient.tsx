@@ -6,6 +6,8 @@ import { formatPrice } from "@/lib/marketplace/listing-access";
 import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
+import type { AdminPlanSubscriptionRow } from "@/lib/billing/admin-plan-subscription-rows";
+import { AdminPlanSubscriptionsSection } from "@/components/marketplace/AdminPlanSubscriptionsSection";
 import type {
   SellerCourseSalesSummary,
   SellerSaleRow,
@@ -53,8 +55,10 @@ function statusLabel(
 
 export function SellerSalesClient({
   analytics,
+  planSubscriptions = null,
 }: {
   analytics: SellerSalesAnalytics;
+  planSubscriptions?: AdminPlanSubscriptionRow[] | null;
 }) {
   const t = useT();
   const { sales, byCourse, totals, payoutsReady } = analytics;
@@ -118,6 +122,10 @@ export function SellerSalesClient({
         >
           {payoutError}
         </DismissibleInlineBanner>
+      ) : null}
+
+      {planSubscriptions ? (
+        <AdminPlanSubscriptionsSection subscriptions={planSubscriptions} />
       ) : null}
 
       <div className="mb-8 grid gap-3 sm:grid-cols-3">

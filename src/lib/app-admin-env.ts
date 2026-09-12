@@ -58,6 +58,23 @@ export function isAppAdminEnvUser(user: {
   return false;
 }
 
+export type AppAdminApiGuard =
+  | { ok: true; user: { id: string; email?: string | null } }
+  | { ok: false; status: 403; error: "Forbidden" };
+
+/**
+ * Server-side gate for `/api/admin/*`. Matches existing admin routes: missing
+ * session and non-allowlisted users both get 403 Forbidden (no distinction).
+ */
+export function requireAppAdminUser(
+  user: { id: string; email?: string | null } | null | undefined
+): AppAdminApiGuard {
+  if (!user || !isAppAdminEnvUser(user)) {
+    return { ok: false, status: 403, error: "Forbidden" };
+  }
+  return { ok: true, user };
+}
+
 /** Use from Server Components (e.g. Explore) where client nav context may not reach the header. */
 export function adminHubHrefForSessionUser(user: {
   id: string;

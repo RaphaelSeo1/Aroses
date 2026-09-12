@@ -42,6 +42,26 @@ const en = {
   payoutsError: "Could not open Stripe payouts. Try again.",
   setupPayoutsFirst: "Set up payouts from a course’s settings first.",
   managePayouts: "Manage payouts",
+  adminPlansTitle: "Plan subscriptions",
+  adminPlansSubtitle:
+    "Who subscribed to Student, Advanced, or Premium. Visible only to founders and admins.",
+  adminPlansEmpty: "No plan subscribers yet",
+  adminPlansEmptyBody:
+    "When someone checks out Student, Advanced, or Premium, they show up here with plan, amount, and status.",
+  adminSubscriber: "Subscriber",
+  adminPlan: "Plan",
+  adminAmount: "Amount",
+  adminStarted: "Started",
+  adminActive: "Active",
+  adminCanceled: "Canceled",
+  adminPastDue: "Past due",
+  adminTrialing: "Trialing",
+  adminInactive: "Inactive",
+  adminIncomplete: "Incomplete",
+  adminUnpaid: "Unpaid",
+  adminGrantedNote: "Granted by admin",
+  adminCanceling: "Cancels at period end",
+  adminBadge: "Admin",
 };
 
 const ko: typeof en = {
@@ -88,6 +108,26 @@ const ko: typeof en = {
   payoutsError: "Stripe 정산을 열지 못했어요. 다시 시도해 주세요.",
   setupPayoutsFirst: "먼저 코스 설정에서 정산을 연결해 주세요.",
   managePayouts: "정산 관리",
+  adminPlansTitle: "요금제 구독",
+  adminPlansSubtitle:
+    "스튜던트·어드밴스드·프리미엄을 구독한 사람이에요. 창업자/관리자에게만 보여요.",
+  adminPlansEmpty: "아직 요금제 구독자가 없어요",
+  adminPlansEmptyBody:
+    "누군가 스튜던트, 어드밴스드, 프리미엄을 결제하면 요금제·금액·상태와 함께 여기에 표시돼요.",
+  adminSubscriber: "구독자",
+  adminPlan: "요금제",
+  adminAmount: "금액",
+  adminStarted: "시작일",
+  adminActive: "활성",
+  adminCanceled: "해지됨",
+  adminPastDue: "연체",
+  adminTrialing: "체험 중",
+  adminInactive: "비활성",
+  adminIncomplete: "미완료",
+  adminUnpaid: "미결제",
+  adminGrantedNote: "관리자 부여",
+  adminCanceling: "기간 종료 시 해지",
+  adminBadge: "관리자",
 };
 
 export const sales = { en, ko };
