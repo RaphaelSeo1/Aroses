@@ -1,12 +1,15 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { applyImpersonationOverride } from "@/lib/impersonation/apply-client";
+import { IMPERSONATION_COOKIE } from "@/lib/impersonation/cookie";
 
 /**
  * Supabase browser session for App Route Handlers (cookie read/write).
+ * Honors admin view-as the same way `createClient` does.
  */
 export async function createRouteHandlerSupabase() {
   const cookieStore = await cookies();
-  return createServerClient(
+  const session = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -21,5 +24,9 @@ export async function createRouteHandlerSupabase() {
         },
       },
     }
+  );
+  return applyImpersonationOverride(
+    session,
+    cookieStore.get(IMPERSONATION_COOKIE)?.value
   );
 }

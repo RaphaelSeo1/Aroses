@@ -44,7 +44,11 @@ function hrefFromClick(event: MouseEvent): { pathname: string; search: string } 
  * Unpaid users may browse hubs. Feature links, paid-gated buttons, and 402
  * mutation responses reopen the upgrade popup instead of sending them to billing.
  */
-function PaidFeatureGateInner() {
+function PaidFeatureGateInner({
+  impersonationAccess = null,
+}: {
+  impersonationAccess?: PaidGateAccess | null;
+}) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -66,6 +70,14 @@ function PaidFeatureGateInner() {
           data: { user },
         } = await supabase.auth.getUser();
         if (!user || cancelled) return;
+        if (impersonationAccess === "paid" || impersonationAccess === "unpaid") {
+          accessRef.current = impersonationAccess;
+          setAccess(impersonationAccess);
+          return;
+        }
+        if (impersonationAccess === "unknown") {
+          return;
+        }
         if (isAppAdminEnvUser(user)) {
           accessRef.current = "paid";
           setAccess("paid");
@@ -150,7 +162,7 @@ function PaidFeatureGateInner() {
       document.removeEventListener("click", onClick, true);
       window.fetch = originalFetch;
     };
-  }, []);
+  }, [impersonationAccess]);
 
   useEffect(() => {
     if (!unpaidGateShouldRedirect(access, tourIsRunning())) return;
@@ -163,10 +175,14 @@ function PaidFeatureGateInner() {
   return null;
 }
 
-export function PaidFeatureGate() {
+export function PaidFeatureGate({
+  impersonationAccess = null,
+}: {
+  impersonationAccess?: PaidGateAccess | null;
+}) {
   return (
     <Suspense fallback={null}>
-      <PaidFeatureGateInner />
+      <PaidFeatureGateInner impersonationAccess={impersonationAccess} />
     </Suspense>
   );
 }

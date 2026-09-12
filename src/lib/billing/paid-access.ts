@@ -132,6 +132,12 @@ export function isUnpaidMutationAllowedApi(pathname: string): boolean {
   if (pathname === "/api/ui-locale" || pathname.startsWith("/api/ui-locale/")) {
     return true;
   }
+  if (
+    pathname === "/api/admin/impersonate" ||
+    pathname.startsWith("/api/admin/impersonate/")
+  ) {
+    return true;
+  }
   return false;
 }
 

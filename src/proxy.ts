@@ -3,6 +3,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { parseSafeInternalNext } from "@/lib/internal-next-path";
 import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import {
+  getImpersonationSecret,
+  IMPERSONATION_COOKIE,
+  clearImpersonationCookieOptions,
+  verifyImpersonationCookie,
+} from "@/lib/impersonation/cookie";
+import { resolveProxyViewer } from "@/lib/impersonation/guard";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
   emailMatchesAllowedDomains,
   isAuthEmailDomainAllowlistEnforced,
   parseAllowedAuthEmailDomains,
@@ -116,14 +124,42 @@ export async function proxy(request: NextRequest) {
     );
   }
 
+  const impersonation = user
+    ? await verifyImpersonationCookie(
+        request.cookies.get(IMPERSONATION_COOKIE)?.value,
+        getImpersonationSecret()
+      )
+    : null;
+  const viewer = user
+    ? resolveProxyViewer({ realUser: user, impersonation })
+    : null;
+
   let onboardingState: "complete" | "required" | "unavailable" = "complete";
   try {
-    if (user?.id) {
-      onboardingState = await getProfileOnboardingState(supabase, user.id);
+    if (user?.id && viewer) {
+      if (viewer.isImpersonating) {
+        const admin = createAdminClient();
+        if (admin) {
+          onboardingState = await getProfileOnboardingState(
+            admin,
+            viewer.viewerId
+          );
+          if (onboardingState === "unavailable") {
+            onboardingState = "complete";
+          }
+        }
+      } else {
+        onboardingState = await getProfileOnboardingState(supabase, user.id);
+      }
     }
   } catch (error) {
-    console.error("[proxy] Supabase profile request failed:", error);
-    return unavailableResponse(supabaseResponse);
+    if (viewer?.isImpersonating) {
+      console.error("[proxy] impersonation profile lookup failed:", error);
+      onboardingState = "complete";
+    } else {
+      console.error("[proxy] Supabase profile request failed:", error);
+      return unavailableResponse(supabaseResponse);
+    }
   }
   if (onboardingState === "unavailable") {
     return unavailableResponse(supabaseResponse);
@@ -190,11 +226,16 @@ export async function proxy(request: NextRequest) {
     supabaseResponse.cookies.getAll().forEach((cookie) => {
       redirectResponse.cookies.set(cookie.name, cookie.value);
     });
+    redirectResponse.cookies.set(
+      IMPERSONATION_COOKIE,
+      "",
+      clearImpersonationCookieOptions(process.env.NODE_ENV === "production")
+    );
     return redirectResponse;
   }
 
   if (user && pathname.startsWith("/dashboard/admin")) {
-    if (!isAppAdminEnvUser(user)) {
+    if (!isAppAdminEnvUser(user) || viewer?.isImpersonating) {
       const url = request.nextUrl.clone();
       url.pathname = "/";
       url.search = "";
@@ -202,24 +243,33 @@ export async function proxy(request: NextRequest) {
     }
   }
 
+  const paywallUser = viewer
+    ? { id: viewer.viewerId, email: viewer.viewerEmail }
+    : user
+      ? { id: user.id, email: user.email }
+      : null;
+
   if (
     user &&
+    paywallUser &&
     !needsOnboarding &&
     isBillingUiEnabled() &&
-    !isAppAdminEnvUser(user)
+    !isAppAdminEnvUser(paywallUser)
   ) {
     let paid = false;
+    const billingClient =
+      viewer?.isImpersonating ? createAdminClient() ?? supabase : supabase;
     try {
-      const { data, error } = await supabase
+      const { data, error } = await billingClient
         .from("user_subscriptions")
         .select("tier, status, admin_granted")
-        .eq("user_id", user.id)
+        .eq("user_id", paywallUser.id)
         .maybeSingle();
       if (error && /admin_granted|schema cache/i.test(error.message ?? "")) {
-        const legacy = await supabase
+        const legacy = await billingClient
           .from("user_subscriptions")
           .select("tier, status")
-          .eq("user_id", user.id)
+          .eq("user_id", paywallUser.id)
           .maybeSingle();
         paid = hasPaidProductAccess(legacy.data);
       } else if (!error) {
@@ -232,8 +282,12 @@ export async function proxy(request: NextRequest) {
         });
       }
     } catch (error) {
-      console.error("[proxy] subscription lookup failed:", error);
-      return unavailableResponse(supabaseResponse);
+      if (viewer?.isImpersonating) {
+        console.error("[proxy] impersonation subscription lookup failed:", error);
+      } else {
+        console.error("[proxy] subscription lookup failed:", error);
+        return unavailableResponse(supabaseResponse);
+      }
     }
 
     const tourCookie = request.cookies.get(TOUR_DEMO_COOKIE)?.value ?? null;

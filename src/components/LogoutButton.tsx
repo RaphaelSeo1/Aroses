@@ -14,6 +14,13 @@ export function LogoutButton({ className }: { className?: string }) {
     const supabase = createClient();
     // Log the sign-out while the session cookie is still valid, then sign out.
     await reportClientActivity("sign_out");
+    await fetch("/api/admin/impersonate/exit", {
+      method: "POST",
+      credentials: "same-origin",
+      redirect: "manual",
+    }).catch(() => {
+      /* ignore — leftover cookie is ignored without an admin session */
+    });
     await supabase.auth.signOut();
     router.replace("/");
     router.refresh();

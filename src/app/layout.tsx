@@ -5,6 +5,7 @@ import Script from "next/script";
 import { ActivePdfBuildProvider } from "@/components/ActivePdfBuildProvider";
 import { AppAdminNavGate } from "@/components/AppAdminNavGate";
 import { AppDialogs } from "@/components/AppDialogs";
+import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 import { PaidFeatureGate } from "@/components/PaidFeatureGate";
 import { ProductTourHost } from "@/components/product-tour/ProductTourHost";
 import { ScrollRestoration } from "@/components/ScrollRestoration";
@@ -13,6 +14,7 @@ import { APP_NAME } from "@/lib/brand";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import { getUiLocale } from "@/lib/i18n/server";
 import { getDictionary } from "@/locales";
+import { getImpersonationViewState } from "@/lib/impersonation/server-state";
 import { getPublicSiteOrigin } from "@/lib/site-url";
 import { THEME_INLINE_SCRIPT } from "@/lib/theme-inline-script";
 import "./globals.css";
@@ -77,14 +79,17 @@ export default async function RootLayout({
 }>) {
   const locale = await getUiLocale();
   const dict = getDictionary(locale);
+  const viewAs = await getImpersonationViewState();
 
   return (
     <html
       lang={locale}
       suppressHydrationWarning
+      data-view-as={viewAs ? "1" : undefined}
       className={`${geistSans.variable} ${geistMono.variable} ${notoSansKr.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col font-sans">
+        {viewAs ? <ImpersonationBanner email={viewAs.targetEmail} /> : null}
         <Script id="theme-init" strategy="beforeInteractive">
           {THEME_INLINE_SCRIPT}
         </Script>
@@ -97,11 +102,13 @@ export default async function RootLayout({
         <ThemeHydration />
         <LocaleProvider locale={locale} dict={dict}>
           <ActivePdfBuildProvider>
-            <AppAdminNavGate>{children}</AppAdminNavGate>
+            <AppAdminNavGate impersonating={Boolean(viewAs)}>
+              {children}
+            </AppAdminNavGate>
           </ActivePdfBuildProvider>
           <AppDialogs />
           <ProductTourHost />
-          <PaidFeatureGate />
+          <PaidFeatureGate impersonationAccess={viewAs?.paidAccess ?? null} />
         </LocaleProvider>
         <Analytics />
       </body>

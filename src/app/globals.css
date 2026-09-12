@@ -596,6 +596,14 @@ html.dark .plan-card-best {
   }
 }
 
+/* Admin view-as banner is fixed; keep sticky headers below it. */
+html[data-view-as] body {
+  padding-top: 2.5rem;
+}
+html[data-view-as] header.sticky {
+  top: 2.5rem;
+}
+
 
 
 

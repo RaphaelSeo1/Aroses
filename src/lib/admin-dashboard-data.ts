@@ -17,6 +17,8 @@ export type AdminActivityKind =
   | "listing_rejected"
   | "course_purchased"
   | "subscription_admin_updated"
+  | "impersonation_started"
+  | "impersonation_ended"
   | "other";
 
 export type AdminActivityItem = {
@@ -47,6 +49,8 @@ const EVENT_LABELS: Record<string, string> = {
   listing_rejected: "Rejected marketplace listing",
   course_purchased: "Purchased a course",
   subscription_admin_updated: "Admin updated subscription",
+  impersonation_started: "Started viewing as user",
+  impersonation_ended: "Stopped viewing as user",
 };
 
 function labelForEvent(type: string): string {

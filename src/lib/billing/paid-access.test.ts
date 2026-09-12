@@ -184,6 +184,8 @@ test("unpaid mutations may still hit billing, tour, onboarding, and ui-locale AP
   assert.equal(isUnpaidMutationAllowedApi("/api/product-tour/complete"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/onboarding"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/ui-locale"), true);
+  assert.equal(isUnpaidMutationAllowedApi("/api/admin/impersonate"), true);
+  assert.equal(isUnpaidMutationAllowedApi("/api/admin/impersonate/exit"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/notes"), false);
   assert.equal(isUnpaidMutationAllowedApi("/api/notes/bulk"), false);
   assert.equal(isUnpaidMutationAllowedApi("/api/courses"), false);

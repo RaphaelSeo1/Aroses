@@ -365,6 +365,8 @@ export function AdminDashboardClient({
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [userQuery, setUserQuery] = useState("");
+  const [viewAsQuery, setViewAsQuery] = useState("");
+  const [viewAsBusy, setViewAsBusy] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fatalConfigError = Boolean(
@@ -437,6 +439,36 @@ export function AdminDashboardClient({
       }
     },
     [router]
+  );
+
+  const startViewAs = useCallback(
+    async (target: { userId?: string; email?: string }) => {
+      setViewAsBusy(true);
+      try {
+        const res = await fetch("/api/admin/impersonate", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(target),
+        });
+        const j = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          redirectTo?: string;
+        };
+        if (!res.ok) {
+          await alertDialog({
+            title: "Couldn’t view as user",
+            body: j.error ?? "Forbidden",
+            tone: "danger",
+          });
+          return;
+        }
+        window.location.assign(j.redirectTo ?? "/");
+      } finally {
+        setViewAsBusy(false);
+      }
+    },
+    []
   );
 
   return (
@@ -518,7 +550,8 @@ export function AdminDashboardClient({
                 </h2>
                 <p className="mt-1 max-w-xl text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
                   Auth accounts, profiles, and subscription plan. Use Change plan to
-                  grant Student/Premium without Stripe.
+                  grant Student/Premium without Stripe. View as opens the product
+                  as that user (their courses, notes, paywall, and sales).
                 </p>
               </div>
               <label className="block w-full sm:max-w-[14rem]">
@@ -532,6 +565,36 @@ export function AdminDashboardClient({
                 />
               </label>
             </div>
+
+            <form
+              className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const q = viewAsQuery.trim();
+                if (!q) return;
+                void startViewAs(
+                  q.includes("@") ? { email: q } : { userId: q }
+                );
+              }}
+            >
+              <label className="block min-w-0 flex-1">
+                <span className="sr-only">View as email or user id</span>
+                <input
+                  type="text"
+                  placeholder="View as email or user id…"
+                  value={viewAsQuery}
+                  onChange={(e) => setViewAsQuery(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-800 shadow-sm outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-2 focus:ring-[#DC2626]/15 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-red-500/25"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={viewAsBusy || !viewAsQuery.trim()}
+                className="inline-flex shrink-0 items-center justify-center rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+              >
+                {viewAsBusy ? "Starting…" : "View as"}
+              </button>
+            </form>
 
             {usersError ? (
               <div className="mt-3 rounded-lg border border-red-200/80 bg-red-50/80 px-3 py-2 text-xs text-red-900 dark:border-red-900/40 dark:bg-red-950/25 dark:text-red-100">
@@ -571,13 +634,16 @@ export function AdminDashboardClient({
                       <th className="hidden px-3 py-2 font-semibold xl:table-cell xl:px-3.5">
                         Onboard
                       </th>
+                      <th className="px-3 py-2 font-semibold sm:px-3.5">
+                        View as
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="text-xs text-zinc-600 dark:text-zinc-300">
                     {filteredUsers.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={9}
+                          colSpan={10}
                           className="px-3 py-8 text-center text-xs text-zinc-500 dark:text-zinc-400"
                         >
                           {initialUsers.length === 0
@@ -689,6 +755,16 @@ export function AdminDashboardClient({
                             ) : (
                               <span className="text-[11px] text-zinc-400 dark:text-zinc-500">—</span>
                             )}
+                          </td>
+                          <td className="border-t border-zinc-100/90 px-3 py-2 dark:border-zinc-800 sm:px-3.5">
+                            <button
+                              type="button"
+                              disabled={viewAsBusy}
+                              onClick={() => void startViewAs({ userId: u.id })}
+                              className="inline-flex items-center rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-zinc-700 hover:border-zinc-300 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-zinc-500 dark:hover:bg-zinc-700"
+                            >
+                              View as
+                            </button>
                           </td>
                         </tr>
                       ))

@@ -24,7 +24,9 @@ export type ActivityEventType =
   | "listing_approved"
   | "listing_rejected"
   | "course_purchased"
-  | "subscription_admin_updated";
+  | "subscription_admin_updated"
+  | "impersonation_started"
+  | "impersonation_ended";
 
 /** Event types a signed-in browser is allowed to report via /api/activity/log. */
 export const CLIENT_LOGGABLE_EVENTS: ReadonlySet<string> = new Set<ActivityEventType>([

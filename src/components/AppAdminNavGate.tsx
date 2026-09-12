@@ -19,16 +19,26 @@ function adminHrefForUser(user: {
  * Supplies admin hub href app-wide. Runs on the **client** so the root layout does not
  * block each navigation on `getUser()` (that duplicated work with every page’s own auth).
  */
-export function AppAdminNavGate({ children }: { children: ReactNode }) {
-  const [adminHubHref, setAdminHubHref] = useState<string | undefined>(undefined);
+export function AppAdminNavGate({
+  children,
+  impersonating = false,
+}: {
+  children: ReactNode;
+  impersonating?: boolean;
+}) {
+  const [sessionAdminHref, setSessionAdminHref] = useState<
+    string | undefined
+  >(undefined);
+  const adminHubHref = impersonating ? undefined : sessionAdminHref;
 
   useEffect(() => {
+    if (impersonating) return;
     const supabase = createClient();
 
     const sync = () => {
       void supabase.auth.getSession().then(({ data: { session } }) => {
         const u = session?.user;
-        setAdminHubHref(
+        setSessionAdminHref(
           u ? adminHrefForUser({ id: u.id, email: u.email }) : undefined
         );
       });
@@ -41,7 +51,7 @@ export function AppAdminNavGate({ children }: { children: ReactNode }) {
       sync();
     });
     return () => subscription.unsubscribe();
-  }, []);
+  }, [impersonating]);
 
   return (
     <DashboardAdminNavProvider adminHubHref={adminHubHref}>

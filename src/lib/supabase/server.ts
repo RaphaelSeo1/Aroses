@@ -1,35 +1,19 @@
-import { createServerClient } from "@supabase/ssr";
+import { applyImpersonationOverride } from "@/lib/impersonation/apply-client";
+import { IMPERSONATION_COOKIE } from "@/lib/impersonation/cookie";
 import { cookies } from "next/headers";
-import { createBoundedSupabaseFetch } from "@/lib/supabase/bounded-fetch";
+import { createSessionClient } from "@/lib/supabase/session-client";
 
+export { createSessionClient } from "@/lib/supabase/session-client";
+
+/**
+ * Product data client. When an admin is viewing as a user, `getUser()`
+ * returns that user and queries use the service role scoped by their id.
+ */
 export async function createClient(options?: { timeoutMs?: number }) {
+  const session = await createSessionClient(options);
   const cookieStore = await cookies();
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      ...(options?.timeoutMs
-        ? {
-            global: {
-              fetch: createBoundedSupabaseFetch(options.timeoutMs),
-            },
-          }
-        : {}),
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          } catch {
-            /* ignore when called from Server Component */
-          }
-        },
-      },
-    }
+  return applyImpersonationOverride(
+    session,
+    cookieStore.get(IMPERSONATION_COOKIE)?.value
   );
 }
