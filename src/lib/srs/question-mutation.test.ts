@@ -45,6 +45,29 @@ test("accepts only bounded card targets with valid UUIDs", () => {
   );
 });
 
+test("strips duplicated A/B/C/D prefixes from edited choices", () => {
+  const result = validateReviewQuestion({
+    type: "mcq",
+    question: "Who pays?",
+    choices: [
+      "A. C) The provider absorbs the cost",
+      "B) The patient",
+      "C. The insurer",
+      "D- The employer",
+    ],
+    correctIndex: 0,
+    explanation: "From the lecture.",
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.question.choices, [
+    "The provider absorbs the cost",
+    "The patient",
+    "The insurer",
+    "The employer",
+  ]);
+});
+
 test("validates and normalizes multiple-choice edits", () => {
   const result = validateReviewQuestion({
     type: "mcq",

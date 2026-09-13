@@ -8,6 +8,9 @@ const en = {
   generatingFromSlides: "Drafting from slides…",
   startOverlayBody:
     "Upload the lecture slides if you have them. When you are ready, Rose can draft notes from the deck — then, as the lecturer talks, those drafts get edited: wrong slide claims dropped, spoken detail folded in. Pick a source to start — share the lecture tab, not this Rose page.",
+  skipCapture: "Skip — I'll write notes myself",
+  skipCaptureHint:
+    "You can still upload slides or start capture from the header later.",
 };
 
 const ko: typeof en = {
@@ -20,6 +23,9 @@ const ko: typeof en = {
   generatingFromSlides: "슬라이드에서 작성 중…",
   startOverlayBody:
     "강의 슬라이드가 있으면 업로드하세요. 준비되면 Rose가 덱으로 노트를 초안하고, 강의가 진행되면 초안을 고칩니다 — 틀린 슬라이드 내용은 빼고, 말한 내용을 보탭니다. 캡처할 소스를 고르세요 — 이 Rose 페이지가 아니라 강의 탭을 공유하세요.",
+  skipCapture: "건너뛰기 — 직접 노트를 쓸게요",
+  skipCaptureHint:
+    "나중에 헤더에서 슬라이드를 올리거나 녹음을 시작할 수 있습니다.",
 };
 
 export const liveNotes = { en, ko };

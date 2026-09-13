@@ -43,7 +43,7 @@ export default async function StandaloneNoteRecordPage({ params }: Props) {
   const { data: session } = await supabase
     .from("live_lecture_sessions")
     .select(
-      "id, user_note_id, title, status, duration_seconds, ingest_job_id"
+      "id, user_note_id, title, status, duration_seconds, ingest_job_id, notes_text"
     )
     .eq("id", sessionId)
     .eq("user_id", user.id)
@@ -122,6 +122,9 @@ export default async function StandaloneNoteRecordPage({ params }: Props) {
       slidesPageCount: m.pageCount,
       slidesSeededThroughPage: m.seededThroughPage,
     }))),
+    hasExistingNotes:
+      typeof session.notes_text === "string" &&
+      session.notes_text.trim().length > 0,
   };
 
   return (

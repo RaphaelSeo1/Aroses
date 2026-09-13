@@ -18,6 +18,7 @@ import {
 } from "@/lib/srs-sm2";
 import { tf } from "@/lib/i18n/format";
 import { useT } from "@/lib/i18n/LocaleProvider";
+import { ReviewSessionChat } from "@/components/review/ReviewSessionChat";
 import {
   createMcqAttempt,
   getOrCreateMcqAttempt,
@@ -72,6 +73,8 @@ export type SrsSessionCard =
       dueAt: string;
       isNew: boolean;
       reviewCount: number;
+      /** Verbatim notes excerpt this focus card was generated from. */
+      sourceExcerpt?: string | null;
     };
 
 export type SrsSessionSummary = {
@@ -660,7 +663,7 @@ export function SrsReviewSession({
   const mcq = isQuizMcq(question) ? question : null;
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 max-h-[calc(100dvh-9.5rem)]">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 lg:h-[calc(100dvh-9.5rem)]">
       <div className="shrink-0">
         <SessionHeader
           position={position}
@@ -673,7 +676,8 @@ export function SrsReviewSession({
         />
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(19rem,0.95fr)]">
+      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
         <div className="min-h-0 max-h-[min(7.5rem,22vh)] shrink-0 overflow-y-auto overscroll-contain">
           <p className="text-[15px] font-medium leading-snug text-zinc-900 dark:text-zinc-100 sm:text-base">
             {question.question}
@@ -743,6 +747,51 @@ export function SrsReviewSession({
             })}
           </div>
         ) : null}
+      </div>
+
+        <div className="flex min-h-[22rem] min-w-0 flex-col lg:min-h-0">
+        <ReviewSessionChat
+          sessionKey={sessionKey}
+          card={{
+            kind: current.kind,
+            materialId: current.materialId,
+            moduleId: current.moduleId,
+            moduleTitle: current.moduleTitle,
+            courseTitle: current.courseTitle,
+            personalItemId:
+              current.kind === "personal" ? current.personalItemId : undefined,
+            sourceExcerpt:
+              current.kind === "personal" ? current.sourceExcerpt ?? null : null,
+            question,
+            revealed,
+            studentAnswer: frText,
+            selectedChoice: mcSelected
+              ? displayMcq?.choices.find((c) => c.id === mcSelected)?.text ??
+                mcSelected
+              : null,
+            grade:
+              revealed && !mcq && frGraded
+                ? {
+                    correct: frCorrect,
+                    verdict: frVerdict,
+                    feedback: frFeedback,
+                  }
+                : revealed && mcq
+                  ? {
+                      correct: Boolean(
+                        displayMcq?.choices.find((c) => c.id === mcSelected)
+                          ?.isCorrect
+                      ),
+                      verdict: displayMcq?.choices.find((c) => c.id === mcSelected)
+                        ?.isCorrect
+                        ? "correct"
+                        : "needs_work",
+                      feedback: null,
+                    }
+                  : null,
+          }}
+        />
+        </div>
       </div>
     </div>
   );

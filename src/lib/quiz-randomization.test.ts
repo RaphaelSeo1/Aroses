@@ -9,6 +9,19 @@ import {
 } from "./quiz-randomization";
 import type { CourseQuizMcqItem } from "../types/course";
 
+const prefixedQuestion: CourseQuizMcqItem = {
+  question: "Who pays?",
+  choices: [
+    "A. The provider",
+    "B) The patient",
+    "C: The insurer",
+    "D- The employer",
+  ],
+  correct: "A",
+  correctIndex: 0,
+  explanation: "Lecture.",
+};
+
 const duplicateChoiceQuestion: CourseQuizMcqItem = {
   question: "Which repeated label is the stored correct answer?",
   choices: ["same", "other", "same", "last"],
@@ -88,5 +101,13 @@ test("preserves correctness by source identity with duplicate text", () => {
   assert.equal(
     attempt.choices.find((choice) => choice.isCorrect)?.sourceIndex,
     duplicateChoiceQuestion.correctIndex
+  );
+});
+
+test("strips A/B/C/D prefixes from displayed choice text", () => {
+  const attempt = restoreMcqAttempt(prefixedQuestion, [0, 1, 2, 3]);
+  assert.deepEqual(
+    attempt.choices.map((choice) => choice.text),
+    ["The provider", "The patient", "The insurer", "The employer"]
   );
 });

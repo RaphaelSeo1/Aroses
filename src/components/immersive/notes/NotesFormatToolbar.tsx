@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { Editor } from "@tiptap/react";
 import { useEditorState } from "@tiptap/react";
+import { promptDialog } from "@/components/AppDialogs";
 
 function Icon({ children }: { children: ReactNode }) {
   return (
@@ -103,9 +104,10 @@ export function NotesFormatToolbar({
     editor,
     selector: ({ editor: ed }) => {
       const image = ed.isActive("image");
-      const imageAlign = image
-        ? (ed.getAttributes("image").align ?? "left")
-        : null;
+      const imageAttrs = image ? ed.getAttributes("image") : null;
+      const imageAlign = imageAttrs?.align ?? "left";
+      const imageCaption =
+        typeof imageAttrs?.caption === "string" ? imageAttrs.caption : "";
       return {
         h1: ed.isActive("heading", { level: 1 }),
         h2: ed.isActive("heading", { level: 2 }),
@@ -129,6 +131,7 @@ export function NotesFormatToolbar({
         code: ed.isActive("code"),
         link: ed.isActive("link"),
         image,
+        imageCaption,
       };
     },
   });
@@ -386,6 +389,32 @@ export function NotesFormatToolbar({
             onClick={() => bumpSelectedImageSize(editor, 1.18)}
           >
             <span className="text-[11px] font-bold leading-none">+</span>
+          </ToolBtn>
+          <ToolBtn
+            title={s.imageCaption ? "Edit image caption" : "Add image caption"}
+            active={Boolean(s.imageCaption)}
+            onClick={() => {
+              void promptDialog({
+                title: s.imageCaption ? "Edit caption" : "Add a caption",
+                body: "A short note or idea that stays under this picture.",
+                label: "Caption",
+                placeholder: "Key idea…",
+                defaultValue: s.imageCaption,
+                confirmLabel: "Save",
+              }).then((caption) => {
+                if (caption === null || editor.isDestroyed) return;
+                editor
+                  .chain()
+                  .focus()
+                  .updateAttributes("image", { caption: caption.trim() })
+                  .run();
+              });
+            }}
+          >
+            <Icon>
+              <rect x="2" y="3" width="12" height="7.5" rx="1.2" />
+              <path d="M4 13.2h8M5.5 15h5" />
+            </Icon>
           </ToolBtn>
         </>
       ) : null}

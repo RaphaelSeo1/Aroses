@@ -37,7 +37,7 @@ export default async function LiveNotesSessionPage({ params }: Props) {
   const { data: session } = await supabase
     .from("live_lecture_sessions")
     .select(
-      "id, course_id, title, status, duration_seconds, ingest_job_id"
+      "id, course_id, title, status, duration_seconds, ingest_job_id, notes_text"
     )
     .eq("id", sessionId)
     .maybeSingle();
@@ -102,6 +102,9 @@ export default async function LiveNotesSessionPage({ params }: Props) {
       slidesPageCount: m.pageCount,
       slidesSeededThroughPage: m.seededThroughPage,
     }))),
+    hasExistingNotes:
+      typeof session.notes_text === "string" &&
+      session.notes_text.trim().length > 0,
   };
 
   return (

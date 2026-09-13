@@ -3,7 +3,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -21,6 +20,7 @@ import { useT } from "@/lib/i18n/LocaleProvider";
 import { chatFileKey, lookAtAttachmentPrompt, MAX_CHAT_ATTACHMENT_CHARS } from "@/lib/chat/chat-attachment-formats";
 import { useChatAttachments } from "@/lib/chat/use-chat-attachments";
 import { pumpTypewriterReply } from "@/lib/chat/typewriter-pump";
+import { useStickToBottom } from "@/lib/chat/use-stick-to-bottom";
 import {
   buildNotesChatHistory,
   NotesChatInterruptionCoordinator,
@@ -255,39 +255,10 @@ export function LiveNotesChat({
     []
   );
 
-  const stickToLatest = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!active) return;
-    stickToLatest();
-    const id = window.requestAnimationFrame(() => {
-      stickToLatest();
-      window.requestAnimationFrame(stickToLatest);
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [turns, busy, streamingId, active, stickToLatest]);
-
-  useEffect(() => {
-    if (!active) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    const stick = () => stickToLatest();
-    const ro =
-      typeof ResizeObserver !== "undefined" ? new ResizeObserver(stick) : null;
-    ro?.observe(el);
-    const inner = el.firstElementChild;
-    if (inner) ro?.observe(inner);
-    const mo = new MutationObserver(stick);
-    mo.observe(el, { childList: true, subtree: true, characterData: true });
-    return () => {
-      ro?.disconnect();
-      mo.disconnect();
-    };
-  }, [active, stickToLatest, turns.length]);
+  const { pin } = useStickToBottom(scrollRef, {
+    active,
+    resetKey: `${sessionId}:${streamingId ?? ""}:${turns.length}`,
+  });
 
   useEffect(() => {
     if (busy) return;
@@ -582,6 +553,7 @@ export function LiveNotesChat({
       setHandingOff(false);
       streamingIdRef.current = assistantId;
       setStreamingId(assistantId);
+      pin();
 
       const writer = notesRef.current?.getStreamWriter();
       const sections = writer?.listAllSections(60) ?? [];
@@ -863,6 +835,7 @@ export function LiveNotesChat({
       recentTranscript,
       screenContext,
       sessionId,
+      pin,
       updateTurns,
     ]
   );
@@ -936,7 +909,7 @@ export function LiveNotesChat({
       ) : null}
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3"
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-3 py-3"
       >
         {turns.length === 0 ? (
           <div className="space-y-3">
@@ -964,12 +937,12 @@ export function LiveNotesChat({
               key={t.id}
               className={t.role === "user" ? "flex justify-end" : "flex justify-start"}
             >
-              <div className="max-w-[92%]">
+              <div className="min-w-0 max-w-[92%] overflow-hidden">
                 <div
                   className={
                     t.role === "user"
-                      ? "rounded-xl rounded-br-sm bg-zinc-800 px-3 py-2 text-[12px] leading-snug text-white"
-                      : "rounded-xl rounded-bl-sm border border-fuchsia-200/55 bg-fuchsia-50/90 px-3 py-2 text-[12px] leading-snug text-zinc-800 dark:border-fuchsia-900/40 dark:bg-fuchsia-950/40 dark:text-zinc-100"
+                      ? "overflow-hidden rounded-xl rounded-br-sm bg-zinc-800 px-3 py-2 text-[12px] leading-snug text-white"
+                      : "overflow-hidden rounded-xl rounded-bl-sm border border-fuchsia-200/55 bg-fuchsia-50/90 px-3 py-2 text-[12px] leading-snug text-zinc-800 dark:border-fuchsia-900/40 dark:bg-fuchsia-950/40 dark:text-zinc-100"
                   }
                 >
                   <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] opacity-70">
@@ -982,7 +955,7 @@ export function LiveNotesChat({
                         : ""}
                   </p>
                   {t.role === "assistant" ? (
-                    <div className="text-[12px] leading-snug">
+                    <div className="min-w-0 overflow-hidden text-[12px] leading-snug">
                       {t.content.trim() ? (
                         <StudyChatMessageMarkdown source={t.content} compact />
                       ) : null}
@@ -994,7 +967,7 @@ export function LiveNotesChat({
                       ) : null}
                     </div>
                   ) : t.content.trim() ? (
-                    <p className="whitespace-pre-wrap text-[12px] leading-snug">
+                    <p className="whitespace-pre-wrap break-words text-[12px] leading-snug [overflow-wrap:anywhere]">
                       {t.content}
                     </p>
                   ) : null}

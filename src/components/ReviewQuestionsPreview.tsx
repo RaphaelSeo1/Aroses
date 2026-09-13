@@ -6,6 +6,7 @@ import type { SrsSessionCard } from "@/components/SrsReviewSession";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { buildSrsSessionUrl } from "@/lib/srs-session-query";
+import { stripChoiceLetterPrefix } from "@/lib/quiz-choice-text";
 import { isQuizMcq, type CourseQuizItem } from "@/types/course";
 
 type PreviewState =
@@ -200,7 +201,7 @@ function QuestionPreviewItem({
   const mcq = isQuizMcq(question) ? question : null;
   const answer = isQuizMcq(question)
     ? `${String.fromCharCode(65 + question.correctIndex)}. ${
-        question.choices[question.correctIndex]
+        stripChoiceLetterPrefix(question.choices[question.correctIndex] ?? "")
       }`
     : question.referenceAnswer;
 
@@ -228,7 +229,7 @@ function QuestionPreviewItem({
         >
           {mcq.choices.map((choice, index) => (
             <li key={`${card.cardKey}-choice-${index}`} className="pl-1">
-              {choice}
+              {stripChoiceLetterPrefix(choice)}
             </li>
           ))}
         </ol>

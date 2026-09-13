@@ -1,4 +1,5 @@
 import type { CoursePayload, CourseQuizItem } from "@/types/course";
+import { stripChoiceLetterPrefix } from "@/lib/quiz-choice-text";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -99,7 +100,9 @@ export function validateReviewQuestion(value: unknown): ValidationResult {
   if (!Array.isArray(input.choices) || input.choices.length !== 4) {
     return { ok: false, error: "Multiple-choice questions need 4 choices." };
   }
-  const choices = input.choices.map(cleanText);
+  const choices = input.choices.map((choice) =>
+    stripChoiceLetterPrefix(cleanText(choice))
+  );
   if (choices.some((choice) => !choice || choice.length > MAX_ANSWER_LENGTH)) {
     return {
       ok: false,

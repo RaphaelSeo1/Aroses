@@ -59,6 +59,7 @@ Task: Output EXACTLY ${n} NEW practice questions as a JSON array only (no markdo
 ${formatOutputLanguageGenerationBlock(outputLanguage)}
 Mix multiple-choice and short written answer:
 - MCQ objects: { "type": "mcq", "question": string, "choices": [4 strings], "correct": "A"|"B"|"C"|"D" OR matching choice text, "explanation": string }
+- Choice strings must be the answer text only — never prefix with A) B) C) D) or "A." (the UI already labels A–D).
 - Free-response: { "type": "free_response", "question": string, "reference_answer": string (snake_case, detailed rubric), "explanation": string }
 
 Aim for roughly half MCQ and half free_response. Questions must test understanding of the lesson content above.`;

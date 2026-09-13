@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { QuizReviewStatsDto } from "@/types/quiz-review";
 import type { CourseQuizItem } from "@/types/course";
+import { stripChoiceLetterPrefix } from "@/lib/quiz-choice-text";
 import { isQuizMcq } from "@/types/course";
 
 type Filter = "all" | "correct" | "incorrect" | "unattempted";
@@ -268,7 +269,7 @@ export function ModuleQuizReview({
                               <span className="font-mono text-xs text-zinc-500">
                                 {letter}.
                               </span>{" "}
-                              {c}
+                              {stripChoiceLetterPrefix(c)}
                               {isAns ? (
                                 <span className="ml-2 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
                                   (correct)

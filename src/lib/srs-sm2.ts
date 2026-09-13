@@ -11,16 +11,13 @@
  * and an append-only `review_history` log live in the database. This file
  * is the single source of truth for how a rating transforms that state.
  *
- * The numbers below match the spec the product owner wrote, with two
- * pragmatic clamps:
- *   - Ease never goes below 1.3 (standard Anki floor).
- *   - First-review intervals: Again→1d, Hard→1d, Good→1d, Easy→4d.
- *     The spec implies "prev * ease * 1.3" for Easy, but the very first
- *     review has prev=0; 4 days matches Anki's default and feels right.
+ * First-review (and Again anytime) intervals are short on purpose:
+ *   Again → 10 minutes, Hard → 30 minutes, Good → 10 hours, Easy → 1 day.
+ * Those values drive both the button labels and the stored `due_at`.
+ * Later successful reviews still grow with SM-2 (ease / prior interval).
  *
- * Same-session re-show for "Again" is the caller's job — the *persisted*
- * interval is still 1 day, but the in-memory session loop should requeue
- * the card before the session ends. See `SrsReviewSession`.
+ * Same-session re-show for "Again" is also the session loop's job.
+ * See `SrsReviewSession`.
  */
 
 export type SrsRating = "again" | "hard" | "good" | "easy";
@@ -28,7 +25,7 @@ export type SrsRating = "again" | "hard" | "good" | "easy";
 export type SrsCardState = {
   /** Ease factor, default 2.5, floor 1.3. */
   ease: number;
-  /** Persisted interval in days. Sub-day "Again" still stores 1d. */
+  /** Persisted interval in days (may be fractional for sub-day ratings). */
   intervalDays: number;
   /** Successful reviews in a row (Again resets to 0). */
   reps: number;
@@ -54,8 +51,14 @@ export const SRS_DEFAULT_STATE: SrsCardState = {
   reps: 0,
 };
 
+const MS_PER_MINUTE = 60_000;
 const MS_PER_DAY = 86_400_000;
-const AGAIN_INTRA_SESSION_MS = 10 * 60 * 1000; // 10 minutes
+const FIRST_REVIEW_MS = {
+  again: 10 * MS_PER_MINUTE,
+  hard: 30 * MS_PER_MINUTE,
+  good: 10 * 60 * MS_PER_MINUTE,
+  easy: MS_PER_DAY,
+} as const;
 
 /**
  * Apply a 4-button rating to a card. Pure function (injectable `now`).
@@ -78,34 +81,50 @@ export function applyRating(
     case "again": {
       ease = clampEase(prevEase - 0.2);
       reps = 0;
-      intervalDays = 1; // persisted floor; session loop re-shows sooner
-      intervalMs = AGAIN_INTRA_SESSION_MS;
+      intervalMs = FIRST_REVIEW_MS.again;
+      intervalDays = intervalMs / MS_PER_DAY;
       break;
     }
     case "hard": {
       ease = clampEase(prevEase - 0.15);
       reps = prevReps + 1;
-      // 1.2x previous interval; first review starts at 1 day.
-      intervalDays = prevInterval > 0 ? Math.max(1, prevInterval * 1.2) : 1;
-      intervalMs = intervalDays * MS_PER_DAY;
+      if (prevReps === 0) {
+        intervalMs = FIRST_REVIEW_MS.hard;
+        intervalDays = intervalMs / MS_PER_DAY;
+      } else {
+        intervalDays =
+          prevInterval > 0
+            ? Math.max(FIRST_REVIEW_MS.hard / MS_PER_DAY, prevInterval * 1.2)
+            : FIRST_REVIEW_MS.hard / MS_PER_DAY;
+        intervalMs = intervalDays * MS_PER_DAY;
+      }
       break;
     }
     case "good": {
-      // Ease unchanged on "good" — matches the spec.
       ease = prevEase;
       reps = prevReps + 1;
-      if (prevReps === 0) intervalDays = 1;
-      else if (prevReps === 1) intervalDays = 6;
-      else intervalDays = Math.max(1, prevInterval * prevEase);
-      intervalMs = intervalDays * MS_PER_DAY;
+      if (prevReps === 0) {
+        intervalMs = FIRST_REVIEW_MS.good;
+        intervalDays = intervalMs / MS_PER_DAY;
+      } else if (prevReps === 1) {
+        intervalDays = 6;
+        intervalMs = intervalDays * MS_PER_DAY;
+      } else {
+        intervalDays = Math.max(1, prevInterval * prevEase);
+        intervalMs = intervalDays * MS_PER_DAY;
+      }
       break;
     }
     case "easy": {
       ease = clampEase(prevEase + 0.15);
       reps = prevReps + 1;
-      if (prevReps === 0) intervalDays = 4;
-      else intervalDays = Math.max(1, prevInterval * ease * 1.3);
-      intervalMs = intervalDays * MS_PER_DAY;
+      if (prevReps === 0) {
+        intervalMs = FIRST_REVIEW_MS.easy;
+        intervalDays = intervalMs / MS_PER_DAY;
+      } else {
+        intervalDays = Math.max(1, prevInterval * ease * 1.3);
+        intervalMs = intervalDays * MS_PER_DAY;
+      }
       break;
     }
     default: {
@@ -120,7 +139,7 @@ export function applyRating(
 
 /**
  * Compute preview labels for all four ratings so the review UI can show
- * "Again 10m · Hard 2d · Good 4d · Easy 10d" next to the buttons.
+ * "Again 10m · Hard 30m · Good 10h · Easy 1d" next to the buttons.
  */
 export function previewRatings(
   prev: SrsCardState,

@@ -533,7 +533,7 @@ Strict rules (follow all):
 4) ONE PROBE PER QUESTION: Pick one concrete concept per item — mechanism, definition term, cause→effect link, contrast, or example.
 5) ELABORATE STEMS: Write clear, specific stems. Use the explanation to justify the answer briefly.
 6) COVERAGE: Spread questions across separated ideas instead of staying on one sentence.
-7) MCQ CHOICES: Every MCQ must have exactly four plausible choices and one clearly correct answer grounded in the excerpt.
+7) MCQ CHOICES: Every MCQ must have exactly four plausible choices and one clearly correct answer grounded in the excerpt. Choice text must NOT start with A) B) C) D) or "A." — the UI already shows those letters.
 8) JSON: Double-quoted keys and strings. No trailing commas. Stop after the closing ].${avoid}${broken}`;
 }
 

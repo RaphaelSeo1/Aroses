@@ -686,7 +686,13 @@ export function NotesPanel({
         });
         return;
       }
-      ed.chain().focus().setImage({ src: result.url }).run();
+      ed.chain()
+        .focus()
+        .insertContent({
+          type: "image",
+          attrs: { src: result.url, width: 280, align: "left", caption: "" },
+        })
+        .run();
     } finally {
       setUploadingImage(false);
     }
@@ -2287,21 +2293,38 @@ export function NotesPanel({
           }
         }
 
-        /* Images / screenshots — resize, align, or drag between note blocks */
+        /* Images / screenshots — float so following text can sit beside them */
         .tn-prose [data-resize-container][data-node="image"] {
           position: relative;
-          display: flex;
-          justify-content: flex-start;
+          display: block;
+          width: fit-content;
           max-width: 100%;
-          margin: 0.85rem 0;
+          margin: 0.35rem 1.1rem 0.75rem 0;
+          float: left;
           visibility: visible !important;
           pointer-events: auto !important;
         }
-        .tn-prose [data-resize-container][data-node="image"][data-align="center"] {
-          justify-content: center;
-        }
         .tn-prose [data-resize-container][data-node="image"][data-align="right"] {
-          justify-content: flex-end;
+          float: right;
+          margin: 0.35rem 0 0.75rem 1.1rem;
+        }
+        .tn-prose [data-resize-container][data-node="image"][data-align="center"] {
+          float: none;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          width: 100%;
+          max-width: 100%;
+          margin: 0.85rem auto;
+          clear: both;
+        }
+        .tn-prose h1,
+        .tn-prose h2,
+        .tn-prose h3,
+        .tn-prose hr,
+        .tn-prose table,
+        .tn-prose .tableWrapper {
+          clear: both;
         }
         .tn-prose [data-resize-container][data-node="image"] [data-resize-wrapper] {
           position: relative;
@@ -2309,6 +2332,32 @@ export function NotesPanel({
           max-width: 100%;
           line-height: 0;
           border-radius: 0.65rem;
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-image-caption] {
+          display: block;
+          width: 100%;
+          margin-top: 0.35rem;
+          color: #71717a;
+          font-size: 12.5px;
+          font-style: italic;
+          line-height: 1.35;
+          text-align: center;
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-image-caption] input {
+          display: block;
+          width: 100%;
+          border: none;
+          background: transparent;
+          padding: 0;
+          color: #71717a;
+          font-size: 12.5px;
+          font-style: italic;
+          line-height: 1.35;
+          outline: none;
+          text-align: center;
+        }
+        .tn-prose [data-resize-container][data-node="image"] [data-image-caption] input::placeholder {
+          color: #a1a1aa;
         }
         .tn-prose img.tn-img,
         .tn-prose img {

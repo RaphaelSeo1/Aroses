@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { stripChoiceLetterPrefix } from "@/lib/quiz-choice-text";
 import type { CoursePayload, CourseQuizMcqItem } from "@/types/course";
 import type {
   GoalsAnswer,
@@ -498,7 +499,7 @@ function QuizStep({
                         <span className="mt-0.5 font-mono text-xs text-zinc-500">
                           {String.fromCharCode(65 + ci)}.
                         </span>
-                        <span>{choice}</span>
+                        <span>{stripChoiceLetterPrefix(choice)}</span>
                       </button>
                     </li>
                   );

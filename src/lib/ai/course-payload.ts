@@ -9,6 +9,7 @@ import type {
   SourceRef,
 } from "@/types/course";
 import { stripStrikethroughCorrections } from "@/lib/ai/strip-strikethrough";
+import { stripChoiceLetterPrefix } from "@/lib/quiz-choice-text";
 
 export function stripJsonFence(raw: string): string {
   let s = raw.trim();
@@ -54,9 +55,13 @@ function normalizeQuizMcq(raw: RawQuiz): CourseQuizMcqItem {
     throw new Error("Invalid quiz item shape");
   }
   const choices = raw.choices.map((c) =>
-    typeof c === "string" ? c : String(c)
+    stripChoiceLetterPrefix(typeof c === "string" ? c : String(c))
   ) as [string, string, string, string];
-  const correctIndex = resolveCorrectIndex(raw.correct, choices);
+  const correctRaw = raw.correct.trim();
+  const correctForResolve = /^[ABCD]$/i.test(correctRaw)
+    ? correctRaw
+    : stripChoiceLetterPrefix(correctRaw);
+  const correctIndex = resolveCorrectIndex(correctForResolve, choices);
   return {
     type: "mcq",
     ...(raw.reviewDisabled === true ? { reviewDisabled: true } : {}),

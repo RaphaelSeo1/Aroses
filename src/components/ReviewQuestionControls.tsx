@@ -7,11 +7,25 @@ import {
   validateReviewQuestion,
   type ReviewQuestionTarget,
 } from "@/lib/srs/question-mutation";
+import { stripChoiceLetterPrefix } from "@/lib/quiz-choice-text";
 import {
   isQuizMcq,
   type CourseQuizItem,
   type CourseQuizMcqItem,
 } from "@/types/course";
+
+function initialDraft(question: CourseQuizItem): CourseQuizItem {
+  if (!isQuizMcq(question)) return question;
+  return {
+    ...question,
+    choices: question.choices.map(stripChoiceLetterPrefix) as [
+      string,
+      string,
+      string,
+      string,
+    ],
+  };
+}
 
 type Props = {
   card: SrsSessionCard;
@@ -27,7 +41,9 @@ export function ReviewQuestionControls({
   const t = useT();
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [draft, setDraft] = useState<CourseQuizItem>(card.question);
+  const [draft, setDraft] = useState<CourseQuizItem>(() =>
+    initialDraft(card.question)
+  );
   const [busy, setBusy] = useState<"saving" | "deleting" | null>(null);
   const [error, setError] = useState<string | null>(null);
 

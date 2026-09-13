@@ -148,7 +148,29 @@ export type LiveNotesInitialSession = {
   slidesPageCount?: number;
   /** How far deck-seeding has gotten; 0 means uploaded but not generated yet. */
   slidesSeededThroughPage?: number;
+  /** True when the notes doc already has body text — skip the capture overlay. */
+  hasExistingNotes?: boolean;
 };
+
+const WRITE_ONLY_STORAGE_KEY = (sessionId: string) =>
+  `aroses.liveNotes.writeOnly.${sessionId}`;
+
+function readWriteOnlySkip(sessionId: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(WRITE_ONLY_STORAGE_KEY(sessionId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function persistWriteOnlySkip(sessionId: string) {
+  try {
+    localStorage.setItem(WRITE_ONLY_STORAGE_KEY(sessionId), "1");
+  } catch {
+    /* ignore */
+  }
+}
 
 function formatElapsed(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -221,13 +243,16 @@ export function LiveNotesSurface({
   const [finishing, setFinishing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmFinish, setConfirmFinish] = useState(false);
-  // Returning sessions (prior transcript / elapsed time) skip the blocking
-  // start overlay so the student can keep typing. Empty brand-new sessions
-  // still get the source picker — even if DB status is "paused".
+  // Returning sessions (prior transcript, elapsed time, existing notes, or
+  // an explicit "write only" skip) skip the blocking start overlay so the
+  // student can keep typing. Empty brand-new sessions still get the source
+  // picker — even if DB status is "paused" — plus a Skip to write by hand.
   const returningSession =
     initialSegments.length > 0 ||
     (typeof session.durationSeconds === "number" &&
-      session.durationSeconds > 0);
+      session.durationSeconds > 0) ||
+    Boolean(session.hasExistingNotes) ||
+    readWriteOnlySkip(session.id);
   const [started, setStarted] = useState(returningSession);
   const [aiWriting, setAiWriting] = useState(false);
   const [aiLogOpen, setAiLogOpen] = useState(false);
@@ -1080,6 +1105,11 @@ export function LiveNotesSurface({
     // Warm Deepgram while the user reads the guide / opens Chrome's picker.
     prefetchToken();
   }, [prefetchToken]);
+
+  const handleSkipCapture = useCallback(() => {
+    persistWriteOnlySkip(sessionId);
+    setStarted(true);
+  }, [sessionId]);
 
   const confirmShareGuide = useCallback(async () => {
     if (!shareGuideSource || shareGuideBusy) return;
@@ -2016,6 +2046,17 @@ export function LiveNotesSurface({
                   <span className="mt-0.5 block text-xs font-normal text-zinc-500 dark:text-zinc-400">
                     In-person lecture — uses your laptop mic (not headphones)
                     and boosts quiet room audio.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSkipCapture}
+                  disabled={status === "connecting"}
+                  className="rounded-2xl px-4 py-2.5 text-center text-sm font-semibold text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                >
+                  {t.liveNotes.skipCapture}
+                  <span className="mt-0.5 block text-xs font-normal text-zinc-400 dark:text-zinc-500">
+                    {t.liveNotes.skipCaptureHint}
                   </span>
                 </button>
               </div>

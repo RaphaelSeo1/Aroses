@@ -73,6 +73,7 @@ export type SessionCard =
       dueAt: string;
       isNew: boolean;
       reviewCount: number;
+      sourceExcerpt?: string | null;
     };
 
 export async function GET(request: Request) {
@@ -318,6 +319,10 @@ export async function GET(request: Request) {
         dueAt: dueIso,
         isNew,
         reviewCount,
+        sourceExcerpt:
+          typeof row.source_excerpt === "string" && row.source_excerpt.trim()
+            ? row.source_excerpt.trim()
+            : null,
       };
 
       if (cram) {
@@ -376,6 +381,8 @@ export async function GET(request: Request) {
 // ---------- helpers --------------------------------------------------------
 
 const PERSONAL_SELECT_FULL =
+  "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history, source_label, source_excerpt";
+const PERSONAL_SELECT_LABEL =
   "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history, source_label";
 const PERSONAL_SELECT_BASE =
   "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history";
@@ -400,6 +407,22 @@ async function loadPersonalQuizRows(
   };
 
   const full = await run(PERSONAL_SELECT_FULL);
+  if (full.error && isMissingDbColumnError(full.error, "source_excerpt")) {
+    const labeled = await run(PERSONAL_SELECT_LABEL);
+    if (!labeled.error) {
+      return (labeled.data ?? []) as unknown as Record<string, unknown>[];
+    }
+    if (isMissingDbColumnError(labeled.error, "source_label")) {
+      const fallback = await run(PERSONAL_SELECT_BASE);
+      if (fallback.error) {
+        console.error("[srs/session personal]", fallback.error);
+        return [];
+      }
+      return (fallback.data ?? []) as unknown as Record<string, unknown>[];
+    }
+    console.error("[srs/session personal]", labeled.error);
+    return [];
+  }
   if (full.error && isMissingDbColumnError(full.error, "source_label")) {
     const fallback = await run(PERSONAL_SELECT_BASE);
     if (fallback.error) {

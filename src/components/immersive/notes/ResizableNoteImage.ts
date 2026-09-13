@@ -25,6 +25,20 @@ function applyAlignment(container: HTMLDivElement, value: unknown) {
   container.dataset.align = imageAlignment(value);
 }
 
+function imageCaption(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function applyCaption(
+  captionEl: HTMLElement,
+  input: HTMLInputElement,
+  value: unknown
+) {
+  const caption = imageCaption(value);
+  if (document.activeElement !== input) input.value = caption;
+  captionEl.dataset.hasCaption = caption ? "true" : "false";
+}
+
 function applyImgSize(img: HTMLImageElement, node: ProseMirrorNode, maxWidth: number) {
   const raw = node.attrs.width;
   const width =
@@ -66,10 +80,29 @@ export const ResizableNoteImage = Image.extend({
       ...this.parent?.(),
       align: {
         default: "left",
-        parseHTML: (element) => imageAlignment(element.dataset.align),
+        parseHTML: (element) =>
+          imageAlignment(
+            element.dataset.align ??
+              element.closest("figure")?.dataset.align
+          ),
         renderHTML: (attributes) => ({
           "data-align": imageAlignment(attributes.align),
         }),
+      },
+      caption: {
+        default: "",
+        parseHTML: (element) => {
+          const fromAttr = element.getAttribute("data-caption");
+          if (fromAttr) return fromAttr;
+          const figure = element.closest("figure");
+          const labeled =
+            figure?.querySelector("figcaption")?.textContent?.trim() ?? "";
+          return labeled;
+        },
+        renderHTML: (attributes) => {
+          const caption = imageCaption(attributes.caption);
+          return caption ? { "data-caption": caption } : {};
+        },
       },
     };
   },
@@ -100,7 +133,57 @@ export const ResizableNoteImage = Image.extend({
           wrapper.appendChild(createHandle(direction));
         }
       }
+
+      const captionEl = document.createElement("figcaption");
+      captionEl.dataset.imageCaption = "";
+      const captionInput = document.createElement("input");
+      captionInput.type = "text";
+      captionInput.maxLength = 280;
+      captionInput.placeholder = "Add a caption";
+      captionInput.setAttribute("aria-label", "Image caption");
+      if (editor.isEditable) {
+        captionEl.appendChild(captionInput);
+        applyCaption(captionEl, captionInput, node.attrs.caption);
+      } else {
+        const caption = imageCaption(node.attrs.caption);
+        captionEl.textContent = caption;
+        captionEl.hidden = !caption;
+      }
+
+      const commitCaption = () => {
+        const pos = getPos();
+        if (typeof pos !== "number" || editor.isDestroyed) return;
+        const next = captionInput.value.trim();
+        editor
+          .chain()
+          .command(({ tr }) => {
+            tr.setNodeMarkup(pos, undefined, {
+              ...editor.state.doc.nodeAt(pos)?.attrs,
+              caption: next,
+            });
+            return true;
+          })
+          .run();
+        applyCaption(captionEl, captionInput, next);
+      };
+
+      captionInput.addEventListener("mousedown", (event) => {
+        event.stopPropagation();
+      });
+      captionInput.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      captionInput.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          captionInput.blur();
+        }
+      });
+      captionInput.addEventListener("blur", commitCaption);
+
       container.appendChild(wrapper);
+      container.appendChild(captionEl);
 
       let dragging: {
         startX: number;
@@ -202,6 +285,13 @@ export const ResizableNoteImage = Image.extend({
           img.alt = typeof updated.attrs.alt === "string" ? updated.attrs.alt : "";
           applyImgSize(img, updated, editorMaxWidth(editor));
           applyAlignment(container, updated.attrs.align);
+          if (editor.isEditable) {
+            applyCaption(captionEl, captionInput, updated.attrs.caption);
+          } else {
+            const caption = imageCaption(updated.attrs.caption);
+            captionEl.textContent = caption;
+            captionEl.hidden = !caption;
+          }
           return true;
         },
         destroy() {

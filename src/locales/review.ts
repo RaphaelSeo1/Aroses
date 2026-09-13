@@ -125,6 +125,13 @@ const en = {
   deletingQuestion: "Deleting…",
   questionDeleteError: "Could not delete question.",
   questionDeleted: "Question deleted.",
+  askRose: "Ask Rose",
+  askRoseHint: "Ask about this card, what you missed, or what your notes say.",
+  askRosePlaceholder: "Ask why this was wrong, or what your notes say…",
+  newChat: "New chat",
+  chats: "Chats",
+  emptyReviewChat:
+    "Ask about this question — Rose will quote your notes when they cover it, and still answer follow-ups that weren't in the lecture.",
 };
 
 const ko: typeof en = {
@@ -251,6 +258,13 @@ const ko: typeof en = {
   deletingQuestion: "삭제 중…",
   questionDeleteError: "질문을 삭제하지 못했어요.",
   questionDeleted: "질문을 삭제했어요.",
+  askRose: "Rose에게 묻기",
+  askRoseHint: "이 카드, 틀린 이유, 노트에 적힌 내용을 물어보세요.",
+  askRosePlaceholder: "왜 틀렸는지, 노트에는 뭐라고 되어 있는지 물어보세요…",
+  newChat: "새 채팅",
+  chats: "채팅",
+  emptyReviewChat:
+    "이 질문에 대해 물어보세요 — 노트에 있으면 그대로 인용하고, 강의에 없던 후속 질문도 이어서 답해요.",
 };
 
 export const review = { en, ko };

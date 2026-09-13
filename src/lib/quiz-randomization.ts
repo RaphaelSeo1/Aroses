@@ -1,4 +1,5 @@
 import type { CourseQuizMcqItem } from "@/types/course";
+import { stripChoiceLetterPrefix } from "@/lib/quiz-choice-text";
 
 export type RandomSource = () => number;
 
@@ -93,7 +94,7 @@ function mcqAttemptFromOrder(
   const choices = sourceOrder.map((sourceIndex) => ({
     id: `choice-${sourceIndex}`,
     sourceIndex,
-    text: question.choices[sourceIndex],
+    text: stripChoiceLetterPrefix(question.choices[sourceIndex] ?? ""),
     isCorrect: sourceIndex === question.correctIndex,
   }));
   return {
