@@ -39,7 +39,7 @@ export async function createIngestJobFromText(
     };
   }
 
-  const transcript = `[from ${title} notes]\n${body}`.slice(0, 500_000);
+  const transcript = body.slice(0, 500_000);
 
   const admin = createAdminClient();
   if (!admin) {

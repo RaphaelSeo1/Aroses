@@ -3,7 +3,12 @@ import {
   countPersonalQuizTypes,
   generatePersonalQuizFromNotes,
 } from "@/lib/ai/personal-quiz-from-notes";
-import { NOTES_FOCUS_BUCKET_ID } from "@/lib/notes/notes-focus-bucket";
+import {
+  NOTES_FOCUS_BUCKET_ID,
+  parseNotesFocusBucketNoteId,
+} from "@/lib/notes/notes-focus-bucket";
+import { purgeFocusQuestionsForNote } from "@/lib/notes/purge-focus-for-note";
+import { isUuid } from "@/lib/voice-tutor/uuid";
 import { insertPersonalQuizItems } from "@/lib/notes/personal-quiz-insert";
 import { resolveFocusDestination } from "@/lib/notes/resolve-focus-destination";
 import { createClient } from "@/lib/supabase/server";
@@ -138,13 +143,29 @@ export async function POST(request: Request) {
   });
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const noteIdParam = new URL(request.url).searchParams.get("noteId");
+  const bucketParam = new URL(request.url).searchParams.get("bucket");
+  const noteFromBucket = parseNotesFocusBucketNoteId(bucketParam);
+
+  if (noteIdParam && isUuid(noteIdParam)) {
+    await purgeFocusQuestionsForNote(supabase, user.id, noteIdParam);
+    return NextResponse.json({
+      ok: true,
+      bucket: `note:${noteIdParam.toLowerCase()}`,
+    });
+  }
+  if (noteFromBucket) {
+    await purgeFocusQuestionsForNote(supabase, user.id, noteFromBucket);
+    return NextResponse.json({ ok: true, bucket: bucketParam });
   }
 
   const { error } = await supabase

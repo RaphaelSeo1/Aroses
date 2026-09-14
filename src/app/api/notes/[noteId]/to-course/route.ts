@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { runPdfIngestContinueAfterTranscript } from "@/lib/pdf-ingest-runner";
 import { assertCanCreateCourse } from "@/lib/billing/course-cap";
 import {
   buildLiveNotesStudyContext,
@@ -225,6 +226,16 @@ export async function POST(request: Request, ctx: Params) {
   if (replaceJobId && replaceJobId !== result.jobId) {
     await supersedeIngestJob(replaceJobId);
   }
+
+  after(async () => {
+    try {
+      await runPdfIngestContinueAfterTranscript(result.jobId, {
+        driveModules: true,
+      });
+    } catch (e) {
+      console.error("[notes/to-course] auto-start ingest", result.jobId, e);
+    }
+  });
 
   return NextResponse.json({
     jobId: result.jobId,

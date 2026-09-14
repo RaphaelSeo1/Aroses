@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { purgeFocusQuestionsForNote } from "@/lib/notes/purge-focus-for-note";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
@@ -238,10 +239,12 @@ export async function DELETE(_req: Request, ctx: Params) {
         console.error("[notes DELETE]", hard.error);
         return NextResponse.json({ error: "Delete failed" }, { status: 500 });
       }
+      await purgeFocusQuestionsForNote(supabase, user.id, noteId);
       return NextResponse.json({ ok: true, permanent: true });
     }
     console.error("[notes DELETE]", error);
     return NextResponse.json({ error: "Delete failed" }, { status: 500 });
   }
+  await purgeFocusQuestionsForNote(supabase, user.id, noteId);
   return NextResponse.json({ ok: true });
 }

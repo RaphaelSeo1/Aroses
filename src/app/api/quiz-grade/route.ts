@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { gradeFreeResponseWithAi } from "@/lib/ai/grade-free-response";
 import { logActivity } from "@/lib/activity-log";
+import { isNotesFocusBucketId } from "@/lib/notes/notes-focus-bucket";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -33,18 +34,23 @@ export async function POST(request: Request) {
     studentAnswer?: string;
   };
 
-  if (typeof b.materialId !== "string" || !UUID_RE.test(b.materialId)) {
+  const materialId =
+    typeof b.materialId === "string" ? b.materialId.trim() : "";
+  const notesFocusDeck = isNotesFocusBucketId(materialId);
+  if (!notesFocusDeck && !UUID_RE.test(materialId)) {
     return NextResponse.json({ error: "Invalid material id." }, { status: 400 });
   }
 
-  const { data: row } = await supabase
-    .from("study_materials")
-    .select("id")
-    .eq("id", b.materialId)
-    .maybeSingle();
+  if (!notesFocusDeck) {
+    const { data: row } = await supabase
+      .from("study_materials")
+      .select("id")
+      .eq("id", materialId)
+      .maybeSingle();
 
-  if (!row) {
-    return NextResponse.json({ error: "Not found." }, { status: 404 });
+    if (!row) {
+      return NextResponse.json({ error: "Not found." }, { status: 404 });
+    }
   }
 
   const question = typeof b.question === "string" ? b.question.trim() : "";
@@ -76,7 +82,9 @@ export async function POST(request: Request) {
       userId: user.id,
       type: "quiz_submitted",
       summary: question.slice(0, 120),
-      metadata: { materialId: b.materialId },
+      metadata: notesFocusDeck
+        ? { focusDeck: materialId }
+        : { materialId },
     });
     return NextResponse.json(result);
   } catch (e) {

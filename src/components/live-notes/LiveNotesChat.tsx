@@ -34,6 +34,11 @@ import {
   applySurgicalNoteRevision,
   pickNoteFoldTarget,
 } from "@/lib/live-notes/fold-note-markdown";
+import {
+  loadReviewChatThreads,
+  saveReviewChatThreads,
+  type ReviewChatThread,
+} from "@/lib/review/review-chat-threads";
 
 type ChatTurn = {
   id: string;
@@ -133,7 +138,51 @@ export function readLiveNotesChatPdf(
   return loadPendingPdf(sessionId);
 }
 
-function loadTurns(sessionId: string): ChatTurn[] {
+type LiveNotesThread = Omit<ReviewChatThread, "turns"> & { turns: ChatTurn[] };
+
+function threadTitleFromChatTurns(turns: ChatTurn[]): string {
+  const first = turns.find((t) => t.role === "user" && t.content.trim());
+  if (!first) return "New chat";
+  const line = first.content.replace(/\s+/g, " ").trim();
+  return line.length > 42 ? `${line.slice(0, 40)}…` : line;
+}
+
+function newLiveNotesThread(): LiveNotesThread {
+  return {
+    id: `t-${crypto.randomUUID()}`,
+    title: "New chat",
+    updatedAt: Date.now(),
+    turns: [],
+  };
+}
+
+function loadLiveNotesThreads(sessionId: string): {
+  threads: LiveNotesThread[];
+  activeId: string;
+} {
+  const stored = loadReviewChatThreads(sessionId, "liveNotes");
+  if (stored.length > 0) {
+    const threads = stored.map((t) => ({
+      ...t,
+      turns: t.turns as ChatTurn[],
+    }));
+    return { threads, activeId: threads[0]!.id };
+  }
+  const legacy = loadTurnsLegacy(sessionId);
+  if (legacy.length > 0) {
+    const th: LiveNotesThread = {
+      id: `t-${crypto.randomUUID()}`,
+      title: threadTitleFromChatTurns(legacy),
+      updatedAt: Date.now(),
+      turns: legacy,
+    };
+    return { threads: [th], activeId: th.id };
+  }
+  const th = newLiveNotesThread();
+  return { threads: [th], activeId: th.id };
+}
+
+function loadTurnsLegacy(sessionId: string): ChatTurn[] {
   try {
     const raw = sessionStorage.getItem(storageKey(sessionId));
     if (!raw) return [];
@@ -204,7 +253,12 @@ export function LiveNotesChat({
   /** Monthly voice allowance already exhausted (live transcription banner). */
   voiceCapped?: boolean;
 }) {
-  const [turns, setTurns] = useState<ChatTurn[]>(() => loadTurns(sessionId));
+  const initialThreads = loadLiveNotesThreads(sessionId);
+  const [threads, setThreads] = useState<LiveNotesThread[]>(
+    initialThreads.threads
+  );
+  const [activeId, setActiveId] = useState(initialThreads.activeId);
+  const [railOpen, setRailOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [handingOff, setHandingOff] = useState(false);
@@ -234,7 +288,12 @@ export function LiveNotesChat({
   } = attach;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const activeThread =
+    threads.find((th) => th.id === activeId) ?? threads[0] ?? newLiveNotesThread();
+  const turns = activeThread.turns;
   const turnsRef = useRef(turns);
+  const activeIdRef = useRef(activeId);
+  const threadsRef = useRef(threads);
   const streamingIdRef = useRef(streamingId);
   const coordinatorRef = useRef(new NotesChatInterruptionCoordinator());
   const lastSendIntentRef = useRef<{ message: string; at: number } | null>(null);
@@ -246,14 +305,39 @@ export function LiveNotesChat({
     noteInstructionRef.current = noteInstruction;
   }, [noteInstruction]);
 
+  turnsRef.current = turns;
+  activeIdRef.current = activeId;
+  threadsRef.current = threads;
+
   const updateTurns = useCallback(
     (update: (current: ChatTurn[]) => ChatTurn[]) => {
-      const next = update(turnsRef.current);
-      turnsRef.current = next;
-      setTurns(next);
+      setThreads((prev) =>
+        prev.map((th) => {
+          if (th.id !== activeIdRef.current) return th;
+          const nextTurns = update(th.turns);
+          turnsRef.current = nextTurns;
+          const title =
+            th.title === "New chat" && nextTurns.length > 0
+              ? threadTitleFromChatTurns(nextTurns)
+              : th.title;
+          return {
+            ...th,
+            turns: nextTurns,
+            title,
+            updatedAt: Date.now(),
+          };
+        })
+      );
     },
     []
   );
+
+  const startNewChat = useCallback(() => {
+    const th = newLiveNotesThread();
+    setThreads((prev) => [th, ...prev].slice(0, 20));
+    setActiveId(th.id);
+    setDraft("");
+  }, []);
 
   const { pin } = useStickToBottom(scrollRef, {
     active,
@@ -262,15 +346,15 @@ export function LiveNotesChat({
 
   useEffect(() => {
     if (busy) return;
-    try {
-      sessionStorage.setItem(
-        storageKey(sessionId),
-        JSON.stringify(turnsRef.current.filter((t) => t.content.trim()).slice(-40))
-      );
-    } catch {
-      /* ignore */
-    }
-  }, [sessionId, turns, busy]);
+    saveReviewChatThreads(
+      sessionId,
+      threadsRef.current.map((th) => ({
+        ...th,
+        turns: th.turns.filter((t) => t.content.trim()).slice(-40),
+      })),
+      "liveNotes"
+    );
+  }, [sessionId, threads, busy]);
 
   useEffect(() => {
     try {
@@ -898,7 +982,55 @@ export function LiveNotesChat({
   };
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div
+        className={`flex shrink-0 flex-col border-r border-zinc-200 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/40 ${
+          railOpen ? "w-[11.5rem]" : "w-10"
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => setRailOpen((v) => !v)}
+          className="flex h-10 items-center justify-center border-b border-zinc-200 text-[11px] font-semibold text-zinc-600 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          aria-expanded={railOpen}
+          title={t.review.chats}
+        >
+          {railOpen ? t.review.chats : "☰"}
+        </button>
+        {railOpen ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <button
+              type="button"
+              onClick={startNewChat}
+              className="mx-2 mt-2 rounded-lg border border-zinc-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200"
+            >
+              {t.review.newChat}
+            </button>
+            <div className="mt-1 min-h-0 flex-1 space-y-0.5 overflow-y-auto px-1.5 pb-2">
+              {threads.map((th) => (
+                <button
+                  key={th.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveId(th.id);
+                    pin();
+                  }}
+                  className={`block w-full truncate rounded-lg px-2 py-1.5 text-left text-[11px] ${
+                    th.id === activeId
+                      ? "bg-white font-semibold text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-50"
+                      : "text-zinc-600 hover:bg-white/80 dark:text-zinc-400 dark:hover:bg-zinc-800/80"
+                  }`}
+                  title={th.title}
+                >
+                  {th.title}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       {voice.active ? (
         <ChatVoiceTutorOrb
           phase={voice.phase}
@@ -1186,6 +1318,7 @@ export function LiveNotesChat({
           {voice.error}
         </p>
       ) : null}
+    </div>
     </div>
   );
 }

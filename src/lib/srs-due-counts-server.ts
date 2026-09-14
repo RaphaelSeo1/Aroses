@@ -1,8 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SrsDueCounts } from "@/lib/srs-due";
+import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
 import {
   isNotesFocusBucketId,
-  NOTES_FOCUS_BUCKET_ID,
+  notesFocusBucketId,
 } from "@/lib/notes/notes-focus-bucket";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
@@ -43,22 +44,33 @@ function deriveCourseTitle(m: MaterialRow): string | null {
 
 function ensureNotesBucket(
   byMaterial: Map<string, SrsDueCounts["byMaterial"][number]>,
-  label: string | null
+  bucketId: string,
+  label: string | null,
+  meta?: {
+    courseId: string | null;
+    courseTitle: string | null;
+  }
 ): SrsDueCounts["byMaterial"][number] {
-  let bucket = byMaterial.get(NOTES_FOCUS_BUCKET_ID);
+  let bucket = byMaterial.get(bucketId);
   if (!bucket) {
     bucket = {
-      materialId: NOTES_FOCUS_BUCKET_ID,
+      materialId: bucketId,
       fileName: label || "Focus questions",
-      courseId: null,
-      courseTitle: "Notes",
+      courseId: meta?.courseId ?? null,
+      courseTitle: meta?.courseTitle ?? "Notes",
       module: 0,
       personal: 0,
       total: 0,
     };
-    byMaterial.set(NOTES_FOCUS_BUCKET_ID, bucket);
-  } else if (label && bucket.fileName === "Focus questions") {
-    bucket.fileName = label;
+    byMaterial.set(bucketId, bucket);
+  } else {
+    if (label && bucket.fileName === "Focus questions") {
+      bucket.fileName = label;
+    }
+    if (meta?.courseTitle && bucket.courseTitle === "Notes") {
+      bucket.courseTitle = meta.courseTitle;
+      bucket.courseId = meta.courseId ?? bucket.courseId;
+    }
   }
   return bucket;
 }
@@ -159,18 +171,22 @@ export async function fetchSrsDueCountsForUser(
 
   let perQ = supabase
     .from("user_personal_quiz_items")
-    .select("material_id, source_label")
+    .select("material_id, source_label, source_note_id")
     .eq("user_id", userId)
     .lte("due_at", nowIso);
   if (materialFilter) perQ = perQ.eq("material_id", materialFilter);
   type PersonalDueRow = {
     material_id?: string | null;
     source_label?: string | null;
+    source_note_id?: string | null;
   };
   const firstPersonal = await perQ;
   let perErr = firstPersonal.error;
   let perRows: PersonalDueRow[] | null = firstPersonal.data;
-  if (perErr && isMissingDbColumnError(perErr, "source_label")) {
+  if (
+    perErr &&
+    isMissingDbColumnError(perErr, "source_label", "source_note_id")
+  ) {
     let fallback = supabase
       .from("user_personal_quiz_items")
       .select("material_id")
@@ -182,6 +198,7 @@ export async function fetchSrsDueCountsForUser(
     perRows = (fb.data ?? []).map((row) => ({
       material_id: row.material_id ?? null,
       source_label: null,
+      source_note_id: null,
     }));
   }
   if (perErr) {
@@ -192,9 +209,8 @@ export async function fetchSrsDueCountsForUser(
   // shared / legacy). Hydrate those materials so due counts aren't silently 0.
   const missingIds = new Set<string>();
   for (const row of perRows ?? []) {
-    const mid = row.material_id
-      ? normId(row.material_id as string)
-      : NOTES_FOCUS_BUCKET_ID;
+    if (!row.material_id) continue;
+    const mid = normId(row.material_id as string);
     if (mid && !isNotesFocusBucketId(mid) && !byMaterial.has(mid)) {
       missingIds.add(mid);
     }
@@ -215,17 +231,45 @@ export async function fetchSrsDueCountsForUser(
     }
   }
 
+  const notesBucketIds = new Set<string>();
   for (const row of perRows ?? []) {
-    const mid = row.material_id
-      ? normId(row.material_id as string)
-      : NOTES_FOCUS_BUCKET_ID;
+    if (!row.material_id) {
+      notesBucketIds.add(
+        notesFocusBucketId(
+          typeof row.source_note_id === "string" ? row.source_note_id : null
+        )
+      );
+    }
+  }
+  const notesMeta = await hydrateNotesFocusBucketMeta(
+    supabase,
+    userId,
+    notesBucketIds
+  );
+
+  for (const row of perRows ?? []) {
+    const rawMid = row.material_id ? normId(row.material_id as string) : null;
+    if (rawMid && !byMaterial.has(rawMid) && !materialById.has(rawMid)) {
+      continue;
+    }
+    const bucketId = rawMid
+      ? rawMid
+      : notesFocusBucketId(
+          typeof row.source_note_id === "string" ? row.source_note_id : null
+        );
+    const meta = notesMeta.get(bucketId);
+    if (meta?.noteDeleted) continue;
     const label =
-      typeof row.source_label === "string" && row.source_label.trim()
+      meta?.fileName ??
+      (typeof row.source_label === "string" && row.source_label.trim()
         ? row.source_label.trim()
-        : null;
-    const bucket = isNotesFocusBucketId(mid)
-      ? ensureNotesBucket(byMaterial, label)
-      : ensureBucket(byMaterial, mid, null);
+        : null);
+    const bucket = rawMid
+      ? ensureBucket(byMaterial, bucketId, null)
+      : ensureNotesBucket(byMaterial, bucketId, label, {
+          courseId: meta?.courseId ?? null,
+          courseTitle: meta?.courseTitle ?? null,
+        });
     bucket.personal += 1;
   }
 

@@ -457,6 +457,12 @@ export async function GET(_request: Request, ctx: Params) {
       ? (row as { ingest_transcript: string }).ingest_transcript
       : undefined;
 
+  const sourceFormatRaw = (row as { source_format?: unknown }).source_format;
+  const sourceFormat =
+    sourceFormatRaw === "text" || sourceFormatRaw === "pdf"
+      ? sourceFormatRaw
+      : undefined;
+
   let previewCourse: CoursePayload | null = null;
   if (
     (outlineReady || row.status === "complete") &&
@@ -533,6 +539,7 @@ export async function GET(_request: Request, ctx: Params) {
     originalFileName,
     streamPreview,
     ingestPhase,
+    sourceFormat,
     ingestTranscript:
       ingestPhase === "reviewing_transcript" ? ingestTranscript : undefined,
     previewCourse,

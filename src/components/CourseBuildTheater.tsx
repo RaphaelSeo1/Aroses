@@ -475,6 +475,7 @@ export function CourseBuildTheater({
 
     const boot = async () => {
       const labelMap: Record<string, string> = {};
+      const autoConfirmIds: string[] = [];
       await Promise.all(
         jobIds.map(async (id) => {
           try {
@@ -482,12 +483,23 @@ export function CourseBuildTheater({
               signal: ac.signal,
             });
             const raw = await r.text();
-            const j = JSON.parse(raw) as { originalFileName?: string };
-            labelMap[id] =
+            const j = JSON.parse(raw) as {
+              originalFileName?: string;
+              ingestPhase?: string;
+              sourceFormat?: string;
+            };
+            const fileName =
               typeof j.originalFileName === "string" &&
               j.originalFileName.trim()
                 ? j.originalFileName.trim()
                 : t.courseBuild.pdfLabel;
+            labelMap[id] = fileName.replace(/\.txt$/i, "");
+            if (
+              j.ingestPhase === "reviewing_transcript" &&
+              (j.sourceFormat === "text" || /\.txt$/i.test(fileName))
+            ) {
+              autoConfirmIds.push(id);
+            }
           } catch {
             if (!ac.signal.aborted) labelMap[id] = t.courseBuild.pdfLabel;
           }
@@ -507,6 +519,19 @@ export function CourseBuildTheater({
           ])
         )
       );
+      if (autoConfirmIds.length > 0) {
+        setConfirmedJobIds((prev) => ({
+          ...prev,
+          ...Object.fromEntries(autoConfirmIds.map((id) => [id, true])),
+        }));
+        await Promise.all(
+          autoConfirmIds.map((id) =>
+            fetch(`/api/process-pdf/jobs/${id}/confirm-transcript`, {
+              method: "POST",
+            }).catch(() => null)
+          )
+        );
+      }
       setPhase("running");
     };
 

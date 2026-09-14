@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload, CourseQuizItem } from "@/types/course";
 import type { SrsRating } from "@/lib/srs-sm2";
+import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
 import {
   isNotesFocusBucketId,
-  NOTES_FOCUS_BUCKET_ID,
+  notesFocusBucketId,
 } from "@/lib/notes/notes-focus-bucket";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -272,13 +273,50 @@ export async function GET(request: Request) {
       }
     }
 
+    const notesBucketIds = new Set<string>();
+    for (const row of personalRows ?? []) {
+      if (!row.material_id) {
+        notesBucketIds.add(
+          notesFocusBucketId(
+            typeof row.source_note_id === "string"
+              ? row.source_note_id
+              : null
+          )
+        );
+      }
+    }
+    const notesMeta = await hydrateNotesFocusBucketMeta(
+      supabase,
+      user.id,
+      notesBucketIds
+    );
+
     for (const row of personalRows ?? []) {
       const rawMid = row.material_id as string | null;
       const isNotesOnly = !rawMid;
-      const mid = isNotesOnly ? NOTES_FOCUS_BUCKET_ID : normId(rawMid);
+      const bucketId = isNotesOnly
+        ? notesFocusBucketId(
+            typeof row.source_note_id === "string"
+              ? row.source_note_id
+              : null
+          )
+        : normId(rawMid);
+      if (
+        allowedMaterialIds &&
+        !allowedMaterialIds.has(bucketId)
+      ) {
+        continue;
+      }
+      if (!isNotesOnly && !materialById.has(bucketId)) {
+        continue;
+      }
+      const noteMeta = notesMeta.get(bucketId);
+      if (isNotesOnly && noteMeta?.noteDeleted) {
+        continue;
+      }
       const mat = isNotesOnly
-        ? stubMaterial(NOTES_FOCUS_BUCKET_ID)
-        : materialById.get(mid) ?? stubMaterial(mid);
+        ? stubMaterial(bucketId)
+        : materialById.get(bucketId) ?? stubMaterial(bucketId);
       const rowModuleId =
         row.module_id == null ? 0 : Number(row.module_id);
       if (moduleIdFilter != null && rowModuleId !== moduleIdFilter) continue;
@@ -294,18 +332,23 @@ export async function GET(request: Request) {
       const dueIso = (row.due_at as string) ?? nowIso;
       const isDue = new Date(dueIso).getTime() <= Date.now();
       const notesLabel =
-        typeof row.source_label === "string" && row.source_label.trim()
+        noteMeta?.fileName ??
+        (typeof row.source_label === "string" && row.source_label.trim()
           ? row.source_label.trim()
-          : "Focus questions";
+          : "Focus questions");
 
       const card: SessionCard = {
         kind: "personal",
         cardKey: `personal:${row.id}`,
         personalItemId: row.id as string,
-        materialId: isNotesOnly ? NOTES_FOCUS_BUCKET_ID : mat.id,
+        materialId: isNotesOnly ? bucketId : mat.id,
         fileName: isNotesOnly ? notesLabel : (mat.file_name ?? "Untitled upload"),
-        courseId: isNotesOnly ? null : deriveCourseId(mat),
-        courseTitle: isNotesOnly ? "Notes" : deriveCourseTitle(mat),
+        courseId: isNotesOnly
+          ? (noteMeta?.courseId ?? null)
+          : deriveCourseId(mat),
+        courseTitle: isNotesOnly
+          ? (noteMeta?.courseTitle ?? "Notes")
+          : deriveCourseTitle(mat),
         moduleId: rowModuleId,
         moduleTitle: isNotesOnly
           ? notesLabel
@@ -381,9 +424,9 @@ export async function GET(request: Request) {
 // ---------- helpers --------------------------------------------------------
 
 const PERSONAL_SELECT_FULL =
-  "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history, source_label, source_excerpt";
+  "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history, source_label, source_excerpt, source_note_id";
 const PERSONAL_SELECT_LABEL =
-  "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history, source_label";
+  "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history, source_label, source_note_id";
 const PERSONAL_SELECT_BASE =
   "id, material_id, module_id, item, srs_ease, srs_interval_days, srs_reps, due_at, last_reviewed_at, review_history";
 

@@ -221,10 +221,14 @@ export function FreePracticePanel({
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
                       {isNotesFocusBucketId(m.materialId)
-                        ? t.review.notesFocusDeck
+                        ? m.courseTitle && m.courseTitle !== "Notes"
+                          ? m.courseTitle
+                          : m.fileName || t.review.notesFocusDeck
                         : (m.courseTitle ?? m.fileName)}
                     </p>
-                    {isNotesFocusBucketId(m.materialId) ? (
+                    {isNotesFocusBucketId(m.materialId) &&
+                    m.courseTitle &&
+                    m.courseTitle !== "Notes" ? (
                       <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
                         {m.fileName}
                       </p>

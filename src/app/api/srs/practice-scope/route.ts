@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
 import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
-import { NOTES_FOCUS_BUCKET_ID } from "@/lib/notes/notes-focus-bucket";
+import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
+import {
+  isNotesFocusBucketId,
+  notesFocusBucketId,
+} from "@/lib/notes/notes-focus-bucket";
 
 /**
  * GET /api/srs/practice-scope
@@ -82,17 +86,25 @@ export async function GET() {
   const personalByMaterial = new Map<string, number>();
   const { data: personalRows } = await supabase
     .from("user_personal_quiz_items")
-    .select("material_id")
+    .select("material_id, source_note_id")
     .eq("user_id", user.id);
   for (const row of personalRows ?? []) {
     const id = row.material_id
       ? (row.material_id as string).toLowerCase()
-      : NOTES_FOCUS_BUCKET_ID;
+      : notesFocusBucketId(
+          typeof row.source_note_id === "string" ? row.source_note_id : null
+        );
     personalByMaterial.set(id, (personalByMaterial.get(id) ?? 0) + 1);
   }
 
+  const notesMeta = await hydrateNotesFocusBucketMeta(
+    supabase,
+    user.id,
+    [...personalByMaterial.keys()].filter((id) => isNotesFocusBucketId(id))
+  );
+
   const missingPersonalMats = [...personalByMaterial.keys()].filter(
-    (id) => id !== NOTES_FOCUS_BUCKET_ID && !materialById.has(id)
+    (id) => !isNotesFocusBucketId(id) && !materialById.has(id)
   );
   if (missingPersonalMats.length > 0) {
     const { data: extraMats } = await supabase
@@ -161,13 +173,15 @@ export async function GET() {
     .filter((m) => m.total > 0)
     .sort((a, b) => b.total - a.total);
 
-  const notesCount = personalByMaterial.get(NOTES_FOCUS_BUCKET_ID) ?? 0;
-  if (notesCount > 0) {
+  for (const [bucketId, notesCount] of personalByMaterial) {
+    if (!isNotesFocusBucketId(bucketId) || notesCount <= 0) continue;
+    const meta = notesMeta.get(bucketId);
+    if (meta?.noteDeleted) continue;
     out.push({
-      materialId: NOTES_FOCUS_BUCKET_ID,
-      fileName: "Focus questions",
-      courseId: null,
-      courseTitle: "Notes",
+      materialId: bucketId,
+      fileName: meta?.fileName ?? "Focus questions",
+      courseId: meta?.courseId ?? null,
+      courseTitle: meta?.courseTitle ?? "Notes",
       moduleQuestions: 0,
       personalQuestions: notesCount,
       total: notesCount,

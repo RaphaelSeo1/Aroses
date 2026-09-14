@@ -509,10 +509,15 @@ function CourseRow({
           }`}
         >
           {isNotesFocusBucketId(material.materialId)
-            ? t.review.notesFocusDeck
+            ? material.courseTitle &&
+              material.courseTitle !== "Notes"
+              ? material.courseTitle
+              : material.fileName || t.review.notesFocusDeck
             : (material.courseTitle ?? material.fileName)}
         </p>
-        {isNotesFocusBucketId(material.materialId) ? (
+        {isNotesFocusBucketId(material.materialId) &&
+        material.courseTitle &&
+        material.courseTitle !== "Notes" ? (
           <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
             {material.fileName}
           </p>

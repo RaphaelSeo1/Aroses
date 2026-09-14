@@ -4,6 +4,7 @@ import {
   parseNoteFolders,
   type NoteHubRef,
 } from "@/lib/notes/hub-types";
+import { purgeFocusQuestionsForNote } from "@/lib/notes/purge-focus-for-note";
 import { createClient } from "@/lib/supabase/server";
 
 const MAX_BULK = 25;
@@ -348,6 +349,9 @@ export async function POST(request: Request) {
     if (result.ok) {
       deleted += 1;
       if (result.permanent) anyPermanent = true;
+      if (item.kind === "standalone") {
+        await purgeFocusQuestionsForNote(supabase, user.id, item.id);
+      }
       const key = cardKeyForRef(item);
       if (key in folders) {
         delete folders[key];

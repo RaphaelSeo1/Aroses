@@ -1,4 +1,7 @@
-import { isNotesFocusBucketId } from "@/lib/notes/notes-focus-bucket";
+import {
+  isNotesFocusBucketId,
+  parseNotesFocusBucketNoteId,
+} from "@/lib/notes/notes-focus-bucket";
 
 /**
  * Delete selected review/practice decks. Prefers deleting the study material;
@@ -14,7 +17,11 @@ export async function deleteReviewMaterials(
 
   for (const item of items) {
     if (isNotesFocusBucketId(item.materialId)) {
-      const res = await fetch("/api/notes/focus-questions", { method: "DELETE" });
+      const noteId = parseNotesFocusBucketNoteId(item.materialId);
+      const url = noteId
+        ? `/api/notes/focus-questions?noteId=${encodeURIComponent(noteId)}`
+        : "/api/notes/focus-questions";
+      const res = await fetch(url, { method: "DELETE" });
       if (res.ok) ok += 1;
       else failed += 1;
       continue;

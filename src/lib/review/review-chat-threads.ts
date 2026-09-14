@@ -15,8 +15,12 @@ export type ReviewChatThread = {
 const MAX_THREADS = 20;
 const MAX_TURNS = 40;
 
-function storageKey(sessionKey: string) {
-  return `aroses.reviewChat.threads.${sessionKey}`;
+export type ChatThreadScope = "review" | "liveNotes";
+
+function storageKey(sessionKey: string, scope: ChatThreadScope = "review") {
+  return scope === "liveNotes"
+    ? `aroses.liveNotes.chatThreads.${sessionKey}`
+    : `aroses.reviewChat.threads.${sessionKey}`;
 }
 
 function parseTurn(raw: unknown): ReviewChatTurn | null {
@@ -42,9 +46,12 @@ function parseTurn(raw: unknown): ReviewChatTurn | null {
   };
 }
 
-export function loadReviewChatThreads(sessionKey: string): ReviewChatThread[] {
+export function loadReviewChatThreads(
+  sessionKey: string,
+  scope: ChatThreadScope = "review"
+): ReviewChatThread[] {
   try {
-    const raw = localStorage.getItem(storageKey(sessionKey));
+    const raw = localStorage.getItem(storageKey(sessionKey, scope));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -73,11 +80,12 @@ export function loadReviewChatThreads(sessionKey: string): ReviewChatThread[] {
 
 export function saveReviewChatThreads(
   sessionKey: string,
-  threads: ReviewChatThread[]
+  threads: ReviewChatThread[],
+  scope: ChatThreadScope = "review"
 ) {
   try {
     localStorage.setItem(
-      storageKey(sessionKey),
+      storageKey(sessionKey, scope),
       JSON.stringify(
         threads
           .slice()
