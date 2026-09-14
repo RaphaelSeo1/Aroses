@@ -1920,7 +1920,7 @@ export function NotesPanel({
       {/* Document body — generous padding, max-width centered. */}
       <div ref={scrollBodyRef} className="min-h-0 flex-1 overflow-y-auto">
         <div
-          className={`mx-auto w-full max-w-[720px] ${
+          className={`mx-auto w-full max-w-[880px] ${
             fillHeight
               ? "px-5 py-5 sm:px-6 sm:py-6"
               : "px-6 py-10 sm:px-10 lg:px-14 lg:py-14"
@@ -2025,7 +2025,7 @@ export function NotesPanel({
       {/* AI Suggestions — pinned to bottom. Spans the full panel
           width (no max-w cap) so on the 50/50 desktop layout the
           suggestion card has room to breathe and stays readable.
-          The document body above keeps the Notion 720px reading
+          The document body above keeps a centered 880px reading
           column; only this section goes full-bleed. */}
       {suggestions.length > 0 ? (
         <div className="border-t border-zinc-100 bg-zinc-50/60 px-5 py-3 xl:px-7">
