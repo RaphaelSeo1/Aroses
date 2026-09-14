@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { isMissingAuthSessionError } from "@/lib/auth/public-routes";
+import {
+  isMissingAuthSessionError,
+  isSupabaseTransportError,
+} from "@/lib/auth/public-routes";
 import { fetchSrsDueCountsForUser } from "@/lib/srs-due-counts-server";
 import { createClient } from "@/lib/supabase/server";
 
@@ -38,6 +41,14 @@ export async function GET(request: Request) {
   } = await supabase.auth.getUser();
   if (authError && !isMissingAuthSessionError(authError)) {
     console.error("[srs/due-counts] auth unavailable:", authError.message);
+    if (isSupabaseTransportError(authError)) {
+      return NextResponse.json({
+        total: 0,
+        module: 0,
+        personal: 0,
+        byMaterial: [],
+      });
+    }
     return NextResponse.json(
       { error: "Authentication service temporarily unavailable." },
       { status: 503, headers: { "Retry-After": "5" } }

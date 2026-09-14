@@ -75,3 +75,35 @@ export function isMissingAuthSessionError(error: {
     code === "session_not_found"
   );
 }
+
+/** Upstream stall or outage — not a missing session. Prefer graceful degradation over 503. */
+export function isSupabaseTransportError(error: {
+  message?: string;
+  name?: string;
+  code?: string;
+} | null | undefined): boolean {
+  if (!error || isMissingAuthSessionError(error)) return false;
+  const msg = error.message ?? "";
+  const name = error.name ?? "";
+  return (
+    /exceeded \d+ms/i.test(msg) ||
+    /fetch failed/i.test(msg) ||
+    /network/i.test(msg) ||
+    /timeout/i.test(msg) ||
+    /502|503|504|522/i.test(msg) ||
+    name === "AbortError"
+  );
+}
+
+export function isSupabaseTransportFailure(error: unknown): boolean {
+  if (!error) return false;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    return isSupabaseTransportError(
+      error as { message?: string; name?: string; code?: string }
+    );
+  }
+  if (error instanceof Error) {
+    return isSupabaseTransportError(error);
+  }
+  return /exceeded \d+ms/i.test(String(error));
+}

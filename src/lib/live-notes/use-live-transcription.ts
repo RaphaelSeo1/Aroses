@@ -74,6 +74,15 @@ const MAX_UTTERANCE_CHARS = 1_200;
  */
 const STALE_UTTERANCE_MS = 8_000;
 
+/** True when the capture stream still has a live audio track feeding transcription. */
+export function hasLiveAudioCapture(
+  stream: MediaStream | null | undefined
+): boolean {
+  if (!stream) return false;
+  const track = stream.getAudioTracks()[0];
+  return Boolean(track && track.readyState === "live");
+}
+
 function pickMimeType(): string | undefined {
   if (typeof MediaRecorder === "undefined") return undefined;
   const candidates = [
@@ -382,10 +391,46 @@ export function useLiveLectureTranscription(options: {
   }, [stopPcmTap]);
 
   /**
+   * Release the browser capture (tracks + preview stream) while keeping the
+   * session paused and the Deepgram socket on keepalive. Used when the user
+   * stops sharing or Chrome ends the audio track.
+   */
+  const releaseCapture = useCallback(() => {
+    stopPcmTap();
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    recorderSocketRef.current = null;
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    const stream = streamRef.current;
+    streamRef.current = null;
+    setMediaStream(null);
+    setHasVideo(false);
+    setSharedSurface(null);
+    if (stream) {
+      for (const track of stream.getTracks()) {
+        try {
+          track.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }, [stopPcmTap]);
+
+  /**
    * Pause when the user ends the share from the browser's own UI (Chrome's
    * "Stop sharing" bar) or the mic device disappears. Resume re-acquires.
    * Video-only end disables preview/vision but keeps transcription going.
    */
+  const releaseCaptureRef = useRef<typeof releaseCapture | null>(null);
+  releaseCaptureRef.current = releaseCapture;
+
   const watchTrackEnded = useCallback((stream: MediaStream) => {
     const audio = stream.getAudioTracks()[0];
     if (audio) {
@@ -395,9 +440,12 @@ export function useLiveLectureTranscription(options: {
         onErrorRef.current?.(
           lastSourceRef.current === "mic"
             ? "The microphone stopped. Press Resume to reconnect it, or Finish to build the course."
-            : "Audio sharing ended. Press Resume to pick the lecture source again, or Finish to build the course with what was captured."
+            : "Audio sharing ended. Pick Tab, System, or Mic below to continue, or Finish to build the course with what was captured."
         );
-        void pauseRef.current?.();
+        void (async () => {
+          await pauseRef.current?.();
+          releaseCaptureRef.current?.();
+        })();
       });
     }
     for (const video of stream.getVideoTracks()) {
@@ -981,10 +1029,17 @@ export function useLiveLectureTranscription(options: {
       setMediaStream(null);
       setHasVideo(false);
     } else if (stream) {
-      // Tab/system: keep the share alive for preview, but mute audio so
-      // nothing is transcribed while paused.
-      for (const t of stream.getAudioTracks()) {
-        t.enabled = false;
+      const audio = stream.getAudioTracks()[0];
+      if (!audio || audio.readyState !== "live") {
+        // Share already ended — drop the dead stream so Resume / recapture UI
+        // can appear without a refresh.
+        releaseCaptureRef.current?.();
+      } else {
+        // Tab/system: keep the share alive for preview, but mute audio so
+        // nothing is transcribed while paused.
+        for (const t of stream.getAudioTracks()) {
+          t.enabled = false;
+        }
       }
     }
 
@@ -998,7 +1053,13 @@ export function useLiveLectureTranscription(options: {
         durationSeconds: Math.round(currentElapsedMs() / 1000),
       }),
     }).catch(() => {});
-  }, [sessionId, setStatusBoth, saveTranscriptNow, currentElapsedMs, stopPcmTap]);
+  }, [
+    sessionId,
+    setStatusBoth,
+    saveTranscriptNow,
+    currentElapsedMs,
+    stopPcmTap,
+  ]);
 
   const pauseRef = useRef<typeof pause | null>(null);
   pauseRef.current = pause;
@@ -1187,6 +1248,8 @@ export function useLiveLectureTranscription(options: {
     start,
     pause,
     resume,
+    /** Release tab/system/mic capture but keep the session paused for re-pick. */
+    releaseCapture,
     stop,
     /** Hot-swap the audio source mid-session without losing anything. */
     switchSource,

@@ -13,6 +13,7 @@ import {
   type CapturePlatform,
 } from "@/lib/live-notes/capture";
 import {
+  hasLiveAudioCapture,
   useLiveLectureTranscription,
   type LiveCaptureSource,
   type LiveTranscriptSegment,
@@ -951,6 +952,7 @@ export function LiveNotesSurface({
     switchSource,
     prefetchToken,
     flushNow,
+    releaseCapture,
     transcriptSaveStatus,
     transcriptLastSavedAt,
     transcriptPendingCount,
@@ -1174,14 +1176,8 @@ export function LiveNotesSurface({
     setError(null);
     await pause();
     // Ending tracks dismisses Chrome's "Sharing … to this tab" bar as well.
-    mediaStream?.getTracks().forEach((t) => {
-      try {
-        t.stop();
-      } catch {
-        /* ignore */
-      }
-    });
-  }, [pause, mediaStream]);
+    releaseCapture();
+  }, [pause, releaseCapture]);
 
   const sourceOptions: Array<{ id: LiveCaptureSource; label: string }> = [
     { id: "tab", label: "Tab" },
@@ -1368,10 +1364,28 @@ export function LiveNotesSurface({
     Boolean(session.ingestJobId) &&
     session.ingestJobReusable === false;
   const isLive = status === "recording" || status === "reconnecting";
-  const canResumeCapture =
+  const liveAudioCapture = hasLiveAudioCapture(mediaStream);
+  const canResumeLivePaused =
     started &&
-    !mediaStream &&
-    (status === "paused" || status === "error" || status === "idle");
+    !isLive &&
+    (status === "paused" || status === "error") &&
+    liveAudioCapture;
+  const canResumeOrRecapture =
+    started &&
+    !isLive &&
+    (status === "paused" || status === "error" || status === "idle") &&
+    (!mediaStream || !liveAudioCapture);
+  const showCaptureEndedBanner =
+    started &&
+    !isLive &&
+    canResumeOrRecapture &&
+    (status === "paused" || status === "error");
+  const showSourceControls =
+    started &&
+    (isLive ||
+      status === "paused" ||
+      status === "error" ||
+      canResumeOrRecapture);
   const showStartOverlay =
     !alreadyCompleted &&
     !started &&
@@ -1444,7 +1458,7 @@ export function LiveNotesSurface({
                     ? "AI is listening"
                     : "Recording"}
             </span>
-          ) : status === "paused" || canResumeCapture ? (
+          ) : status === "paused" || canResumeOrRecapture ? (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
               ⏸{" "}
               {activeSource === "mic" || !activeSource
@@ -1468,11 +1482,7 @@ export function LiveNotesSurface({
 
         {/* Controls */}
         <div className="flex items-center gap-2">
-          {(isLive ||
-            status === "paused" ||
-            (status === "error" && started) ||
-            canResumeCapture) &&
-          !finishing ? (
+          {showSourceControls && !finishing ? (
             <div
               className="inline-flex items-center overflow-hidden rounded-full border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"
               role="group"
@@ -1485,7 +1495,7 @@ export function LiveNotesSurface({
                     key={opt.id}
                     type="button"
                     onClick={() => void handleSwitchSource(opt.id)}
-                    disabled={switching || active}
+                    disabled={switching || (active && liveAudioCapture)}
                     aria-pressed={active}
                     title={
                       opt.id === "tab"
@@ -1530,26 +1540,27 @@ export function LiveNotesSurface({
             >
               {activeSource === "mic" ? "Pause mic" : "Pause"}
             </button>
-          ) : canResumeCapture ? (
+          ) : canResumeLivePaused ? (
             <button
               type="button"
-              onClick={() => {
-                // Same-page pause keeps hook status "paused" → resume().
-                // After a reload the hook is idle again → must start() fresh.
-                if (status === "paused" || status === "error") {
-                  void resume();
-                  return;
-                }
-                void handleStart(activeSource ?? "mic");
-              }}
+              onClick={() => void resume()}
               title={
-                activeSource === "mic" || !activeSource
+                activeSource === "mic"
                   ? "Start listening again — turns the microphone back on"
                   : "Resume transcription"
               }
               className="rounded-full bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
             >
-              {activeSource === "mic" || !activeSource ? "Start mic" : "Resume"}
+              {activeSource === "mic" ? "Start mic" : "Resume"}
+            </button>
+          ) : canResumeOrRecapture ? (
+            <button
+              type="button"
+              onClick={() => void handleStart(activeSource ?? "tab")}
+              title="Pick a lecture source again"
+              className="rounded-full bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+            >
+              Capture again
             </button>
           ) : null}
 
@@ -1701,6 +1712,31 @@ export function LiveNotesSurface({
           >
             Stop sharing
           </button>
+        </div>
+      ) : null}
+
+      {showCaptureEndedBanner ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-200/90 bg-amber-50/95 px-4 py-2.5 dark:border-amber-900/40 dark:bg-amber-950/50 sm:px-6">
+          <p className="text-sm font-medium text-amber-950 dark:text-amber-100">
+            {t.liveNotes.captureStoppedHint}
+          </p>
+          <div
+            className="inline-flex items-center overflow-hidden rounded-full border border-amber-300/80 bg-white dark:border-amber-800 dark:bg-zinc-900"
+            role="group"
+            aria-label="Resume capture"
+          >
+            {sourceOptions.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => void handleSwitchSource(opt.id)}
+                disabled={switching || shareGuideBusy}
+                className="px-3 py-1.5 text-xs font-semibold text-amber-900 transition-colors hover:bg-amber-100 disabled:opacity-60 dark:text-amber-100 dark:hover:bg-amber-950/60"
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
 

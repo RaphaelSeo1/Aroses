@@ -11,6 +11,8 @@ const en = {
   skipCapture: "Skip — I'll write notes myself",
   skipCaptureHint:
     "You can still upload slides or start capture from the header later.",
+  captureStoppedHint:
+    "Capture stopped — pick a source to continue, or press Capture again:",
 };
 
 const ko: typeof en = {
@@ -26,6 +28,8 @@ const ko: typeof en = {
   skipCapture: "건너뛰기 — 직접 노트를 쓸게요",
   skipCaptureHint:
     "나중에 헤더에서 슬라이드를 올리거나 녹음을 시작할 수 있습니다.",
+  captureStoppedHint:
+    "캡처가 중지되었습니다 — 소스를 선택하거나 다시 캡처를 눌러 계속하세요:",
 };
 
 export const liveNotes = { en, ko };

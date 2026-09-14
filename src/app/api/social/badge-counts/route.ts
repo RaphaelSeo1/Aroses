@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { isMissingAuthSessionError } from "@/lib/auth/public-routes";
+import {
+  isMissingAuthSessionError,
+  isSupabaseTransportError,
+} from "@/lib/auth/public-routes";
 import { fetchSocialBadgeCounts } from "@/lib/messaging/social-badge-counts";
 import { createClient } from "@/lib/supabase/server";
 
@@ -14,6 +17,13 @@ export async function GET() {
   } = await supabase.auth.getUser();
   if (authError && !isMissingAuthSessionError(authError)) {
     console.error("[social/badge-counts] auth unavailable:", authError.message);
+    if (isSupabaseTransportError(authError)) {
+      return NextResponse.json({
+        unreadMessages: 0,
+        pendingFriendRequests: 0,
+        total: 0,
+      });
+    }
     return NextResponse.json(
       { error: "Authentication service temporarily unavailable." },
       { status: 503, headers: { "Retry-After": "5" } }

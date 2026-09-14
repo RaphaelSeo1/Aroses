@@ -16,10 +16,15 @@ import {
   parseAllowedAuthEmailDomains,
 } from "@/lib/school-email-policy";
 import { getProfileOnboardingState } from "@/lib/onboarding-gate";
-import { createBoundedSupabaseFetch } from "@/lib/supabase/bounded-fetch";
+import {
+  AUTH_SUPABASE_TIMEOUT_MS,
+  createBoundedSupabaseFetchWithRetry,
+} from "@/lib/supabase/bounded-fetch";
 import {
   isMissingAuthSessionError,
   isPublicUnauthenticatedPath,
+  isSupabaseTransportError,
+  isSupabaseTransportFailure,
   nextPathForUnauthenticated,
   unauthenticatedHomePath,
   unauthenticatedProductEntryPath,
@@ -80,7 +85,10 @@ export async function proxy(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       global: {
-        fetch: createBoundedSupabaseFetch(),
+        fetch: createBoundedSupabaseFetchWithRetry(
+          AUTH_SUPABASE_TIMEOUT_MS,
+          1
+        ),
       },
       cookies: {
         getAll() {
@@ -105,11 +113,22 @@ export async function proxy(request: NextRequest) {
   try {
     const result = await supabase.auth.getUser();
     if (result.error && !isMissingAuthSessionError(result.error)) {
+      if (isSupabaseTransportError(result.error)) {
+        console.error(
+          "[proxy] Supabase auth slow — passing through:",
+          result.error.message
+        );
+        return supabaseResponse;
+      }
       console.error("[proxy] Supabase auth unavailable:", result.error.message);
       return unavailableResponse(supabaseResponse);
     }
     user = result.data.user;
   } catch (error) {
+    if (isSupabaseTransportFailure(error)) {
+      console.error("[proxy] Supabase auth slow — passing through:", error);
+      return supabaseResponse;
+    }
     console.error("[proxy] Supabase auth request failed:", error);
     return unavailableResponse(supabaseResponse);
   }
@@ -156,13 +175,22 @@ export async function proxy(request: NextRequest) {
     if (viewer?.isImpersonating) {
       console.error("[proxy] impersonation profile lookup failed:", error);
       onboardingState = "complete";
+    } else if (isSupabaseTransportFailure(error)) {
+      console.error(
+        "[proxy] Supabase profile slow — skipping onboarding gate:",
+        error
+      );
+      onboardingState = "complete";
     } else {
       console.error("[proxy] Supabase profile request failed:", error);
       return unavailableResponse(supabaseResponse);
     }
   }
   if (onboardingState === "unavailable") {
-    return unavailableResponse(supabaseResponse);
+    console.error(
+      "[proxy] onboarding profile unavailable — skipping gate this request"
+    );
+    onboardingState = "complete";
   }
   const needsOnboarding = onboardingState === "required";
 
@@ -284,6 +312,11 @@ export async function proxy(request: NextRequest) {
     } catch (error) {
       if (viewer?.isImpersonating) {
         console.error("[proxy] impersonation subscription lookup failed:", error);
+      } else if (isSupabaseTransportFailure(error)) {
+        console.error(
+          "[proxy] subscription lookup slow — skipping paywall gate:",
+          error
+        );
       } else {
         console.error("[proxy] subscription lookup failed:", error);
         return unavailableResponse(supabaseResponse);

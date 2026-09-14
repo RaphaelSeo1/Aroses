@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
-import { createBoundedSupabaseFetch } from "./bounded-fetch.ts";
+import {
+  createBoundedSupabaseFetch,
+  createBoundedSupabaseFetchWithRetry,
+} from "./bounded-fetch.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -55,4 +58,24 @@ test("preserves cancellation from the caller", async () => {
   controller.abort(new Error("caller cancelled"));
 
   await assert.rejects(request, /caller cancelled/);
+});
+
+test("retries once after a deadline abort then succeeds", async () => {
+  let attempts = 0;
+  globalThis.fetch = async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      return new Promise<Response>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("Supabase request exceeded 20ms")), 25);
+      });
+    }
+    return new Response("ok", { status: 200 });
+  };
+
+  const response = await createBoundedSupabaseFetchWithRetry(20, 1)(
+    "https://example.test"
+  );
+
+  assert.equal(attempts, 2);
+  assert.equal(response.status, 200);
 });
