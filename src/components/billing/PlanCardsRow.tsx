@@ -6,10 +6,19 @@ import type { ReactNode } from "react";
  */
 export function PlanCardsRow({ children }: { children: ReactNode }) {
   return (
-    <div className="-mx-1 overflow-x-auto px-1 pt-3">
+    <div className="-mx-1 overflow-x-auto px-2 pt-3 pb-3">
       <div className="grid min-w-[52rem] grid-cols-5 items-stretch gap-2.5 sm:gap-3">
         {children}
       </div>
     </div>
+  );
+}
+
+/** Gold corner chip for the Student trial card. */
+export function StudentPlanCornerBadge({ children }: { children: ReactNode }) {
+  return (
+    <span className="plan-student-corner">
+      <span>{children}</span>
+    </span>
   );
 }

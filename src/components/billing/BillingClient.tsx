@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { PlanCardsRow } from "@/components/billing/PlanCardsRow";
+import { PlanCardsRow, StudentPlanCornerBadge } from "@/components/billing/PlanCardsRow";
 import {
   CHECKOUT_PLAN_ORDER,
   formatUsdAmount,
@@ -365,6 +365,11 @@ export function BillingClient({
                 <span className="plan-trial-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-[0.14em]">
                   {t.billing.limitedTimeBadge}
                 </span>
+              ) : null}
+              {isTrialCard ? (
+                <StudentPlanCornerBadge>
+                  {t.billing.studentLovedBadge}
+                </StudentPlanCornerBadge>
               ) : null}
               <div className="flex items-start justify-between gap-2">
                 <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">

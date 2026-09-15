@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { PlanCardsRow } from "@/components/billing/PlanCardsRow";
+import { PlanCardsRow, StudentPlanCornerBadge } from "@/components/billing/PlanCardsRow";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import {
   OPEN_UPGRADE_EVENT,
@@ -283,6 +283,11 @@ function UpgradePlanCards({
                 <span className="plan-trial-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-[0.14em]">
                   {billing.limitedTimeBadge}
                 </span>
+              ) : null}
+              {isTrialCard ? (
+                <StudentPlanCornerBadge>
+                  {billing.studentLovedBadge}
+                </StudentPlanCornerBadge>
               ) : null}
               <div className="flex items-start justify-between gap-2">
                 <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
