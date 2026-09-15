@@ -1,10 +1,5 @@
-import {
-  PAID_PLAN_TIERS,
-  PLANS,
-  isPaidPlanTier,
-  type PaidPlanTier,
-  type PlanTier,
-} from "./plans.ts";
+import { PAID_PLAN_TIERS, isPaidPlanTier, type PaidPlanTier } from "./plans.ts";
+import { salePriceMonthly } from "./sale.ts";
 
 export { PAID_PLAN_TIERS, isPaidPlanTier };
 export type { PaidPlanTier };
@@ -24,9 +19,33 @@ export type AdminPlanSubscriptionRow = {
   adminGranted: boolean;
 };
 
-export function listPriceCentsForTier(tier: PaidPlanTier): number {
-  const monthly = PLANS[tier as PlanTier]?.priceMonthly ?? 0;
-  return Math.round(monthly * 100);
+/**
+ * Monthly cents for admin table/MRR.
+ * Prefers a stored Stripe charge when present; otherwise the currently
+ * charged sale/promo price (`salePriceMonthly`).
+ */
+export function listPriceCentsForTier(
+  tier: PaidPlanTier,
+  stripeAmountCents?: number | null
+): number {
+  if (
+    typeof stripeAmountCents === "number" &&
+    Number.isFinite(stripeAmountCents) &&
+    stripeAmountCents >= 0
+  ) {
+    return Math.round(stripeAmountCents);
+  }
+  return Math.round(salePriceMonthly(tier) * 100);
+}
+
+/** Read a stored Stripe charge from a subscription snapshot, if the column exists. */
+export function storedStripeAmountCents(row: {
+  amount_cents?: number | null;
+  stripe_amount_cents?: number | null;
+}): number | null {
+  const n = row.amount_cents ?? row.stripe_amount_cents;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
 }
 
 export function subscriberLabelFromParts(parts: {
@@ -69,7 +88,7 @@ export type AdminPlanSubscriptionSummary = {
   currency: "usd";
 };
 
-/** Current subscribers + list-price MRR (excludes admin-granted comps). */
+/** Current subscribers + charged-price MRR (excludes admin-granted comps). */
 export function summarizeAdminPlanSubscriptions(
   rows: AdminPlanSubscriptionRow[]
 ): AdminPlanSubscriptionSummary {

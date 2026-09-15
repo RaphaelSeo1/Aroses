@@ -6,6 +6,7 @@ import {
   listPriceCentsForTier,
   sortAdminPlanSubscriptionRows,
   startedAtFromSubscription,
+  storedStripeAmountCents,
   subscriberLabelFromParts,
   type AdminPlanSubscriptionRow,
   type PaidPlanTier,
@@ -22,6 +23,9 @@ type SubRow = {
   updated_at: string | null;
   cancel_at_period_end: boolean | null;
   admin_granted?: boolean | null;
+  /** Stored Stripe unit amount in cents, when the webhook snapshot has it. */
+  amount_cents?: number | null;
+  stripe_amount_cents?: number | null;
 };
 
 type ProfileRow = {
@@ -129,7 +133,7 @@ export async function loadAdminPlanSubscriptions(): Promise<
         username: profile?.username,
       }),
       tier,
-      amountCents: listPriceCentsForTier(tier),
+      amountCents: listPriceCentsForTier(tier, storedStripeAmountCents(row)),
       currency: "usd",
       status: (row.status ?? "inactive").toLowerCase(),
       startedAt: startedAtFromSubscription({
