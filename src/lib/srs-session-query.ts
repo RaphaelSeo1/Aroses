@@ -2,6 +2,8 @@ export type SrsSessionQuery = {
   scope?: "module" | "personal" | "both";
   materialId?: string;
   materialIds?: string[];
+  /** Present (even empty) to filter personal cards by source_note_id. */
+  noteIds?: string[];
   moduleId?: number;
   newLimit?: number;
   maxReviews?: number;
@@ -12,6 +14,7 @@ export function buildSrsSessionUrl({
   scope = "both",
   materialId,
   materialIds,
+  noteIds,
   moduleId,
   newLimit,
   maxReviews,
@@ -22,6 +25,9 @@ export function buildSrsSessionUrl({
   if (materialId) params.set("materialId", materialId);
   if (materialIds && materialIds.length > 0) {
     params.set("materialIds", materialIds.join(","));
+  }
+  if (noteIds) {
+    params.set("noteIds", noteIds.join(","));
   }
   if (typeof moduleId === "number") params.set("moduleId", String(moduleId));
   if (typeof newLimit === "number") params.set("newLimit", String(newLimit));

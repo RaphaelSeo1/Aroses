@@ -9,6 +9,17 @@ import { useEffect, useRef, useState } from "react";
  * fresh numbers.
  */
 
+/** Focus cards from one note, nested under a course/material picker row. */
+export type SrsDueNoteChild = {
+  /** `note:{uuid}` or legacy `"notes"`. */
+  materialId: string;
+  sourceNoteId: string | null;
+  /** Note title. */
+  fileName: string;
+  personal: number;
+  total: number;
+};
+
 export type SrsDueByMaterial = {
   materialId: string;
   fileName: string;
@@ -17,6 +28,8 @@ export type SrsDueByMaterial = {
   module: number;
   personal: number;
   total: number;
+  /** Present when personal cards can be attributed to distinct notes. */
+  notes?: SrsDueNoteChild[];
 };
 
 export type SrsDueCounts = {

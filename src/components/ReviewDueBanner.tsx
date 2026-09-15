@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { useSrsDueCounts, type SrsDueCounts } from "@/lib/srs-due";
+import { groupReviewPickerRows } from "@/lib/review-picker";
 
 /**
  * Slim "X cards due for review today" banner shown on the dashboard home
@@ -47,7 +48,7 @@ export function ReviewDueBanner({
   if (!counts || counts.total === 0 || dismissedToday) return null;
 
   const total = counts.total;
-  const courseCount = counts.byMaterial.length;
+  const courseCount = groupReviewPickerRows(counts.byMaterial).length;
 
   return (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-border/70 bg-brand-blush/70 px-4 py-3 text-sm shadow-sm dark:border-brand-border/40 dark:bg-brand-blush/10">

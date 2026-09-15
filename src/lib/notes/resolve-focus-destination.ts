@@ -67,25 +67,6 @@ export async function resolveFocusDestination(
   let sourceLabel = "Notes";
   let courseId: string | null = null;
 
-  if (input.materialId && isUuid(input.materialId)) {
-    const ok = await canAccessStudyMaterial(supabase, userId, input.materialId);
-    if (!ok) return { error: "Not found.", status: 404 };
-    const { data: mat } = await supabase
-      .from("study_materials")
-      .select("id, file_name, course_payload")
-      .eq("id", input.materialId)
-      .maybeSingle();
-    if (!mat) return { error: "Not found.", status: 404 };
-    return {
-      materialId: mat.id as string,
-      moduleId: firstModuleId(mat.course_payload, input.moduleId),
-      sourceNoteId,
-      sourceLabel:
-        ((mat.file_name as string) || "").replace(/\.[a-z0-9]{2,5}$/i, "").trim() ||
-        "Course notes",
-    };
-  }
-
   if (input.liveSessionId && isUuid(input.liveSessionId)) {
     let { data: session, error: sessionErr } = await supabase
       .from("live_lecture_sessions")
@@ -161,6 +142,26 @@ export async function resolveFocusDestination(
     }
   } else if (input.noteId && isUuid(input.noteId)) {
     return { error: "Not found.", status: 404 };
+  }
+
+  if (input.materialId && isUuid(input.materialId)) {
+    const ok = await canAccessStudyMaterial(supabase, userId, input.materialId);
+    if (!ok) return { error: "Not found.", status: 404 };
+    const { data: mat } = await supabase
+      .from("study_materials")
+      .select("id, file_name, course_payload")
+      .eq("id", input.materialId)
+      .maybeSingle();
+    if (!mat) return { error: "Not found.", status: 404 };
+    const materialLabel =
+      ((mat.file_name as string) || "").replace(/\.[a-z0-9]{2,5}$/i, "").trim() ||
+      "Course notes";
+    return {
+      materialId: mat.id as string,
+      moduleId: firstModuleId(mat.course_payload, input.moduleId),
+      sourceNoteId,
+      sourceLabel: sourceLabel !== "Notes" ? sourceLabel : materialLabel,
+    };
   }
 
   if (courseId) {

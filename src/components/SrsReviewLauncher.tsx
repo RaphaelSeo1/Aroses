@@ -22,6 +22,8 @@ export type SrsReviewLauncherProps = {
   materialId?: string;
   /** Multi-material filter for the global dashboard. */
   materialIds?: string[];
+  /** Filter personal cards by source_note_id. Empty array excludes note-sourced cards. */
+  noteIds?: string[];
   /** Limit further to one module within a material. */
   moduleId?: number;
   /** Override new-card-per-day cap for this session. */
@@ -65,6 +67,7 @@ export function SrsReviewLauncher({
   scope = "both",
   materialId,
   materialIds,
+  noteIds,
   moduleId,
   newLimit,
   maxReviews,
@@ -101,6 +104,7 @@ export function SrsReviewLauncher({
       if (materialId) params.set("materialId", materialId);
       if (materialIds && materialIds.length > 0)
         params.set("materialIds", materialIds.join(","));
+      if (noteIds) params.set("noteIds", noteIds.join(","));
       if (typeof moduleId === "number")
         params.set("moduleId", String(moduleId));
       if (typeof newLimit === "number") params.set("newLimit", String(newLimit));
@@ -137,6 +141,7 @@ export function SrsReviewLauncher({
     scope,
     materialId,
     materialIds?.join(","),
+    noteIds?.join(","),
     moduleId,
     newLimit,
     maxReviews,

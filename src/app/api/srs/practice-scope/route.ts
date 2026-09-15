@@ -7,6 +7,12 @@ import {
   isNotesFocusBucketId,
   notesFocusBucketId,
 } from "@/lib/notes/notes-focus-bucket";
+import type { SrsDueByMaterial } from "@/lib/srs-due";
+import {
+  addPersonalFocusCount,
+  finalizeFocusBuckets,
+} from "@/lib/srs-focus-buckets";
+import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 
 /**
  * GET /api/srs/practice-scope
@@ -82,40 +88,69 @@ export async function GET() {
     materialById.set(m.id.toLowerCase(), m);
   }
 
-  // Focus-card counts per material (may include non-owned materials).
-  const personalByMaterial = new Map<string, number>();
-  const { data: personalRows } = await supabase
+  // Focus-card counts (may include non-owned materials). Nested by source
+  // note even when the card is attached to a course material_id.
+  type PersonalRow = {
+    material_id?: string | null;
+    source_note_id?: string | null;
+    source_label?: string | null;
+  };
+  const firstPersonal = await supabase
     .from("user_personal_quiz_items")
-    .select("material_id, source_note_id")
+    .select("material_id, source_note_id, source_label")
     .eq("user_id", user.id);
-  for (const row of personalRows ?? []) {
-    const id = row.material_id
-      ? (row.material_id as string).toLowerCase()
-      : notesFocusBucketId(
-          typeof row.source_note_id === "string" ? row.source_note_id : null
-        );
-    personalByMaterial.set(id, (personalByMaterial.get(id) ?? 0) + 1);
+  let personalRows: PersonalRow[] | null = firstPersonal.data;
+  let personalErr = firstPersonal.error;
+  if (
+    personalErr &&
+    isMissingDbColumnError(personalErr, "source_label", "source_note_id")
+  ) {
+    const fallback = await supabase
+      .from("user_personal_quiz_items")
+      .select("material_id")
+      .eq("user_id", user.id);
+    personalErr = fallback.error;
+    personalRows = (fallback.data ?? []).map((row) => ({
+      material_id: row.material_id ?? null,
+      source_note_id: null,
+      source_label: null,
+    }));
+  }
+  if (personalErr) {
+    console.error("[practice-scope personal]", personalErr);
+    personalRows = [];
   }
 
-  const notesMeta = await hydrateNotesFocusBucketMeta(
-    supabase,
-    user.id,
-    [...personalByMaterial.keys()].filter((id) => isNotesFocusBucketId(id))
-  );
-
-  const missingPersonalMats = [...personalByMaterial.keys()].filter(
-    (id) => !isNotesFocusBucketId(id) && !materialById.has(id)
-  );
-  if (missingPersonalMats.length > 0) {
+  const missingPersonalMats = new Set<string>();
+  const notesBucketIds = new Set<string>();
+  for (const row of personalRows ?? []) {
+    notesBucketIds.add(
+      notesFocusBucketId(
+        typeof row.source_note_id === "string" ? row.source_note_id : null
+      )
+    );
+    if (!row.material_id) continue;
+    const id = (row.material_id as string).toLowerCase();
+    if (!isNotesFocusBucketId(id) && !materialById.has(id)) {
+      missingPersonalMats.add(id);
+    }
+  }
+  if (missingPersonalMats.size > 0) {
     const { data: extraMats } = await supabase
       .from("study_materials")
       .select("id, file_name, course_id, course_payload, courses ( id, title )")
-      .in("id", missingPersonalMats);
+      .in("id", [...missingPersonalMats]);
     for (const raw of extraMats ?? []) {
       const m = raw as unknown as MaterialRow;
       materialById.set(m.id.toLowerCase(), m);
     }
   }
+
+  const notesMeta = await hydrateNotesFocusBucketMeta(
+    supabase,
+    user.id,
+    notesBucketIds
+  );
 
   const materials = [...materialById.values()];
 
@@ -147,46 +182,55 @@ export async function GET() {
     addAttempt(row.material_id as string, row.question_index as number);
   }
 
-  const out = materials
-    .map((m) => {
-      // Count only attempted questions that still exist in the course payload.
-      const valid = validQuestionIndexes(m.course_payload);
-      const attempted = attemptedByMaterial.get(m.id);
-      let moduleQuestions = 0;
-      if (attempted) {
-        for (const qi of attempted) {
-          if (valid.has(qi)) moduleQuestions += 1;
-        }
+  const byMaterial = new Map<string, SrsDueByMaterial>();
+  for (const m of materials) {
+    const valid = validQuestionIndexes(m.course_payload);
+    const attempted = attemptedByMaterial.get(m.id);
+    let moduleQuestions = 0;
+    if (attempted) {
+      for (const qi of attempted) {
+        if (valid.has(qi)) moduleQuestions += 1;
       }
-      const personalQuestions =
-        personalByMaterial.get(m.id.toLowerCase()) ?? 0;
-      return {
-        materialId: m.id,
-        fileName: m.file_name ?? "Untitled upload",
-        courseId: deriveCourseId(m),
-        courseTitle: deriveCourseTitle(m),
-        moduleQuestions,
-        personalQuestions,
-        total: moduleQuestions + personalQuestions,
-      };
-    })
-    .filter((m) => m.total > 0)
-    .sort((a, b) => b.total - a.total);
-
-  for (const [bucketId, notesCount] of personalByMaterial) {
-    if (!isNotesFocusBucketId(bucketId) || notesCount <= 0) continue;
-    const meta = notesMeta.get(bucketId);
-    if (meta?.noteDeleted) continue;
-    out.push({
-      materialId: bucketId,
-      fileName: meta?.fileName ?? "Focus questions",
-      courseId: meta?.courseId ?? null,
-      courseTitle: meta?.courseTitle ?? "Notes",
-      moduleQuestions: 0,
-      personalQuestions: notesCount,
-      total: notesCount,
+    }
+    byMaterial.set(m.id.toLowerCase(), {
+      materialId: m.id,
+      fileName: m.file_name ?? "Untitled upload",
+      courseId: deriveCourseId(m),
+      courseTitle: deriveCourseTitle(m),
+      module: moduleQuestions,
+      personal: 0,
+      total: moduleQuestions,
     });
   }
+
+  for (const row of personalRows ?? []) {
+    addPersonalFocusCount(
+      byMaterial,
+      {
+        materialId: row.material_id ?? null,
+        sourceNoteId:
+          typeof row.source_note_id === "string" ? row.source_note_id : null,
+        sourceLabel:
+          typeof row.source_label === "string" ? row.source_label : null,
+      },
+      notesMeta
+    );
+  }
+  finalizeFocusBuckets(byMaterial);
+
+  const out = [...byMaterial.values()]
+    .filter((m) => m.total > 0)
+    .sort((a, b) => b.total - a.total)
+    .map((m) => ({
+      materialId: m.materialId,
+      fileName: m.fileName,
+      courseId: m.courseId,
+      courseTitle: m.courseTitle,
+      moduleQuestions: m.module,
+      personalQuestions: m.personal,
+      total: m.total,
+      notes: m.notes,
+    }));
 
   const totals = out.reduce(
     (acc, m) => {

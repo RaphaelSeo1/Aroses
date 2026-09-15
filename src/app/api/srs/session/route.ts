@@ -7,6 +7,10 @@ import {
   isNotesFocusBucketId,
   notesFocusBucketId,
 } from "@/lib/notes/notes-focus-bucket";
+import {
+  parseSrsSessionScope,
+  personalCardInScope,
+} from "@/lib/srs-session-scope";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
@@ -19,7 +23,9 @@ import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
  * Query params (all optional unless noted):
  *   scope=both|module|personal   (default "both")
  *   materialId=<uuid>            limit to one course/material
- *   materialIds=<csv-of-uuid>    limit to a subset of courses
+ *   materialIds=<csv-of-uuid-or-note:id>  limit to a subset of courses/notes
+ *   noteIds=<csv-of-uuid>        personal cards whose source_note_id is in the list
+ *                                (empty value = exclude note-sourced cards)
  *   moduleId=<int>               limit to one module (requires materialId)
  *   newLimit=<int>               override per-day new-card cap
  *   maxReviews=<int>             override per-day review cap
@@ -35,9 +41,6 @@ import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
  * Cards are returned in play order. "Again" same-session re-show is handled
  * client-side by SrsReviewSession.
  */
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type Scope = "both" | "module" | "personal";
 
@@ -96,8 +99,13 @@ export async function GET(request: Request) {
   const materialIdParam = url.searchParams.get("materialId") ?? "";
   const materialIdsParam = url.searchParams.get("materialIds") ?? "";
   const moduleIdParam = url.searchParams.get("moduleId");
-
-  const allowedMaterialIds = collectMaterialIds(materialIdParam, materialIdsParam);
+  const sessionScope = parseSrsSessionScope({
+    materialId: materialIdParam,
+    materialIds: materialIdsParam,
+    noteIds: url.searchParams.get("noteIds") ?? undefined,
+    noteIdsSpecified: url.searchParams.has("noteIds"),
+  });
+  const allowedMaterialUuids = sessionScope.materialUuids;
 
   // -------- Load prefs ----------------------------------------------------
   const prefs = await loadPrefs(supabase, user.id);
@@ -139,7 +147,7 @@ export async function GET(request: Request) {
   const materials = (ownedMaterials ?? [])
     .map((m) => m as unknown as MaterialRow)
     .filter((m) => {
-      if (allowedMaterialIds && !allowedMaterialIds.has(normId(m.id))) {
+      if (allowedMaterialUuids && !allowedMaterialUuids.has(normId(m.id))) {
         return false;
       }
       return true;
@@ -149,7 +157,7 @@ export async function GET(request: Request) {
   for (const m of materials) materialById.set(normId(m.id), m);
 
   // -- Due module cards (existing SRS state, due_at <= now)
-  if (scope !== "personal") {
+  if (scope !== "personal" && allowedMaterialUuids?.size !== 0) {
     let dueQuery = supabase
       .from("user_module_card_srs")
       .select(
@@ -164,8 +172,8 @@ export async function GET(request: Request) {
       dueQuery = dueQuery.lte("due_at", nowIso);
     }
 
-    if (allowedMaterialIds && allowedMaterialIds.size > 0) {
-      dueQuery = dueQuery.in("material_id", [...allowedMaterialIds]);
+    if (allowedMaterialUuids && allowedMaterialUuids.size > 0) {
+      dueQuery = dueQuery.in("material_id", [...allowedMaterialUuids]);
     }
 
     const { data: dueRows } = await dueQuery;
@@ -182,7 +190,7 @@ export async function GET(request: Request) {
     }
 
     // -- New module cards (no SRS row yet)
-    const seenKeys = await loadSeenModuleKeys(supabase, user.id, allowedMaterialIds);
+    const seenKeys = await loadSeenModuleKeys(supabase, user.id, allowedMaterialUuids);
     // Free practice (cram) should only resurface questions the learner has
     // actually tried before — not brand-new questions from courses they
     // haven't studied yet. "Tried" = answered in a quiz (question_attempts).
@@ -190,7 +198,7 @@ export async function GET(request: Request) {
     // review (non-cram) we still introduce genuinely new cards, since that's
     // how the learner makes progress.
     const attemptedKeys = cram
-      ? await loadAttemptedModuleKeys(supabase, user.id, allowedMaterialIds)
+      ? await loadAttemptedModuleKeys(supabase, user.id, allowedMaterialUuids)
       : null;
     const newCandidates: SessionCard[] = [];
     for (const mat of materials) {
@@ -222,29 +230,37 @@ export async function GET(request: Request) {
 
   if (scope !== "module") {
     const uuids =
-      allowedMaterialIds && allowedMaterialIds.size > 0
-        ? [...allowedMaterialIds].filter((id) => UUID_RE.test(id))
-        : null;
-    const includeNotes =
-      !allowedMaterialIds ||
-      allowedMaterialIds.size === 0 ||
-      [...allowedMaterialIds].some((id) => isNotesFocusBucketId(id));
-
+      allowedMaterialUuids == null
+        ? null
+        : [...allowedMaterialUuids];
     const personalRows: Record<string, unknown>[] = [];
-    if (uuids === null) {
-      personalRows.push(
-        ...(await loadPersonalQuizRows(supabase, user.id, "all"))
-      );
+    const seenPersonalIds = new Set<string>();
+    const pushUnique = (rows: Record<string, unknown>[]) => {
+      for (const row of rows) {
+        const id = typeof row.id === "string" ? row.id : "";
+        if (id && seenPersonalIds.has(id)) continue;
+        if (id) seenPersonalIds.add(id);
+        personalRows.push(row);
+      }
+    };
+
+    if (!sessionScope.hasRestriction) {
+      pushUnique(await loadPersonalQuizRows(supabase, user.id, "all"));
     } else {
-      if (uuids.length > 0) {
-        personalRows.push(
-          ...(await loadPersonalQuizRows(supabase, user.id, "materials", uuids))
+      if (uuids && uuids.length > 0) {
+        pushUnique(
+          await loadPersonalQuizRows(supabase, user.id, "materials", uuids)
         );
       }
-      if (includeNotes) {
-        personalRows.push(
-          ...(await loadPersonalQuizRows(supabase, user.id, "notes"))
+      if (sessionScope.noteFilterActive && sessionScope.noteIds.size > 0) {
+        pushUnique(
+          await loadPersonalQuizRows(supabase, user.id, "sourceNotes", [
+            ...sessionScope.noteIds,
+          ])
         );
+      }
+      if (sessionScope.includeLegacyNotes) {
+        pushUnique(await loadPersonalQuizRows(supabase, user.id, "notes"));
       }
     }
 
@@ -275,15 +291,13 @@ export async function GET(request: Request) {
 
     const notesBucketIds = new Set<string>();
     for (const row of personalRows ?? []) {
-      if (!row.material_id) {
-        notesBucketIds.add(
-          notesFocusBucketId(
-            typeof row.source_note_id === "string"
-              ? row.source_note_id
-              : null
-          )
-        );
-      }
+      notesBucketIds.add(
+        notesFocusBucketId(
+          typeof row.source_note_id === "string"
+            ? row.source_note_id
+            : null
+        )
+      );
     }
     const notesMeta = await hydrateNotesFocusBucketMeta(
       supabase,
@@ -293,30 +307,27 @@ export async function GET(request: Request) {
 
     for (const row of personalRows ?? []) {
       const rawMid = row.material_id as string | null;
-      const isNotesOnly = !rawMid;
-      const bucketId = isNotesOnly
-        ? notesFocusBucketId(
-            typeof row.source_note_id === "string"
-              ? row.source_note_id
-              : null
-          )
-        : normId(rawMid);
+      const sourceNoteId =
+        typeof row.source_note_id === "string" ? row.source_note_id : null;
       if (
-        allowedMaterialIds &&
-        !allowedMaterialIds.has(bucketId)
+        !personalCardInScope(sessionScope, {
+          materialId: rawMid,
+          sourceNoteId,
+        })
       ) {
         continue;
       }
-      if (!isNotesOnly && !materialById.has(bucketId)) {
+      const isNotesOnly = !rawMid;
+      const noteBucketId = notesFocusBucketId(sourceNoteId);
+      const bucketId = isNotesOnly ? noteBucketId : normId(rawMid);
+      const noteMeta = notesMeta.get(noteBucketId);
+      if (noteMeta?.noteDeleted) {
         continue;
       }
-      const noteMeta = notesMeta.get(bucketId);
-      if (isNotesOnly && noteMeta?.noteDeleted) {
-        continue;
-      }
-      const mat = isNotesOnly
-        ? stubMaterial(bucketId)
-        : materialById.get(bucketId) ?? stubMaterial(bucketId);
+      const mat = !isNotesOnly && materialById.has(bucketId)
+        ? materialById.get(bucketId)!
+        : stubMaterial(isNotesOnly ? bucketId : noteBucketId);
+      const treatAsNotes = isNotesOnly || !materialById.has(bucketId);
       const rowModuleId =
         row.module_id == null ? 0 : Number(row.module_id);
       if (moduleIdFilter != null && rowModuleId !== moduleIdFilter) continue;
@@ -336,23 +347,31 @@ export async function GET(request: Request) {
         (typeof row.source_label === "string" && row.source_label.trim()
           ? row.source_label.trim()
           : "Focus questions");
+      const fromNote = Boolean(sourceNoteId);
+      const courseTitle = treatAsNotes
+        ? (noteMeta?.courseTitle ?? null)
+        : deriveCourseTitle(mat) ?? noteMeta?.courseTitle ?? null;
 
       const card: SessionCard = {
         kind: "personal",
         cardKey: `personal:${row.id}`,
         personalItemId: row.id as string,
-        materialId: isNotesOnly ? bucketId : mat.id,
-        fileName: isNotesOnly ? notesLabel : (mat.file_name ?? "Untitled upload"),
-        courseId: isNotesOnly
+        materialId: treatAsNotes ? noteBucketId : mat.id,
+        fileName: fromNote
+          ? notesLabel
+          : treatAsNotes
+            ? notesLabel
+            : (mat.file_name ?? "Untitled upload"),
+        courseId: treatAsNotes
           ? (noteMeta?.courseId ?? null)
           : deriveCourseId(mat),
-        courseTitle: isNotesOnly
-          ? (noteMeta?.courseTitle ?? "Notes")
-          : deriveCourseTitle(mat),
+        courseTitle,
         moduleId: rowModuleId,
-        moduleTitle: isNotesOnly
+        moduleTitle: fromNote
           ? notesLabel
-          : lookupModuleTitle(mat.course_payload, rowModuleId),
+          : treatAsNotes
+            ? notesLabel
+            : lookupModuleTitle(mat.course_payload, rowModuleId),
         question,
         srs: {
           ease: Number(row.srs_ease) || 2.5,
@@ -433,7 +452,7 @@ const PERSONAL_SELECT_BASE =
 async function loadPersonalQuizRows(
   supabase: SupabaseClient,
   userId: string,
-  mode: "all" | "materials" | "notes",
+  mode: "all" | "materials" | "notes" | "sourceNotes",
   materialIds?: string[]
 ): Promise<Record<string, unknown>[]> {
   const run = async (select: string) => {
@@ -445,6 +464,8 @@ async function loadPersonalQuizRows(
       q = q.in("material_id", materialIds);
     } else if (mode === "notes") {
       q = q.is("material_id", null);
+    } else if (mode === "sourceNotes" && materialIds && materialIds.length > 0) {
+      q = q.in("source_note_id", materialIds);
     }
     return q.order("due_at", { ascending: true });
   };
@@ -498,22 +519,6 @@ function stubMaterial(id: string): MaterialRow {
     course_payload: null,
     courses: null,
   };
-}
-
-function collectMaterialIds(
-  single: string,
-  many: string
-): Set<string> | null {
-  const ids = new Set<string>();
-  const candidate = (s: string) => {
-    const t = normId(s);
-    if (t && (UUID_RE.test(t) || isNotesFocusBucketId(t))) ids.add(t);
-  };
-  if (single) candidate(single);
-  if (many) {
-    for (const piece of many.split(",")) candidate(piece);
-  }
-  return ids.size > 0 ? ids : null;
 }
 
 function clampInt(

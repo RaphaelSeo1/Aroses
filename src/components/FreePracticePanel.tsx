@@ -2,10 +2,20 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ReviewPickerList } from "@/components/ReviewPickerList";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { deleteReviewMaterials } from "@/lib/review-delete-materials";
-import { isNotesFocusBucketId } from "@/lib/notes/notes-focus-bucket";
+import {
+  allPickerLeafIds,
+  deleteItemsForSelection,
+  groupReviewPickerRows,
+  pickerSelectionToSessionParams,
+  practiceScopeToPickerSource,
+  selectedGroupCount,
+  visibleDueForLeaves,
+} from "@/lib/review-picker";
+import type { SrsDueNoteChild } from "@/lib/srs-due";
 
 type ScopeMaterial = {
   materialId: string;
@@ -15,6 +25,7 @@ type ScopeMaterial = {
   moduleQuestions: number;
   personalQuestions: number;
   total: number;
+  notes?: SrsDueNoteChild[];
 };
 
 type ScopeResponse = {
@@ -22,18 +33,22 @@ type ScopeResponse = {
   totals: { module: number; personal: number; total: number };
 };
 
+export type FreePracticeStart = {
+  materialIds: string[];
+  noteIds?: string[];
+};
+
 /**
  * Course chooser for free practice (cram). Lists every course with its total
  * practiceable questions so the learner can pick which courses to drill,
- * ignoring the spaced-repetition schedule. Passing the selected material IDs
- * (or none, for "everything") up to the dashboard launches the cram session.
+ * ignoring the spaced-repetition schedule.
  */
 export function FreePracticePanel({
   onStart,
   onCancel,
 }: {
-  /** `materialIds` empty = practice everything. */
-  onStart: (materialIds: string[]) => void;
+  /** Empty materialIds = practice everything. */
+  onStart: (payload: FreePracticeStart) => void;
   onCancel: () => void;
 }) {
   const t = useT();
@@ -56,7 +71,13 @@ export function FreePracticePanel({
         const json = (await res.json()) as ScopeResponse;
         if (cancelled) return;
         setData(json);
-        setSelected(new Set(json.materials.map((m) => m.materialId)));
+        setSelected(
+          new Set(
+            allPickerLeafIds(
+              groupReviewPickerRows(json.materials.map(practiceScopeToPickerSource))
+            )
+          )
+        );
       } catch (e) {
         if (!cancelled) setError("Could not load your courses. Try again.");
         console.warn("[free-practice scope]", e);
@@ -69,9 +90,30 @@ export function FreePracticePanel({
     };
   }, []);
 
-  const materials = useMemo(() => data?.materials ?? [], [data]);
+  const groups = useMemo(
+    () =>
+      groupReviewPickerRows(
+        (data?.materials ?? []).map(practiceScopeToPickerSource)
+      ),
+    [data]
+  );
+  const allLeafIds = useMemo(() => allPickerLeafIds(groups), [groups]);
+  const selectedSession = useMemo(
+    () => pickerSelectionToSessionParams(groups, selected),
+    [groups, selected]
+  );
+  const selectedQuestionTotal = useMemo(
+    () => visibleDueForLeaves(groups, selected, "both"),
+    [groups, selected]
+  );
+  const selectedCourseCount = useMemo(
+    () => selectedGroupCount(groups, selected),
+    [groups, selected]
+  );
+  const allSelected =
+    allLeafIds.length > 0 && allLeafIds.every((id) => selected.has(id));
 
-  const toggle = (id: string) =>
+  const toggleLeaf = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -79,18 +121,20 @@ export function FreePracticePanel({
       return next;
     });
 
-  const selectedList = useMemo(
-    () => materials.filter((m) => selected.has(m.materialId)),
-    [materials, selected]
-  );
-  const selectedQuestionTotal = useMemo(
-    () => selectedList.reduce((n, m) => n + m.total, 0),
-    [selectedList]
-  );
-  const allSelected = materials.length > 0 && selected.size === materials.length;
+  const toggleGroup = (group: (typeof groups)[number]) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allOn = group.leafIds.every((id) => next.has(id));
+      for (const id of group.leafIds) {
+        if (allOn) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  };
 
   const confirmDeleteSelected = async () => {
-    const items = materials.filter((m) => selected.has(m.materialId));
+    const items = deleteItemsForSelection(groups, selected);
     if (items.length === 0) {
       setPendingDelete(false);
       return;
@@ -98,12 +142,7 @@ export function FreePracticePanel({
     setDeleting(true);
     setDeleteError(null);
     try {
-      const result = await deleteReviewMaterials(
-        items.map((m) => ({
-          materialId: m.materialId,
-          courseId: m.courseId,
-        }))
-      );
+      const result = await deleteReviewMaterials(items);
       if (result.failed > 0) {
         setDeleteError(t.review.deleteSelectedError);
       }
@@ -113,7 +152,13 @@ export function FreePracticePanel({
       if (res.ok) {
         const json = (await res.json()) as ScopeResponse;
         setData(json);
-        setSelected(new Set(json.materials.map((m) => m.materialId)));
+        setSelected(
+          new Set(
+            allPickerLeafIds(
+              groupReviewPickerRows(json.materials.map(practiceScopeToPickerSource))
+            )
+          )
+        );
       }
     } catch {
       setDeleteError(t.review.deleteSelectedError);
@@ -144,7 +189,7 @@ export function FreePracticePanel({
           Free practice ignores the review schedule and re-serves questions
           you&apos;ve already tried — quiz questions you&apos;ve answered plus
           your saved focus cards — so you drill familiar material instead of
-          brand-new questions. Pick the courses you want to cram.
+          brand-new questions. Pick a whole course or a specific note.
         </p>
       </header>
 
@@ -154,7 +199,7 @@ export function FreePracticePanel({
         </p>
       ) : error ? (
         <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-      ) : materials.length === 0 ? (
+      ) : groups.length === 0 ? (
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
           Nothing to practice yet. Once you&apos;ve answered some quiz
           questions or saved focus cards, they&apos;ll show up here to drill.
@@ -163,18 +208,14 @@ export function FreePracticePanel({
         <>
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              {materials.length} course{materials.length === 1 ? "" : "s"} ·{" "}
+              {groups.length} course{groups.length === 1 ? "" : "s"} ·{" "}
               {data?.totals.total ?? 0} questions total
             </span>
             <div className="flex items-center gap-3">
               <button
                 type="button"
                 onClick={() =>
-                  setSelected(
-                    allSelected
-                      ? new Set()
-                      : new Set(materials.map((m) => m.materialId))
-                  )
+                  setSelected(allSelected ? new Set() : new Set(allLeafIds))
                 }
                 className="text-xs font-medium text-brand hover:text-brand-hover dark:text-brand-soft"
               >
@@ -200,77 +241,33 @@ export function FreePracticePanel({
             </p>
           ) : null}
 
-          <ul className="max-h-[22rem] overflow-y-auto rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-            {materials.map((m, idx) => {
-              const checked = selected.has(m.materialId);
-              return (
-                <li
-                  key={m.materialId}
-                  className={`flex items-center gap-3 px-4 py-3 sm:px-5 ${
-                    idx === materials.length - 1
-                      ? ""
-                      : "border-b border-zinc-100 dark:border-zinc-900"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggle(m.materialId)}
-                    className="h-4 w-4 shrink-0 cursor-pointer rounded border-zinc-300 text-brand focus:ring-brand"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                      {isNotesFocusBucketId(m.materialId)
-                        ? m.courseTitle && m.courseTitle !== "Notes"
-                          ? m.courseTitle
-                          : m.fileName || t.review.notesFocusDeck
-                        : (m.courseTitle ?? m.fileName)}
-                    </p>
-                    {isNotesFocusBucketId(m.materialId) &&
-                    m.courseTitle &&
-                    m.courseTitle !== "Notes" ? (
-                      <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
-                        {m.fileName}
-                      </p>
-                    ) : m.courseTitle && m.courseTitle !== m.fileName ? (
-                      <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
-                        {m.fileName}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2 text-xs tabular-nums">
-                    {m.personalQuestions > 0 ? (
-                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-                        +{m.personalQuestions} focus
-                      </span>
-                    ) : null}
-                    <span className="font-semibold text-zinc-900 dark:text-zinc-100">
-                      {m.total}
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+          <ReviewPickerList
+            groups={groups}
+            selectedIds={selected}
+            onToggleLeaf={toggleLeaf}
+            onToggleGroup={toggleGroup}
+            showModulePills
+            maxHeightClass="max-h-[22rem] overflow-y-auto"
+          />
 
           <div className="sticky bottom-4 z-10 flex flex-col gap-2 sm:flex-row sm:items-center">
             <button
               type="button"
-              onClick={() => onStart(selectedList.map((m) => m.materialId))}
-              disabled={selectedList.length === 0}
+              onClick={() => onStart(selectedSession)}
+              disabled={selectedSession.materialIds.length === 0}
               className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-emerald-600 px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-emerald-500 dark:hover:bg-emerald-600"
             >
               Start free practice
               <span className="opacity-90">
                 ({selectedQuestionTotal} question
                 {selectedQuestionTotal === 1 ? "" : "s"} from{" "}
-                {selectedList.length} course
-                {selectedList.length === 1 ? "" : "s"})
+                {selectedCourseCount} course
+                {selectedCourseCount === 1 ? "" : "s"})
               </span>
             </button>
             <button
               type="button"
-              onClick={() => onStart([])}
+              onClick={() => onStart({ materialIds: [] })}
               className="inline-flex items-center justify-center rounded-full border border-zinc-300 bg-white px-6 py-3.5 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-900"
             >
               Practice everything
@@ -282,9 +279,9 @@ export function FreePracticePanel({
       <ConfirmDialog
         open={pendingDelete}
         title={
-          selected.size === 1
+          selectedCourseCount === 1
             ? t.review.deleteSelectedTitleOne
-            : tf(t.review.deleteSelectedTitle, { count: selected.size })
+            : tf(t.review.deleteSelectedTitle, { count: selectedCourseCount })
         }
         confirmLabel={t.review.deleteSelected}
         confirmBusy={deleting}

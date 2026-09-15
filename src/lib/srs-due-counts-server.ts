@@ -5,6 +5,10 @@ import {
   isNotesFocusBucketId,
   notesFocusBucketId,
 } from "@/lib/notes/notes-focus-bucket";
+import {
+  addPersonalFocusCount,
+  finalizeFocusBuckets,
+} from "@/lib/srs-focus-buckets";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
 import type { CoursePayload } from "@/types/course";
@@ -40,39 +44,6 @@ function deriveCourseTitle(m: MaterialRow): string | null {
   if (!c) return null;
   if (Array.isArray(c)) return c[0]?.title ?? null;
   return c.title ?? null;
-}
-
-function ensureNotesBucket(
-  byMaterial: Map<string, SrsDueCounts["byMaterial"][number]>,
-  bucketId: string,
-  label: string | null,
-  meta?: {
-    courseId: string | null;
-    courseTitle: string | null;
-  }
-): SrsDueCounts["byMaterial"][number] {
-  let bucket = byMaterial.get(bucketId);
-  if (!bucket) {
-    bucket = {
-      materialId: bucketId,
-      fileName: label || "Focus questions",
-      courseId: meta?.courseId ?? null,
-      courseTitle: meta?.courseTitle ?? "Notes",
-      module: 0,
-      personal: 0,
-      total: 0,
-    };
-    byMaterial.set(bucketId, bucket);
-  } else {
-    if (label && bucket.fileName === "Focus questions") {
-      bucket.fileName = label;
-    }
-    if (meta?.courseTitle && bucket.courseTitle === "Notes") {
-      bucket.courseTitle = meta.courseTitle;
-      bucket.courseId = meta.courseId ?? bucket.courseId;
-    }
-  }
-  return bucket;
 }
 
 function ensureBucket(
@@ -233,13 +204,11 @@ export async function fetchSrsDueCountsForUser(
 
   const notesBucketIds = new Set<string>();
   for (const row of perRows ?? []) {
-    if (!row.material_id) {
-      notesBucketIds.add(
-        notesFocusBucketId(
-          typeof row.source_note_id === "string" ? row.source_note_id : null
-        )
-      );
-    }
+    notesBucketIds.add(
+      notesFocusBucketId(
+        typeof row.source_note_id === "string" ? row.source_note_id : null
+      )
+    );
   }
   const notesMeta = await hydrateNotesFocusBucketMeta(
     supabase,
@@ -248,38 +217,20 @@ export async function fetchSrsDueCountsForUser(
   );
 
   for (const row of perRows ?? []) {
-    const rawMid = row.material_id ? normId(row.material_id as string) : null;
-    if (rawMid && !byMaterial.has(rawMid) && !materialById.has(rawMid)) {
-      continue;
-    }
-    const bucketId = rawMid
-      ? rawMid
-      : notesFocusBucketId(
-          typeof row.source_note_id === "string" ? row.source_note_id : null
-        );
-    const meta = notesMeta.get(bucketId);
-    if (meta?.noteDeleted) continue;
-    const label =
-      meta?.fileName ??
-      (typeof row.source_label === "string" && row.source_label.trim()
-        ? row.source_label.trim()
-        : null);
-    const bucket = rawMid
-      ? ensureBucket(byMaterial, bucketId, null)
-      : ensureNotesBucket(byMaterial, bucketId, label, {
-          courseId: meta?.courseId ?? null,
-          courseTitle: meta?.courseTitle ?? null,
-        });
-    bucket.personal += 1;
+    addPersonalFocusCount(
+      byMaterial,
+      {
+        materialId: row.material_id ?? null,
+        sourceNoteId:
+          typeof row.source_note_id === "string" ? row.source_note_id : null,
+        sourceLabel:
+          typeof row.source_label === "string" ? row.source_label : null,
+      },
+      notesMeta
+    );
   }
 
-  let totalModule = 0;
-  let totalPersonal = 0;
-  for (const b of byMaterial.values()) {
-    b.total = b.module + b.personal;
-    totalModule += b.module;
-    totalPersonal += b.personal;
-  }
+  const { totalModule, totalPersonal } = finalizeFocusBuckets(byMaterial);
 
   return {
     total: totalModule + totalPersonal,

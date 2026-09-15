@@ -17,12 +17,14 @@ type PreviewState =
 
 type Props = {
   materialIds: string[];
+  noteIds?: string[];
   scope: "module" | "personal" | "both";
   onChanged?: () => void;
 };
 
 export function ReviewQuestionsPreview({
   materialIds,
+  noteIds,
   scope,
   onChanged,
 }: Props) {
@@ -31,7 +33,7 @@ export function ReviewQuestionsPreview({
   const [state, setState] = useState<PreviewState>({ status: "idle" });
   const [notice, setNotice] = useState<string | null>(null);
   const enabled = materialIds.length > 0;
-  const previewUrl = buildSrsSessionUrl({ scope, materialIds });
+  const previewUrl = buildSrsSessionUrl({ scope, materialIds, noteIds });
 
   async function loadQuestions() {
     setState({ status: "loading" });

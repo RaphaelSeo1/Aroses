@@ -60,6 +60,39 @@ export async function hydrateNotesFocusBucketMeta(
     return out;
   }
 
+  const courseTitleById = new Map<string, string>();
+  const courseIds = new Set<string>();
+  for (const raw of notes ?? []) {
+    if (typeof raw.course_id === "string" && raw.course_id) {
+      courseIds.add(raw.course_id);
+    }
+    const courses = raw.courses as
+      | { id: string; title: string | null }
+      | { id: string; title: string | null }[]
+      | null;
+    const courseRow = Array.isArray(courses) ? courses[0] : courses;
+    if (courseRow?.id && courseRow.title) {
+      courseTitleById.set(courseRow.id, courseRow.title);
+    }
+  }
+  const missingCourseIds = [...courseIds].filter((id) => !courseTitleById.has(id));
+  if (missingCourseIds.length > 0) {
+    const { data: courseRows, error: courseErr } = await supabase
+      .from("courses")
+      .select("id, title")
+      .in("id", missingCourseIds);
+    if (courseErr) {
+      console.error("[hydrateNotesFocusBucketMeta courses]", courseErr);
+    }
+    for (const row of courseRows ?? []) {
+      const title =
+        typeof row.title === "string" && row.title.trim() ? row.title.trim() : null;
+      if (typeof row.id === "string" && title) {
+        courseTitleById.set(row.id, title);
+      }
+    }
+  }
+
   for (const raw of notes ?? []) {
     const id = raw.id;
     const bucketId = notesFocusBucketId(id);
@@ -68,14 +101,18 @@ export async function hydrateNotesFocusBucketMeta(
       | { id: string; title: string | null }[]
       | null;
     const courseRow = Array.isArray(courses) ? courses[0] : courses;
+    const courseId =
+      typeof raw.course_id === "string"
+        ? raw.course_id
+        : (courseRow?.id ?? null);
     out.set(bucketId, {
       fileName:
         (typeof raw.title === "string" && raw.title.trim()) || "Notes",
-      courseId:
-        typeof raw.course_id === "string"
-          ? raw.course_id
-          : (courseRow?.id ?? null),
-      courseTitle: courseRow?.title ?? null,
+      courseId,
+      courseTitle:
+        (courseId ? courseTitleById.get(courseId) : null) ??
+        courseRow?.title ??
+        null,
       noteDeleted: Boolean((raw as { deleted_at?: unknown }).deleted_at),
     });
   }

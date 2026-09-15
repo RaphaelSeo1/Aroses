@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSrsSessionUrl } from "./srs-session-query";
+import { buildSrsSessionUrl } from "./srs-session-query.ts";
 
 test("builds the default review-session URL", () => {
   assert.equal(buildSrsSessionUrl({}), "/api/srs/session?scope=both");
@@ -13,6 +13,17 @@ test("includes dashboard selection and review type", () => {
       materialIds: ["material-a", "material-b"],
     }),
     "/api/srs/session?scope=personal&materialIds=material-a%2Cmaterial-b"
+  );
+});
+
+test("includes noteIds even when the list is empty", () => {
+  assert.equal(
+    buildSrsSessionUrl({
+      scope: "both",
+      materialIds: ["material-a"],
+      noteIds: [],
+    }),
+    "/api/srs/session?scope=both&materialIds=material-a&noteIds="
   );
 });
 

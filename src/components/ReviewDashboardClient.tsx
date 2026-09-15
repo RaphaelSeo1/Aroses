@@ -3,14 +3,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { FreePracticePanel } from "@/components/FreePracticePanel";
+import { ReviewPickerList } from "@/components/ReviewPickerList";
 import { ReviewQuestionsPreview } from "@/components/ReviewQuestionsPreview";
 import { ReviewSettingsPanel } from "@/components/ReviewSettingsPanel";
 import { SrsReviewLauncher } from "@/components/SrsReviewLauncher";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { deleteReviewMaterials } from "@/lib/review-delete-materials";
-import { useSrsDueCounts, type SrsDueByMaterial } from "@/lib/srs-due";
-import { isNotesFocusBucketId } from "@/lib/notes/notes-focus-bucket";
+import {
+  allPickerLeafIds,
+  deleteItemsForSelection,
+  groupReviewPickerRows,
+  pickerSelectionToSessionParams,
+  selectedGroupCount,
+  visibleDueForLeaves,
+} from "@/lib/review-picker";
+import { useSrsDueCounts } from "@/lib/srs-due";
 
 /**
  * Global Review dashboard.
@@ -48,44 +56,45 @@ export function ReviewDashboardClient() {
   const [sessionMode, setSessionMode] = useState<
     null | {
       materialIds: string[];
+      noteIds?: string[];
       scope: ReviewKind;
       kindBefore: ReviewKind;
       cram?: boolean;
     }
   >(null);
 
+  const materials = counts?.byMaterial ?? [];
+  const groups = useMemo(() => groupReviewPickerRows(materials), [materials]);
+  const allLeafIds = useMemo(() => allPickerLeafIds(groups), [groups]);
+
   // Preselect everything once counts arrive (matches the "all" default
   // from the spec; later we'll honor user_srs_prefs.default_dashboard_selection).
   const [didInitSelection, setDidInitSelection] = useState(false);
   useEffect(() => {
     if (didInitSelection || !counts) return;
-    setSelectedIds(
-      new Set(counts.byMaterial.filter((m) => m.total > 0).map((m) => m.materialId))
-    );
+    setSelectedIds(new Set(allPickerLeafIds(groupReviewPickerRows(counts.byMaterial))));
     setDidInitSelection(true);
   }, [counts, didInitSelection]);
 
-  const materials = counts?.byMaterial ?? [];
-  const selectedMaterials = useMemo(
-    () => materials.filter((m) => selectedIds.has(m.materialId)),
-    [materials, selectedIds]
+  const selectedSession = useMemo(
+    () => pickerSelectionToSessionParams(groups, selectedIds),
+    [groups, selectedIds]
   );
 
-  const visibleDueForSelection = useMemo(() => {
-    let n = 0;
-    for (const m of selectedMaterials) {
-      if (kind === "module") n += m.module;
-      else if (kind === "personal") n += m.personal;
-      else n += m.total;
-    }
-    return n;
-  }, [selectedMaterials, kind]);
+  const visibleDueForSelection = useMemo(
+    () => visibleDueForLeaves(groups, selectedIds, kind),
+    [groups, selectedIds, kind]
+  );
+  const selectedCourseCount = useMemo(
+    () => selectedGroupCount(groups, selectedIds),
+    [groups, selectedIds]
+  );
 
   const totalDue = counts?.total ?? 0;
   const moduleTotal = counts?.module ?? 0;
   const personalTotal = counts?.personal ?? 0;
 
-  const toggleMaterial = useCallback((id: string) => {
+  const toggleLeaf = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -94,11 +103,23 @@ export function ReviewDashboardClient() {
     });
   }, []);
 
+  const toggleGroup = useCallback((group: (typeof groups)[number]) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const allOn = group.leafIds.every((id) => next.has(id));
+      for (const id of group.leafIds) {
+        if (allOn) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
   const allSelected =
-    materials.length > 0 && selectedIds.size === materials.length;
+    allLeafIds.length > 0 && allLeafIds.every((id) => selectedIds.has(id));
 
   const confirmDeleteSelected = useCallback(async () => {
-    const items = materials.filter((m) => selectedIds.has(m.materialId));
+    const items = deleteItemsForSelection(groups, selectedIds);
     if (items.length === 0) {
       setPendingDelete(false);
       return;
@@ -106,12 +127,7 @@ export function ReviewDashboardClient() {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const result = await deleteReviewMaterials(
-        items.map((m) => ({
-          materialId: m.materialId,
-          courseId: m.courseId,
-        }))
-      );
+      const result = await deleteReviewMaterials(items);
       if (result.failed > 0) {
         setDeleteError(t.review.deleteSelectedError);
       }
@@ -123,21 +139,23 @@ export function ReviewDashboardClient() {
     } finally {
       setDeleting(false);
     }
-  }, [materials, selectedIds, refresh, t.review.deleteSelectedError]);
+  }, [groups, selectedIds, refresh, t.review.deleteSelectedError]);
 
   const startReview = useCallback(
     (overrides?: { all?: boolean }) => {
       const ids = overrides?.all
-        ? materials.filter((m) => m.total > 0).map((m) => m.materialId)
-        : selectedMaterials.map((m) => m.materialId);
-      if (ids.length === 0) return;
+        ? new Set(allLeafIds)
+        : selectedIds;
+      const params = pickerSelectionToSessionParams(groups, ids);
+      if (params.materialIds.length === 0) return;
       setSessionMode({
-        materialIds: ids,
+        materialIds: params.materialIds,
+        noteIds: params.noteIds,
         scope: overrides?.all ? "both" : kind,
         kindBefore: kind,
       });
     },
-    [materials, selectedMaterials, kind]
+    [allLeafIds, selectedIds, groups, kind]
   );
 
   // Free practice: cram cards ignoring the spaced-repetition schedule. Lets the
@@ -145,10 +163,11 @@ export function ReviewDashboardClient() {
   // tells the session API to pull from every owned course; passing a subset
   // limits the cram to the courses they picked.
   const startPractice = useCallback(
-    (materialIds: string[] = []) => {
+    (payload: { materialIds?: string[]; noteIds?: string[] } = {}) => {
       setChoosingPractice(false);
       setSessionMode({
-        materialIds,
+        materialIds: payload.materialIds ?? [],
+        noteIds: payload.noteIds,
         scope: "both",
         kindBefore: kind,
         cram: true,
@@ -174,8 +193,9 @@ export function ReviewDashboardClient() {
         <SrsReviewLauncher
           scope={sessionMode.scope}
           materialIds={sessionMode.materialIds}
+          noteIds={sessionMode.noteIds}
           cram={sessionMode.cram}
-          sessionKey={`global-${sessionMode.materialIds.slice(0, 4).join(",")}-${sessionMode.scope}${sessionMode.cram ? "-cram" : ""}`}
+          sessionKey={`global-${sessionMode.materialIds.slice(0, 4).join(",")}-${sessionMode.noteIds?.slice(0, 4).join(",") ?? ""}-${sessionMode.scope}${sessionMode.cram ? "-cram" : ""}`}
           heading={
             sessionMode.cram ? t.review.freePractice : t.review.globalReview
           }
@@ -198,7 +218,7 @@ export function ReviewDashboardClient() {
   if (choosingPractice) {
     return (
       <FreePracticePanel
-        onStart={(ids) => startPractice(ids)}
+        onStart={(payload) => startPractice(payload)}
         onCancel={() => setChoosingPractice(false)}
       />
     );
@@ -339,11 +359,7 @@ export function ReviewDashboardClient() {
             <button
               type="button"
               onClick={() =>
-                setSelectedIds(
-                  allSelected
-                    ? new Set()
-                    : new Set(materials.map((m) => m.materialId))
-                )
+                setSelectedIds(allSelected ? new Set() : new Set(allLeafIds))
               }
               className="text-xs font-medium text-brand hover:text-brand-hover dark:text-brand-soft"
             >
@@ -369,25 +385,12 @@ export function ReviewDashboardClient() {
           </p>
         ) : null}
 
-        <ul className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-          {materials.length === 0 ? (
-            <li className="px-4 py-5 text-sm text-zinc-500 dark:text-zinc-400">
-              {t.review.noCoursesYet}
-            </li>
-          ) : (
-            materials.map((m, idx) => (
-              <CourseRow
-                key={m.materialId}
-                material={m}
-                checked={selectedIds.has(m.materialId)}
-                disabled={false}
-                caughtUp={m.total === 0}
-                onToggle={() => toggleMaterial(m.materialId)}
-                isLast={idx === materials.length - 1}
-              />
-            ))
-          )}
-        </ul>
+        <ReviewPickerList
+          groups={groups}
+          selectedIds={selectedIds}
+          onToggleLeaf={toggleLeaf}
+          onToggleGroup={toggleGroup}
+        />
       </div>
 
       {/* Type filter ----------------------------------------------- */}
@@ -420,10 +423,9 @@ export function ReviewDashboardClient() {
       </div>
 
       <ReviewQuestionsPreview
-        key={`${kind}:${selectedMaterials
-          .map((material) => material.materialId)
-          .join(",")}`}
-        materialIds={selectedMaterials.map((material) => material.materialId)}
+        key={`${kind}:${selectedSession.materialIds.join(",")}:${selectedSession.noteIds?.join(",") ?? ""}`}
+        materialIds={selectedSession.materialIds}
+        noteIds={selectedSession.noteIds}
         scope={kind}
         onChanged={refresh}
       />
@@ -436,16 +438,16 @@ export function ReviewDashboardClient() {
         <button
           type="button"
           onClick={() => startReview()}
-          disabled={visibleDueForSelection === 0 || selectedMaterials.length === 0}
+          disabled={visibleDueForSelection === 0 || selectedCourseCount === 0}
           className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand px-6 py-3.5 text-base font-semibold text-white shadow-lg shadow-red-600/25 hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-brand dark:hover:bg-brand-soft"
         >
           {t.review.startReview}
           <span className="opacity-90">
-            {visibleDueForSelection === 1 && selectedMaterials.length === 1
+            {visibleDueForSelection === 1 && selectedCourseCount === 1
               ? t.review.startReviewDetailOne
               : tf(t.review.startReviewDetail, {
                   count: visibleDueForSelection,
-                  courses: selectedMaterials.length,
+                  courses: selectedCourseCount,
                 })}
           </span>
         </button>
@@ -454,9 +456,9 @@ export function ReviewDashboardClient() {
       <ConfirmDialog
         open={pendingDelete}
         title={
-          selectedIds.size === 1
+          selectedCourseCount === 1
             ? t.review.deleteSelectedTitleOne
-            : tf(t.review.deleteSelectedTitle, { count: selectedIds.size })
+            : tf(t.review.deleteSelectedTitle, { count: selectedCourseCount })
         }
         confirmLabel={t.review.deleteSelected}
         confirmBusy={deleting}
@@ -468,109 +470,5 @@ export function ReviewDashboardClient() {
         {t.review.deleteSelectedWarning}
       </ConfirmDialog>
     </section>
-  );
-}
-
-function CourseRow({
-  material,
-  checked,
-  disabled,
-  caughtUp,
-  onToggle,
-  isLast,
-}: {
-  material: SrsDueByMaterial;
-  checked: boolean;
-  disabled: boolean;
-  caughtUp: boolean;
-  onToggle: () => void;
-  isLast: boolean;
-}) {
-  const t = useT();
-  return (
-    <li
-      className={`flex items-center gap-3 px-4 py-3 sm:px-5 ${
-        isLast ? "" : "border-b border-zinc-100 dark:border-zinc-900"
-      } ${caughtUp ? "bg-zinc-50/50 dark:bg-zinc-900/30" : ""}`}
-    >
-      <input
-        type="checkbox"
-        checked={!disabled && checked}
-        disabled={disabled}
-        onChange={onToggle}
-        className="h-4 w-4 shrink-0 cursor-pointer rounded border-zinc-300 text-brand focus:ring-brand disabled:cursor-not-allowed disabled:opacity-50"
-      />
-      <div className="min-w-0 flex-1">
-        <p
-          className={`truncate text-sm font-medium ${
-            caughtUp
-              ? "text-zinc-500 dark:text-zinc-500"
-              : "text-zinc-900 dark:text-zinc-100"
-          }`}
-        >
-          {isNotesFocusBucketId(material.materialId)
-            ? material.courseTitle &&
-              material.courseTitle !== "Notes"
-              ? material.courseTitle
-              : material.fileName || t.review.notesFocusDeck
-            : (material.courseTitle ?? material.fileName)}
-        </p>
-        {isNotesFocusBucketId(material.materialId) &&
-        material.courseTitle &&
-        material.courseTitle !== "Notes" ? (
-          <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
-            {material.fileName}
-          </p>
-        ) : material.courseTitle && material.courseTitle !== material.fileName ? (
-          <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
-            {material.fileName}
-          </p>
-        ) : null}
-      </div>
-      <div className="flex shrink-0 items-center gap-2 text-xs tabular-nums">
-        {caughtUp ? (
-          <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-            {t.review.allCaughtUpPill}
-          </span>
-        ) : (
-          <>
-            <Pill label={t.review.moduleLabel} value={material.module} tone="brand" />
-            <Pill label={t.review.focusLabel} value={material.personal} tone="zinc" />
-            <span className="ml-1 font-semibold text-zinc-900 dark:text-zinc-100">
-              {material.total}
-            </span>
-          </>
-        )}
-      </div>
-    </li>
-  );
-}
-
-function Pill({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone: "brand" | "zinc";
-}) {
-  if (value === 0) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500">
-        {label} 0
-      </span>
-    );
-  }
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium ${
-        tone === "brand"
-          ? "bg-brand-blush text-brand-ink dark:bg-brand-blush/15 dark:text-brand-soft"
-          : "bg-zinc-100 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
-      }`}
-    >
-      {label} {value}
-    </span>
   );
 }
