@@ -11,6 +11,7 @@ import { buildIngestChunks, type IngestChunk } from "@/lib/study-ingest/chunking
 import { extractSourceImagesFromBuffer } from "@/lib/study-ingest/source-images/extract-from-buffer";
 import type { IngestSourceImageRecord } from "@/lib/study-ingest/source-images/types";
 import { uploadIngestSourceImages } from "@/lib/study-ingest/source-images/upload";
+import { sumSourcePageUnits } from "@/lib/billing/source-page-units";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 
 const DL_DELAYS_MS = [1_500, 3_000, 6_000];
@@ -24,6 +25,8 @@ export type IngestSourceFileRef = {
 export type JobExtractSuccess = {
   text: string;
   numpages: number;
+  /** Normalized source-page equivalents across EVERY file in the job. */
+  sourcePageUnits: number;
   skippedMiddle: boolean;
   retainStorage: boolean;
   ingestMedia: {
@@ -268,7 +271,18 @@ export async function extractContentForIngestJob(input: {
       .join("\n\n");
   }
 
-  const pdfMeta = extractedParts.find((p) => p.meta.kind === "pdf")?.meta;
+  const pdfPages = extractedParts.reduce((sum, p) => {
+    if (p.meta.kind !== "pdf") return sum;
+    return sum + Math.max(0, p.meta.pageCount ?? 0);
+  }, 0);
+  const sourcePageUnits = sumSourcePageUnits(
+    extractedParts.map((p) => ({
+      kind: p.meta.kind,
+      pageCount: p.meta.pageCount,
+      slideCount: p.meta.slideCount,
+      wordCount: p.meta.wordCount,
+    }))
+  );
   const skippedMiddle = extractedParts.some(
     (p) => p.meta.kind === "pdf" && p.meta.skippedMiddle === true
   );
@@ -285,7 +299,8 @@ export async function extractContentForIngestJob(input: {
   return {
     text: textForCourse,
     chunks,
-    numpages: pdfMeta?.pageCount ?? 0,
+    numpages: pdfPages,
+    sourcePageUnits,
     skippedMiddle,
     retainStorage,
     ingestMedia: mediaMeta,

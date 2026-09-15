@@ -62,6 +62,13 @@ import {
 } from "@/lib/live-notes/notes-emphasis";
 import { formatSelfStudyGenerationBlock } from "@/lib/self-study-context";
 import { splitCombinedSourceBlocks } from "@/lib/study-ingest/combine";
+import {
+  buildProfileForDepth,
+  depthInstructionBlock,
+  depthOutlineCoverageHint,
+  type CourseBuildProfile,
+} from "@/lib/ai/generation-depth-config";
+import { getGenerationDepthContext } from "@/lib/ai/generation-depth-context";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
@@ -81,13 +88,10 @@ export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
  * PDF ingest uses a **chunked** pipeline (outline in `runPdfIngestJob`, then one module per
  * `POST /api/process-pdf/expand`) so each invocation stays within the serverless wall clock.
  *
- * **Default `express`**: Haiku, tight caps — targets **~2–5 minutes** for a typical lecture PDF
- * (network + model latency vary; huge decks may exceed). Use `COURSE_BUILD_PROFILE=fast`,
- * `balanced`, or `full` for richer, slower output. `balanced` defaults are tuned to stay a bit
- * richer than `fast` without the old “~2× wall-clock” gap (see module/outline retries and caps).
- * `ANTHROPIC_COURSE_MODEL` overrides models.
+ * **Default** follows the user's snapshotted plan depth (Essential→express …
+ * Maximum→full). `COURSE_BUILD_PROFILE` remains a developer/test override when
+ * no job depth is in context (legacy jobs).
  */
-type CourseBuildProfile = "express" | "fast" | "balanced" | "full";
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -195,17 +199,14 @@ function clampInt(n: number, min: number, max: number): number {
 }
 
 function resolveCourseBuildProfile(): CourseBuildProfile {
+  const depth = getGenerationDepthContext();
+  if (depth) return buildProfileForDepth(depth);
   const p = process.env.COURSE_BUILD_PROFILE?.trim().toLowerCase();
   if (p === "full") return "full";
   if (p === "balanced") return "balanced";
   if (p === "fast") return "fast";
   if (p === "express") return "express";
-  // Default when COURSE_BUILD_PROFILE is unset (e.g. production without the env
-  // var): `balanced` (Haiku) — cheaper and faster than `full` (Sonnet) while
-  // still producing genuinely in-depth, multi-module courses. The balanced
-  // depth knobs below (material chars, module/lesson caps, coverage prompt) are
-  // tuned up from stock so large PDFs keep near-`full` coverage. Set
-  // COURSE_BUILD_PROFILE=full to restore the Sonnet deep build.
+  // Legacy jobs / tests without a snapshotted depth.
   return "balanced";
 }
 
@@ -649,16 +650,18 @@ async function sleep(ms: number) {
  * this just tells the outliner to map every section/heading to a module/lesson.
  */
 function outlineCoverageBlock(profile: CourseBuildProfile): string {
+  const depth = getGenerationDepthContext();
+  const depthHint = depth ? `${depthOutlineCoverageHint(depth)}\n` : "";
   if (profile === "express") {
-    return "COVERAGE: Map **every major section/heading** in the excerpt to its own lesson_title — do not merge unrelated topics. Use enough modules to cover the full deck.";
+    return `${depthHint}COVERAGE: Map **every major section/heading** in the excerpt to its own lesson_title — do not merge unrelated topics. Use enough modules to cover the full deck. Never omit foundational concepts.`;
   }
   if (profile === "fast") {
-    return "COVERAGE: Map obvious sections in this excerpt to modules; stay within the caps above.";
+    return `${depthHint}COVERAGE: Map obvious sections in this excerpt to modules; stay within the caps above. Never omit foundational concepts.`;
   }
   if (profile === "balanced") {
-    return "COVERAGE: Plan modules + lesson_titles that together map **every section, heading, and distinct topic across the whole document** — first page to last. Walk it end to end using the headings to infer structure; do not plan only for the opening pages. Later pages and the document middle each need their own modules/lessons.";
+    return `${depthHint}COVERAGE: Plan modules + lesson_titles that together map **every section, heading, and distinct topic across the whole document** — first page to last. Walk it end to end using the headings to infer structure; do not plan only for the opening pages. Later pages and the document middle each need their own modules/lessons.`;
   }
-  return `COVERAGE (critical): Plan modules + lesson_titles that together **map every section, heading, and distinct topic across the entire document** — first page to last. The material below is the **full document** unless it is extremely large. Walk it end to end; do not plan only for the opening pages and stop. Later pages and the document middle each need their own modules/lessons. Full lesson bodies are written from the same source later.`;
+  return `${depthHint}COVERAGE (critical): Plan modules + lesson_titles that together **map every section, heading, and distinct topic across the entire document** — first page to last. The material below is the **full document** unless it is extremely large. Walk it end to end; do not plan only for the opening pages and stop. Later pages and the document middle each need their own modules/lessons. Full lesson bodies are written from the same source later.`;
 }
 
 /**
@@ -703,10 +706,14 @@ function administrativeContentExclusionRules(): string {
  * `tableAndDataFidelityRules`).
  */
 function lessonGenerationSpec(): string {
-  return `You convert source teaching material into self-contained study lessons. The source may be slides, a lecture transcript, a textbook page, an article, or a mix. Your job is to preserve everything teachable in the source and expand it into prose a student can learn from WITHOUT the original.
+  const depth = getGenerationDepthContext();
+  const depthBlock = depth
+    ? `\n\nThe COURSE DEPTH block governs enrichment, examples, synthesis, and secondary coverage. Accuracy and source fidelity remain mandatory.\n${depthInstructionBlock(depth)}`
+    : "";
+  return `You convert source teaching material into self-contained study lessons. The source may be slides, a lecture transcript, a textbook page, an article, or a mix. Your job is to preserve everything teachable in the source that this course depth requires, and expand it into prose a student can learn from WITHOUT the original.
 
 COVERAGE — the core rule:
-Every concept, distinction, mechanism, worked example, named entity, framework, and cause→effect explanation in the source must appear in the lessons. Do not drop material because it is hard to phrase, buried in a messy transcript, or only stated once. If the source teaches it, the lesson keeps it.
+Every concept, distinction, mechanism, worked example, named entity, framework, and cause→effect explanation in the source that this depth calls for must appear in the lessons. Do not drop foundational material because it is hard to phrase, buried in a messy transcript, or only stated once. If the source teaches a core idea, the lesson keeps it.
 
 Treat ALL sources as equal in weight. A rambling spoken transcript carries as much teachable content as a clean slide — often more. Do NOT favor neatly formatted sources over messy ones. The connective reasoning a lecturer says out loud is usually the most valuable content and the easiest to lose. Mine every source as hard as the cleanest one.
 
@@ -715,7 +722,7 @@ NON-REDUNDANCY — teach each thing exactly ONCE:
 - A brief one-line recap or an explicit back-reference ("as covered earlier in the section on X") is fine, but do NOT re-derive, re-define, or re-explain in depth material already taught earlier.
 - Across modules and lessons, build on earlier coverage instead of repeating it: each later lesson must add NEW material, not restate a prior lesson's explanation. If two planned lessons would cover the same idea, teach it fully in the first and only reference it from the second.
 - Within a single lesson, present each point once; never restate the same explanation in different words later in the same lesson.
-- This does NOT weaken COVERAGE: still cover EVERYTHING the source teaches — but each distinct thing ONCE, in its best location.
+- This does NOT weaken COVERAGE: still cover what the depth requires — but each distinct thing ONCE, in its best location.
 
 WHAT TO KEEP:
 - definitions and the distinctions between similar terms
@@ -750,7 +757,7 @@ OUTPUT per lesson — map onto the lesson JSON object the system consumes:
 - "key_terms" (DISCRETIONARY — no fixed count; judge from the source): an array of { "term", "definition" } objects. Include a key term ONLY when it is a distinct, important term the source introduces and defines or uses meaningfully — typically a named concept, technique, drug, formula, or field-specific vocabulary a student would study. Add as many as the material genuinely warrants — that may be ZERO for a lesson with no notable terminology. Do NOT pad with trivial or common words (e.g. "cell", "energy", "important", "example", "overview"), do NOT hit a quota, and never invent terms not grounded in the source. An empty key_terms array is valid and is preferred over filler. For Latin-script terms, capitalize properly (Title Case for multi-word terms; keep standard acronyms like DNA, HIV, ATP as uppercase). Do not leave ordinary English terms in all-lowercase.
 - "examples" (aim for AT LEAST 1–2 per lesson): concrete real-world examples that help a student understand the concept. PREFER the source's own specific example whenever it provides one, keeping its actual details. When the source gives NO example, you MAY add a brief, clearly illustrative real-world example of your own that correctly illustrates the concept. GUARDRAIL: an added example must be a GENERIC illustrative scenario only — it must NOT invent source-specific facts, figures, numbers, named cases, doses, or data, and must NOT contradict the source; the lesson's core facts and figures stay strictly source-faithful. NEVER output a placeholder string like "real world example 1" or "Clinical scenario…" — every example must be a real, substantive illustration. Output an array of example strings.
 
-Before finishing, check each distinct teachable point in the source against your lessons. If anything in the source isn't covered, add it. Also confirm every lesson's "content" is real teaching prose (not empty or key-terms-only), that each concept is taught in depth only once, and that each lesson carries at least one helpful real-world example.`;
+Before finishing, check each distinct teachable point in the source against your lessons. If anything in the source isn't covered, add it. Also confirm every lesson's "content" is real teaching prose (not empty or key-terms-only), that each concept is taught in depth only once, and that each lesson carries at least one helpful real-world example.${depthBlock}`;
 }
 
 /**

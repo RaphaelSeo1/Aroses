@@ -84,12 +84,14 @@ const en = {
   planUsageTitle: "Your plan",
   planUsageUpgrade: "Upgrade",
   planUsageViewPlans: "View plans",
-  planUsageCourses: "Courses",
+  planUsageCourses: "AI Course Generations",
+  planUsageSourcePages: "Source Pages",
   planUsageVoice: "Voice tutoring",
   planUsageRecordings: "Lecture recordings",
   planUsageOf: "{used} / {cap}",
   planUsageUnlimited: "{used} / Unlimited",
   planUsageMinutes: "{used} / {cap} min",
+  planUsageResets: "Resets {date}",
   recordLectureTitle: "Record a lecture",
   recordLectureDesc:
     "Capture a live class with tab, system, or mic audio — Rose writes notes as you go.",
@@ -149,6 +151,8 @@ const en = {
   deleteCourseTitle: "Delete this course?",
   deleteCourseWarning:
     "will be permanently deleted, along with all uploads, sections, generated lessons, quizzes, and progress.",
+  deleteCourseUsageNote:
+    "Deleting this course will not restore AI generation or source-page usage from this billing period.",
   cannotBeUndone: "This cannot be undone.",
   cancel: "Cancel",
   deleting: "Deleting…",
@@ -335,12 +339,14 @@ const ko: typeof en = {
   planUsageTitle: "내 요금제",
   planUsageUpgrade: "업그레이드",
   planUsageViewPlans: "요금제 보기",
-  planUsageCourses: "코스",
+  planUsageCourses: "AI 코스 생성",
+  planUsageSourcePages: "소스 페이지",
   planUsageVoice: "음성 튜터링",
   planUsageRecordings: "강의 녹음",
   planUsageOf: "{used} / {cap}",
   planUsageUnlimited: "{used} / 무제한",
   planUsageMinutes: "{used} / {cap}분",
+  planUsageResets: "{date}에 초기화",
   recordLectureTitle: "강의 녹음",
   recordLectureDesc:
     "탭·시스템·마이크 오디오로 수업을 캡처하면 Rose가 실시간으로 노트를 작성해요.",
@@ -400,6 +406,8 @@ const ko: typeof en = {
   deleteCourseTitle: "이 코스를 삭제할까요?",
   deleteCourseWarning:
     "코스가 모든 업로드, 섹션, 생성된 레슨, 퀴즈, 진행 상황과 함께 영구 삭제돼요.",
+  deleteCourseUsageNote:
+    "코스를 삭제해도 이번 결제 주기의 AI 생성·소스 페이지 사용량은 되돌리지 않아요.",
   cannotBeUndone: "이 작업은 되돌릴 수 없어요.",
   cancel: "취소",
   deleting: "삭제 중…",

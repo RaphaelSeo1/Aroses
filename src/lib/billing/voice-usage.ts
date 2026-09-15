@@ -1,6 +1,7 @@
 import "server-only";
 import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
+import { resolveBillingPeriod } from "@/lib/billing/billing-period";
 import { getUserSubscription } from "@/lib/billing/subscription";
 import { voiceCapSeconds, type PlanTier } from "@/lib/billing/plans";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -42,29 +43,13 @@ export type VoiceAllowance = {
   unlimited: boolean;
 };
 
-/**
- * Billing-period anchor for usage. Paid users reset on Stripe's
- * current_period_start; free users reset on the 1st of the calendar month (UTC).
- */
 function resolvePeriod(sub: {
   tier: PlanTier;
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
 }): { start: Date; end: string | null } {
-  if (sub.tier !== "free" && sub.currentPeriodStart) {
-    const start = new Date(sub.currentPeriodStart);
-    if (!Number.isNaN(start.getTime())) {
-      return { start, end: sub.currentPeriodEnd };
-    }
-  }
-  const now = new Date();
-  const start = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0)
-  );
-  const end = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0)
-  );
-  return { start, end: end.toISOString() };
+  const period = resolveBillingPeriod(sub);
+  return { start: period.start, end: period.endIso };
 }
 
 /** Check whether the user may use voice right now (reads usage, doesn't mutate). */

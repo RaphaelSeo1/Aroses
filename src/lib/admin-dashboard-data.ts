@@ -212,7 +212,7 @@ export type AdminUserRow = {
   displayName: string | null;
   username: string | null;
   onboardingCompletedAt: string | null;
-  planTier: "free" | "student" | "advanced" | "premium";
+  planTier: "free" | "basic" | "student" | "plus" | "advanced" | "premium";
   planStatus: string;
   planAdminGranted: boolean;
 };
@@ -325,7 +325,9 @@ export async function fetchAdminUserDirectory(
     const email = typeof u.email === "string" ? u.email.trim() : "";
     const tierRaw = (sub?.tier ?? "free").toLowerCase();
     const planTier =
+      tierRaw === "basic" ||
       tierRaw === "student" ||
+      tierRaw === "plus" ||
       tierRaw === "advanced" ||
       tierRaw === "premium"
         ? tierRaw

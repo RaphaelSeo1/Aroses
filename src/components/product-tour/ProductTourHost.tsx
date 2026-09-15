@@ -18,7 +18,7 @@ import {
 } from "@/lib/billing/paid-access";
 import {
   CHECKOUT_PLAN_ORDER,
-  PLANS,
+  formatUsdAmount,
   isPaidTier,
   type PlanTier,
 } from "@/lib/billing/plans";
@@ -29,6 +29,7 @@ import {
 } from "@/lib/billing/sale";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
+import type { Dictionary } from "@/locales";
 import { configuredTourCourseId } from "@/lib/product-tour/bio-1a";
 import {
   buildProductTourSteps,
@@ -53,71 +54,66 @@ const TOOLTIP_EST_HEIGHT = 230;
 type Rect = { top: number; left: number; width: number; height: number };
 
 function planCardCopy(
-  billing: {
-    planFree: string;
-    planStudent: string;
-    planAdvanced: string;
-    planPremium: string;
-    planFreeTag: string;
-    planStudentTag: string;
-    planAdvancedTag: string;
-    planPremiumTag: string;
-    planFreeHighlight1: string;
-    planFreeHighlight2: string;
-    planFreeHighlight3: string;
-    planStudentHighlight1: string;
-    planStudentHighlight2: string;
-    planStudentHighlight3: string;
-    planAdvancedHighlight1: string;
-    planAdvancedHighlight2: string;
-    planAdvancedHighlight3: string;
-    planPremiumHighlight1: string;
-    planPremiumHighlight2: string;
-    planPremiumHighlight3: string;
-  },
+  billing: Dictionary["billing"],
   tier: PlanTier
 ) {
-  if (tier === "free") {
-    return {
-      name: billing.planFree,
-      tagline: billing.planFreeTag,
-      highlights: [
-        billing.planFreeHighlight1,
-        billing.planFreeHighlight2,
-        billing.planFreeHighlight3,
-      ],
-    };
-  }
-  if (tier === "student") {
-    return {
-      name: billing.planStudent,
-      tagline: billing.planStudentTag,
-      highlights: [
-        billing.planStudentHighlight1,
-        billing.planStudentHighlight2,
-        billing.planStudentHighlight3,
-      ],
-    };
-  }
-  if (tier === "advanced") {
-    return {
-      name: billing.planAdvanced,
-      tagline: billing.planAdvancedTag,
-      highlights: [
-        billing.planAdvancedHighlight1,
-        billing.planAdvancedHighlight2,
-        billing.planAdvancedHighlight3,
-      ],
-    };
-  }
-  return {
-    name: billing.planPremium,
-    tagline: billing.planPremiumTag,
-    highlights: [
+  const names: Record<PlanTier, string> = {
+    free: billing.planFree,
+    basic: billing.planBasic,
+    student: billing.planStudent,
+    plus: billing.planPlus,
+    advanced: billing.planAdvanced,
+    premium: billing.planPremium,
+  };
+  const taglines: Record<PlanTier, string> = {
+    free: billing.planFreeTag,
+    basic: billing.planBasicTag,
+    student: billing.planStudentTag,
+    plus: billing.planPlusTag,
+    advanced: billing.planAdvancedTag,
+    premium: billing.planPremiumTag,
+  };
+  const highlights: Record<PlanTier, string[]> = {
+    free: [
+      billing.planFreeHighlight1,
+      billing.planFreeHighlight2,
+      billing.planFreeHighlight3,
+    ],
+    basic: [
+      billing.planBasicHighlight1,
+      billing.planBasicHighlight2,
+      billing.planBasicHighlight3,
+      billing.planBasicHighlight5,
+    ],
+    student: [
+      billing.planStudentIncludes,
+      billing.planStudentHighlight1,
+      billing.planStudentHighlight2,
+      billing.planStudentHighlight5,
+    ],
+    plus: [
+      billing.planPlusIncludes,
+      billing.planPlusHighlight1,
+      billing.planPlusHighlight2,
+      billing.planPlusHighlight5,
+    ],
+    advanced: [
+      billing.planAdvancedIncludes,
+      billing.planAdvancedHighlight1,
+      billing.planAdvancedHighlight2,
+      billing.planAdvancedHighlight7,
+    ],
+    premium: [
+      billing.planPremiumIncludes,
       billing.planPremiumHighlight1,
       billing.planPremiumHighlight2,
-      billing.planPremiumHighlight3,
+      billing.planPremiumHighlight5,
     ],
+  };
+  return {
+    name: names[tier],
+    tagline: taglines[tier],
+    highlights: highlights[tier],
   };
 }
 
@@ -253,17 +249,15 @@ function UpgradePlanCards({
       <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
         {plansHeading}
       </p>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {CHECKOUT_PLAN_ORDER.map((tier) => {
-          const plan = PLANS[tier];
-          const price = plan.priceMonthly;
+          const charged = salePriceMonthly(tier);
           const wasPrice = compareAtPriceMonthly(tier);
           const showSale =
             isPaidTier(tier) &&
-            price > 0 &&
+            charged > 0 &&
             wasPrice != null &&
-            wasPrice > price;
-          const salePrice = showSale ? salePriceMonthly(tier) : price;
+            wasPrice > charged;
           const salePercent = showSale ? salePercentForTier(tier) : 0;
           const isBest = tier === "advanced";
           const { name, tagline, highlights } = planCardCopy(billing, tier);
@@ -300,15 +294,15 @@ function UpgradePlanCards({
                 {showSale ? (
                   <>
                     <span className="mr-1 text-sm font-medium text-zinc-400 line-through dark:text-zinc-500">
-                      ${wasPrice}
+                      ${formatUsdAmount(wasPrice)}
                     </span>
                     <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                      ${salePrice}
+                      ${formatUsdAmount(charged)}
                     </span>
                   </>
                 ) : (
                   <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                    ${price}
+                    ${formatUsdAmount(charged)}
                   </span>
                 )}
                 <span className="text-xs text-zinc-500 dark:text-zinc-400">

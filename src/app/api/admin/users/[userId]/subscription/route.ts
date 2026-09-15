@@ -6,14 +6,21 @@ import {
   adminSetUserSubscription,
   type AdminSubscriptionStatus,
 } from "@/lib/billing/subscription";
-import type { PlanTier } from "@/lib/billing/plans";
+import { parsePlanTier, type PlanTier } from "@/lib/billing/plans";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const TIERS = new Set<PlanTier>(["free", "student", "advanced", "premium"]);
+const TIERS = new Set<PlanTier>([
+  "free",
+  "basic",
+  "student",
+  "plus",
+  "advanced",
+  "premium",
+]);
 const STATUSES = new Set<string>(ADMIN_SUBSCRIPTION_STATUSES);
 
 type Params = { params: Promise<{ userId: string }> };
@@ -53,9 +60,12 @@ export async function POST(req: Request, ctx: Params) {
       ? String((body as { status: unknown }).status).trim().toLowerCase()
       : "";
 
-  if (!TIERS.has(tierRaw as PlanTier)) {
+  if (!parsePlanTier(tierRaw) || !TIERS.has(tierRaw as PlanTier)) {
     return NextResponse.json(
-      { error: "tier must be free, student, advanced, or premium." },
+      {
+        error:
+          "tier must be free, basic, student, plus, advanced, or premium.",
+      },
       { status: 400 }
     );
   }
@@ -114,7 +124,7 @@ export async function POST(req: Request, ctx: Params) {
       return NextResponse.json(
         {
           error:
-            "Database tier check is out of date (rejects a valid plan tier). Run migration 101_add_advanced_plan_tier.sql in the Supabase SQL editor, then retry.",
+            "Database tier check is out of date (rejects a valid plan tier). Run migration 110_subscription_generation_usage.sql in the Supabase SQL editor, then retry.",
         },
         { status: 500 }
       );

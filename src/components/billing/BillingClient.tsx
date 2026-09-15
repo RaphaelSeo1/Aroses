@@ -3,9 +3,10 @@
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  PLANS,
   CHECKOUT_PLAN_ORDER,
+  formatUsdAmount,
   isPaidTier,
+  voiceHours,
   type PlanTier,
 } from "@/lib/billing/plans";
 import {
@@ -20,38 +21,88 @@ import type { Dictionary } from "@/locales";
 function planStrings(t: Dictionary["billing"], tier: PlanTier) {
   const names: Record<PlanTier, string> = {
     free: t.planFree,
+    basic: t.planBasic,
     student: t.planStudent,
+    plus: t.planPlus,
     advanced: t.planAdvanced,
     premium: t.planPremium,
   };
   const taglines: Record<PlanTier, string> = {
     free: t.planFreeTag,
+    basic: t.planBasicTag,
     student: t.planStudentTag,
+    plus: t.planPlusTag,
     advanced: t.planAdvancedTag,
     premium: t.planPremiumTag,
   };
+  const includes: Record<PlanTier, string | null> = {
+    free: null,
+    basic: t.planBasicIncludes,
+    student: t.planStudentIncludes,
+    plus: t.planPlusIncludes,
+    advanced: t.planAdvancedIncludes,
+    premium: t.planPremiumIncludes,
+  };
   const highlights: Record<PlanTier, string[]> = {
     free: [t.planFreeHighlight1, t.planFreeHighlight2, t.planFreeHighlight3],
+    basic: [
+      t.planBasicHighlight1,
+      t.planBasicHighlight2,
+      t.planBasicHighlight3,
+      t.planBasicHighlight4,
+      t.planBasicHighlight5,
+      t.planBasicHighlight6,
+      t.planBasicHighlight7,
+      t.planBasicHighlight8,
+    ],
     student: [
       t.planStudentHighlight1,
       t.planStudentHighlight2,
       t.planStudentHighlight3,
+      t.planStudentHighlight4,
+      t.planStudentHighlight5,
+      t.planStudentHighlight6,
+    ],
+    plus: [
+      t.planPlusHighlight1,
+      t.planPlusHighlight2,
+      t.planPlusHighlight3,
+      t.planPlusHighlight4,
+      t.planPlusHighlight5,
+      t.planPlusHighlight6,
     ],
     advanced: [
       t.planAdvancedHighlight1,
       t.planAdvancedHighlight2,
       t.planAdvancedHighlight3,
+      t.planAdvancedHighlight4,
+      t.planAdvancedHighlight5,
+      t.planAdvancedHighlight6,
+      t.planAdvancedHighlight7,
     ],
     premium: [
       t.planPremiumHighlight1,
       t.planPremiumHighlight2,
       t.planPremiumHighlight3,
+      t.planPremiumHighlight4,
+      t.planPremiumHighlight5,
+      t.planPremiumHighlight6,
     ],
+  };
+  const depthHint: Record<PlanTier, string | null> = {
+    free: null,
+    basic: t.depthEssentialHint,
+    student: t.depthStandardHint,
+    plus: t.depthDetailedHint,
+    advanced: t.depthComprehensiveHint,
+    premium: t.depthMaximumHint,
   };
   return {
     name: names[tier],
     tagline: taglines[tier],
+    includes: includes[tier],
     highlights: highlights[tier],
+    depthHint: depthHint[tier],
   };
 }
 
@@ -217,7 +268,7 @@ export function BillingClient({
               <span className="ml-2 text-sm font-normal text-zinc-500">
                 ·{" "}
                 {tf(t.billing.voiceHoursMonth, {
-                  hours: PLANS[currentTier].voiceHours,
+                  hours: String(voiceHours(currentTier)),
                 })}
               </span>
             ) : null}
@@ -267,15 +318,17 @@ export function BillingClient({
       </div>
 
       {/* Plan cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {CHECKOUT_PLAN_ORDER.map((tier) => {
           const plan = planStrings(t.billing, tier);
-          const price = PLANS[tier].priceMonthly;
+          const charged = salePriceMonthly(tier);
           const isCurrent = tier === currentTier;
           const wasPrice = compareAtPriceMonthly(tier);
           const showSale =
-            isPaidTier(tier) && price > 0 && wasPrice != null && wasPrice > price;
-          const salePrice = showSale ? salePriceMonthly(tier) : price;
+            isPaidTier(tier) &&
+            charged > 0 &&
+            wasPrice != null &&
+            wasPrice > charged;
           const salePercent = showSale ? salePercentForTier(tier) : 0;
           const isBest = tier === "advanced";
           return (
@@ -318,15 +371,15 @@ export function BillingClient({
                 {showSale ? (
                   <>
                     <span className="mr-2 text-lg font-medium text-zinc-400 line-through dark:text-zinc-500">
-                      ${wasPrice}
+                      ${formatUsdAmount(wasPrice)}
                     </span>
                     <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                      ${salePrice}
+                      ${formatUsdAmount(charged)}
                     </span>
                   </>
                 ) : (
                   <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                    ${price}
+                    ${formatUsdAmount(charged)}
                   </span>
                 )}
                 <span className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -339,7 +392,20 @@ export function BillingClient({
                   {t.billing.salePriceNote}
                 </p>
               ) : null}
-              <ul className="mt-4 flex-1 space-y-2 text-sm text-zinc-600 dark:text-zinc-300">
+              {plan.includes ? (
+                <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  {plan.includes}
+                </p>
+              ) : null}
+              {plan.depthHint ? (
+                <p
+                  className="mt-1 text-[11px] leading-snug text-zinc-500 dark:text-zinc-400"
+                  title={plan.depthHint}
+                >
+                  {t.billing.depthLabel}: {plan.depthHint}
+                </p>
+              ) : null}
+              <ul className="mt-3 flex-1 space-y-2 text-sm text-zinc-600 dark:text-zinc-300">
                 {plan.highlights.map((h) => (
                   <li key={h} className="flex items-start gap-2">
                     <svg

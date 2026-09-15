@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       {
         error:
           sub.tier === "free"
-            ? "You're already on the Free plan — no billing account to manage."
+            ? "You're unsubscribed — no billing account to manage."
             : "No billing account yet — upgrade to a paid plan first.",
       },
       { status: 400 }

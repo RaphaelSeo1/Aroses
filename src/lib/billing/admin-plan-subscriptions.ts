@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  PAID_PLAN_TIERS,
   isPaidPlanTier,
   listPriceCentsForTier,
   sortAdminPlanSubscriptionRows,
@@ -61,9 +62,8 @@ async function loadAuthEmails(
 }
 
 /**
- * Current Student / Advanced / Premium rows from `user_subscriptions`
- * (Stripe webhook snapshot). One row per user — period start is the
- * started/renewed date we store.
+ * Current paid-plan rows from `user_subscriptions` (Stripe webhook snapshot).
+ * One row per user — period start is the started/renewed date we store.
  */
 export async function loadAdminPlanSubscriptions(): Promise<
   AdminPlanSubscriptionRow[]
@@ -74,14 +74,14 @@ export async function loadAdminPlanSubscriptions(): Promise<
   const full = await admin
     .from("user_subscriptions")
     .select(SUB_SELECT)
-    .in("tier", ["student", "advanced", "premium"]);
+    .in("tier", [...PAID_PLAN_TIERS]);
 
   let rows: SubRow[] | null = null;
   if (full.error && /admin_granted|schema cache/i.test(full.error.message ?? "")) {
     const legacy = await admin
       .from("user_subscriptions")
       .select(SUB_SELECT_LEGACY)
-      .in("tier", ["student", "advanced", "premium"]);
+      .in("tier", [...PAID_PLAN_TIERS]);
     if (legacy.error) {
       console.error("[admin plan subscriptions]", legacy.error);
       return [];

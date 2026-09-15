@@ -16,8 +16,8 @@ import {
   substantiveLessonTitles,
 } from "@/lib/study-ingest/normalize-ingest-title";
 import { isDenseSectionedPharmacologyDeck } from "@/lib/study-ingest/pdf-section-split";
-
-type CourseBuildProfile = "express" | "fast" | "balanced" | "full";
+import type { CourseBuildProfile } from "@/lib/ai/generation-depth-config";
+import { getGenerationDepthContext } from "@/lib/ai/generation-depth-context";
 
 const DENSE_MAX_LESSONS = 10;
 const DENSE_TARGET_LESSONS = 8;
@@ -133,10 +133,16 @@ export function structurePlanTargets(
     maxLessons = clampInt(Math.ceil(chunkCount / 1.5), minLessons, 20);
     maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
   } else {
-    // full: deepest profile — more modules and more lessons per the source.
-    minLessons = clampInt(Math.ceil(chunkCount / 1.3), 3, 48);
-    maxLessons = clampInt(Math.ceil(chunkCount / 1.05), minLessons, 60);
-    maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
+    // full / maximum: deepest profiles — more modules and more lessons per the source.
+    const depth = getGenerationDepthContext();
+    const maxBoost = depth === "maximum" ? 1.15 : 1;
+    minLessons = clampInt(Math.ceil((chunkCount / 1.3) * maxBoost), 3, 56);
+    maxLessons = clampInt(Math.ceil((chunkCount / 1.05) * maxBoost), minLessons, 72);
+    maxModules = clampInt(
+      envInt("COURSE_FULL_MAX_MODULES", depth === "maximum" ? 22 : 18),
+      4,
+      28
+    );
   }
 
   const minModules =

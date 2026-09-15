@@ -1,6 +1,8 @@
 import "server-only";
+import { resolveBillingPeriod } from "@/lib/billing/billing-period";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import {
+  isPaidTier,
   lectureRecordingCap,
   PLANS,
   type PlanTier,
@@ -30,29 +32,13 @@ export type LectureRecordingCapBlocked = {
   periodStart: string;
 };
 
-/**
- * Billing-period anchor (same rules as voice usage): paid users reset on
- * Stripe's current_period_start; free users on the 1st of the UTC month.
- */
 function resolvePeriod(sub: {
   tier: PlanTier;
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
 }): { start: Date; end: string | null } {
-  if (sub.tier !== "free" && sub.currentPeriodStart) {
-    const start = new Date(sub.currentPeriodStart);
-    if (!Number.isNaN(start.getTime())) {
-      return { start, end: sub.currentPeriodEnd };
-    }
-  }
-  const now = new Date();
-  const start = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0)
-  );
-  const end = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0)
-  );
-  return { start, end: end.toISOString() };
+  const period = resolveBillingPeriod(sub);
+  return { start: period.start, end: period.endIso };
 }
 
 /**
@@ -75,22 +61,13 @@ export async function assertCanStartLectureRecording(
     return { ok: true, tier, used: 0, cap, periodStart };
   }
 
-  const query = admin
+  // Count every started session in the period, including soft-deleted rows.
+  // Deleting a recording must not restore a monthly slot.
+  const { count, error } = await admin
     .from("live_lecture_sessions")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
     .gte("created_at", periodStart);
-
-  // Soft-delete column may be missing pre-migration — retry without it.
-  let { count, error } = await query.is("deleted_at", null);
-
-  if (error && /deleted_at/i.test(error.message ?? "")) {
-    ({ count, error } = await admin
-      .from("live_lecture_sessions")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .gte("created_at", periodStart));
-  }
 
   if (error) {
     console.error("[billing] lecture recording count", error);
@@ -100,14 +77,9 @@ export async function assertCanStartLectureRecording(
   const used = count ?? 0;
   if (cap != null && used >= cap) {
     const planName = PLANS[tier].name;
-    const upgradeHint =
-      tier === "premium"
-        ? "You've used all lecture recordings for this billing period."
-        : tier === "advanced"
-          ? `Your ${planName} plan includes ${cap} lecture recordings per month. Upgrade to Premium for 20 / month.`
-          : tier === "student"
-            ? `Your ${planName} plan includes ${cap} lecture recordings per month. Upgrade to Advanced for 10 / month or Premium for 20 / month.`
-            : `Free includes ${cap} lecture recording per month. Upgrade to Student for 5, Advanced for 10, or Premium for 20 / month.`;
+    const upgradeHint = !isPaidTier(tier)
+      ? "Choose a plan to record lectures."
+      : `You've used all ${cap} lecture recordings included with ${planName} this billing period.`;
     return {
       ok: false,
       status: 402,

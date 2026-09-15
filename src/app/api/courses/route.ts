@@ -107,12 +107,12 @@ export async function POST(request: Request) {
     if (!isSchemaErr) {
       console.error("[POST /api/courses]", errFull);
       const msg = errFull.message ?? "";
-      if (/course_cap_reached/i.test(msg)) {
+      if (/course_cap_reached|course_generation_cap_reached/i.test(msg)) {
         return NextResponse.json(
           {
             error:
-              "You've reached your plan's course limit. Delete a course or upgrade to create another.",
-            code: "course_cap_reached",
+              "You've used all AI course generations included with your plan for this billing period. Upgrade or wait until your allowance resets.",
+            code: "course_generation_cap_reached",
           },
           { status: 402 }
         );

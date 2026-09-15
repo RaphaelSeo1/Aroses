@@ -343,7 +343,7 @@ const en = {
     appSubtitle:
       "How features in Aroses fit together — see the sections above for walkthroughs.",
     pricingParagraph:
-      "You're not paying for access to AI — that's commoditized. You're paying for the parts that turn AI into a study routine you'll actually follow: course-structured lessons, persistent spaced repetition, progress tracking, and not having to engineer prompts. **Free** includes {freeHighlight} plus unlimited text tutoring, quizzes, SRS, **1 course**, and 1 lecture recording / month. **Student** is ${studentPrice}/month ({studentVoiceHours} hours of voice/month, up to 2 courses, 5 lecture recordings / month). **Advanced** is ${advancedPrice}/month ({advancedVoiceHours} hours of voice/month, up to 5 courses, 10 lecture recordings / month). **Premium** is ${premiumPrice}/month ({premiumVoiceHours} hours of voice/month, unlimited courses, 20 lecture recordings / month). Voice caps switch you to text — never a hard block mid-study. Optional voice top-ups are planned (~$8/hour). If you have the discipline to rebuild all of this yourself with free tools every session, you may not need us. Most people don't, and that's who Aroses is for.",
+      "You're not paying for access to AI — that's commoditized. You're paying for the parts that turn AI into a study routine you'll actually follow: course-structured lessons, persistent spaced repetition, progress tracking, and not having to engineer prompts. Paid plans start at **Basic** (${basicPrice}/month). **Student** is ${studentPrice}/month ({studentGens} AI course generations and {studentPages} source pages per billing period). **Plus** is ${plusPrice}/month. **Advanced** is ${advancedPrice}/month ({advancedGens} generations, comprehensive depth, early access). **Premium** is ${premiumPrice}/month ({premiumGens} generations, maximum depth). There is no public Free generation plan — unsubscribed accounts keep existing courses, notes, quizzes, and SRS. Voice caps switch you to text — never a hard block mid-study. If you have the discipline to rebuild all of this yourself with free tools every session, you may not need us. Most people don't, and that's who Aroses is for.",
     honestItems: [
       {
         id: "vs-chatgpt",
@@ -417,7 +417,7 @@ const en = {
         id: "cancel",
         question: "What happens to my courses and progress if I stop paying or the app shuts down?",
         paragraphs: [
-          "If you cancel a paid plan, you keep your account on the **Free** tier — your courses, notes, quiz history, and SRS cards stay unless you delete them. Voice drops to the free monthly allowance; everything else (text tutoring, building, quizzes, review) stays available. We don't have a one-click \"export entire course as PDF\" yet; you can copy lesson text and download tutor session recaps where that feature exists. We're building toward better portability — your stuff should never feel held hostage. Long term, we'd rather you be able to take your work with you than trap you in a subscription.",
+          "If you cancel a paid plan, you keep your account and all of your courses, notes, quiz history, and SRS cards unless you delete them. You won't have paid AI course-generation or voice allowances until you subscribe again. We don't have a one-click \"export entire course as PDF\" yet; you can copy lesson text and download tutor session recaps where that feature exists. We're building toward better portability — your stuff should never feel held hostage. Long term, we'd rather you be able to take your work with you than trap you in a subscription.",
         ],
       },
       {
@@ -796,7 +796,7 @@ const ko: typeof en = {
     appSubtitle:
       "Aroses 기능이 어떻게 맞물리는지 — 위 섹션에서 자세한 안내를 확인하세요.",
     pricingParagraph:
-      "AI 접근권에 돈을 내는 게 아니에요 — 그건 이미 흔해졌죠. 돈을 내는 이유는 AI를 실제로 지킬 학습 루틴으로 바꿔 주는 부분이에요: 코스 구조 레슨, 지속적인 간격 반복, 진행 추적, 매번 프롬프트를 설계하지 않아도 되는 것. **무료**에는 {freeHighlight}와 무제한 텍스트 튜터링, 퀴즈, SRS, **코스 1개**, 월 강의 녹음 1회가 포함돼요. **Student**는 월 ${studentPrice} ({studentVoiceHours}시간 음성/월, 코스 최대 2개, 녹음 5회). **Advanced**는 월 ${advancedPrice} ({advancedVoiceHours}시간 음성/월, 코스 최대 5개, 녹음 10회). **Premium**은 월 ${premiumPrice} ({premiumVoiceHours}시간 음성/월, 무제한 코스, 녹음 20회). 음성 한도에 도달하면 텍스트로 전환돼요 — 학습 중 갑자기 막히지 않아요. 선택적 음성 추가 구매도 계획 중이에요 (약 $8/시간). 매 세션마다 무료 도구로 이걸 전부 직접 만들 자신이 있다면 우리가 필요 없을 수도 있어요. 대부분은 그렇지 않고, 그게 Aroses가 있는 이유예요.",
+      "AI 접근권에 돈을 내는 게 아니에요 — 그건 이미 흔해졌죠. 돈을 내는 이유는 AI를 실제로 지킬 학습 루틴으로 바꿔 주는 부분이에요: 코스 구조 레슨, 지속적인 간격 반복, 진행 추적, 매번 프롬프트를 설계하지 않아도 되는 것. 유료 요금제는 **베이직** (월 ${basicPrice})부터예요. **스튜던트**는 월 ${studentPrice} (결제 기간당 AI 코스 생성 {studentGens}회, 소스 페이지 {studentPages}). **플러스**는 월 ${plusPrice}. **어드밴스드**는 월 ${advancedPrice} (생성 {advancedGens}회, 종합 깊이, 얼리 액세스). **프리미엄**은 월 ${premiumPrice} (생성 {premiumGens}회, 최대 깊이). 공개 무료 생성 요금제는 없어요 — 구독이 없어도 기존 코스·노트·퀴즈·SRS는 유지돼요. 음성 한도에 도달하면 텍스트로 전환돼요 — 학습 중 갑자기 막히지 않아요. 매 세션마다 무료 도구로 이걸 전부 직접 만들 자신이 있다면 우리가 필요 없을 수도 있어요. 대부분은 그렇지 않고, 그게 Aroses가 있는 이유예요.",
     honestItems: [
       {
         id: "vs-chatgpt",
@@ -870,7 +870,7 @@ const ko: typeof en = {
         id: "cancel",
         question: "결제를 멈추거나 앱이 문을 닫으면 코스와 진행은 어떻게 되나요?",
         paragraphs: [
-          "유료 요금제를 취소해도 **무료** 등급 계정은 유지돼요 — 코스, 노트, 퀴즈 기록, SRS 카드는 삭제하지 않는 한 남아요. 음성은 무료 월 한도로 줄고, 나머지(텍스트 튜터링, 빌드, 퀴즈, 복습)는 계속 쓸 수 있어요. 아직 \"전체 코스를 PDF로 내보내기\" 원클릭은 없어요; 레슨 텍스트 복사, 튜터 세션 요약 다운로드(해당 기능 있는 경우)는 가능해요. 더 나은 이식성을 만들고 있어요 — 내 자료가 구독에 갇히면 안 돼요. 장기적으로는 가두기보다 가져갈 수 있게 하는 편이에요.",
+          "유료 요금제를 취소해도 계정과 코스, 노트, 퀴즈 기록, SRS 카드는 삭제하지 않는 한 남아요. 다시 구독하기 전까지는 유료 AI 코스 생성과 음성 한도는 없어요. 아직 \"전체 코스를 PDF로 내보내기\" 원클릭은 없어요; 레슨 텍스트 복사, 튜터 세션 요약 다운로드(해당 기능 있는 경우)는 가능해요. 더 나은 이식성을 만들고 있어요 — 내 자료가 구독에 갇히면 안 돼요. 장기적으로는 가두기보다 가져갈 수 있게 하는 편이에요.",
         ],
       },
       {

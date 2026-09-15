@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { PLANS, type PlanTier } from "@/lib/billing/plans";
+import { voiceHours, type PlanTier } from "@/lib/billing/plans";
 import type { PlanUsageSummary } from "@/lib/billing/plan-usage-types";
 import { HomeCalendarWidget } from "@/components/calendar/HomeCalendarWidget";
 import { useT } from "@/lib/i18n/LocaleProvider";
@@ -43,14 +43,18 @@ function usageTone(pct: number): "ok" | "warn" | "hot" {
 function planDisplayName(
   billing: {
     planFree: string;
+    planBasic: string;
     planStudent: string;
+    planPlus: string;
     planAdvanced: string;
     planPremium: string;
   },
   tier: PlanTier
 ): string {
   if (tier === "free") return billing.planFree;
+  if (tier === "basic") return billing.planBasic;
   if (tier === "student") return billing.planStudent;
+  if (tier === "plus") return billing.planPlus;
   if (tier === "advanced") return billing.planAdvanced;
   return billing.planPremium;
 }
@@ -139,7 +143,13 @@ export function HomeRightSidebar({
       ? Math.round(planUsage.voiceCapSeconds / 60)
       : 0;
   const coursesPct = planUsage
-    ? usagePct(planUsage.coursesUsed, planUsage.coursesCap)
+    ? usagePct(
+        planUsage.courseGenerationsUsed,
+        planUsage.courseGenerationsCap
+      )
+    : 0;
+  const sourcePagesPct = planUsage
+    ? usagePct(planUsage.sourcePagesUsed, planUsage.sourcePagesCap)
     : 0;
   const voicePct = planUsage
     ? usagePct(planUsage.voiceUsedSeconds, planUsage.voiceCapSeconds)
@@ -177,7 +187,7 @@ export function HomeRightSidebar({
                     {" "}
                     ·{" "}
                     {tf(t.billing.voiceHoursMonth, {
-                      hours: PLANS[planUsage.tier].voiceHours,
+                      hours: String(voiceHours(planUsage.tier)),
                     })}
                   </span>
                 ) : null}
@@ -204,17 +214,32 @@ export function HomeRightSidebar({
             <UsageMeter
               label={t.dashboard.planUsageCourses}
               valueLabel={
-                planUsage.coursesCap == null
+                planUsage.courseGenerationsCap == null
                   ? tf(t.dashboard.planUsageUnlimited, {
-                      used: planUsage.coursesUsed,
+                      used: planUsage.courseGenerationsUsed,
                     })
                   : tf(t.dashboard.planUsageOf, {
-                      used: planUsage.coursesUsed,
-                      cap: planUsage.coursesCap,
+                      used: planUsage.courseGenerationsUsed,
+                      cap: planUsage.courseGenerationsCap,
                     })
               }
               pct={coursesPct}
-              unlimited={planUsage.coursesCap == null}
+              unlimited={planUsage.courseGenerationsCap == null}
+            />
+            <UsageMeter
+              label={t.dashboard.planUsageSourcePages}
+              valueLabel={
+                planUsage.sourcePagesCap == null
+                  ? tf(t.dashboard.planUsageUnlimited, {
+                      used: planUsage.sourcePagesUsed,
+                    })
+                  : tf(t.dashboard.planUsageOf, {
+                      used: planUsage.sourcePagesUsed,
+                      cap: planUsage.sourcePagesCap,
+                    })
+              }
+              pct={sourcePagesPct}
+              unlimited={planUsage.sourcePagesCap == null}
             />
             <UsageMeter
               label={t.dashboard.planUsageVoice}
@@ -246,6 +271,16 @@ export function HomeRightSidebar({
               pct={recordingsPct}
               unlimited={recordingsUnlimited}
             />
+            {planUsage.periodEnd ? (
+              <p className="pt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                {tf(t.dashboard.planUsageResets, {
+                  date: new Date(planUsage.periodEnd).toLocaleDateString(
+                    undefined,
+                    { month: "long", day: "numeric" }
+                  ),
+                })}
+              </p>
+            ) : null}
           </div>
         </section>
       ) : null}

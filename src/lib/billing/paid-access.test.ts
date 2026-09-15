@@ -24,7 +24,11 @@ test("unpaid free/inactive users cannot use the product", () => {
 
 test("active paid tiers and admin-granted paid tiers have access", () => {
   assert.equal(
-    hasPaidProductAccess({ tier: "student", status: "active" }),
+    hasPaidProductAccess({ tier: "basic", status: "active" }),
+    true
+  );
+  assert.equal(
+    hasPaidProductAccess({ tier: "plus", status: "active" }),
     true
   );
   assert.equal(

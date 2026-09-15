@@ -1,7 +1,13 @@
-import { PLANS, type PlanTier } from "./plans.ts";
+import {
+  PAID_PLAN_TIERS,
+  PLANS,
+  isPaidPlanTier,
+  type PaidPlanTier,
+  type PlanTier,
+} from "./plans.ts";
 
-export const PAID_PLAN_TIERS = ["student", "advanced", "premium"] as const;
-export type PaidPlanTier = (typeof PAID_PLAN_TIERS)[number];
+export { PAID_PLAN_TIERS, isPaidPlanTier };
+export type { PaidPlanTier };
 
 export type AdminPlanSubscriptionRow = {
   userId: string;
@@ -17,10 +23,6 @@ export type AdminPlanSubscriptionRow = {
   cancelAtPeriodEnd: boolean;
   adminGranted: boolean;
 };
-
-export function isPaidPlanTier(tier: string): tier is PaidPlanTier {
-  return (PAID_PLAN_TIERS as readonly string[]).includes(tier.toLowerCase());
-}
 
 export function listPriceCentsForTier(tier: PaidPlanTier): number {
   const monthly = PLANS[tier as PlanTier]?.priceMonthly ?? 0;

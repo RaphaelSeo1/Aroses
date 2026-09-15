@@ -10,17 +10,21 @@ import {
   type AdminPlanSubscriptionRow,
 } from "./admin-plan-subscription-rows.ts";
 
-test("paid plan tiers are Student / Advanced / Premium only", () => {
+test("paid plan tiers include Basic and Plus", () => {
+  assert.equal(isPaidPlanTier("basic"), true);
   assert.equal(isPaidPlanTier("student"), true);
+  assert.equal(isPaidPlanTier("plus"), true);
   assert.equal(isPaidPlanTier("advanced"), true);
   assert.equal(isPaidPlanTier("premium"), true);
   assert.equal(isPaidPlanTier("free"), false);
 });
 
-test("list prices match plan monthly USD", () => {
-  assert.equal(listPriceCentsForTier("student"), 2900);
-  assert.equal(listPriceCentsForTier("advanced"), 500);
-  assert.equal(listPriceCentsForTier("premium"), 5900);
+test("list prices match regular plan monthly USD", () => {
+  assert.equal(listPriceCentsForTier("basic"), 1999);
+  assert.equal(listPriceCentsForTier("student"), 3999);
+  assert.equal(listPriceCentsForTier("plus"), 5999);
+  assert.equal(listPriceCentsForTier("advanced"), 7999);
+  assert.equal(listPriceCentsForTier("premium"), 10999);
 });
 
 test("subscriber label prefers email then name then username", () => {
@@ -74,7 +78,7 @@ test("plan KPIs count current subscribers and paying MRR only", () => {
       userId: "a",
       subscriberLabel: "a",
       tier: "student",
-      amountCents: 2900,
+      amountCents: 3999,
       status: "active",
     },
     {
@@ -82,7 +86,7 @@ test("plan KPIs count current subscribers and paying MRR only", () => {
       userId: "b",
       subscriberLabel: "b",
       tier: "premium",
-      amountCents: 5900,
+      amountCents: 10999,
       status: "trialing",
     },
     {
@@ -90,7 +94,7 @@ test("plan KPIs count current subscribers and paying MRR only", () => {
       userId: "c",
       subscriberLabel: "c",
       tier: "advanced",
-      amountCents: 500,
+      amountCents: 7999,
       status: "active",
       adminGranted: true,
     },
@@ -99,7 +103,7 @@ test("plan KPIs count current subscribers and paying MRR only", () => {
       userId: "d",
       subscriberLabel: "d",
       tier: "student",
-      amountCents: 2900,
+      amountCents: 3999,
       status: "canceled",
     },
   ];
@@ -107,7 +111,7 @@ test("plan KPIs count current subscribers and paying MRR only", () => {
   const summary = summarizeAdminPlanSubscriptions(rows);
   assert.equal(summary.subscriberCount, 3);
   assert.equal(summary.payingCount, 2);
-  assert.equal(summary.mrrCents, 8800);
+  assert.equal(summary.mrrCents, 14998);
 });
 
 test("rows sort newest started first", () => {
@@ -117,7 +121,7 @@ test("rows sort newest started first", () => {
     displayName: null,
     subscriberLabel: "a",
     tier: "student",
-    amountCents: 2900,
+    amountCents: 3999,
     currency: "usd",
     status: "active",
     startedAt: "2026-01-01T00:00:00.000Z",

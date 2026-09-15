@@ -773,6 +773,9 @@ export function CourseDashboardList({
                   </span>{" "}
                   {t.dashboard.deleteCourseWarning}
                 </p>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
+                  {t.dashboard.deleteCourseUsageNote}
+                </p>
                 <p className="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
                   {t.dashboard.cannotBeUndone}
                 </p>

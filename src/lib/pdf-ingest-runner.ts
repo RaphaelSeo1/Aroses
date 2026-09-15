@@ -58,6 +58,17 @@ import {
 import { ensurePdfVisualsAtFinalize } from "@/lib/pdf-ingest/ensure-pdf-visuals";
 import { report, addJobDegradedReason } from "@/lib/report-error";
 import { enterAiUsageContext } from "@/lib/billing/ai-usage";
+import {
+  finalizeUsageForJob,
+  lookupReservationIdForJob,
+  releaseUsageForJob,
+  reserveSourcePages,
+} from "@/lib/billing/course-cap";
+import { sourcePageCap } from "@/lib/billing/plans";
+import { resolveBillingPeriod } from "@/lib/billing/billing-period";
+import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
+import { getUserSubscription } from "@/lib/billing/subscription";
+import { enterGenerationDepthFromJob } from "@/lib/ai/generation-depth-context";
 import { enrichModulesWithPdfAssets } from "@/lib/pdf-ingest/enrich-modules-with-assets";
 import { placeAllPdfAssetsIntoModules } from "@/lib/pdf-ingest/place-course-assets";
 import {
@@ -321,6 +332,7 @@ async function failJob(
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);
+  await releaseUsageForJob(jobId).catch(() => {});
   await removeIngestObject(admin, storagePath, options);
 }
 
@@ -657,6 +669,7 @@ async function finalizePdfIngest(
     .eq("id", jobId)
     .maybeSingle();
   if (alreadyDone?.status === "complete" && alreadyDone?.material_id) {
+    await finalizeUsageForJob(jobId).catch(() => {});
     return { materialId: alreadyDone.material_id as string };
   }
 
@@ -1256,6 +1269,8 @@ async function finalizePdfIngest(
       : null;
   }
 
+  await finalizeUsageForJob(jobId).catch(() => {});
+
   await logActivity(
     {
       userId: materialOwnerId,
@@ -1338,7 +1353,14 @@ export async function runPdfIngestExpandOne(
         job.id,
         typeof job.course_id === "string" ? job.course_id : null
       )
-    : { studyContext: null, outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE };
+    : {
+        studyContext: null,
+        outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE,
+        generationDepth: null,
+        billingTierSnapshot: null,
+      };
+
+  enterGenerationDepthFromJob(expandGenerationContext);
 
   const sourceTextForLocale =
     typeof job?.ingest_source_text === "string" ? job.ingest_source_text : "";
@@ -2084,7 +2106,14 @@ export async function runPdfIngestJob(
         claimed.id,
         typeof claimed.course_id === "string" ? claimed.course_id : null
       )
-    : { studyContext: null, outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE };
+    : {
+        studyContext: null,
+        outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE,
+        generationDepth: null,
+        billingTierSnapshot: null,
+      };
+
+  enterGenerationDepthFromJob(generationContext);
 
   if (claimErr) {
     console.error("[pdf-ingest] claim", jobId, claimErr);
@@ -2223,8 +2252,63 @@ export async function runPdfIngestJob(
       jobId,
       chars: extracted.text.length,
       numpages: extracted.numpages,
+      sourcePageUnits: extracted.sourcePageUnits,
       retainStorage: extracted.retainStorage,
     });
+
+    const sourceUnits = Math.max(0, extracted.sourcePageUnits);
+    await admin
+      .from("pdf_ingest_jobs")
+      .update({
+        source_page_units: sourceUnits,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId)
+      .then(({ error }) => {
+        if (error && isMissingDbColumnError(error, "source_page_units")) {
+          return { error: null };
+        }
+        return { error };
+      }, () => ({ error: null }));
+
+    const ownerId =
+      typeof claimed.user_id === "string" ? claimed.user_id : null;
+    if (ownerId && sourceUnits > 0) {
+      const reservationId = await lookupReservationIdForJob(jobId);
+      if (!reservationId) {
+        await failJobUnlessStale(
+          admin,
+          jobId,
+          cleanupPaths,
+          "Billing metering is temporarily unavailable. Try again in a moment.",
+          claimedEpoch
+        );
+        return;
+      }
+      const unlimited = await isUnlimitedPlanMeterUser(ownerId);
+      if (!unlimited) {
+        const sub = await getUserSubscription(ownerId);
+        const period = resolveBillingPeriod(sub);
+        const pages = await reserveSourcePages({
+          userId: ownerId,
+          reservationId,
+          sourcePageUnits: sourceUnits,
+          cap: sourcePageCap(sub.tier),
+          periodStart: period.startIso,
+          periodEnd: period.endIso,
+        });
+        if (!pages.ok) {
+          await failJobUnlessStale(
+            admin,
+            jobId,
+            cleanupPaths,
+            pages.error,
+            claimedEpoch
+          );
+          return;
+        }
+      }
+    }
 
     await touchJobProgress(admin, jobId);
   } catch (e) {
@@ -2419,6 +2503,7 @@ export async function runPdfIngestContinueAfterTranscript(
     jobId,
     typeof job.course_id === "string" ? job.course_id : null
   );
+  enterGenerationDepthFromJob(generationContext);
 
   await runPdfIngestOutlinePhase(admin, {
     jobId,

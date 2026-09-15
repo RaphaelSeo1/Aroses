@@ -2,7 +2,7 @@ import "server-only";
 import type Stripe from "stripe";
 import { isStripeConfigured, getStripe } from "@/lib/stripe/client";
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { PlanTier } from "@/lib/billing/plans";
+import { parsePlanTier, type PlanTier } from "@/lib/billing/plans";
 import { syncStripeSubscription } from "@/lib/billing/sync-subscription";
 
 export type UserSubscription = {
@@ -41,7 +41,7 @@ type SubscriptionRow = {
 
 function rowToSubscription(row: SubscriptionRow): UserSubscription {
   return {
-    tier: row.tier ?? "free",
+    tier: parsePlanTier(row.tier) ?? "free",
     status: row.status ?? "inactive",
     stripeCustomerId: row.stripe_customer_id,
     stripeSubscriptionId: row.stripe_subscription_id,
@@ -175,7 +175,7 @@ export async function reconcileUserSubscription(
   if (!needsCheck) return local;
 
   const stripe = getStripe();
-  let customerId = local.stripeCustomerId;
+  const customerId = local.stripeCustomerId;
 
   if (customerId) {
     try {

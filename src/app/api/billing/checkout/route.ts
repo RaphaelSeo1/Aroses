@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { PLANS, type PlanTier } from "@/lib/billing/plans";
+import { PLANS } from "@/lib/billing/plans";
+import { assertCheckoutTier, checkoutStripePriceId } from "@/lib/billing/sale";
 import { getOrCreateStripeCustomer } from "@/lib/billing/subscription";
 import { getStripe, isStripeConfigured, originFromRequest } from "@/lib/stripe/client";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -35,12 +36,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const tier = (body as { tier?: unknown }).tier as PlanTier;
-  if (tier !== "student" && tier !== "advanced" && tier !== "premium") {
+  const tier = assertCheckoutTier((body as { tier?: unknown }).tier);
+  if (!tier) {
     return NextResponse.json({ error: "Choose a paid plan." }, { status: 400 });
   }
 
-  const priceId = PLANS[tier].stripePriceId;
+  const priceId = checkoutStripePriceId(tier);
   if (!priceId) {
     return NextResponse.json(
       { error: `The ${PLANS[tier].name} plan isn't configured yet.` },
@@ -55,7 +56,6 @@ export async function POST(request: Request) {
     });
     const origin = originFromRequest(request);
     const stripe = getStripe();
-    // Sale UI is cosmetic — Stripe prices ($29 / $59) are already the sale rates.
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,

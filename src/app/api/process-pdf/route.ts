@@ -17,6 +17,20 @@ import {
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { parseCourseOutputLanguage } from "@/lib/course-output-language";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
+import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
+import {
+  generationDepthForTier,
+  maxPdfsPerCourse,
+  PLANS,
+} from "@/lib/billing/plans";
+import { getUserSubscription } from "@/lib/billing/subscription";
+import { releaseGenerationUsage, reserveCourseGeneration } from "@/lib/billing/course-cap";
+import {
+  countPdfNames,
+  pdfCapWouldExceed,
+  sumActivePdfsForCourse,
+  type IngestJobPdfRow,
+} from "@/lib/billing/pdf-per-course";
 
 export const runtime = "nodejs";
 
@@ -85,6 +99,10 @@ function parseFilesInput(body: Record<string, unknown>): IngestFileInput[] | nul
  * other files from the job, or only the first uploaded file gets extracted.
  */
 const OPTIONAL_INGEST_JOB_COLUMNS = [
+  "usage_reservation_id",
+  "generation_depth",
+  "billing_tier_snapshot",
+  "source_page_units",
   "material_sort_order",
   "output_language",
   "study_context",
@@ -275,6 +293,57 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
     return NextResponse.json({ error: "Course not found" }, { status: 403 });
   }
 
+  const unlimitedMeters = await isUnlimitedPlanMeterUser(user.id, user.email);
+  const sub = await getUserSubscription(user.id);
+  const pdfCap = unlimitedMeters ? null : maxPdfsPerCourse(sub.tier);
+  const incomingPdfs = countPdfNames(
+    files.map((f) => f.originalFileName || f.storagePath)
+  );
+  if (pdfCap != null) {
+    const { data: jobRows, error: pdfCountErr } = await admin
+      .from("pdf_ingest_jobs")
+      .select(
+        "status, source_format, original_file_name, storage_path, source_files"
+      )
+      .eq("course_id", courseId);
+    if (pdfCountErr) {
+      console.error("[process-pdf] pdf count", pdfCountErr);
+      await removeIngestObjects(admin, files.map((x) => x.storagePath));
+      return NextResponse.json(
+        {
+          error:
+            "Billing metering is temporarily unavailable. Try again in a moment.",
+          code: "generation_metering_unavailable",
+        },
+        { status: 503 }
+      );
+    }
+    const activePdfs = sumActivePdfsForCourse(
+      (jobRows ?? []) as IngestJobPdfRow[]
+    );
+    if (
+      pdfCapWouldExceed({
+        activePdfs,
+        incomingPdfs,
+        cap: pdfCap,
+      })
+    ) {
+      const wouldHave = activePdfs + incomingPdfs;
+      const extra = wouldHave - pdfCap;
+      await removeIngestObjects(admin, files.map((x) => x.storagePath));
+      return NextResponse.json(
+        {
+          error: `Your ${PLANS[sub.tier].name} plan supports up to ${pdfCap} PDFs per course. This course would have ${wouldHave}. Remove ${extra} PDF${extra === 1 ? "" : "s"} or upgrade your plan.`,
+          code: "pdf_per_course_cap_reached",
+          cap: pdfCap,
+          used: activePdfs,
+          incoming: incomingPdfs,
+        },
+        { status: 402 }
+      );
+    }
+  }
+
   const { data: groupOwn } = await supabase
     .from("exam_groups")
     .select("id")
@@ -399,6 +468,66 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
   }
 
   const jobId = jobRow.id;
+
+  const reserved = await reserveCourseGeneration({
+    userId: user.id,
+    email: user.email,
+    courseId,
+    jobId,
+  });
+  if (!reserved.ok) {
+    await admin
+      .from("pdf_ingest_jobs")
+      .update({
+        status: "failed",
+        error_message: reserved.error,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId);
+    await removeIngestObjects(admin, files.map((x) => x.storagePath));
+    return NextResponse.json(
+      {
+        error: reserved.error,
+        code: reserved.code,
+        used: reserved.used,
+        cap: reserved.cap,
+      },
+      { status: reserved.status }
+    );
+  }
+
+  const snapshot = {
+    usage_reservation_id: reserved.reservationId,
+    billing_tier_snapshot: reserved.tier,
+    generation_depth: generationDepthForTier(reserved.tier),
+  };
+  const snapRes = await admin
+    .from("pdf_ingest_jobs")
+    .update(snapshot)
+    .eq("id", jobId);
+  if (snapRes.error) {
+    console.error("[process-pdf] snapshot usage fields", snapRes.error);
+    // Fail closed: do not start expensive generation without a durable snapshot.
+    await releaseGenerationUsage(reserved.reservationId);
+    await admin
+      .from("pdf_ingest_jobs")
+      .update({
+        status: "failed",
+        error_message:
+          "Billing metering is temporarily unavailable. Try again in a moment.",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", jobId);
+    await removeIngestObjects(admin, files.map((x) => x.storagePath));
+    return NextResponse.json(
+      {
+        error:
+          "Billing metering is temporarily unavailable. Try again in a moment.",
+        code: "generation_metering_unavailable",
+      },
+      { status: 503 }
+    );
+  }
 
   const { error: langPrefErr } = await supabase
     .from("courses")

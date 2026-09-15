@@ -28,13 +28,15 @@ function resolveHonestItem(
       question: item.question,
       paragraphs: [
         tf(helpContent[locale].faq.pricingParagraph, {
-          freeHighlight: PLANS.free.highlights[0].toLowerCase(),
+          basicPrice: String(PLANS.basic.priceMonthly),
           studentPrice: String(PLANS.student.priceMonthly),
-          studentVoiceHours: String(PLANS.student.voiceHours),
+          plusPrice: String(PLANS.plus.priceMonthly),
           advancedPrice: String(PLANS.advanced.priceMonthly),
-          advancedVoiceHours: String(PLANS.advanced.voiceHours),
           premiumPrice: String(PLANS.premium.priceMonthly),
-          premiumVoiceHours: String(PLANS.premium.voiceHours),
+          studentGens: String(PLANS.student.courseGenerations),
+          studentPages: String(PLANS.student.sourcePages),
+          advancedGens: String(PLANS.advanced.courseGenerations),
+          premiumGens: String(PLANS.premium.courseGenerations),
         }),
       ],
     };

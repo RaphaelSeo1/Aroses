@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { releaseUsageForJob } from "@/lib/billing/course-cap";
 
 export const runtime = "nodejs";
 
@@ -98,6 +99,8 @@ export async function POST(_request: Request, ctx: Params) {
       { status: 500 }
     );
   }
+
+  await releaseUsageForJob(jobId);
 
   return NextResponse.json({ ok: true as const, cancelledAt });
 }
