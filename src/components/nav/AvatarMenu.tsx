@@ -24,18 +24,21 @@ export function AvatarMenu({
   avatarUrl,
   adminHubHref,
   initialSocialCounts,
+  fetchBadges = true,
 }: {
   displayName?: string | null;
   email?: string | null;
   avatarUrl?: string | null;
   adminHubHref?: string;
   initialSocialCounts?: SocialBadgeCounts | null;
+  fetchBadges?: boolean;
 }) {
   const t = useT();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const { counts: socialCounts } = useSocialBadgeCounts({
+    enabled: fetchBadges,
     initialCounts: initialSocialCounts,
   });
   const socialTotal = socialCounts.total;

@@ -1,6 +1,11 @@
 export const DEFAULT_SUPABASE_TIMEOUT_MS = 5_000;
-/** Longer bound for auth/session lookups in proxy and route handlers. */
+/** Longer bound for auth/session lookups in proxy and page shells. */
 export const AUTH_SUPABASE_TIMEOUT_MS = 12_000;
+/**
+ * Badge / due-count widgets must fail open quickly. A 5s auth wait on every
+ * homepage load is user-visible stall; zeros are better than holding the UI.
+ */
+export const WIDGET_SUPABASE_TIMEOUT_MS = 1_000;
 
 export function isSupabaseTimeoutError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;

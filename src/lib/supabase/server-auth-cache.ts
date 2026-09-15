@@ -1,5 +1,6 @@
 import { cache } from "react";
 import type { User } from "@supabase/supabase-js";
+import { AUTH_SUPABASE_TIMEOUT_MS } from "@/lib/supabase/bounded-fetch";
 import { createClient } from "@/lib/supabase/server";
 
 type ServerAuth = {
@@ -12,9 +13,12 @@ type ServerAuth = {
  * One `createClient` + `getUser` per React server request. Several RSC trees can import
  * this in the same navigation without repeating the Supabase round-trip.
  * While impersonating, `user` is the target so dashboard/notes/sales load their rows.
+ *
+ * Uses the longer auth bound (not the 1s widget bound) so a slow-but-healthy
+ * session lookup does not look like a logged-out visitor.
  */
 export const getServerAuth: () => Promise<ServerAuth> = cache(async () => {
-  const supabase = await createClient();
+  const supabase = await createClient({ timeoutMs: AUTH_SUPABASE_TIMEOUT_MS });
   const {
     data: { user },
   } = await supabase.auth.getUser();

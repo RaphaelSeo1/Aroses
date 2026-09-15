@@ -2,7 +2,9 @@ import type { ComponentProps } from "react";
 import { HeaderNavLoggedIn } from "@/components/HeaderNavLoggedIn";
 import { fetchSocialBadgeCounts } from "@/lib/messaging/social-badge-counts";
 import { fetchSrsDueCountsForUser } from "@/lib/srs-due-counts-server";
+import { WIDGET_SUPABASE_TIMEOUT_MS } from "@/lib/supabase/bounded-fetch";
 import { getServerAuth } from "@/lib/supabase/server-auth-cache";
+import { firstResolvedOrNull } from "@/lib/supabase/widget-auth";
 
 type Props = ComponentProps<typeof HeaderNavLoggedIn>;
 
@@ -15,8 +17,14 @@ export async function HeaderNavLoggedInServer(props: Props) {
 
   const [initialDueCounts, initialSocialCounts, profileRes] = user
     ? await Promise.all([
-        fetchSrsDueCountsForUser(supabase, user.id),
-        fetchSocialBadgeCounts(supabase, user.id),
+        firstResolvedOrNull(
+          fetchSrsDueCountsForUser(supabase, user.id),
+          WIDGET_SUPABASE_TIMEOUT_MS
+        ),
+        firstResolvedOrNull(
+          fetchSocialBadgeCounts(supabase, user.id),
+          WIDGET_SUPABASE_TIMEOUT_MS
+        ),
         supabase
           .from("profiles")
           .select("display_name, avatar_url")

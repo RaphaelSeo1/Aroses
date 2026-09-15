@@ -27,6 +27,7 @@ export function HeaderNavLoggedIn({
   displayName,
   email,
   avatarUrl,
+  fetchBadges = true,
 }: {
   /** Show when studying — links back to uploads/workspace for this course. */
   courseHomeHref?: string;
@@ -40,12 +41,17 @@ export function HeaderNavLoggedIn({
   displayName?: string | null;
   email?: string | null;
   avatarUrl?: string | null;
+  /**
+   * Loading skeletons should render nav chrome without hitting badge APIs.
+   * The real page header hydrates counts from the server.
+   */
+  fetchBadges?: boolean;
 }) {
   const t = useT();
   const dashboardNav = useDashboardAdminNav();
   const adminHubHref = adminHubHrefProp ?? dashboardNav?.adminHubHref;
   const { counts: dueCounts } = useSrsDueCounts(undefined, {
-    enabled: true,
+    enabled: fetchBadges,
     initialCounts: initialDueCounts,
   });
   const dueTotal = dueCounts?.total ?? initialDueCounts?.total ?? 0;
@@ -138,6 +144,7 @@ export function HeaderNavLoggedIn({
         avatarUrl={avatarUrl}
         adminHubHref={adminHubHref}
         initialSocialCounts={initialSocialCounts}
+        fetchBadges={fetchBadges}
       />
     </>
   );

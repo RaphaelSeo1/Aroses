@@ -5,7 +5,7 @@ import { MainRouteSkeleton } from "@/components/MainRouteSkeleton";
 export default function DashboardLoading() {
   return (
     <>
-      <AppHeader right={<HeaderNavLoggedIn />} />
+      <AppHeader right={<HeaderNavLoggedIn fetchBadges={false} />} />
       <MainRouteSkeleton />
     </>
   );

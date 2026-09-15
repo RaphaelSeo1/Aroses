@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { sharedJsonGet } from "@/lib/widget-json-fetch";
 
 /**
  * Client-side React hook that polls `/api/srs/due-counts` so the UI can show
@@ -72,9 +73,7 @@ export function useSrsDueCounts(
         const url = materialId
           ? `/api/srs/due-counts?materialId=${encodeURIComponent(materialId)}`
           : `/api/srs/due-counts`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`due-counts ${res.status}`);
-        const json = (await res.json()) as SrsDueCounts;
+        const json = await sharedJsonGet<SrsDueCounts>(url);
         if (!cancelled) setCounts(json);
       } catch (e) {
         if (!cancelled) {

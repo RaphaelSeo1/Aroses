@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
-import {
-  isMissingAuthSessionError,
-  isSupabaseTransportError,
-} from "@/lib/auth/public-routes";
+import { isMissingAuthSessionError } from "@/lib/auth/public-routes";
 import { fetchSrsDueCountsForUser } from "@/lib/srs-due-counts-server";
+import { WIDGET_SUPABASE_TIMEOUT_MS } from "@/lib/supabase/bounded-fetch";
 import { createClient } from "@/lib/supabase/server";
+import { decideWidgetAuth } from "@/lib/supabase/widget-auth";
 
 /**
  * GET /api/srs/due-counts
@@ -33,36 +32,31 @@ import { createClient } from "@/lib/supabase/server";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const EMPTY_COUNTS = {
+  total: 0,
+  module: 0,
+  personal: 0,
+  byMaterial: [] as [],
+};
+
 export async function GET(request: Request) {
-  const supabase = await createClient({ timeoutMs: 5_000 });
+  const supabase = await createClient({ timeoutMs: WIDGET_SUPABASE_TIMEOUT_MS });
   const {
     data: { user },
     error: authError,
   } = await supabase.auth.getUser();
-  if (authError && !isMissingAuthSessionError(authError)) {
-    console.error("[srs/due-counts] auth unavailable:", authError.message);
-    if (isSupabaseTransportError(authError)) {
-      return NextResponse.json({
-        total: 0,
-        module: 0,
-        personal: 0,
-        byMaterial: [],
-      });
+  const auth = decideWidgetAuth(user, authError);
+  if (auth !== "proceed" || !user) {
+    if (authError && !isMissingAuthSessionError(authError)) {
+      console.error("[srs/due-counts] auth unavailable:", authError.message);
     }
-    return NextResponse.json(
-      { error: "Authentication service temporarily unavailable." },
-      { status: 503, headers: { "Retry-After": "5" } }
-    );
-  }
-  if (!user) {
-    // Public callers (e.g. dashboard SSR before sign-in) get zero counts so
-    // the badge silently disappears rather than 401-ing.
-    return NextResponse.json({
-      total: 0,
-      module: 0,
-      personal: 0,
-      byMaterial: [],
-    });
+    if (auth === "unavailable") {
+      return NextResponse.json(
+        { error: "Authentication service temporarily unavailable." },
+        { status: 503, headers: { "Retry-After": "5" } }
+      );
+    }
+    return NextResponse.json(EMPTY_COUNTS);
   }
 
   const url = new URL(request.url);

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import {
+  AUTH_SUPABASE_TIMEOUT_MS,
+  DEFAULT_SUPABASE_TIMEOUT_MS,
+  WIDGET_SUPABASE_TIMEOUT_MS,
   createBoundedSupabaseFetch,
   createBoundedSupabaseFetchWithRetry,
 } from "./bounded-fetch.ts";
@@ -78,4 +81,12 @@ test("retries once after a deadline abort then succeeds", async () => {
 
   assert.equal(attempts, 2);
   assert.equal(response.status, 200);
+});
+
+test("badge widgets fail open much faster than proxy/page auth", () => {
+  assert.equal(WIDGET_SUPABASE_TIMEOUT_MS, 1_000);
+  assert.equal(AUTH_SUPABASE_TIMEOUT_MS, 12_000);
+  assert.equal(DEFAULT_SUPABASE_TIMEOUT_MS, 5_000);
+  assert.ok(WIDGET_SUPABASE_TIMEOUT_MS < DEFAULT_SUPABASE_TIMEOUT_MS);
+  assert.ok(DEFAULT_SUPABASE_TIMEOUT_MS < AUTH_SUPABASE_TIMEOUT_MS);
 });

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MESSAGING_REFRESH_EVENT } from "@/lib/messaging/realtime";
 import type { SocialBadgeCounts } from "@/lib/messaging/social-badge-types";
+import { sharedJsonGet } from "@/lib/widget-json-fetch";
 
 const POLL_INTERVAL_MS = 45_000;
 
@@ -45,9 +46,9 @@ export function useSocialBadgeCounts(opts?: {
     const fetchCounts = async () => {
       setLoading(true);
       try {
-        const res = await fetch("/api/social/badge-counts");
-        if (!res.ok) throw new Error(`badge-counts ${res.status}`);
-        const json = (await res.json()) as SocialBadgeCounts;
+        const json = await sharedJsonGet<SocialBadgeCounts>(
+          "/api/social/badge-counts"
+        );
         if (!cancelled) {
           setCounts({
             unreadMessages: Number(json.unreadMessages) || 0,
