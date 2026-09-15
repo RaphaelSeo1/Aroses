@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { planCheckoutSessionParams } from "@/lib/billing/checkout-session";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { PLANS } from "@/lib/billing/plans";
-import { assertCheckoutTier, checkoutStripePriceId } from "@/lib/billing/sale";
+import {
+  assertCheckoutTier,
+  checkoutPriceEnvName,
+  checkoutStripePriceId,
+} from "@/lib/billing/sale";
 import { getOrCreateStripeCustomer } from "@/lib/billing/subscription";
 import { getStripe, isStripeConfigured, originFromRequest } from "@/lib/stripe/client";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -44,8 +48,10 @@ export async function POST(request: Request) {
 
   const priceId = checkoutStripePriceId(tier);
   if (!priceId) {
+    const envName = checkoutPriceEnvName(tier);
+    console.error(`[billing] checkout missing ${envName} for ${tier}`);
     return NextResponse.json(
-      { error: `The ${PLANS[tier].name} plan isn't configured yet.` },
+      { error: `The ${PLANS[tier].name} plan isn't available yet.` },
       { status: 500 }
     );
   }

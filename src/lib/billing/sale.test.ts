@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  checkoutPriceEnvName,
   compareAtPriceMonthly,
   resolveCheckoutPriceId,
   salePriceMonthly,
@@ -59,14 +60,25 @@ test("promo OFF charges regular recurring price IDs with no strikethrough", () =
   }
 });
 
-test("promo ON without a promo Price ID does not silently charge regular", () => {
+test("promo ON falls back to the regular Price ID when the promo ID is unset", () => {
   assert.equal(
     resolveCheckoutPriceId(
       { stripePriceId: "reg", stripePromoPriceId: null },
       true
     ),
-    null
+    "reg"
   );
+});
+
+test("missing checkout Price names the promo env var while promo is on", () => {
+  const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
+  process.env.SUBSCRIPTION_PROMO_ENABLED = "true";
+  try {
+    assert.equal(checkoutPriceEnvName("student"), "STRIPE_PRICE_STUDENT_PROMO");
+    assert.equal(checkoutPriceEnvName("basic"), "STRIPE_PRICE_BASIC_PROMO");
+  } finally {
+    process.env.SUBSCRIPTION_PROMO_ENABLED = prev;
+  }
 });
 
 test("each paid tier has distinct regular vs promo display prices while promo is on", () => {

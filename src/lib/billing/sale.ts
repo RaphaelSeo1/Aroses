@@ -105,7 +105,7 @@ export function resolveCheckoutPriceId(
   plan: { stripePriceId: string | null; stripePromoPriceId: string | null },
   promoActive: boolean
 ): string | null {
-  if (promoActive) return plan.stripePromoPriceId;
+  if (promoActive) return plan.stripePromoPriceId ?? plan.stripePriceId;
   return plan.stripePriceId;
 }
 
@@ -115,6 +115,29 @@ export function resolveCheckoutPriceId(
  */
 export function checkoutStripePriceId(tier: PaidPlanTier): string | null {
   return resolveCheckoutPriceId(PLANS[tier], isSubscriptionPromoActive());
+}
+
+const PROMO_PRICE_ENV: Record<PaidPlanTier, string> = {
+  basic: "STRIPE_PRICE_BASIC_PROMO",
+  student: "STRIPE_PRICE_STUDENT_PROMO",
+  plus: "STRIPE_PRICE_PLUS_PROMO",
+  advanced: "STRIPE_PRICE_ADVANCED_PROMO",
+  premium: "STRIPE_PRICE_PREMIUM_PROMO",
+};
+
+const REGULAR_PRICE_ENV: Record<PaidPlanTier, string> = {
+  basic: "STRIPE_PRICE_BASIC_REGULAR",
+  student: "STRIPE_PRICE_STUDENT_REGULAR",
+  plus: "STRIPE_PRICE_PLUS_REGULAR",
+  advanced: "STRIPE_PRICE_ADVANCED_REGULAR",
+  premium: "STRIPE_PRICE_PREMIUM_REGULAR",
+};
+
+/** Env var Checkout expects for this tier on the current promo switch. */
+export function checkoutPriceEnvName(tier: PaidPlanTier): string {
+  return isSubscriptionPromoActive()
+    ? PROMO_PRICE_ENV[tier]
+    : REGULAR_PRICE_ENV[tier];
 }
 
 export function assertCheckoutTier(raw: unknown): PaidPlanTier | null {

@@ -88,8 +88,12 @@ function uniqueIds(...ids: Array<string | null | undefined>): string[] {
   return out;
 }
 
+const BASIC_REGULAR =
+  envId("STRIPE_PRICE_BASIC_REGULAR") ?? envId("STRIPE_PRICE_BASIC");
 const STUDENT_REGULAR =
   envId("STRIPE_PRICE_STUDENT_REGULAR") ?? envId("STRIPE_PRICE_STUDENT");
+const PLUS_REGULAR =
+  envId("STRIPE_PRICE_PLUS_REGULAR") ?? envId("STRIPE_PRICE_PLUS");
 const ADVANCED_REGULAR =
   envId("STRIPE_PRICE_ADVANCED_REGULAR") ?? envId("STRIPE_PRICE_ADVANCED");
 const PREMIUM_REGULAR =
@@ -119,9 +123,12 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     name: "Basic",
     priceMonthly: 19.99,
     promoPriceMonthly: 3.99,
-    stripePriceId: envId("STRIPE_PRICE_BASIC_REGULAR"),
+    stripePriceId: BASIC_REGULAR,
     stripePromoPriceId: envId("STRIPE_PRICE_BASIC_PROMO"),
-    legacyStripePriceIds: [],
+    legacyStripePriceIds: uniqueIds(
+      envId("STRIPE_PRICE_BASIC"),
+      BASIC_REGULAR
+    ).filter((id) => id !== BASIC_REGULAR),
     voiceMinutes: 60,
     courseGenerations: 1,
     sourcePages: 100,
@@ -177,9 +184,12 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     name: "Plus",
     priceMonthly: 59.99,
     promoPriceMonthly: 24.99,
-    stripePriceId: envId("STRIPE_PRICE_PLUS_REGULAR"),
+    stripePriceId: PLUS_REGULAR,
     stripePromoPriceId: envId("STRIPE_PRICE_PLUS_PROMO"),
-    legacyStripePriceIds: [],
+    legacyStripePriceIds: uniqueIds(
+      envId("STRIPE_PRICE_PLUS"),
+      PLUS_REGULAR
+    ).filter((id) => id !== PLUS_REGULAR),
     voiceMinutes: 420,
     courseGenerations: 5,
     sourcePages: 400,
