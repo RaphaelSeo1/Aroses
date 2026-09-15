@@ -1,9 +1,10 @@
 import type { NotesFocusBucketMeta } from "./notes/hydrate-notes-focus-buckets.ts";
 import {
+  isGenericFocusTitle,
   isNotesFocusBucketId,
   notesFocusBucketId,
 } from "./notes/notes-focus-bucket.ts";
-import type { SrsDueByMaterial, SrsDueNoteChild } from "./srs-due.ts";
+import type { SrsDueByMaterial } from "./srs-due.ts";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -18,37 +19,12 @@ function noteTitle(
   sourceNoteId: string | null
 ): string {
   const hydrated = (meta?.fileName ?? "").trim();
-  if (hydrated && hydrated !== "Notes") return hydrated;
+  if (hydrated && !isGenericFocusTitle(hydrated)) return hydrated;
   const label = (sourceLabel ?? "").trim();
-  if (label) return label;
+  if (label && !isGenericFocusTitle(label)) return label;
   if (hydrated) return hydrated;
+  if (label) return label;
   return sourceNoteId ? "Notes" : "Focus questions";
-}
-
-function ensureNoteChild(
-  parent: SrsDueByMaterial,
-  bucketId: string,
-  fileName: string,
-  sourceNoteId: string | null
-): SrsDueNoteChild {
-  if (!parent.notes) parent.notes = [];
-  let child = parent.notes.find((n) => n.materialId === bucketId);
-  if (!child) {
-    child = {
-      materialId: bucketId,
-      sourceNoteId,
-      fileName,
-      personal: 0,
-      total: 0,
-    };
-    parent.notes.push(child);
-  } else {
-    if (fileName && (child.fileName === "Focus questions" || child.fileName === "Notes")) {
-      child.fileName = fileName;
-    }
-    if (!child.sourceNoteId && sourceNoteId) child.sourceNoteId = sourceNoteId;
-  }
-  return child;
 }
 
 export function ensureNotesBucket(
@@ -61,7 +37,7 @@ export function ensureNotesBucket(
   if (!bucket) {
     bucket = {
       materialId: bucketId,
-      fileName: label || "Focus questions",
+      fileName: label && !isGenericFocusTitle(label) ? label : label || "Focus questions",
       courseId: meta?.courseId ?? null,
       courseTitle: meta?.courseTitle ?? null,
       module: 0,
@@ -70,7 +46,7 @@ export function ensureNotesBucket(
     };
     byMaterial.set(bucketId, bucket);
   } else {
-    if (label && (bucket.fileName === "Focus questions" || bucket.fileName === "Notes")) {
+    if (label && isGenericFocusTitle(bucket.fileName) && !isGenericFocusTitle(label)) {
       bucket.fileName = label;
     }
     if (meta?.courseTitle && !bucket.courseTitle) {
@@ -85,8 +61,9 @@ export function ensureNotesBucket(
 }
 
 /**
- * Count a personal/focus card under its course material (nested by note)
- * or as a standalone notes-focus row.
+ * Count a personal/focus card as notes-origin (per-note Review child) or as
+ * course-origin (personal on the study material). Notes-origin never folds
+ * into an existing PDF child just because material_id was set.
  */
 export function addPersonalFocusCount(
   byMaterial: Map<string, SrsDueByMaterial>,
@@ -106,25 +83,25 @@ export function addPersonalFocusCount(
   if (meta?.noteDeleted) return false;
 
   const label = noteTitle(meta, row.sourceLabel, sourceNoteId);
+  const notesOrigin =
+    Boolean(sourceNoteId) || !isGenericFocusTitle(row.sourceLabel);
+
+  if (notesOrigin) {
+    const bucket = ensureNotesBucket(byMaterial, noteBucketId, label, {
+      courseId: meta?.courseId ?? null,
+      courseTitle: meta?.courseTitle ?? null,
+    });
+    bucket.personal += 1;
+    return true;
+  }
+
   const rawMid = row.materialId ? normId(row.materialId) : "";
   const hasRealMaterial = Boolean(rawMid) && !isNotesFocusBucketId(rawMid);
-
   if (hasRealMaterial) {
     const parent = byMaterial.get(rawMid);
-    if (parent) {
-      parent.personal += 1;
-      if (sourceNoteId) {
-        const child = ensureNoteChild(parent, noteBucketId, label, sourceNoteId);
-        child.personal += 1;
-        child.total = child.personal;
-        if (meta?.courseTitle && !parent.courseTitle) {
-          parent.courseTitle = meta.courseTitle;
-          parent.courseId = meta.courseId ?? parent.courseId;
-        }
-      }
-      return true;
-    }
-    if (!sourceNoteId) return false;
+    if (!parent) return false;
+    parent.personal += 1;
+    return true;
   }
 
   const bucket = ensureNotesBucket(byMaterial, noteBucketId, label, {

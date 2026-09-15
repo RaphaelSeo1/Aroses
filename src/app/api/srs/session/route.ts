@@ -3,7 +3,9 @@ import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload, CourseQuizItem } from "@/types/course";
 import type { SrsRating } from "@/lib/srs-sm2";
 import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
+import { repairOrphanNotesFocusCards } from "@/lib/notes/repair-orphan-focus-cards";
 import {
+  isGenericFocusTitle,
   isNotesFocusBucketId,
   notesFocusBucketId,
 } from "@/lib/notes/notes-focus-bucket";
@@ -229,6 +231,11 @@ export async function GET(request: Request) {
   const personalNew: SessionCard[] = [];
 
   if (scope !== "module") {
+    try {
+      await repairOrphanNotesFocusCards(supabase, user.id);
+    } catch (e) {
+      console.error("[srs/session repair focus]", e);
+    }
     const uuids =
       allowedMaterialUuids == null
         ? null
@@ -319,15 +326,20 @@ export async function GET(request: Request) {
       }
       const isNotesOnly = !rawMid;
       const noteBucketId = notesFocusBucketId(sourceNoteId);
-      const bucketId = isNotesOnly ? noteBucketId : normId(rawMid);
+      const sourceLabel =
+        typeof row.source_label === "string" ? row.source_label.trim() : "";
+      const fromNote =
+        Boolean(sourceNoteId) ||
+        Boolean(sourceLabel && !isGenericFocusTitle(sourceLabel));
       const noteMeta = notesMeta.get(noteBucketId);
       if (noteMeta?.noteDeleted) {
         continue;
       }
-      const mat = !isNotesOnly && materialById.has(bucketId)
-        ? materialById.get(bucketId)!
-        : stubMaterial(isNotesOnly ? bucketId : noteBucketId);
-      const treatAsNotes = isNotesOnly || !materialById.has(bucketId);
+      const mat =
+        !isNotesOnly && !fromNote && materialById.has(normId(rawMid))
+          ? materialById.get(normId(rawMid))!
+          : stubMaterial(noteBucketId);
+      const treatAsNotes = isNotesOnly || fromNote || !materialById.has(normId(rawMid || ""));
       const rowModuleId =
         row.module_id == null ? 0 : Number(row.module_id);
       if (moduleIdFilter != null && rowModuleId !== moduleIdFilter) continue;
@@ -343,11 +355,15 @@ export async function GET(request: Request) {
       const dueIso = (row.due_at as string) ?? nowIso;
       const isDue = new Date(dueIso).getTime() <= Date.now();
       const notesLabel =
+        (noteMeta?.fileName && !isGenericFocusTitle(noteMeta.fileName)
+          ? noteMeta.fileName
+          : null) ??
+        (sourceLabel && !isGenericFocusTitle(sourceLabel)
+          ? sourceLabel
+          : null) ??
         noteMeta?.fileName ??
-        (typeof row.source_label === "string" && row.source_label.trim()
-          ? row.source_label.trim()
-          : "Focus questions");
-      const fromNote = Boolean(sourceNoteId);
+        sourceLabel ??
+        "Focus questions";
       const courseTitle = treatAsNotes
         ? (noteMeta?.courseTitle ?? null)
         : deriveCourseTitle(mat) ?? noteMeta?.courseTitle ?? null;

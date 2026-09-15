@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import {
+  isGenericFocusTitle,
   notesFocusBucketId,
   parseNotesFocusBucketNoteId,
 } from "@/lib/notes/notes-focus-bucket";
@@ -93,6 +94,51 @@ export async function hydrateNotesFocusBucketMeta(
     }
   }
 
+  const sessionCourseByNoteId = new Map<string, string>();
+  const sessionTitleByNoteId = new Map<string, string>();
+  if (noteIds.size > 0) {
+    const sessionQuery = await supabase
+      .from("live_lecture_sessions")
+      .select("user_note_id, course_id, title")
+      .eq("user_id", userId)
+      .in("user_note_id", [...noteIds]);
+    if (
+      !sessionQuery.error ||
+      !isMissingDbColumnError(sessionQuery.error, "user_note_id")
+    ) {
+      for (const row of sessionQuery.data ?? []) {
+        const noteId =
+          typeof row.user_note_id === "string" ? row.user_note_id : null;
+        if (!noteId) continue;
+        if (typeof row.course_id === "string" && row.course_id) {
+          sessionCourseByNoteId.set(noteId, row.course_id);
+          if (!courseTitleById.has(row.course_id)) {
+            courseIds.add(row.course_id);
+          }
+        }
+        if (typeof row.title === "string" && row.title.trim()) {
+          sessionTitleByNoteId.set(noteId, row.title.trim());
+        }
+      }
+    }
+    const extraCourseIds = [...courseIds].filter((id) => !courseTitleById.has(id));
+    if (extraCourseIds.length > 0) {
+      const { data: extraCourses } = await supabase
+        .from("courses")
+        .select("id, title")
+        .in("id", extraCourseIds);
+      for (const row of extraCourses ?? []) {
+        const title =
+          typeof row.title === "string" && row.title.trim()
+            ? row.title.trim()
+            : null;
+        if (typeof row.id === "string" && title) {
+          courseTitleById.set(row.id, title);
+        }
+      }
+    }
+  }
+
   for (const raw of notes ?? []) {
     const id = raw.id;
     const bucketId = notesFocusBucketId(id);
@@ -104,10 +150,19 @@ export async function hydrateNotesFocusBucketMeta(
     const courseId =
       typeof raw.course_id === "string"
         ? raw.course_id
-        : (courseRow?.id ?? null);
+        : (courseRow?.id ?? sessionCourseByNoteId.get(id) ?? null);
+    const noteTitle =
+      typeof raw.title === "string" && raw.title.trim()
+        ? raw.title.trim()
+        : "";
+    const sessionTitle = sessionTitleByNoteId.get(id) ?? "";
+    const title =
+      (noteTitle && !isGenericFocusTitle(noteTitle) ? noteTitle : "") ||
+      sessionTitle ||
+      noteTitle ||
+      "Notes";
     out.set(bucketId, {
-      fileName:
-        (typeof raw.title === "string" && raw.title.trim()) || "Notes",
+      fileName: title,
       courseId,
       courseTitle:
         (courseId ? courseTitleById.get(courseId) : null) ??

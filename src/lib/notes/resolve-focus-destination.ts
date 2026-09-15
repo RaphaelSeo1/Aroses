@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { isUuid } from "@/lib/voice-tutor/uuid";
+import { ensureLiveSessionUserNote } from "@/lib/live-notes/sync-standalone-note";
 
 export type FocusSourceInput = {
   materialId?: string;
@@ -30,44 +31,42 @@ function firstModuleId(payload: unknown, preferred?: number): number {
   return ids[0] ?? 1;
 }
 
-async function materialForCourse(
-  supabase: SupabaseClient,
-  userId: string,
-  courseId: string
-): Promise<{ id: string; file_name: string | null; course_payload: unknown } | null> {
-  const { data } = await supabase
-    .from("study_materials")
-    .select("id, file_name, course_payload, user_id")
-    .eq("course_id", courseId)
-    .order("sort_order", { ascending: true })
-    .limit(8);
-  const rows = data ?? [];
-  const owned = rows.find((r) => r.user_id === userId) ?? rows[0];
-  if (!owned) return null;
-  const ok = await canAccessStudyMaterial(supabase, userId, owned.id as string);
-  if (!ok) return null;
-  return {
-    id: owned.id as string,
-    file_name: (owned.file_name as string | null) ?? null,
-    course_payload: owned.course_payload,
-  };
-}
-
 /**
- * Resolve where a notes-sourced focus card should live: a course material
- * when the note is linked, otherwise the notes-only Review bucket.
+ * Resolve where a notes-sourced focus card should live.
+ *
+ * Notes / live notes / tutor notes are always notes-origin: persist
+ * `source_note_id` + the note title, and never attach onto an existing
+ * course PDF just because the note sits next to a course. Course grouping
+ * in Review comes from `user_notes.course_id` (hydrated at read time).
+ *
+ * `materialId` without a note/live/tutor source is course-origin (in-lesson
+ * notes on a study material).
  */
 export async function resolveFocusDestination(
   supabase: SupabaseClient,
   userId: string,
   input: FocusSourceInput
 ): Promise<FocusDestination | { error: string; status: number }> {
+  const fromNotesSurface = Boolean(
+    (input.noteId && isUuid(input.noteId)) ||
+      (input.liveSessionId && isUuid(input.liveSessionId)) ||
+      (input.tutorSessionId && isUuid(input.tutorSessionId))
+  );
+
   let sourceNoteId: string | null =
     input.noteId && isUuid(input.noteId) ? input.noteId : null;
   let sourceLabel = "Notes";
   let courseId: string | null = null;
 
   if (input.liveSessionId && isUuid(input.liveSessionId)) {
+    const ensured = await ensureLiveSessionUserNote(
+      supabase,
+      input.liveSessionId,
+      userId
+    );
+    if (ensured?.noteId) sourceNoteId = ensured.noteId;
+    if (ensured?.courseId) courseId = ensured.courseId;
+
     let { data: session, error: sessionErr } = await supabase
       .from("live_lecture_sessions")
       .select("id, user_id, course_id, user_note_id, title")
@@ -86,13 +85,16 @@ export async function resolveFocusDestination(
       if (sessionErr) console.error("[resolveFocusDestination live]", sessionErr);
       return { error: "Not found.", status: 404 };
     }
-    if (typeof (session as { user_note_id?: unknown }).user_note_id === "string") {
+    if (
+      !sourceNoteId &&
+      typeof (session as { user_note_id?: unknown }).user_note_id === "string"
+    ) {
       sourceNoteId = (session as { user_note_id: string }).user_note_id;
     }
     if (typeof session.title === "string" && session.title.trim()) {
       sourceLabel = session.title.trim();
     }
-    if (typeof session.course_id === "string") {
+    if (!courseId && typeof session.course_id === "string") {
       courseId = session.course_id;
     }
   }
@@ -136,12 +138,41 @@ export async function resolveFocusDestination(
       if (typeof note.title === "string" && note.title.trim()) {
         sourceLabel = note.title.trim();
       }
-      if (!courseId && typeof (note as { course_id?: unknown }).course_id === "string") {
+      if (
+        !courseId &&
+        typeof (note as { course_id?: unknown }).course_id === "string"
+      ) {
         courseId = (note as { course_id: string }).course_id;
       }
     }
   } else if (input.noteId && isUuid(input.noteId)) {
     return { error: "Not found.", status: 404 };
+  }
+
+  if (courseId && sourceNoteId) {
+    const { error } = await supabase
+      .from("user_notes")
+      .update({
+        course_id: courseId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", sourceNoteId)
+      .eq("user_id", userId)
+      .is("course_id", null);
+    if (error && !isMissingDbColumnError(error, "course_id")) {
+      console.error("[resolveFocusDestination note course]", error);
+    }
+  }
+
+  // Notes-origin cards stay notes-only. Course parent in Review is hydrated
+  // from the note's course_id — never from some other course's PDF.
+  if (fromNotesSurface) {
+    return {
+      materialId: null,
+      moduleId: null,
+      sourceNoteId,
+      sourceLabel,
+    };
   }
 
   if (input.materialId && isUuid(input.materialId)) {
@@ -162,22 +193,6 @@ export async function resolveFocusDestination(
       sourceNoteId,
       sourceLabel: sourceLabel !== "Notes" ? sourceLabel : materialLabel,
     };
-  }
-
-  if (courseId) {
-    const mat = await materialForCourse(supabase, userId, courseId);
-    if (mat) {
-      return {
-        materialId: mat.id,
-        moduleId: firstModuleId(mat.course_payload, input.moduleId),
-        sourceNoteId,
-        sourceLabel:
-          sourceLabel !== "Notes"
-            ? sourceLabel
-            : (mat.file_name || "").replace(/\.[a-z0-9]{2,5}$/i, "").trim() ||
-              "Course notes",
-      };
-    }
   }
 
   return {

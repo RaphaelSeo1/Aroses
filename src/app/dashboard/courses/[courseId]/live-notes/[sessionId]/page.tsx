@@ -11,6 +11,7 @@ import {
 } from "@/lib/notes/ingest-job-retry";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
+import { ensureLiveSessionUserNote } from "@/lib/live-notes/sync-standalone-note";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -34,14 +35,38 @@ export default async function LiveNotesSessionPage({ params }: Props) {
   }
 
   // RLS scopes the row to its owner.
-  const { data: session } = await supabase
+  let { data: session, error: sessionErr } = await supabase
     .from("live_lecture_sessions")
     .select(
-      "id, course_id, title, status, duration_seconds, ingest_job_id, notes_text"
+      "id, course_id, title, status, duration_seconds, ingest_job_id, notes_text, user_note_id"
     )
     .eq("id", sessionId)
     .maybeSingle();
+  if (sessionErr && /user_note_id/i.test(sessionErr.message ?? "")) {
+    ({ data: session } = await supabase
+      .from("live_lecture_sessions")
+      .select(
+        "id, course_id, title, status, duration_seconds, ingest_job_id, notes_text"
+      )
+      .eq("id", sessionId)
+      .maybeSingle());
+  }
   if (!session || session.course_id !== courseId) notFound();
+
+  let userNoteId =
+    typeof (session as { user_note_id?: unknown }).user_note_id === "string"
+      ? ((session as { user_note_id: string }).user_note_id)
+      : null;
+  try {
+    const ensured = await ensureLiveSessionUserNote(
+      supabase,
+      sessionId,
+      user.id
+    );
+    if (ensured?.noteId) userNoteId = ensured.noteId;
+  } catch (e) {
+    console.error("[live-notes page ensure note]", e);
+  }
 
   const course = await fetchCourseForDashboard(supabase, courseId, user.id);
   if (!course) notFound();
@@ -76,6 +101,7 @@ export default async function LiveNotesSessionPage({ params }: Props) {
   const initialSession: LiveNotesInitialSession = {
     id: session.id,
     courseId,
+    userNoteId,
     title:
       typeof session.title === "string" && session.title.trim()
         ? session.title.trim()

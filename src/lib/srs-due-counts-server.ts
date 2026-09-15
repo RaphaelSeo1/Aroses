@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SrsDueCounts } from "@/lib/srs-due";
 import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
+import { repairOrphanNotesFocusCards } from "@/lib/notes/repair-orphan-focus-cards";
 import {
   isNotesFocusBucketId,
   notesFocusBucketId,
@@ -138,6 +139,12 @@ export async function fetchSrsDueCountsForUser(
     ) {
       bucket.module += 1;
     }
+  }
+
+  try {
+    await repairOrphanNotesFocusCards(supabase, userId);
+  } catch (e) {
+    console.error("[srs-due-counts repair focus]", e);
   }
 
   let perQ = supabase

@@ -211,8 +211,13 @@ export default async function NotesHubPage() {
   } else {
     userSections = (sectionsRes.data ?? []) as SectionRow[];
   }
-  const courseLiveSessions = liveSessions.filter(
-    (s) => !s.user_note_id && s.course_id
+  const courseLiveSessions = liveSessions.filter((s) => s.course_id);
+  const courseBackedNoteIds = new Set(
+    courseLiveSessions
+      .map((s) =>
+        typeof s.user_note_id === "string" ? (s.user_note_id as string) : null
+      )
+      .filter((id): id is string => Boolean(id))
   );
   const activeNoteSessionByNoteId = new Map(
     liveSessions
@@ -260,7 +265,7 @@ export default async function NotesHubPage() {
     new Set([
       ...courseLiveSessions.map((s) => s.course_id as string),
       ...trashedLive
-        .filter((s) => !s.user_note_id && s.course_id)
+        .filter((s) => s.course_id)
         .map((s) => s.course_id as string),
       ...(materials ?? []).map((m) => m.course_id as string),
     ])
@@ -328,7 +333,11 @@ export default async function NotesHubPage() {
 
   const customSectionCards = (sectionId: string): NoteDocCardData[] =>
     standaloneNotes
-      .filter((n) => (n.section_id as string | null) === sectionId)
+      .filter(
+        (n) =>
+          (n.section_id as string | null) === sectionId &&
+          !courseBackedNoteIds.has(n.id as string)
+      )
       .map((n) => toStandaloneCard(n, n.ingest_job_id ? "Course build started" : null));
 
   const customSectionsBase: NoteHubSection[] = userSections.map((s) => ({
@@ -429,7 +438,9 @@ export default async function NotesHubPage() {
   });
 
   const myNotesCards = dedupeCards([
-    ...standaloneNotes.map((n) => toStandaloneCard(n)),
+    ...standaloneNotes
+      .filter((n) => !courseBackedNoteIds.has(n.id as string))
+      .map((n) => toStandaloneCard(n)),
     ...liveCards,
     ...tutorCards,
     ...courseNoteCards,
@@ -540,7 +551,7 @@ export default async function NotesHubPage() {
       };
     }),
     ...trashedLive
-      .filter((s) => !s.user_note_id && s.course_id)
+      .filter((s) => s.course_id)
       .map((s) => {
         const deletedAt =
           typeof (s as { deleted_at?: string }).deleted_at === "string"

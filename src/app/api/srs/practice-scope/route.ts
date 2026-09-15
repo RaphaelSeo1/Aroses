@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
 import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
 import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
+import { repairOrphanNotesFocusCards } from "@/lib/notes/repair-orphan-focus-cards";
 import {
   isNotesFocusBucketId,
   notesFocusBucketId,
@@ -90,6 +91,11 @@ export async function GET() {
 
   // Focus-card counts (may include non-owned materials). Nested by source
   // note even when the card is attached to a course material_id.
+  try {
+    await repairOrphanNotesFocusCards(supabase, user.id);
+  } catch (e) {
+    console.error("[practice-scope repair focus]", e);
+  }
   type PersonalRow = {
     material_id?: string | null;
     source_note_id?: string | null;

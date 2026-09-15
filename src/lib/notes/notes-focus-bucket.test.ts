@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isGenericFocusTitle,
   isNotesFocusBucketId,
   notesFocusBucketId,
   NOTES_FOCUS_BUCKET_ID,
@@ -17,4 +18,11 @@ test("notesFocusBucketId uses per-note buckets when note id is known", () => {
 test("legacy bucket id still recognized", () => {
   assert.equal(notesFocusBucketId(null), NOTES_FOCUS_BUCKET_ID);
   assert.equal(isNotesFocusBucketId(NOTES_FOCUS_BUCKET_ID), true);
+});
+
+test("isGenericFocusTitle rejects placeholders but keeps real note titles", () => {
+  assert.equal(isGenericFocusTitle("Focus questions"), true);
+  assert.equal(isGenericFocusTitle("Notes"), true);
+  assert.equal(isGenericFocusTitle("Lecture 2"), false);
+  assert.equal(isGenericFocusTitle("PBHLTH 162A"), false);
 });

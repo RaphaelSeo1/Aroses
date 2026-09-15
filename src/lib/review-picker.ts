@@ -1,4 +1,5 @@
 import {
+  isGenericFocusTitle,
   isNotesFocusBucketId,
   NOTES_FOCUS_BUCKET_ID,
   parseNotesFocusBucketNoteId,
@@ -241,13 +242,15 @@ export function pickerParentLabel(
 ): string {
   if (group.courseTitle) return group.courseTitle;
   if (group.courseId) return fallbacks.courseFallback;
+  const name = (group.fileName || "").trim();
+  if (name && !isGenericFocusTitle(name)) return name;
   if (
     group.id === NOTES_FOCUS_BUCKET_ID ||
     (isNotesFocusBucketId(group.id) && !parseNotesFocusBucketNoteId(group.id))
   ) {
     return fallbacks.focusQuestions;
   }
-  return group.fileName || fallbacks.focusQuestions;
+  return name || fallbacks.focusQuestions;
 }
 
 export function pickerChildLabel(

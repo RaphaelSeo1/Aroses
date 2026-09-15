@@ -121,8 +121,10 @@ export async function PUT(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  if (data.user_note_id) {
+  try {
     await syncLiveSessionToStandaloneNote(supabase, sessionId, user.id);
+  } catch (e) {
+    console.error("[live-notes notes PUT sync]", e);
   }
 
   return NextResponse.json({

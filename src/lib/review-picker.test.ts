@@ -167,6 +167,64 @@ test("legacy notes bucket without a note id is Focus questions", () => {
   );
 });
 
+test("orphan notes bucket with source_label Lecture 2 keeps that title", () => {
+  const groups = groupReviewPickerRows([
+    {
+      materialId: "notes",
+      fileName: "Lecture 2",
+      courseId: null,
+      courseTitle: null,
+      module: 0,
+      personal: 49,
+      total: 49,
+    },
+  ]);
+  assert.equal(
+    pickerParentLabel(groups[0]!, {
+      focusQuestions: "Focus questions",
+      courseFallback: "Course",
+    }),
+    "Lecture 2"
+  );
+});
+
+test("Lecture 2 notes-origin child sits under PBHLTH, not a course PDF", () => {
+  const groups = groupReviewPickerRows([
+    {
+      materialId: MAT,
+      fileName: "Telomeres, centromeres and chromosome substructure.pdf",
+      courseId: COURSE,
+      courseTitle: "MCB 104 (Fall 2026)",
+      module: 8,
+      personal: 0,
+      total: 8,
+    },
+    {
+      materialId: `note:${NOTE_A}`,
+      fileName: "Lecture 2",
+      courseId: "44444444-4444-4444-8444-444444444444",
+      courseTitle: "PBHLTH 162A",
+      module: 0,
+      personal: 49,
+      total: 49,
+    },
+  ]);
+  assert.equal(groups.length, 2);
+  const pbhlth = groups.find((g) => g.courseTitle === "PBHLTH 162A")!;
+  const mcb = groups.find((g) => g.courseTitle === "MCB 104 (Fall 2026)")!;
+  assert.equal(pbhlth.children.length, 1);
+  assert.equal(pbhlth.children[0]!.kind, "note");
+  assert.equal(pbhlth.children[0]!.fileName, "Lecture 2");
+  assert.equal(mcb.children.every((c) => c.kind === "module"), true);
+  assert.equal(
+    pickerParentLabel(pbhlth, {
+      focusQuestions: "Focus questions",
+      courseFallback: "Course",
+    }),
+    "PBHLTH 162A"
+  );
+});
+
 test("full course selection passes material + note buckets without noteIds param", () => {
   const groups = groupReviewPickerRows([courseWithTwoNotes()]);
   const selected = new Set(allPickerLeafIds(groups));

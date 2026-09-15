@@ -228,7 +228,7 @@ export function LiveNotesSurface({
   const router = useRouter();
   const t = useT();
   const sessionId = session.id;
-  const isStandalone = variant === "standalone" || Boolean(session.userNoteId);
+  const isStandalone = variant === "standalone";
   /** Hub list — standalone notes no longer use a separate "doc" editor page. */
   const allNotesHref = "/notes";
 

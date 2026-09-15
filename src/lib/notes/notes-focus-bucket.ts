@@ -31,3 +31,15 @@ export function parseNotesFocusBucketNoteId(
   const noteId = raw.slice(NOTES_FOCUS_BUCKET_PREFIX.length);
   return UUID_RE.test(noteId) ? noteId : null;
 }
+
+/** Placeholder titles that should never win over a real note/course name. */
+export function isGenericFocusTitle(label: string | null | undefined): boolean {
+  const s = (label ?? "").trim().toLowerCase();
+  return (
+    !s ||
+    s === "notes" ||
+    s === "focus questions" ||
+    s === "focus cards" ||
+    s === "from notes"
+  );
+}
