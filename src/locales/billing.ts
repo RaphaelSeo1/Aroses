@@ -117,6 +117,11 @@ const en = {
   saleWas: "Was ${price}",
   salePriceNote: "Promotional price",
   bestBadge: "BEST VALUE",
+  limitedTimeBadge: "LIMITED TIME",
+  studentTrialHeadline: "3-day free trial",
+  studentTrialThen: "Then",
+  studentTrialNote: "Card saved at checkout. You won’t be charged until day 4.",
+  startStudentTrial: "Start 3-day trial",
 };
 
 const ko: typeof en = {
@@ -234,6 +239,11 @@ const ko: typeof en = {
   saleWas: "정가 ${price}",
   salePriceNote: "프로모션 가격",
   bestBadge: "BEST VALUE",
+  limitedTimeBadge: "기간 한정",
+  studentTrialHeadline: "3일 무료 체험",
+  studentTrialThen: "이후",
+  studentTrialNote: "결제 시 카드가 등록되고, 4일째부터 청구돼요.",
+  startStudentTrial: "3일 체험 시작",
 };
 
 export const billing = { en, ko };

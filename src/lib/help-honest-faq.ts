@@ -4,7 +4,8 @@
  */
 
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { PLANS } from "@/lib/billing/plans";
+import { PLANS, formatUsdAmount } from "@/lib/billing/plans";
+import { salePriceMonthly } from "@/lib/billing/sale";
 import { tf } from "@/lib/i18n/format";
 import type { UiLocale } from "@/lib/i18n/config";
 import { helpContent } from "@/locales/help-content";
@@ -28,11 +29,11 @@ function resolveHonestItem(
       question: item.question,
       paragraphs: [
         tf(helpContent[locale].faq.pricingParagraph, {
-          basicPrice: String(PLANS.basic.priceMonthly),
-          studentPrice: String(PLANS.student.priceMonthly),
-          plusPrice: String(PLANS.plus.priceMonthly),
-          advancedPrice: String(PLANS.advanced.priceMonthly),
-          premiumPrice: String(PLANS.premium.priceMonthly),
+          basicPrice: formatUsdAmount(salePriceMonthly("basic")),
+          studentPrice: formatUsdAmount(salePriceMonthly("student")),
+          plusPrice: formatUsdAmount(salePriceMonthly("plus")),
+          advancedPrice: formatUsdAmount(salePriceMonthly("advanced")),
+          premiumPrice: formatUsdAmount(salePriceMonthly("premium")),
           studentGens: String(PLANS.student.courseGenerations),
           studentPages: String(PLANS.student.sourcePages),
           advancedGens: String(PLANS.advanced.courseGenerations),

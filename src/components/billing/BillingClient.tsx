@@ -14,6 +14,7 @@ import {
   salePriceMonthly,
   salePercentForTier,
 } from "@/lib/billing/sale";
+import { isStudentTrialActive } from "@/lib/billing/student-trial";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import type { Dictionary } from "@/locales";
@@ -89,6 +90,14 @@ function planStrings(t: Dictionary["billing"], tier: PlanTier) {
       t.planPremiumHighlight6,
     ],
   };
+  const depthName: Record<PlanTier, string | null> = {
+    free: null,
+    basic: t.depthEssential,
+    student: t.depthStandard,
+    plus: t.depthDetailed,
+    advanced: t.depthComprehensive,
+    premium: t.depthMaximum,
+  };
   const depthHint: Record<PlanTier, string | null> = {
     free: null,
     basic: t.depthEssentialHint,
@@ -102,6 +111,7 @@ function planStrings(t: Dictionary["billing"], tier: PlanTier) {
     tagline: taglines[tier],
     includes: includes[tier],
     highlights: highlights[tier],
+    depthName: depthName[tier],
     depthHint: depthHint[tier],
   };
 }
@@ -226,11 +236,11 @@ export function BillingClient({
 
   return (
     <div>
-      <header className="mb-8">
+      <header className="mb-10">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
           {t.billing.title}
         </h1>
-        <p className="mt-2 max-w-2xl text-pretty text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+        <p className="mt-3 max-w-2xl text-pretty text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
           {t.billing.subtitleLong}
         </p>
       </header>
@@ -253,12 +263,12 @@ export function BillingClient({
       {error ? <Banner tone="error">{error}</Banner> : null}
 
       {/* Current plan summary */}
-      <div className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-zinc-200/90 bg-white/95 p-5 dark:border-zinc-800 dark:bg-zinc-950/90">
-        <div>
+      <div className="mb-12 flex flex-wrap items-center justify-between gap-6 rounded-2xl border border-zinc-200/90 bg-white/95 p-6 sm:p-7 dark:border-zinc-800 dark:bg-zinc-950/90">
+        <div className="min-w-0 flex-1">
           <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
             {t.billing.currentPlan}
           </p>
-          <p className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+          <p className="mt-2 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
             {currentTier === "free" ? t.billing.noActiveSub : currentPlan.name}
             {voiceUnlimited ? (
               <span className="ml-2 text-sm font-normal text-zinc-500">
@@ -273,7 +283,7 @@ export function BillingClient({
               </span>
             ) : null}
           </p>
-          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1.5 text-sm text-zinc-500 dark:text-zinc-400">
             {statusLine(
               t.billing,
               status,
@@ -281,7 +291,7 @@ export function BillingClient({
               periodEndLabel
             )}
           </p>
-          <div className="mt-3 w-full max-w-xs">
+          <div className="mt-5 w-full max-w-xs">
             <div className="flex w-full items-center justify-between gap-3 text-[11px] text-zinc-500 dark:text-zinc-400">
               <span className="shrink-0">{t.billing.voiceThisPeriod}</span>
               <span className="shrink-0 tabular-nums">
@@ -317,8 +327,8 @@ export function BillingClient({
         ) : null}
       </div>
 
-      {/* Plan cards */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      {/* Plan cards — wrap 2 then 3 rather than five crushed columns */}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 md:gap-7 xl:grid-cols-3">
         {CHECKOUT_PLAN_ORDER.map((tier) => {
           const plan = planStrings(t.billing, tier);
           const charged = salePriceMonthly(tier);
@@ -331,27 +341,35 @@ export function BillingClient({
             wasPrice > charged;
           const salePercent = showSale ? salePercentForTier(tier) : 0;
           const isBest = tier === "advanced";
+          const isTrialCard =
+            isStudentTrialActive() && tier === "student" && !isCurrent;
           return (
             <div
               key={tier}
-              className={`relative flex flex-col rounded-2xl border p-5 ${
+              className={`relative flex flex-col rounded-2xl border px-6 pb-6 pt-7 ${
                 isBest
                   ? "plan-card-best"
-                  : isCurrent
-                    ? "border-brand bg-brand/[0.04] dark:border-brand-soft dark:bg-brand-soft/[0.06]"
-                    : "border-zinc-200/90 bg-white/95 dark:border-zinc-800 dark:bg-zinc-950/90"
+                  : isTrialCard
+                    ? "plan-card-trial"
+                    : isCurrent
+                      ? "border-brand bg-brand/[0.04] dark:border-brand-soft dark:bg-brand-soft/[0.06]"
+                      : "border-zinc-200/90 bg-white/95 dark:border-zinc-800 dark:bg-zinc-950/90"
               }`}
             >
               {isBest ? (
                 <span className="plan-best-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-3 py-0.5 text-[10px] font-bold tracking-[0.14em]">
                   {t.billing.bestBadge}
                 </span>
+              ) : isTrialCard ? (
+                <span className="plan-trial-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-3 py-0.5 text-[10px] font-bold tracking-[0.14em]">
+                  {t.billing.limitedTimeBadge}
+                </span>
               ) : null}
-              <div className="flex items-baseline justify-between gap-2">
+              <div className="flex items-start justify-between gap-3">
                 <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                   {plan.name}
                 </h2>
-                <div className="flex shrink-0 items-center gap-1.5">
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                   {showSale ? (
                     <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300">
                       {tf(t.billing.saleBadge, { percent: String(salePercent) })}
@@ -364,50 +382,78 @@ export function BillingClient({
                   ) : null}
                 </div>
               </div>
-              <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              <p className="mt-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
                 {plan.tagline}
               </p>
-              <p className="mt-3">
-                {showSale ? (
-                  <>
-                    <span className="mr-2 text-lg font-medium text-zinc-400 line-through dark:text-zinc-500">
-                      ${formatUsdAmount(wasPrice)}
+
+              <div className="mt-6">
+                {isTrialCard ? (
+                  <p className="text-sm font-semibold tracking-tight text-emerald-800 dark:text-emerald-300">
+                    {t.billing.studentTrialHeadline}
+                  </p>
+                ) : null}
+                <p className={isTrialCard ? "mt-2" : undefined}>
+                  {isTrialCard ? (
+                    <span className="mr-2 text-xs font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+                      {t.billing.studentTrialThen}
                     </span>
+                  ) : null}
+                  {showSale ? (
+                    <>
+                      <span className="mr-2 text-lg font-medium text-zinc-400 line-through dark:text-zinc-500">
+                        ${formatUsdAmount(wasPrice)}
+                      </span>
+                      <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                        ${formatUsdAmount(charged)}
+                      </span>
+                    </>
+                  ) : (
                     <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
                       ${formatUsdAmount(charged)}
                     </span>
-                  </>
-                ) : (
-                  <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                    ${formatUsdAmount(charged)}
+                  )}
+                  <span className="text-sm text-zinc-500 dark:text-zinc-400">
+                    {" "}
+                    {t.billing.perMonthLabel}
                   </span>
-                )}
-                <span className="text-sm text-zinc-500 dark:text-zinc-400">
-                  {" "}
-                  {t.billing.perMonthLabel}
-                </span>
-              </p>
-              {showSale ? (
-                <p className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-                  {t.billing.salePriceNote}
+                </p>
+                {showSale ? (
+                  <p className="mt-2 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                    {t.billing.salePriceNote}
+                  </p>
+                ) : null}
+                {isTrialCard ? (
+                  <p className="mt-2 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+                    {t.billing.studentTrialNote}
+                  </p>
+                ) : null}
+              </div>
+
+              {plan.depthName ? (
+                <p
+                  className="mt-6 truncate text-xs text-zinc-500 dark:text-zinc-400"
+                  title={plan.depthHint ?? undefined}
+                >
+                  <span className="font-medium text-zinc-600 dark:text-zinc-300">
+                    {t.billing.depthLabel}
+                  </span>
+                  <span className="mx-1.5 text-zinc-300 dark:text-zinc-600">
+                    ·
+                  </span>
+                  <span>{plan.depthName}</span>
                 </p>
               ) : null}
+
               {plan.includes ? (
-                <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                <p className="mt-5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
                   {plan.includes}
                 </p>
-              ) : null}
-              {plan.depthHint ? (
-                <p
-                  className="mt-1 text-[11px] leading-snug text-zinc-500 dark:text-zinc-400"
-                  title={plan.depthHint}
-                >
-                  {t.billing.depthLabel}: {plan.depthHint}
-                </p>
-              ) : null}
-              <ul className="mt-3 flex-1 space-y-2 text-sm text-zinc-600 dark:text-zinc-300">
+              ) : (
+                <div className="mt-5" />
+              )}
+              <ul className="mt-3 flex-1 space-y-2.5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
                 {plan.highlights.map((h) => (
-                  <li key={h} className="flex items-start gap-2">
+                  <li key={h} className="flex items-start gap-2.5">
                     <svg
                       className="mt-0.5 h-4 w-4 shrink-0 text-brand dark:text-brand-soft"
                       viewBox="0 0 24 24"
@@ -424,7 +470,7 @@ export function BillingClient({
                   </li>
                 ))}
               </ul>
-              <div className="mt-5">{renderCta(tier, isCurrent)}</div>
+              <div className="mt-8">{renderCta(tier, isCurrent, isTrialCard)}</div>
             </div>
           );
         })}
@@ -432,7 +478,7 @@ export function BillingClient({
     </div>
   );
 
-  function renderCta(tier: PlanTier, isCurrent: boolean) {
+  function renderCta(tier: PlanTier, isCurrent: boolean, isTrialCard: boolean) {
     if (isCurrent) {
       return (
         <button
@@ -474,9 +520,11 @@ export function BillingClient({
       >
         {busyTier === tier
           ? t.billing.redirecting
-          : isPaidTier(currentTier)
-            ? t.billing.switchPlan
-            : t.billing.upgrade}
+          : isTrialCard
+            ? t.billing.startStudentTrial
+            : isPaidTier(currentTier)
+              ? t.billing.switchPlan
+              : t.billing.upgrade}
       </button>
     );
   }

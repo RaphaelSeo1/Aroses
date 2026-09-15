@@ -27,6 +27,7 @@ import {
   salePercentForTier,
   salePriceMonthly,
 } from "@/lib/billing/sale";
+import { isStudentTrialActive } from "@/lib/billing/student-trial";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import type { Dictionary } from "@/locales";
@@ -249,7 +250,7 @@ function UpgradePlanCards({
       <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
         {plansHeading}
       </p>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {CHECKOUT_PLAN_ORDER.map((tier) => {
           const charged = salePriceMonthly(tier);
           const wasPrice = compareAtPriceMonthly(tier);
@@ -260,19 +261,26 @@ function UpgradePlanCards({
             wasPrice > charged;
           const salePercent = showSale ? salePercentForTier(tier) : 0;
           const isBest = tier === "advanced";
+          const isTrialCard = isStudentTrialActive() && tier === "student";
           const { name, tagline, highlights } = planCardCopy(billing, tier);
           return (
             <div
               key={tier}
-              className={`relative flex flex-col rounded-2xl border p-4 ${
+              className={`relative flex flex-col rounded-2xl border p-5 ${
                 isBest
                   ? "plan-card-best"
-                  : "border-zinc-200/90 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/50"
+                  : isTrialCard
+                    ? "plan-card-trial"
+                    : "border-zinc-200/90 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/50"
               }`}
             >
               {isBest ? (
                 <span className="plan-best-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-[0.14em]">
                   {upgradeBest}
+                </span>
+              ) : isTrialCard ? (
+                <span className="plan-trial-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-[0.14em]">
+                  {billing.limitedTimeBadge}
                 </span>
               ) : null}
               <div className="flex items-start justify-between gap-2">
@@ -287,30 +295,47 @@ function UpgradePlanCards({
                   </span>
                 ) : null}
               </div>
-              <p className="mt-1 text-xs leading-snug text-zinc-500 dark:text-zinc-400">
+              <p className="mt-1.5 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
                 {tagline}
               </p>
-              <p className="mt-2">
-                {showSale ? (
-                  <>
-                    <span className="mr-1 text-sm font-medium text-zinc-400 line-through dark:text-zinc-500">
-                      ${formatUsdAmount(wasPrice)}
+              <div className="mt-4">
+                {isTrialCard ? (
+                  <p className="text-xs font-semibold tracking-tight text-emerald-800 dark:text-emerald-300">
+                    {billing.studentTrialHeadline}
+                  </p>
+                ) : null}
+                <p className={isTrialCard ? "mt-1.5" : undefined}>
+                  {isTrialCard ? (
+                    <span className="mr-1.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+                      {billing.studentTrialThen}
                     </span>
+                  ) : null}
+                  {showSale ? (
+                    <>
+                      <span className="mr-1 text-sm font-medium text-zinc-400 line-through dark:text-zinc-500">
+                        ${formatUsdAmount(wasPrice)}
+                      </span>
+                      <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                        ${formatUsdAmount(charged)}
+                      </span>
+                    </>
+                  ) : (
                     <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
                       ${formatUsdAmount(charged)}
                     </span>
-                  </>
-                ) : (
-                  <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                    ${formatUsdAmount(charged)}
+                  )}
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                    {" "}
+                    {perMonthLabel}
                   </span>
-                )}
-                <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                  {" "}
-                  {perMonthLabel}
-                </span>
-              </p>
-              <ul className="mt-3 flex-1 space-y-1.5 text-xs leading-snug text-zinc-600 dark:text-zinc-300">
+                </p>
+                {showSale ? (
+                  <p className="mt-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+                    {billing.salePriceNote}
+                  </p>
+                ) : null}
+              </div>
+              <ul className="mt-4 flex-1 space-y-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-300">
                 {highlights.map((h) => (
                   <li key={h} className="flex items-start gap-1.5">
                     <span
@@ -327,7 +352,7 @@ function UpgradePlanCards({
                 type="button"
                 disabled={busyTier != null}
                 onClick={() => onCheckout(tier)}
-                className={`mt-4 inline-flex w-full items-center justify-center rounded-full px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
+                className={`mt-5 inline-flex w-full items-center justify-center rounded-full px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
                   isBest
                     ? "bg-violet-600 text-white hover:bg-violet-700"
                     : "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
@@ -335,7 +360,9 @@ function UpgradePlanCards({
               >
                 {busyTier === tier
                   ? choosePlanBusy
-                  : tf(choosePlan, { name })}
+                  : isTrialCard
+                    ? billing.startStudentTrial
+                    : tf(choosePlan, { name })}
               </button>
             </div>
           );

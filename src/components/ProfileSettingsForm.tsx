@@ -582,7 +582,11 @@ export function ProfileSettingsForm({
       </aside>
 
       <div className="min-w-0 flex-1">
-        <div className="overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-xl shadow-zinc-900/[0.06] ring-1 ring-zinc-900/[0.04] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-black/40 dark:ring-white/[0.06]">
+        <div
+          className={`rounded-2xl border border-zinc-200/90 bg-white shadow-xl shadow-zinc-900/[0.06] ring-1 ring-zinc-900/[0.04] dark:border-zinc-800 dark:bg-zinc-950 dark:shadow-black/40 dark:ring-white/[0.06] ${
+            panel === "billing" ? "overflow-visible" : "overflow-hidden"
+          }`}
+        >
           <div className={panel === "general" ? undefined : "hidden"}>
           {visitedPanels.has("general") && (
             <>
@@ -933,7 +937,7 @@ export function ProfileSettingsForm({
           {showBilling ? (
             <div className={panel === "billing" ? undefined : "hidden"}>
               {visitedPanels.has("billing") && billingPanel ? (
-                <div className="px-5 pb-10 pt-5 sm:px-8 sm:pb-12 sm:pt-6">
+                <div className="px-5 pb-12 pt-8 sm:px-8 sm:pb-14 sm:pt-10">
                   {billingPanel}
                 </div>
               ) : null}

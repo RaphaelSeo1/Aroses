@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { PLANS } from "@/lib/billing/plans";
 import { assertCheckoutTier, checkoutStripePriceId } from "@/lib/billing/sale";
+import { studentTrialDaysForCheckout } from "@/lib/billing/student-trial";
 import { getOrCreateStripeCustomer } from "@/lib/billing/subscription";
 import { getStripe, isStripeConfigured, originFromRequest } from "@/lib/stripe/client";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -56,6 +57,7 @@ export async function POST(request: Request) {
     });
     const origin = originFromRequest(request);
     const stripe = getStripe();
+    const trialDays = studentTrialDaysForCheckout(tier);
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
@@ -66,7 +68,10 @@ export async function POST(request: Request) {
       client_reference_id: user.id,
       // Stamp the user id everywhere the webhook might read it.
       metadata: { user_id: user.id },
-      subscription_data: { metadata: { user_id: user.id } },
+      subscription_data: {
+        metadata: { user_id: user.id },
+        ...(trialDays != null ? { trial_period_days: trialDays } : {}),
+      },
     });
 
     if (!session.url) {

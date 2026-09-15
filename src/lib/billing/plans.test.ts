@@ -82,7 +82,7 @@ test("public paid tiers have the specified entitlements", () => {
       depth: "maximum",
       early: true,
       regular: 109.99,
-      promo: 59,
+      promo: 59.99,
     },
   };
 

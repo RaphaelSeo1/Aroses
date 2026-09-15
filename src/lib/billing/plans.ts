@@ -230,7 +230,7 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     tier: "premium",
     name: "Premium",
     priceMonthly: 109.99,
-    promoPriceMonthly: 59,
+    promoPriceMonthly: 59.99,
     stripePriceId: PREMIUM_REGULAR,
     stripePromoPriceId: envId("STRIPE_PRICE_PREMIUM_PROMO"),
     legacyStripePriceIds: uniqueIds(
