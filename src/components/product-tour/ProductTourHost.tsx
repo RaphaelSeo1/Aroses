@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { PlanCardsRow } from "@/components/billing/PlanCardsRow";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import {
   OPEN_UPGRADE_EVENT,
@@ -250,30 +251,30 @@ function UpgradePlanCards({
       <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
         {plansHeading}
       </p>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <PlanCardsRow>
         {CHECKOUT_PLAN_ORDER.map((tier) => {
-          const charged = salePriceMonthly(tier);
-          const wasPrice = compareAtPriceMonthly(tier);
-          const showSale =
-            isPaidTier(tier) &&
-            charged > 0 &&
-            wasPrice != null &&
-            wasPrice > charged;
-          const salePercent = showSale ? salePercentForTier(tier) : 0;
-          const isBest = tier === "advanced";
-          const isTrialCard = isStudentTrialActive() && tier === "student";
-          const { name, tagline, highlights } = planCardCopy(billing, tier);
-          return (
-            <div
-              key={tier}
-              className={`relative flex flex-col rounded-2xl border p-5 ${
-                isBest
-                  ? "plan-card-best"
-                  : isTrialCard
-                    ? "plan-card-trial"
-                    : "border-zinc-200/90 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/50"
-              }`}
-            >
+            const charged = salePriceMonthly(tier);
+            const wasPrice = compareAtPriceMonthly(tier);
+            const showSale =
+              isPaidTier(tier) &&
+              charged > 0 &&
+              wasPrice != null &&
+              wasPrice > charged;
+            const salePercent = showSale ? salePercentForTier(tier) : 0;
+            const isBest = tier === "advanced";
+            const isTrialCard = isStudentTrialActive() && tier === "student";
+            const { name, tagline, highlights } = planCardCopy(billing, tier);
+            return (
+              <div
+                key={tier}
+                className={`relative flex h-full min-w-0 flex-col rounded-2xl border p-3.5 sm:p-4 ${
+                  isBest
+                    ? "plan-card-best"
+                    : isTrialCard
+                      ? "plan-card-trial"
+                      : "border-zinc-200/90 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/50"
+                }`}
+              >
               {isBest ? (
                 <span className="plan-best-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-[0.14em]">
                   {upgradeBest}
@@ -348,26 +349,28 @@ function UpgradePlanCards({
                   </li>
                 ))}
               </ul>
-              <button
-                type="button"
-                disabled={busyTier != null}
-                onClick={() => onCheckout(tier)}
-                className={`mt-5 inline-flex w-full items-center justify-center rounded-full px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
-                  isBest
-                    ? "bg-violet-600 text-white hover:bg-violet-700"
-                    : "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
-                }`}
-              >
-                {busyTier === tier
-                  ? choosePlanBusy
-                  : isTrialCard
-                    ? billing.startStudentTrial
-                    : tf(choosePlan, { name })}
-              </button>
+              <div className="mt-auto pt-4">
+                <button
+                  type="button"
+                  disabled={busyTier != null}
+                  onClick={() => onCheckout(tier)}
+                  className={`inline-flex w-full items-center justify-center rounded-full px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
+                    isBest
+                      ? "bg-violet-600 text-white hover:bg-violet-700"
+                      : "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
+                  }`}
+                >
+                  {busyTier === tier
+                    ? choosePlanBusy
+                    : isTrialCard
+                      ? billing.startStudentTrial
+                      : tf(choosePlan, { name })}
+                </button>
+              </div>
             </div>
           );
         })}
-      </div>
+      </PlanCardsRow>
       {checkoutError ? (
         <p
           className="mt-3 text-center text-xs font-medium text-red-600 dark:text-red-400"
@@ -823,7 +826,7 @@ function ProductTourInner() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="product-tour-celebration-title"
-          className="my-6 w-full max-w-4xl rounded-3xl border border-zinc-200 bg-white p-6 text-center shadow-2xl shadow-zinc-950/30 dark:border-zinc-700 dark:bg-zinc-950 sm:p-8"
+          className="my-6 w-full max-w-7xl rounded-3xl border border-zinc-200 bg-white p-5 text-center shadow-2xl shadow-zinc-950/30 dark:border-zinc-700 dark:bg-zinc-950 sm:p-7"
         >
           <span
             className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-brand-blush text-brand ring-1 ring-brand/20 dark:bg-brand/20 dark:text-brand-soft"
@@ -882,7 +885,7 @@ function ProductTourInner() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="upgrade-required-title"
-          className="my-6 w-full max-w-4xl rounded-3xl border border-zinc-200 bg-white p-6 text-center shadow-2xl shadow-zinc-950/30 dark:border-zinc-700 dark:bg-zinc-950 sm:p-8"
+          className="my-6 w-full max-w-7xl rounded-3xl border border-zinc-200 bg-white p-5 text-center shadow-2xl shadow-zinc-950/30 dark:border-zinc-700 dark:bg-zinc-950 sm:p-7"
         >
           <h2
             id="upgrade-required-title"

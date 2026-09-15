@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { PlanCardsRow } from "@/components/billing/PlanCardsRow";
 import {
   CHECKOUT_PLAN_ORDER,
   formatUsdAmount,
@@ -327,8 +328,8 @@ export function BillingClient({
         ) : null}
       </div>
 
-      {/* Plan cards — wrap 2 then 3 rather than five crushed columns */}
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 md:gap-7 xl:grid-cols-3">
+      {/* Plan cards — five across; scroll on narrow viewports instead of wrapping */}
+      <PlanCardsRow>
         {CHECKOUT_PLAN_ORDER.map((tier) => {
           const plan = planStrings(t.billing, tier);
           const charged = salePriceMonthly(tier);
@@ -346,7 +347,7 @@ export function BillingClient({
           return (
             <div
               key={tier}
-              className={`relative flex flex-col rounded-2xl border px-6 pb-6 pt-7 ${
+              className={`relative flex h-full min-w-0 flex-col rounded-2xl border px-3.5 pb-4 pt-5 sm:px-4 sm:pb-5 sm:pt-6 ${
                 isBest
                   ? "plan-card-best"
                   : isTrialCard
@@ -357,73 +358,73 @@ export function BillingClient({
               }`}
             >
               {isBest ? (
-                <span className="plan-best-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-3 py-0.5 text-[10px] font-bold tracking-[0.14em]">
+                <span className="plan-best-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-[0.14em]">
                   {t.billing.bestBadge}
                 </span>
               ) : isTrialCard ? (
-                <span className="plan-trial-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-3 py-0.5 text-[10px] font-bold tracking-[0.14em]">
+                <span className="plan-trial-badge absolute -top-2.5 left-1/2 z-10 -translate-x-1/2 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-[0.14em]">
                   {t.billing.limitedTimeBadge}
                 </span>
               ) : null}
-              <div className="flex items-start justify-between gap-3">
-                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              <div className="flex items-start justify-between gap-2">
+                <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
                   {plan.name}
                 </h2>
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
                   {showSale ? (
-                    <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300">
+                    <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300">
                       {tf(t.billing.saleBadge, { percent: String(salePercent) })}
                     </span>
                   ) : null}
                   {isCurrent ? (
-                    <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand dark:bg-brand-soft/15 dark:text-brand-soft">
+                    <span className="rounded-full bg-brand/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand dark:bg-brand-soft/15 dark:text-brand-soft">
                       {t.billing.current}
                     </span>
                   ) : null}
                 </div>
               </div>
-              <p className="mt-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
+              <p className="mt-1.5 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
                 {plan.tagline}
               </p>
 
-              <div className="mt-6">
+              <div className="mt-4">
                 {isTrialCard ? (
-                  <p className="text-sm font-semibold tracking-tight text-emerald-800 dark:text-emerald-300">
+                  <p className="text-xs font-semibold tracking-tight text-emerald-800 dark:text-emerald-300">
                     {t.billing.studentTrialHeadline}
                   </p>
                 ) : null}
-                <p className={isTrialCard ? "mt-2" : undefined}>
+                <p className={isTrialCard ? "mt-1.5" : undefined}>
                   {isTrialCard ? (
-                    <span className="mr-2 text-xs font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+                    <span className="mr-1.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
                       {t.billing.studentTrialThen}
                     </span>
                   ) : null}
                   {showSale ? (
                     <>
-                      <span className="mr-2 text-lg font-medium text-zinc-400 line-through dark:text-zinc-500">
+                      <span className="mr-1 text-sm font-medium text-zinc-400 line-through dark:text-zinc-500">
                         ${formatUsdAmount(wasPrice)}
                       </span>
-                      <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                      <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
                         ${formatUsdAmount(charged)}
                       </span>
                     </>
                   ) : (
-                    <span className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+                    <span className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
                       ${formatUsdAmount(charged)}
                     </span>
                   )}
-                  <span className="text-sm text-zinc-500 dark:text-zinc-400">
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">
                     {" "}
                     {t.billing.perMonthLabel}
                   </span>
                 </p>
                 {showSale ? (
-                  <p className="mt-2 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                  <p className="mt-1.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
                     {t.billing.salePriceNote}
                   </p>
                 ) : null}
                 {isTrialCard ? (
-                  <p className="mt-2 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
                     {t.billing.studentTrialNote}
                   </p>
                 ) : null}
@@ -431,7 +432,7 @@ export function BillingClient({
 
               {plan.depthName ? (
                 <p
-                  className="mt-6 truncate text-xs text-zinc-500 dark:text-zinc-400"
+                  className="mt-4 truncate text-[11px] text-zinc-500 dark:text-zinc-400"
                   title={plan.depthHint ?? undefined}
                 >
                   <span className="font-medium text-zinc-600 dark:text-zinc-300">
@@ -445,17 +446,17 @@ export function BillingClient({
               ) : null}
 
               {plan.includes ? (
-                <p className="mt-5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+                <p className="mt-4 text-[10px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
                   {plan.includes}
                 </p>
               ) : (
-                <div className="mt-5" />
+                <div className="mt-4" />
               )}
-              <ul className="mt-3 flex-1 space-y-2.5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
+              <ul className="mt-2.5 flex-1 space-y-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-300">
                 {plan.highlights.map((h) => (
-                  <li key={h} className="flex items-start gap-2.5">
+                  <li key={h} className="flex items-start gap-1.5">
                     <svg
-                      className="mt-0.5 h-4 w-4 shrink-0 text-brand dark:text-brand-soft"
+                      className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand dark:text-brand-soft"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -470,11 +471,13 @@ export function BillingClient({
                   </li>
                 ))}
               </ul>
-              <div className="mt-8">{renderCta(tier, isCurrent, isTrialCard)}</div>
+              <div className="mt-auto pt-4">
+                {renderCta(tier, isCurrent, isTrialCard)}
+              </div>
             </div>
           );
         })}
-      </div>
+      </PlanCardsRow>
     </div>
   );
 
@@ -484,7 +487,7 @@ export function BillingClient({
         <button
           type="button"
           disabled
-          className="w-full cursor-default rounded-full bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+          className="w-full cursor-default rounded-full bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
         >
           {tier === "free" ? t.billing.yourPlan : t.billing.currentPlan}
         </button>
@@ -497,7 +500,7 @@ export function BillingClient({
           type="button"
           onClick={openPortal}
           disabled={portalBusy}
-          className="w-full rounded-full border border-zinc-300 px-4 py-2.5 text-sm font-semibold text-zinc-700 transition hover:border-zinc-400 disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-200"
+          className="w-full rounded-full border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700 transition hover:border-zinc-400 disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-200"
         >
           {t.billing.cancelInPortal}
         </button>
@@ -505,7 +508,7 @@ export function BillingClient({
         <button
           type="button"
           disabled
-          className="w-full cursor-default rounded-full bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-400 dark:bg-zinc-800"
+          className="w-full cursor-default rounded-full bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-400 dark:bg-zinc-800"
         >
           {t.billing.included}
         </button>
@@ -516,7 +519,7 @@ export function BillingClient({
         type="button"
         onClick={() => startCheckout(tier)}
         disabled={busyTier !== null}
-        className="w-full rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover disabled:opacity-60"
+        className="w-full rounded-full bg-brand px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-brand-hover disabled:opacity-60"
       >
         {busyTier === tier
           ? t.billing.redirecting

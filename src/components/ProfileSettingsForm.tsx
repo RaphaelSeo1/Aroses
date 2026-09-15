@@ -537,7 +537,11 @@ export function ProfileSettingsForm({
   };
 
   return (
-    <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:gap-12">
+    <div
+      className={`flex flex-col gap-8 lg:flex-row lg:items-start ${
+        panel === "billing" ? "lg:gap-8" : "lg:gap-12"
+      }`}
+    >
       <aside className="shrink-0 lg:w-60 lg:pt-1">
         <nav
           className="flex flex-row gap-1 overflow-x-auto rounded-2xl border border-zinc-200/90 bg-white/90 p-1.5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90 lg:flex-col lg:overflow-visible lg:p-2 lg:shadow-md lg:shadow-zinc-900/5 dark:lg:shadow-black/40"
@@ -937,7 +941,7 @@ export function ProfileSettingsForm({
           {showBilling ? (
             <div className={panel === "billing" ? undefined : "hidden"}>
               {visitedPanels.has("billing") && billingPanel ? (
-                <div className="px-5 pb-12 pt-8 sm:px-8 sm:pb-14 sm:pt-10">
+                <div className="px-4 pb-12 pt-8 sm:px-5 sm:pb-14 sm:pt-10">
                   {billingPanel}
                 </div>
               ) : null}
