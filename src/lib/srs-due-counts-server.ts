@@ -1,7 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SrsDueCounts } from "@/lib/srs-due";
 import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
-import { repairOrphanNotesFocusCards } from "@/lib/notes/repair-orphan-focus-cards";
 import {
   isNotesFocusBucketId,
   notesFocusBucketId,
@@ -141,11 +140,9 @@ export async function fetchSrsDueCountsForUser(
     }
   }
 
-  try {
-    await repairOrphanNotesFocusCards(supabase, userId);
-  } catch (e) {
-    console.error("[srs-due-counts repair focus]", e);
-  }
+  // Orphan focus-card repair is intentionally not on this hot path — it can
+  // take hundreds of ms and the Review/nav badge poll every minute. Session
+  // start and practice-scope still run repair when the learner opens decks.
 
   let perQ = supabase
     .from("user_personal_quiz_items")

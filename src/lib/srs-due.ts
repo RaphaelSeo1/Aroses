@@ -48,11 +48,14 @@ export function useSrsDueCounts(
     enabled?: boolean;
     refreshKey?: number | string;
     initialCounts?: SrsDueCounts | null;
+    /** Override the shared widget client abort (Review needs longer). */
+    timeoutMs?: number;
   }
 ): { counts: SrsDueCounts | null; loading: boolean; refresh: () => void } {
   const enabled = opts?.enabled !== false;
   const refreshKey = opts?.refreshKey;
   const initialCounts = opts?.initialCounts;
+  const timeoutMs = opts?.timeoutMs;
   const [counts, setCounts] = useState<SrsDueCounts | null>(
     initialCounts ?? null
   );
@@ -73,7 +76,10 @@ export function useSrsDueCounts(
         const url = materialId
           ? `/api/srs/due-counts?materialId=${encodeURIComponent(materialId)}`
           : `/api/srs/due-counts`;
-        const json = await sharedJsonGet<SrsDueCounts>(url);
+        const json =
+          timeoutMs != null
+            ? await sharedJsonGet<SrsDueCounts>(url, timeoutMs)
+            : await sharedJsonGet<SrsDueCounts>(url);
         if (!cancelled) setCounts(json);
       } catch (e) {
         if (!cancelled) {
@@ -100,7 +106,7 @@ export function useSrsDueCounts(
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
-  }, [enabled, materialId, refreshKey, manualBump]);
+  }, [enabled, materialId, refreshKey, manualBump, timeoutMs]);
 
   return {
     counts,

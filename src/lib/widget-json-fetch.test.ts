@@ -49,3 +49,35 @@ test("aborts a stalled widget request at the client deadline", async () => {
   );
   assert.ok(Date.now() - startedAt < 250);
 });
+
+test("extends the shared abort when a longer waiter joins", async () => {
+  let fetchStarted = 0;
+  globalThis.fetch = async (_input, init) =>
+    new Promise<Response>((resolve, reject) => {
+      fetchStarted += 1;
+      const timer = setTimeout(() => {
+        resolve(
+          new Response(JSON.stringify({ total: 7 }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })
+        );
+      }, 80);
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(init.signal?.reason);
+        },
+        { once: true }
+      );
+    });
+
+  const short = sharedJsonGet<{ total: number }>("/api/srs/due-counts", 30);
+  const long = sharedJsonGet<{ total: number }>("/api/srs/due-counts", 500);
+  const [a, b] = await Promise.all([short, long]);
+
+  assert.equal(fetchStarted, 1);
+  assert.equal(a.total, 7);
+  assert.equal(b.total, 7);
+});

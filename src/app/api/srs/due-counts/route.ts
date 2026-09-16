@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isMissingAuthSessionError } from "@/lib/auth/public-routes";
 import { fetchSrsDueCountsForUser } from "@/lib/srs-due-counts-server";
-import { WIDGET_SUPABASE_TIMEOUT_MS } from "@/lib/supabase/bounded-fetch";
+import { DEFAULT_SUPABASE_TIMEOUT_MS } from "@/lib/supabase/bounded-fetch";
 import { createClient } from "@/lib/supabase/server";
 import { decideWidgetAuth } from "@/lib/supabase/widget-auth";
 
@@ -40,7 +40,12 @@ const EMPTY_COUNTS = {
 };
 
 export async function GET(request: Request) {
-  const supabase = await createClient({ timeoutMs: WIDGET_SUPABASE_TIMEOUT_MS });
+  // Use the normal Supabase bound (not the 1s widget auth bound). Due counts
+  // hydrate notes-focus buckets across several round-trips; a 1s per-request
+  // timeout fail-opens to zeros while /api/srs/practice-scope still works.
+  const supabase = await createClient({
+    timeoutMs: DEFAULT_SUPABASE_TIMEOUT_MS,
+  });
   const {
     data: { user },
     error: authError,

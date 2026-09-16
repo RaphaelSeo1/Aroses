@@ -19,6 +19,7 @@ import {
   visibleDueForLeaves,
 } from "@/lib/review-picker";
 import { useSrsDueCounts } from "@/lib/srs-due";
+import { REVIEW_DUE_COUNTS_CLIENT_TIMEOUT_MS } from "@/lib/widget-json-fetch";
 
 /**
  * Global Review dashboard.
@@ -43,8 +44,9 @@ type ReviewKind = "both" | "module" | "personal";
 
 export function ReviewDashboardClient() {
   const t = useT();
-  const { counts, loading, refresh } = useSrsDueCounts(undefined, {
+  const { counts, refresh } = useSrsDueCounts(undefined, {
     enabled: true,
+    timeoutMs: REVIEW_DUE_COUNTS_CLIENT_TIMEOUT_MS,
   });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [kind, setKind] = useState<ReviewKind>("both");
@@ -224,8 +226,11 @@ export function ReviewDashboardClient() {
     );
   }
 
-  // ----------- loading skeleton -----------
-  if (loading && !counts) {
+  // ----------- loading / unavailable -----------
+  // A timed-out fetch used to leave counts=null and fall through to "0 due /
+  // No courses yet" while Choose courses still worked. Keep the skeleton until
+  // a successful payload arrives (focus/poll will retry).
+  if (!counts) {
     return (
       <section className="space-y-4" data-tour="review-dashboard">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -237,7 +242,7 @@ export function ReviewDashboardClient() {
   }
 
   // ----------- empty state (no decks at all) -----------
-  if (counts && materials.length === 0) {
+  if (materials.length === 0) {
     return (
       <section className="space-y-6">
         <header data-tour="review-dashboard">
