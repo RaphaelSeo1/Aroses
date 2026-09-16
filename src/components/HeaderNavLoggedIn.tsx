@@ -5,6 +5,7 @@ import { HeaderNavLink } from "@/components/HeaderNavLink";
 import { TutorSessionNavDropdown } from "@/components/TutorSessionNavDropdown";
 import { AvatarMenu } from "@/components/nav/AvatarMenu";
 import { MobileNavMenu } from "@/components/nav/MobileNavMenu";
+import { CheckInStreakChip } from "@/components/CheckInStreakChip";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import { useSrsDueCounts, type SrsDueCounts } from "@/lib/srs-due";
@@ -137,6 +138,8 @@ export function HeaderNavLoggedIn({
           <HeaderNavLink href={courseHomeHref}>{t.nav.courseHome}</HeaderNavLink>
         ) : null}
       </div>
+
+      <CheckInStreakChip enabled={fetchBadges} />
 
       <AvatarMenu
         displayName={displayName}

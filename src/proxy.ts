@@ -31,6 +31,7 @@ import {
 } from "@/lib/auth/public-routes";
 import {
   hasPaidProductAccess,
+  snapshotFromSubscriptionRow,
   isUnpaidMutationAllowedApi,
   PAID_PLAN_REQUIRED_CODE,
   UPGRADE_POPUP_PATH,
@@ -288,26 +289,31 @@ export async function proxy(request: NextRequest) {
     const billingClient =
       viewer?.isImpersonating ? createAdminClient() ?? supabase : supabase;
     try {
-      const { data, error } = await billingClient
+      const full = await billingClient
         .from("user_subscriptions")
-        .select("tier, status, admin_granted")
+        .select(
+          "tier, status, admin_granted, grant_source, current_period_end"
+        )
         .eq("user_id", paywallUser.id)
         .maybeSingle();
-      if (error && /admin_granted|schema cache/i.test(error.message ?? "")) {
-        const legacy = await billingClient
+      if (full.error && /grant_source|schema cache/i.test(full.error.message ?? "")) {
+        const mid = await billingClient
           .from("user_subscriptions")
-          .select("tier, status")
+          .select("tier, status, admin_granted")
           .eq("user_id", paywallUser.id)
           .maybeSingle();
-        paid = hasPaidProductAccess(legacy.data);
-      } else if (!error) {
-        paid = hasPaidProductAccess({
-          tier: data?.tier,
-          status: data?.status,
-          adminGranted: Boolean(
-            (data as { admin_granted?: boolean } | null)?.admin_granted
-          ),
-        });
+        if (mid.error && /admin_granted|schema cache/i.test(mid.error.message ?? "")) {
+          const legacy = await billingClient
+            .from("user_subscriptions")
+            .select("tier, status")
+            .eq("user_id", paywallUser.id)
+            .maybeSingle();
+          paid = hasPaidProductAccess(legacy.data);
+        } else if (!mid.error) {
+          paid = hasPaidProductAccess(snapshotFromSubscriptionRow(mid.data));
+        }
+      } else if (!full.error) {
+        paid = hasPaidProductAccess(snapshotFromSubscriptionRow(full.data));
       }
     } catch (error) {
       if (viewer?.isImpersonating) {

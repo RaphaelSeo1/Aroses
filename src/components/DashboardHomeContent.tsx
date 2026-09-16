@@ -7,6 +7,7 @@ import { HomeHubEntryLink } from "@/components/HomeHubEntryLink";
 import { HomeRecordLectureCard } from "@/components/HomeRecordLectureCard";
 import { HomeResumeHero } from "@/components/HomeResumeHero";
 import { HomeRightSidebar } from "@/components/HomeRightSidebar";
+import { DailyCheckInCard } from "@/components/DailyCheckInCard";
 import { ReviewDueBanner } from "@/components/ReviewDueBanner";
 import { PendingCollaboratorInvites } from "@/components/PendingCollaboratorInvites";
 import { PendingFriendRequests } from "@/components/PendingFriendRequests";
@@ -109,6 +110,10 @@ export async function DashboardHomeContent({
                   openReview: t.review.openReview,
                 }}
               />
+
+              <div className="mt-6 lg:hidden">
+                <DailyCheckInCard />
+              </div>
 
               <section className="mt-8">
                 <header

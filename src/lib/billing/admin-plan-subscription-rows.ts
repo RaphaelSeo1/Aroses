@@ -17,6 +17,7 @@ export type AdminPlanSubscriptionRow = {
   periodEnd: string | null;
   cancelAtPeriodEnd: boolean;
   adminGranted: boolean;
+  grantSource?: "admin" | "checkin" | null;
 };
 
 /**

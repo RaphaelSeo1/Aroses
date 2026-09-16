@@ -23,6 +23,7 @@ type SubRow = {
   updated_at: string | null;
   cancel_at_period_end: boolean | null;
   admin_granted?: boolean | null;
+  grant_source?: string | null;
   /** Stored Stripe unit amount in cents, when the webhook snapshot has it. */
   amount_cents?: number | null;
   stripe_amount_cents?: number | null;
@@ -35,7 +36,7 @@ type ProfileRow = {
 };
 
 const SUB_SELECT =
-  "user_id, tier, status, current_period_start, current_period_end, updated_at, cancel_at_period_end, admin_granted";
+  "user_id, tier, status, current_period_start, current_period_end, updated_at, cancel_at_period_end, admin_granted, grant_source";
 const SUB_SELECT_LEGACY =
   "user_id, tier, status, current_period_start, current_period_end, updated_at, cancel_at_period_end";
 
@@ -81,7 +82,30 @@ export async function loadAdminPlanSubscriptions(): Promise<
     .in("tier", [...PAID_PLAN_TIERS]);
 
   let rows: SubRow[] | null = null;
-  if (full.error && /admin_granted|schema cache/i.test(full.error.message ?? "")) {
+  if (full.error && /grant_source|schema cache/i.test(full.error.message ?? "")) {
+    const noSource = await admin
+      .from("user_subscriptions")
+      .select(
+        "user_id, tier, status, current_period_start, current_period_end, updated_at, cancel_at_period_end, admin_granted"
+      )
+      .in("tier", [...PAID_PLAN_TIERS]);
+    if (noSource.error && /admin_granted|schema cache/i.test(noSource.error.message ?? "")) {
+      const legacy = await admin
+        .from("user_subscriptions")
+        .select(SUB_SELECT_LEGACY)
+        .in("tier", [...PAID_PLAN_TIERS]);
+      if (legacy.error) {
+        console.error("[admin plan subscriptions]", legacy.error);
+        return [];
+      }
+      rows = (legacy.data ?? []) as SubRow[];
+    } else if (noSource.error) {
+      console.error("[admin plan subscriptions]", noSource.error);
+      return [];
+    } else {
+      rows = (noSource.data ?? []) as SubRow[];
+    }
+  } else if (full.error && /admin_granted|schema cache/i.test(full.error.message ?? "")) {
     const legacy = await admin
       .from("user_subscriptions")
       .select(SUB_SELECT_LEGACY)
@@ -143,6 +167,12 @@ export async function loadAdminPlanSubscriptions(): Promise<
       periodEnd: row.current_period_end,
       cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
       adminGranted: Boolean(row.admin_granted),
+      grantSource:
+        row.grant_source === "checkin" || row.grant_source === "admin"
+          ? row.grant_source
+          : row.admin_granted
+            ? "admin"
+            : null,
     };
   });
 

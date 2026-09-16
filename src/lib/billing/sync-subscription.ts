@@ -148,11 +148,34 @@ export async function syncStripeSubscription(
       current_period_start: startIso,
       current_period_end: endIso,
       cancel_at_period_end: sub.cancel_at_period_end ?? false,
-      // Real Stripe billing takes over any previous admin grant.
+      // Real Stripe billing takes over any previous admin / check-in grant.
       admin_granted: false,
+      grant_source: null,
     },
     { onConflict: "user_id" }
   );
+
+  if (error && /grant_source|schema cache/i.test(error.message ?? "")) {
+    const retry = await admin.from("user_subscriptions").upsert(
+      {
+        user_id: userId,
+        tier,
+        status: sub.status,
+        stripe_customer_id: customerId,
+        stripe_subscription_id: sub.id,
+        current_period_start: startIso,
+        current_period_end: endIso,
+        cancel_at_period_end: sub.cancel_at_period_end ?? false,
+        admin_granted: false,
+      },
+      { onConflict: "user_id" }
+    );
+    if (retry.error) {
+      console.error("[billing] sync subscription upsert failed", retry.error);
+      throw retry.error;
+    }
+    return;
+  }
 
   if (error) {
     console.error("[billing] sync subscription upsert failed", error);
@@ -194,9 +217,32 @@ export async function markSubscriptionCanceled(opts: {
       current_period_end: null,
       cancel_at_period_end: false,
       admin_granted: false,
+      grant_source: null,
     },
     { onConflict: "user_id" }
   );
+
+  if (error && /grant_source|schema cache/i.test(error.message ?? "")) {
+    const retry = await admin.from("user_subscriptions").upsert(
+      {
+        user_id: userId,
+        tier: "free",
+        status: "canceled",
+        stripe_customer_id: customerId,
+        stripe_subscription_id: null,
+        current_period_start: null,
+        current_period_end: null,
+        cancel_at_period_end: false,
+        admin_granted: false,
+      },
+      { onConflict: "user_id" }
+    );
+    if (retry.error) {
+      console.error("[billing] cancel sync upsert failed", retry.error);
+      throw retry.error;
+    }
+    return;
+  }
 
   if (error) {
     console.error("[billing] cancel sync upsert failed", error);

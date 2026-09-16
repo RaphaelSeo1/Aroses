@@ -2,6 +2,7 @@ import "server-only";
 import type Stripe from "stripe";
 import { isStripeConfigured, getStripe } from "@/lib/stripe/client";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isCheckInGrantExpired } from "@/lib/billing/paid-access";
 import { parsePlanTier, type PlanTier } from "@/lib/billing/plans";
 import { syncStripeSubscription } from "@/lib/billing/sync-subscription";
 
@@ -13,8 +14,10 @@ export type UserSubscription = {
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
-  /** True when an app admin set tier/status (not Stripe). */
+  /** True when an app admin or check-in reward set tier/status (not Stripe). */
   adminGranted: boolean;
+  /** `admin` | `checkin` | null (Stripe-managed). */
+  grantSource: "admin" | "checkin" | null;
 };
 
 const FREE_SUBSCRIPTION: UserSubscription = {
@@ -26,6 +29,7 @@ const FREE_SUBSCRIPTION: UserSubscription = {
   currentPeriodEnd: null,
   cancelAtPeriodEnd: false,
   adminGranted: false,
+  grantSource: null,
 };
 
 type SubscriptionRow = {
@@ -37,7 +41,15 @@ type SubscriptionRow = {
   current_period_end: string | null;
   cancel_at_period_end: boolean;
   admin_granted?: boolean | null;
+  grant_source?: string | null;
 };
+
+function parseGrantSource(
+  raw: string | null | undefined
+): "admin" | "checkin" | null {
+  if (raw === "admin" || raw === "checkin") return raw;
+  return null;
+}
 
 function rowToSubscription(row: SubscriptionRow): UserSubscription {
   return {
@@ -49,6 +61,7 @@ function rowToSubscription(row: SubscriptionRow): UserSubscription {
     currentPeriodEnd: row.current_period_end,
     cancelAtPeriodEnd: row.cancel_at_period_end ?? false,
     adminGranted: Boolean(row.admin_granted),
+    grantSource: parseGrantSource(row.grant_source),
   };
 }
 
@@ -86,20 +99,44 @@ const ACTIVE_SUB_STATUSES = new Set([
  * the safe default.
  */
 export async function getUserSubscription(
-  userId: string
+  userId: string,
+  opts?: { skipLapse?: boolean }
 ): Promise<UserSubscription> {
   const admin = createAdminClient();
   if (!admin) return FREE_SUBSCRIPTION;
   const { data, error } = await admin
     .from("user_subscriptions")
     .select(
-      "tier, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, cancel_at_period_end, admin_granted"
+      "tier, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, cancel_at_period_end, admin_granted, grant_source"
     )
     .eq("user_id", userId)
     .maybeSingle();
   if (error) {
+    if (isMissingGrantSourceColumn(error)) {
+      const noSource = await admin
+        .from("user_subscriptions")
+        .select(
+          "tier, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, cancel_at_period_end, admin_granted"
+        )
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (noSource.error && isMissingAdminGrantedColumn(noSource.error)) {
+        const legacy = await admin
+          .from("user_subscriptions")
+          .select(
+            "tier, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, cancel_at_period_end"
+          )
+          .eq("user_id", userId)
+          .maybeSingle();
+        if (legacy.error || !legacy.data) return FREE_SUBSCRIPTION;
+        return rowToSubscription(legacy.data as SubscriptionRow);
+      }
+      if (noSource.error || !noSource.data) return FREE_SUBSCRIPTION;
+      const read = rowToSubscription(noSource.data as SubscriptionRow);
+      return opts?.skipLapse ? read : lapseExpiredCheckInGrant(userId, read);
+    }
     // Pre-migration DBs may lack admin_granted — fall back without it.
-    if (/admin_granted|schema cache/i.test(error.message ?? "")) {
+    if (isMissingAdminGrantedColumn(error)) {
       const legacy = await admin
         .from("user_subscriptions")
         .select(
@@ -113,11 +150,47 @@ export async function getUserSubscription(
     return FREE_SUBSCRIPTION;
   }
   if (!data) return FREE_SUBSCRIPTION;
-  return rowToSubscription(data as SubscriptionRow);
+  const read = rowToSubscription(data as SubscriptionRow);
+  return opts?.skipLapse ? read : lapseExpiredCheckInGrant(userId, read);
 }
 
 function isMissingAdminGrantedColumn(err: { message?: string } | null): boolean {
   return /admin_granted|schema cache/i.test(err?.message ?? "");
+}
+
+function isMissingGrantSourceColumn(err: { message?: string } | null): boolean {
+  return /grant_source|schema cache/i.test(err?.message ?? "");
+}
+
+async function lapseExpiredCheckInGrant(
+  userId: string,
+  local: UserSubscription
+): Promise<UserSubscription> {
+  if (
+    !isCheckInGrantExpired({
+      tier: local.tier,
+      status: local.status,
+      adminGranted: local.adminGranted,
+      grantSource: local.grantSource,
+      currentPeriodEnd: local.currentPeriodEnd,
+    })
+  ) {
+    return local;
+  }
+  try {
+    await writeFreeSubscription(userId, {
+      stripeCustomerId: local.stripeCustomerId,
+    });
+  } catch {
+    return FREE_SUBSCRIPTION;
+  }
+  if (!local.stripeCustomerId || !isStripeConfigured()) {
+    return {
+      ...FREE_SUBSCRIPTION,
+      stripeCustomerId: local.stripeCustomerId,
+    };
+  }
+  return reconcileUserSubscription(userId);
 }
 
 /** Reset local billing state to free (keeps optional live customer id). */
@@ -138,9 +211,15 @@ async function writeFreeSubscription(
     cancel_at_period_end: false,
   };
   let { error } = await admin.from("user_subscriptions").upsert(
-    { ...base, admin_granted: false },
+    { ...base, admin_granted: false, grant_source: null },
     { onConflict: "user_id" }
   );
+  if (error && isMissingGrantSourceColumn(error)) {
+    ({ error } = await admin.from("user_subscriptions").upsert(
+      { ...base, admin_granted: false },
+      { onConflict: "user_id" }
+    ));
+  }
   if (error && isMissingAdminGrantedColumn(error)) {
     ({ error } = await admin
       .from("user_subscriptions")
@@ -370,9 +449,15 @@ export async function adminSetUserSubscription(opts: {
   };
 
   let { error } = await admin.from("user_subscriptions").upsert(
-    { ...payload, admin_granted: true },
+    { ...payload, admin_granted: true, grant_source: "admin" },
     { onConflict: "user_id" }
   );
+  if (error && isMissingGrantSourceColumn(error)) {
+    ({ error } = await admin.from("user_subscriptions").upsert(
+      { ...payload, admin_granted: true },
+      { onConflict: "user_id" }
+    ));
+  }
   if (error && isMissingAdminGrantedColumn(error)) {
     console.warn(
       "[billing] admin_granted column missing — apply migration 099. Upserting without it."

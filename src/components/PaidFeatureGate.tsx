@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import {
+  fetchPaidAccessSnapshot,
   hasPaidProductAccess,
   PAID_PLAN_REQUIRED_CODE,
   requestUpgradePopup,
@@ -83,19 +84,9 @@ function PaidFeatureGateInner({
           setAccess("paid");
           return;
         }
-        const { data } = await supabase
-          .from("user_subscriptions")
-          .select("tier, status, admin_granted")
-          .eq("user_id", user.id)
-          .maybeSingle();
+        const snapshot = await fetchPaidAccessSnapshot(supabase, user.id);
         if (cancelled) return;
-        const nextAccess: PaidGateAccess = hasPaidProductAccess({
-          tier: data?.tier,
-          status: data?.status,
-          adminGranted: Boolean(
-            (data as { admin_granted?: boolean } | null)?.admin_granted
-          ),
-        })
+        const nextAccess: PaidGateAccess = hasPaidProductAccess(snapshot)
           ? "paid"
           : "unpaid";
         accessRef.current = nextAccess;

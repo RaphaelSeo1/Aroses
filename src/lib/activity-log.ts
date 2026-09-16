@@ -25,6 +25,7 @@ export type ActivityEventType =
   | "listing_rejected"
   | "course_purchased"
   | "subscription_admin_updated"
+  | "checkin_plus_granted"
   | "impersonation_started"
   | "impersonation_ended";
 

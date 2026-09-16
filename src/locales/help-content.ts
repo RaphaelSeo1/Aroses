@@ -109,7 +109,7 @@ const en = {
       previewTitle: "Primary navigation",
       previewCaption: "Review shows a badge when cards are due today.",
       items: [
-        "**Home** — workspace with your courses, continue studying, streak, and review banner",
+        "**Home** — workspace with your courses, continue studying, daily check-in, streak, and review banner",
         "**Tutor** — start a standalone session or open past sessions",
         "**Explore** — community courses (sign-in required)",
         "**Review** — global spaced-repetition hub",
@@ -563,7 +563,7 @@ const ko: typeof en = {
       previewTitle: "주요 내비게이션",
       previewCaption: "오늘 복습할 카드가 있으면 복습에 배지가 표시돼요.",
       items: [
-        "**홈** — 내 코스, 학습 이어하기, 연속 학습, 복습 배너가 있는 워크스페이스",
+        "**홈** — 내 코스, 학습 이어하기, 매일 체크인, 연속 학습, 복습 배너가 있는 워크스페이스",
         "**튜터** — 독립 세션 시작 또는 이전 세션 열기",
         "**탐색** — 커뮤니티 코스 (로그인 필요)",
         "**복습** — 전역 간격 반복 허브",

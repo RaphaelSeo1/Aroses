@@ -4,6 +4,7 @@ import { billing } from "./billing";
 import { common } from "./common";
 import { courseBuild } from "./courseBuild";
 import { calendar } from "./calendar";
+import { checkin } from "./checkin";
 import { dashboard } from "./dashboard";
 import { explore } from "./explore";
 import { forum } from "./forum";
@@ -40,6 +41,7 @@ export function getDictionary(locale: UiLocale) {
     productTour: productTour[locale],
     dashboard: dashboard[locale],
     calendar: calendar[locale],
+    checkin: checkin[locale],
     settings: settings[locale],
     study: study[locale],
     explore: explore[locale],

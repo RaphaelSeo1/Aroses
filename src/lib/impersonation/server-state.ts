@@ -3,6 +3,7 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { isAppAdminEnvUser } from "@/lib/app-admin-env";
 import {
+  fetchPaidAccessSnapshot,
   hasPaidProductAccess,
   type PaidGateAccess,
 } from "@/lib/billing/paid-access";
@@ -31,29 +32,8 @@ async function loadTargetPaidAccess(
   const admin = createAdminClient();
   if (!admin) return "unknown";
   try {
-    const { data, error } = await admin
-      .from("user_subscriptions")
-      .select("tier, status, admin_granted")
-      .eq("user_id", targetId)
-      .maybeSingle();
-    if (error && /admin_granted|schema cache/i.test(error.message ?? "")) {
-      const legacy = await admin
-        .from("user_subscriptions")
-        .select("tier, status")
-        .eq("user_id", targetId)
-        .maybeSingle();
-      return hasPaidProductAccess(legacy.data) ? "paid" : "unpaid";
-    }
-    if (error) return "unknown";
-    return hasPaidProductAccess({
-      tier: data?.tier,
-      status: data?.status,
-      adminGranted: Boolean(
-        (data as { admin_granted?: boolean } | null)?.admin_granted
-      ),
-    })
-      ? "paid"
-      : "unpaid";
+    const snapshot = await fetchPaidAccessSnapshot(admin, targetId);
+    return hasPaidProductAccess(snapshot) ? "paid" : "unpaid";
   } catch {
     return "unknown";
   }

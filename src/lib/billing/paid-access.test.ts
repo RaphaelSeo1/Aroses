@@ -182,12 +182,51 @@ test("unknown client access intercepts like unpaid without redirecting yet", () 
   assert.equal(unpaidGateShouldRedirect("unpaid", true), false);
 });
 
+test("expired check-in Plus is not paid access", () => {
+  assert.equal(
+    hasPaidProductAccess(
+      {
+        tier: "plus",
+        status: "active",
+        adminGranted: true,
+        grantSource: "checkin",
+        currentPeriodEnd: "2020-01-01T00:00:00.000Z",
+      },
+      new Date("2026-09-16T00:00:00.000Z")
+    ),
+    false
+  );
+  assert.equal(
+    hasPaidProductAccess(
+      {
+        tier: "plus",
+        status: "active",
+        adminGranted: true,
+        grantSource: "checkin",
+        currentPeriodEnd: "2026-10-16T00:00:00.000Z",
+      },
+      new Date("2026-09-16T00:00:00.000Z")
+    ),
+    true
+  );
+  assert.equal(
+    hasPaidProductAccess({
+      tier: "premium",
+      status: "inactive",
+      adminGranted: true,
+      grantSource: "admin",
+    }),
+    true
+  );
+});
+
 test("unpaid mutations may still hit billing, tour, onboarding, and ui-locale APIs", () => {
   assert.equal(isUnpaidMutationAllowedApi("/api/billing/checkout"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/billing/webhook"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/product-tour/complete"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/onboarding"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/ui-locale"), true);
+  assert.equal(isUnpaidMutationAllowedApi("/api/checkin"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/admin/impersonate"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/admin/impersonate/exit"), true);
   assert.equal(isUnpaidMutationAllowedApi("/api/notes"), false);

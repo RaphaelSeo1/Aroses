@@ -7,10 +7,90 @@ export type PaidAccessSnapshot = {
   tier?: string | null;
   status?: string | null;
   adminGranted?: boolean | null;
+  /** `admin` | `checkin` | null. Check-in Plus expires at currentPeriodEnd. */
+  grantSource?: string | null;
+  currentPeriodEnd?: string | null;
 };
 
+export function isCheckInGrantExpired(
+  sub: PaidAccessSnapshot | null | undefined,
+  now: Date = new Date()
+): boolean {
+  if ((sub?.grantSource ?? "").toLowerCase() !== "checkin") return false;
+  const tier = (sub?.tier ?? "free").toLowerCase() as PlanTier;
+  if (!isPaidTier(tier)) return false;
+  if (!sub?.currentPeriodEnd) return true;
+  const end = new Date(sub.currentPeriodEnd);
+  if (Number.isNaN(end.getTime())) return true;
+  return end.getTime() <= now.getTime();
+}
+
+export function snapshotFromSubscriptionRow(
+  data:
+    | {
+        tier?: string | null;
+        status?: string | null;
+        admin_granted?: boolean | null;
+        grant_source?: string | null;
+        current_period_end?: string | null;
+      }
+    | null
+    | undefined
+): PaidAccessSnapshot {
+  return {
+    tier: data?.tier ?? null,
+    status: data?.status ?? null,
+    adminGranted: Boolean(data?.admin_granted),
+    grantSource: data?.grant_source ?? null,
+    currentPeriodEnd: data?.current_period_end ?? null,
+  };
+}
+
+const PAID_ACCESS_SELECTS = [
+  "tier, status, admin_granted, grant_source, current_period_end",
+  "tier, status, admin_granted, current_period_end",
+  "tier, status, admin_granted",
+  "tier, status",
+] as const;
+
+/** Load a billing snapshot, falling back if newer columns are not migrated yet. */
+export async function fetchPaidAccessSnapshot(
+  client: { from: (table: string) => unknown },
+  userId: string
+): Promise<PaidAccessSnapshot | null> {
+  const table = client.from as (table: string) => {
+    select: (columns: string) => {
+      eq: (
+        column: string,
+        value: string
+      ) => {
+        maybeSingle: () => Promise<{
+          data: Record<string, unknown> | null;
+          error: { message?: string } | null;
+        }>;
+      };
+    };
+  };
+  for (const columns of PAID_ACCESS_SELECTS) {
+    const { data, error } = await table("user_subscriptions")
+      .select(columns)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!error) return snapshotFromSubscriptionRow(data);
+    const msg = error.message ?? "";
+    if (!/grant_source|admin_granted|current_period_end|schema cache/i.test(msg)) {
+      return null;
+    }
+  }
+  return null;
+}
+
 /** True when the user may use the product (not the unpaid/free default). */
-export function hasPaidProductAccess(sub: PaidAccessSnapshot | null | undefined): boolean {
+export function hasPaidProductAccess(
+  sub: PaidAccessSnapshot | null | undefined,
+  now: Date = new Date()
+): boolean {
+  if (isCheckInGrantExpired(sub, now)) return false;
   const tier = (sub?.tier ?? "free").toLowerCase() as PlanTier;
   const status = (sub?.status ?? "inactive").toLowerCase();
   if (sub?.adminGranted && isPaidTier(tier)) return true;
@@ -130,6 +210,9 @@ export function isUnpaidMutationAllowedApi(pathname: string): boolean {
   if (pathname.startsWith("/api/product-tour")) return true;
   if (pathname.startsWith("/api/onboarding")) return true;
   if (pathname === "/api/ui-locale" || pathname.startsWith("/api/ui-locale/")) {
+    return true;
+  }
+  if (pathname === "/api/checkin" || pathname.startsWith("/api/checkin/")) {
     return true;
   }
   if (

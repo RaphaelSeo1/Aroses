@@ -168,7 +168,11 @@ export function AdminPlanSubscriptionsSection({
                     <p className={`text-sm font-medium ${statusClass(row.status)}`}>
                       {statusLabel(row.status, t.sales)}
                     </p>
-                    {row.adminGranted ? (
+                    {row.grantSource === "checkin" ? (
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                        {t.sales.checkinGrantedNote}
+                      </p>
+                    ) : row.adminGranted ? (
                       <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                         {t.sales.adminGrantedNote}
                       </p>
