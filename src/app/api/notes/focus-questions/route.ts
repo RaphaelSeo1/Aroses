@@ -3,6 +3,7 @@ import {
   countPersonalQuizTypes,
   generatePersonalQuizFromNotes,
 } from "@/lib/ai/personal-quiz-from-notes";
+import { QUIZ_QUESTION_VOLUME_MAX } from "@/lib/ai/quiz-question-volume";
 import {
   NOTES_FOCUS_BUCKET_ID,
   parseNotesFocusBucketNoteId,
@@ -18,12 +19,6 @@ export const maxDuration = 180;
 
 const MIN_CORPUS = 20;
 const MAX_CORPUS = 8_000;
-
-function countForCorpus(len: number): number {
-  if (len < 120) return 3;
-  if (len < 600) return 4;
-  return 6;
-}
 
 /**
  * POST /api/notes/focus-questions
@@ -95,7 +90,7 @@ export async function POST(request: Request) {
   try {
     items = await generatePersonalQuizFromNotes(
       excerpt.slice(0, MAX_CORPUS),
-      countForCorpus(excerpt.length),
+      QUIZ_QUESTION_VOLUME_MAX,
       {
         existingCounts: countPersonalQuizTypes(existingRows ?? []),
       }

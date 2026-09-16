@@ -238,7 +238,6 @@ export function PersonalQuizSection({
             moduleId,
             noteIds: noteIds.length > 0 ? noteIds : undefined,
             extraContext: extra.length > 0 ? extra : undefined,
-            count: 6,
           }),
         }
       );

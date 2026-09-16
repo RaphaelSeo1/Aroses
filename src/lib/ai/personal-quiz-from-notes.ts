@@ -5,6 +5,11 @@ import {
 } from "@/lib/ai/course-payload";
 import { tutorChatModel } from "@/lib/ai/anthropic-models";
 import { quizDifficultyWordingRules } from "@/lib/ai/quiz-difficulty-wording";
+import {
+  QUIZ_QUESTION_VOLUME_MAX,
+  clampQuizQuestionSoftMax,
+  quizQuestionVolumeRules,
+} from "@/lib/ai/quiz-question-volume";
 import type {
   CourseQuizFreeItem,
   CourseQuizItem,
@@ -34,8 +39,9 @@ const EMPTY_TYPE_COUNTS: PersonalQuizTypeCounts = {
   freeResponse: 0,
 };
 
+/** Soft max for adaptive volume (1–6). Client `count` is an upper bound only. */
 function targetQuestionCount(count: number): number {
-  return Math.min(12, Math.max(3, Math.floor(count)));
+  return clampQuizQuestionSoftMax(count);
 }
 
 /**
@@ -420,12 +426,16 @@ function softenQuizItem(raw: unknown): unknown {
 }
 
 /**
- * Normalize model candidates and fill only their planned type slots.
- * A malformed FRQ is dropped; an extra MCQ can never silently replace it.
+ * Normalize model candidates and fill planned type slots.
+ * A malformed FRQ is dropped; an extra MCQ can never silently replace a
+ * planned FRQ slot. When `fillRemainder` is set, leftover distinct items of
+ * either type may fill unused slots up to the plan length (coverage over
+ * strict balance — used for adaptive volume).
  */
 export function selectPersonalQuizItems(
   raw: unknown[],
-  plan: PersonalQuizType[]
+  plan: PersonalQuizType[],
+  opts?: { fillRemainder?: boolean }
 ): CourseQuizItem[] {
   const normalized = normalizeQuizItemsLoose(raw.map(softenQuizItem));
   const mcqs = dedupePersonalMcqs(normalized.filter(isQuizMcq));
@@ -461,6 +471,15 @@ export function selectPersonalQuizItems(
         : takeDistinct(freeResponses);
     if (item) selected.push(item);
   }
+
+  if (opts?.fillRemainder) {
+    while (selected.length < plan.length) {
+      const item = takeDistinct(freeResponses) ?? takeDistinct(mcqs);
+      if (!item) break;
+      selected.push(item);
+    }
+  }
+
   return selected;
 }
 
@@ -478,37 +497,29 @@ function dedupePersonalFreeResponses(
   return kept;
 }
 
-function typeCounts(plan: PersonalQuizType[]): PersonalQuizTypeCounts {
-  return {
-    mcq: plan.filter((type) => type === "mcq").length,
-    freeResponse: plan.filter((type) => type === "free_response").length,
-  };
-}
-
-function missingTypes(
-  selected: CourseQuizItem[],
-  plan: PersonalQuizType[]
-): PersonalQuizTypeCounts {
-  const wanted = typeCounts(plan);
-  const have = {
-    mcq: selected.filter(isQuizMcq).length,
-    freeResponse: selected.filter(isQuizFreeResponse).length,
-  };
-  return {
-    mcq: Math.max(0, wanted.mcq - have.mcq),
-    freeResponse: Math.max(0, wanted.freeResponse - have.freeResponse),
-  };
+function preferTypeWhenOne(
+  existing: PersonalQuizTypeCounts
+): PersonalQuizType {
+  if (existing.mcq < existing.freeResponse) return "mcq";
+  if (existing.freeResponse < existing.mcq) return "free_response";
+  return "free_response";
 }
 
 /** Exported for unit tests — keep in sync with generatePersonalQuizFromNotes. */
 export function buildPersonalQuizGenerationPrompt(opts: {
   corpus: string;
-  mcq: number;
-  freeResponse: number;
+  softMax?: number;
+  existingCounts?: PersonalQuizTypeCounts;
+  /** Repair path: force a single item of this type. */
+  repairSingleType?: PersonalQuizType;
   avoidQuestions?: string[];
   brokenOutput?: string;
 }): string {
-  const total = opts.mcq + opts.freeResponse;
+  const softMax = clampQuizQuestionSoftMax(
+    opts.softMax ?? QUIZ_QUESTION_VOLUME_MAX
+  );
+  const existing = opts.existingCounts ?? EMPTY_TYPE_COUNTS;
+  const preferOne = opts.repairSingleType ?? preferTypeWhenOne(existing);
   const avoid =
     opts.avoidQuestions && opts.avoidQuestions.length > 0
       ? `\nDo not repeat these already accepted questions:\n${opts.avoidQuestions
@@ -516,33 +527,42 @@ export function buildPersonalQuizGenerationPrompt(opts: {
           .join("\n")}\n`
       : "";
   const broken = opts.brokenOutput
-    ? `\nThe previous output was malformed or had the wrong type mix. Do not copy its structural errors:\n${opts.brokenOutput.slice(0, 6_000)}\n`
+    ? `\nThe previous output was malformed. Do not copy its structural errors:\n${opts.brokenOutput.slice(0, 6_000)}\n`
     : "";
+
+  const task = opts.repairSingleType
+    ? `Task: Output a JSON array of EXACTLY 1 question with "type": "${opts.repairSingleType}". Output ONLY the JSON array — no markdown fences, no commentary, no trailing text.`
+    : `Task: Output a JSON array of BETWEEN 1 and ${softMax} questions (inclusive). Decide the count using QUESTION VOLUME below — never pad. Output ONLY the JSON array — no markdown fences, no commentary, no trailing text.
+Type mix: when writing 2+, prefer roughly half multiple-choice and half free-response, but undershoot a type rather than invent filler. When writing exactly 1, prefer type "${preferOne}".`;
 
   return `You are writing practice quiz questions for ONE learner. Use ONLY the excerpts below — do not invent facts not grounded in this text.
 
 LEARNER NOTES / HIGHLIGHTS:
 ${opts.corpus}
 
-Task: Output a JSON array of EXACTLY ${total} questions: EXACTLY ${opts.mcq} multiple-choice and EXACTLY ${opts.freeResponse} free-response. Output ONLY the JSON array — no markdown fences, no commentary, no trailing text.
+${task}
 MCQ object: { "type": "mcq", "difficulty": "easy"|"medium"|"hard", "question": string, "choices": [4 strings], "correct": "A"|"B"|"C"|"D", "explanation": string }
 Free-response object: { "type": "free_response", "difficulty": "easy"|"medium"|"hard", "question": string, "reference_answer": string, "explanation": string }
 
 Strict rules (follow all):
-1) TYPE COUNTS: Preserve the exact requested split. Never turn a free-response slot into multiple choice.
-2) REFERENCE RUBRIC: Every free-response item must have a substantive natural-language reference_answer (1–3 sentences) stating the key ideas a correct answer should cover. It is used by a concept-focused AI grader.
-3) DISTINCT FACTS: Each question must test a different main idea from the notes. Do not ask the same underlying fact twice using different wording.
-4) ONE PROBE PER QUESTION: Pick one concrete concept per item — mechanism, definition term, cause→effect link, contrast, or example.
-5) ${quizDifficultyWordingRules()}
-6) COVERAGE: Spread questions across separated ideas instead of staying on one sentence.
-7) MCQ CHOICES: Every MCQ must have exactly four plausible choices and one clearly correct answer grounded in the excerpt. Choice text must NOT start with A) B) C) D) or "A." — the UI already shows those letters. Use the explanation to justify the answer briefly.
-8) JSON: Double-quoted keys and strings. No trailing commas. Stop after the closing ].${avoid}${broken}`;
+1) ${quizQuestionVolumeRules(softMax)}
+2) TYPE MIX: Prefer balanced MCQ / free-response when content supports multiple items. Never turn a needed free-response into MCQ just to hit a count. Do not invent items to balance types.
+3) REFERENCE RUBRIC: Every free-response item must have a substantive natural-language reference_answer (1–3 sentences) stating the key ideas a correct answer should cover. It is used by a concept-focused AI grader.
+4) DISTINCT FACTS: Each question must test a different main idea from the notes. Do not ask the same underlying fact twice using different wording.
+5) ONE PROBE PER QUESTION: Pick one concrete concept per item — mechanism, definition term, cause→effect link, contrast, or example.
+6) ${quizDifficultyWordingRules()}
+7) COVERAGE: For multi-idea excerpts, spread questions across separated ideas instead of staying on one sentence. For a single definition/fact, one strong question is enough.
+8) MCQ CHOICES: Every MCQ must have exactly four plausible choices and one clearly correct answer grounded in the excerpt. Choice text must NOT start with A) B) C) D) or "A." — the UI already shows those letters. Use the explanation to justify the answer briefly.
+9) JSON: Double-quoted keys and strings. No trailing commas. Stop after the closing ].${avoid}${broken}`;
 }
 
-/** Generate a balanced batch from the learner's own highlights/notes only. */
+/**
+ * Generate practice items from the learner's highlights/notes.
+ * `count` is a soft maximum (1–6); the model chooses volume from content.
+ */
 export async function generatePersonalQuizFromNotes(
   learnerNotes: string,
-  count: number,
+  count: number = QUIZ_QUESTION_VOLUME_MAX,
   opts?: { existingCounts?: PersonalQuizTypeCounts }
 ): Promise<CourseQuizItem[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -555,13 +575,15 @@ export async function generatePersonalQuizFromNotes(
     throw new Error("Add a bit more text — paste a highlight or note first.");
   }
 
-  const plan = planPersonalQuizTypes(count, opts?.existingCounts);
-  const wanted = typeCounts(plan);
-  // One backup of each type lets dedupe discard overlap without changing the mix.
+  const softMax = targetQuestionCount(count);
+  const existing = opts?.existingCounts ?? EMPTY_TYPE_COUNTS;
+  // Preference order up to softMax — selection keeps only items the model
+  // actually produced (no padding to fill the plan).
+  const plan = planPersonalQuizTypes(softMax, existing);
   const prompt = buildPersonalQuizGenerationPrompt({
     corpus,
-    mcq: wanted.mcq + 1,
-    freeResponse: wanted.freeResponse + 1,
+    softMax,
+    existingCounts: existing,
   });
 
   const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 1 });
@@ -580,12 +602,9 @@ export async function generatePersonalQuizFromNotes(
   }
 
   let parsed = parsePersonalQuizModelText(block.text);
-  let selected = selectPersonalQuizItems(parsed, plan);
-  const missing = missingTypes(selected, plan);
-  if (missing.mcq > 0 || missing.freeResponse > 0) {
-    const repairMcq = missing.mcq > 0 ? missing.mcq + 1 : 0;
-    const repairFreeResponse =
-      missing.freeResponse > 0 ? missing.freeResponse + 1 : 0;
+  let selected = selectPersonalQuizItems(parsed, plan, { fillRemainder: true });
+  if (selected.length === 0) {
+    const repairType = preferTypeWhenOne(existing);
     const repair = await anthropic.messages.create({
       model,
       max_tokens: 4096,
@@ -595,9 +614,9 @@ export async function generatePersonalQuizFromNotes(
           role: "user",
           content: buildPersonalQuizGenerationPrompt({
             corpus,
-            mcq: repairMcq,
-            freeResponse: repairFreeResponse,
-            avoidQuestions: selected.map((item) => item.question),
+            softMax: 1,
+            existingCounts: existing,
+            repairSingleType: repairType,
             brokenOutput: block.text,
           }),
         },
@@ -605,30 +624,17 @@ export async function generatePersonalQuizFromNotes(
     });
     const repaired = repair.content.find((b) => b.type === "text");
     if (repaired && repaired.type === "text") {
-      parsed = [
-        ...parsed,
-        ...parsePersonalQuizModelText(repaired.text),
-      ];
-      selected = selectPersonalQuizItems(parsed, plan);
+      parsed = parsePersonalQuizModelText(repaired.text);
+      selected = selectPersonalQuizItems(parsed, [repairType]);
     }
   }
 
-  if (selected.length !== plan.length) {
+  if (selected.length === 0) {
     console.error(
-      "[personal-quiz-from-notes] could not satisfy balanced type plan",
-      {
-        wanted,
-        selected: typeCounts(
-          selected.map((item) =>
-            isQuizFreeResponse(item) ? "free_response" : "mcq"
-          )
-        ),
-        output: block.text.slice(0, 400),
-      }
+      "[personal-quiz-from-notes] no usable questions from model",
+      { softMax, output: block.text.slice(0, 400) }
     );
-    throw new Error(
-      "Could not build a balanced question set from that note. Try a slightly longer selection."
-    );
+    throw new Error("Could not build questions from that note.");
   }
 
   return selected;

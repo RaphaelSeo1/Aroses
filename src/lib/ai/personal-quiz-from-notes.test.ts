@@ -53,6 +53,7 @@ test("parsePersonalQuizModelText tolerates trailing commas and smart quotes", ()
 });
 
 test("planPersonalQuizTypes balances an empty set with FRQ-first tie behavior", () => {
+  assert.deepEqual(planPersonalQuizTypes(1), ["free_response"]);
   assert.deepEqual(planPersonalQuizTypes(3), [
     "free_response",
     "mcq",
@@ -140,11 +141,56 @@ test("selected cards retain persistence-ready MCQ and FRQ shapes", () => {
 test("buildPersonalQuizGenerationPrompt matches wording to difficulty", () => {
   const prompt = buildPersonalQuizGenerationPrompt({
     corpus: "Hemoglobin binds oxygen in red blood cells.",
-    mcq: 2,
-    freeResponse: 2,
+    softMax: 4,
   });
   assert.match(prompt, /DIFFICULTY THEN WORDING/i);
   assert.match(prompt, /"difficulty": "easy"\|"medium"\|"hard"/);
   assert.match(prompt, /ANTI-PATTERNS/i);
   assert.doesNotMatch(prompt, /ELABORATE STEMS/i);
+});
+
+test("buildPersonalQuizGenerationPrompt uses adaptive volume not a fixed count", () => {
+  const prompt = buildPersonalQuizGenerationPrompt({
+    corpus: "Hemoglobin binds oxygen in red blood cells.",
+    softMax: 6,
+  });
+  assert.match(prompt, /QUESTION VOLUME/i);
+  assert.match(prompt, /BETWEEN 1 and 6/i);
+  assert.match(prompt, /distinct teachable units/i);
+  assert.match(prompt, /One term\/definition/);
+  assert.doesNotMatch(prompt, /EXACTLY 6 questions/i);
+  assert.doesNotMatch(prompt, /EXACTLY \d+ multiple-choice/i);
+});
+
+test("selectPersonalQuizItems fillRemainder keeps coverage when types are skewed", () => {
+  const manyMcq = [
+    {
+      type: "mcq",
+      question: "What binds oxygen in blood?",
+      choices: ["Hemoglobin", "Insulin", "Keratin", "Pepsin"],
+      correct: "A",
+      explanation: "Hemoglobin binds O2.",
+    },
+    {
+      type: "mcq",
+      question: "Which organelle produces most ATP?",
+      choices: ["Mitochondria", "Ribosome", "Lysosome", "Golgi"],
+      correct: "A",
+      explanation: "Mitochondria produce ATP.",
+    },
+    {
+      type: "mcq",
+      question: "What is the main nitrogenous waste in humans?",
+      choices: ["Urea", "Ammonia", "Uric acid", "Creatine"],
+      correct: "A",
+      explanation: "Humans excrete urea.",
+    },
+  ];
+  const selected = selectPersonalQuizItems(manyMcq, [
+    "free_response",
+    "mcq",
+    "free_response",
+  ], { fillRemainder: true });
+  assert.equal(selected.length, 3);
+  assert.ok(selected.every(isQuizMcq));
 });
