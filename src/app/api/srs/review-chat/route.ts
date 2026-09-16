@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { streamReviewChat } from "@/lib/ai/review-chat";
+import { ensureInlineYourNotesLink } from "@/lib/ai/review-chat-notes-link";
 import { lookAtAttachmentPrompt } from "@/lib/chat/chat-attachment-formats";
 import { parseChatAttachments } from "@/lib/chat/chat-attachment-parse";
 import { isNotesFocusBucketId, parseNotesFocusBucketNoteId } from "@/lib/notes/notes-focus-bucket";
@@ -183,6 +184,7 @@ export async function POST(request: Request) {
   }
 
   const notesLink = sourceNoteId ? `/notes/doc/${sourceNoteId}` : null;
+  const hadStudentNotes = Boolean(sourceExcerpt);
 
   let lessonNotes = "";
   if (materialId && UUID_RE.test(materialId) && !isNotesFocusBucketId(materialId)) {
@@ -201,12 +203,9 @@ export async function POST(request: Request) {
     ? (b.grade as { verdict?: unknown; feedback?: unknown; correct?: unknown })
     : null;
 
-  const contextParts = [
-    `Course: ${typeof b.courseTitle === "string" && b.courseTitle.trim() ? b.courseTitle.trim() : "Review"}`,
-    `Module: ${typeof b.moduleTitle === "string" && b.moduleTitle.trim() ? b.moduleTitle.trim() : "—"}`,
-    `Card type: ${b.cardKind === "personal" ? "Focus card (from notes)" : "Module bank"}`,
+  const activeCardParts = [
     question && typeof question === "object"
-      ? `CURRENT CARD:\n${describeQuestion(question, revealed)}`
+      ? describeQuestion(question, revealed)
       : null,
     studentAnswer ? `STUDENT'S WRITTEN ANSWER:\n${studentAnswer}` : null,
     selectedChoice ? `STUDENT SELECTED:\n${selectedChoice}` : null,
@@ -217,11 +216,19 @@ export async function POST(request: Request) {
             : ""
         }`
       : null,
+  ].filter(Boolean);
+
+  const contextParts = [
+    `Course: ${typeof b.courseTitle === "string" && b.courseTitle.trim() ? b.courseTitle.trim() : "Review"}`,
+    `Module: ${typeof b.moduleTitle === "string" && b.moduleTitle.trim() ? b.moduleTitle.trim() : "—"}`,
+    `Card type: ${b.cardKind === "personal" ? "Focus card (from notes)" : "Module bank"}`,
     sourceExcerpt
       ? `STUDENT NOTES (quote these verbatim when they cover the question):\n${sourceExcerpt}`
       : null,
-    notesLink
-      ? `NOTES LINK (include when citing student notes): [Open your notes](${notesLink})`
+    // Only mention the URL when notes are available; model must use inline
+    // [your notes](url) — never a separate "Open your notes" CTA.
+    hadStudentNotes && notesLink
+      ? `NOTES URL (only when citing notes, link the words "your notes"): ${notesLink}`
       : null,
     lessonNotes
       ? `COURSE LESSONS (this module):\n${lessonNotes}`
@@ -266,18 +273,35 @@ export async function POST(request: Request) {
         }
       };
       try {
+        let fullReply = "";
         for await (const delta of streamReviewChat({
           message,
           history: asHistory(b.history),
           contextText: contextParts.join("\n\n"),
+          activeCardText: activeCardParts.join("\n\n"),
           userId: user.id,
           voice: b.voice === true,
           voiceContinuation,
-          notesLink,
+          notesLink:
+            !b.voice && hadStudentNotes && notesLink ? notesLink : null,
         })) {
+          fullReply += delta;
           send("text", { channel: "reply", delta });
         }
-        send("done", {});
+        if (!b.voice && hadStudentNotes && notesLink) {
+          const patched = ensureInlineYourNotesLink(
+            fullReply,
+            notesLink,
+            true
+          );
+          if (patched !== fullReply) {
+            send("done", { finalReply: patched });
+          } else {
+            send("done", {});
+          }
+        } else {
+          send("done", {});
+        }
       } catch (e) {
         console.error("[srs/review-chat]", e);
         void report("srs.review_chat_failed", e, { userId: user.id });

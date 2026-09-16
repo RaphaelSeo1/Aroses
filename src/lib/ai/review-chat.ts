@@ -40,14 +40,16 @@ Acknowledge briefly, answer what they just said, then resume only if it still he
 function reviewChatSystem(
   voice?: boolean,
   interruption?: ReviewVoiceContinuation,
+  /** Path like /notes/doc/{uuid} — only when student notes are in context. */
   notesLink?: string | null
 ): string {
   const notesCite = notesLink
     ? voice
-      ? `- When you cite their notes, mention they can open those notes from the Open notes control next to chat (do not invent a URL).`
-      : `- When you cite their notes (blockquote or "Your notes say…"), include this markdown link once in that reply: [Open your notes](${notesLink})
-- That link opens their notes in another tab — never invent a different notes URL.`
-    : `- If you cite notes but no NOTES LINK was provided, do not invent a notes URL.`;
+      ? `- When you cite their notes, say "your notes" naturally. Do not speak URLs.`
+      : `- When you cite or explain from their notes, make the words "your notes" an inline markdown link once using exactly this URL: [your notes](${notesLink})
+- Example shape: "…as explained in [your notes](${notesLink})."
+- Do NOT add a separate "Open your notes" line, button, or redundant CTA. Only include the link when you actually use their notes.`
+    : `- If you cite notes but no note link is available, do not invent a notes URL.`;
 
   const replyShape = voice
     ? `- This reply is spoken aloud. 1–3 short sentences is the norm. NO markdown.
@@ -56,11 +58,15 @@ function reviewChatSystem(
 - When their notes cover the point, quote them closely — use a markdown blockquote or "Your notes say: …" with the exact wording. Do not paraphrase a note you are citing.
 - If the question is not in the notes/lecture, lead with a short clause like "Not covered in detail in this lecture, but…" and THEN still answer helpfully. Never refuse. Never stop at "that wasn't in the lecture." Mark extra tutoring as yours, not as something from class.`;
 
-  return `You are ${AI_ASSISTANT_NAME}, sitting with a student during spaced-repetition review. They can ask about the current card, why they missed it, or anything related.
+  return `You are ${AI_ASSISTANT_NAME}, sitting with a student during spaced-repetition review. They are looking at one ACTIVE REVIEW CARD right now.
+
+ACTIVE CARD:
+- Their help requests are about that ACTIVE REVIEW CARD unless they clearly ask about something else.
+- Never ask which question or card they mean — you already have it in context.
+- Use the card prompt, their answer, and the reveal/grade (if shown) to coach what they got wrong.
 
 GROUNDING:
 - Prefer STUDENT NOTES and COURSE LESSONS when the question is about this material. Cite notes verbatim when you use them.
-- Use the CURRENT CARD (prompt, their answer, the reveal/grade if shown) to coach what they got wrong.
 - If the card is NOT yet revealed, do not dump the correct MCQ letter or paste the stored reference answer. Coach the idea instead.
 - After reveal, explain freely — including why their answer missed, and what the notes said.
 
@@ -80,10 +86,15 @@ export async function* streamReviewChat(input: {
   message: string;
   history: ReviewChatHistoryTurn[];
   contextText: string;
+  /**
+   * Stem / choices / answer for the card on screen. Placed immediately before
+   * the student message so the model cannot miss which question is active.
+   */
+  activeCardText?: string | null;
   userId?: string | null;
   voice?: boolean;
   voiceContinuation?: ReviewVoiceContinuation;
-  /** Path like /notes/doc/{uuid} for citing the student's notes. */
+  /** Path like /notes/doc/{uuid} when student notes are available to cite. */
   notesLink?: string | null;
 }): AsyncGenerator<string, void, void> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -96,9 +107,13 @@ export async function* streamReviewChat(input: {
     .map((t) => `${t.role === "user" ? "STUDENT" : "ROSE"}: ${t.content.slice(0, MAX_TURN)}`)
     .join("\n\n");
 
+  const activeCard = input.activeCardText?.trim() ?? "";
   const contextBlock = [
     input.contextText.trim().slice(0, MAX_CONTEXT) || "(no notes loaded)",
     historyBlock ? `EARLIER TURNS:\n${historyBlock}` : null,
+    activeCard
+      ? `ACTIVE REVIEW CARD (student is looking at this now — answer about this card unless they clearly change topic):\n${activeCard}`
+      : "ACTIVE REVIEW CARD: (not provided — if they ask for help on a card, ask which one only as a last resort.)",
     `STUDENT MESSAGE:\n${input.message}`,
   ]
     .filter(Boolean)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import {
   pickerChildLabel,
@@ -25,21 +25,8 @@ export function ReviewPickerList({
   maxHeightClass?: string;
 }) {
   const t = useT();
-  const [expanded, setExpanded] = useState<Set<string>>(
-    () => new Set(groups.filter((g) => g.children.length > 0).map((g) => g.id))
-  );
-
-  useEffect(() => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      for (const group of groups) {
-        if (group.children.length > 0 && !next.has(group.id)) {
-          next.add(group.id);
-        }
-      }
-      return next;
-    });
-  }, [groups]);
+  // Courses start collapsed; user expands a row to see nested notes/focus items.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   const fallbacks = {
     focusQuestions: t.review.focusQuestions,
