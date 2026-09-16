@@ -7,6 +7,7 @@ import { repairOrphanNotesFocusCards } from "@/lib/notes/repair-orphan-focus-car
 import {
   isGenericFocusTitle,
   isNotesFocusBucketId,
+  isNotesOriginFocusCard,
   notesFocusBucketId,
 } from "@/lib/notes/notes-focus-bucket";
 import {
@@ -328,9 +329,10 @@ export async function GET(request: Request) {
       const noteBucketId = notesFocusBucketId(sourceNoteId);
       const sourceLabel =
         typeof row.source_label === "string" ? row.source_label.trim() : "";
-      const fromNote =
-        Boolean(sourceNoteId) ||
-        Boolean(sourceLabel && !isGenericFocusTitle(sourceLabel));
+      const fromNote = isNotesOriginFocusCard({
+        materialId: rawMid,
+        sourceNoteId,
+      });
       const noteMeta = notesMeta.get(noteBucketId);
       if (noteMeta?.noteDeleted) {
         continue;

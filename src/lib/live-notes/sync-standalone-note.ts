@@ -52,8 +52,7 @@ async function patchNoteCourseId(
       updated_at: new Date().toISOString(),
     })
     .eq("id", noteId)
-    .eq("user_id", userId)
-    .is("course_id", null);
+    .eq("user_id", userId);
   if (error && !isMissingDbColumnError(error, "course_id")) {
     console.error("[ensureLiveSessionUserNote course]", error);
   }

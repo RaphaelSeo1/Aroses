@@ -137,6 +137,44 @@ test("source_label Lecture 2 without a note id is not generic Focus questions", 
   assert.notEqual(pickerParentLabel(groups[0]!, fallbacks), "Focus questions");
 });
 
+test("Lecture 3 PDF with a lecture label is course-origin, not a phantom notes row", () => {
+  const byMaterial = new Map<string, SrsDueByMaterial>([
+    [
+      MAT,
+      {
+        materialId: MAT,
+        fileName: "Lecture 3.pdf",
+        courseId: COURSE,
+        courseTitle: "PBHLTH 162A",
+        module: 0,
+        personal: 0,
+        total: 0,
+      },
+    ],
+  ]);
+  for (let i = 0; i < 240; i++) {
+    addPersonalFocusCount(
+      byMaterial,
+      {
+        materialId: MAT,
+        sourceNoteId: null,
+        sourceLabel: "Lecture 3",
+      },
+      new Map()
+    );
+  }
+  finalizeFocusBuckets(byMaterial);
+  assert.equal(byMaterial.get(MAT)!.personal, 240);
+  assert.equal(byMaterial.has("notes"), false);
+  const groups = groupReviewPickerRows([...byMaterial.values()]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]!.courseTitle, "PBHLTH 162A");
+  assert.equal(
+    groups[0]!.children.some((c) => c.kind === "note"),
+    false
+  );
+});
+
 test("two notes on the same course stay as separate note children", () => {
   const byMaterial = new Map<string, SrsDueByMaterial>();
   const notesMeta = new Map<string, NotesFocusBucketMeta>([

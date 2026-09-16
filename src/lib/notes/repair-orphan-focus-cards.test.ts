@@ -119,3 +119,120 @@ test("ignores generic Focus questions labels", () => {
     null
   );
 });
+
+const SESSION_B = "55555555-5555-4555-8555-555555555555";
+
+test("Lecture 2 in two courses is ambiguous without a preferred course", () => {
+  const match = pickNoteForFocusLabel(
+    "Lecture 2",
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 2",
+        courseId: COURSE,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 2",
+        courseId: OTHER,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+      },
+    ],
+    [
+      {
+        id: SESSION,
+        title: "Lecture 2",
+        courseId: COURSE,
+        userNoteId: NOTE_A,
+        updatedAt: "2026-09-10T00:00:00Z",
+      },
+      {
+        id: SESSION_B,
+        title: "Lecture 2",
+        courseId: OTHER,
+        userNoteId: NOTE_B,
+        updatedAt: "2026-09-11T00:00:00Z",
+      },
+    ]
+  );
+  assert.equal(match?.ambiguous, true);
+  assert.equal(match?.noteId, "");
+});
+
+test("preferred course keeps PBHLTH Lecture 2 off MCB 104", () => {
+  const match = pickNoteForFocusLabel(
+    "Lecture 2",
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 2",
+        courseId: COURSE,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 2",
+        courseId: OTHER,
+        updatedAt: "2026-09-11T00:00:00Z",
+        deleted: false,
+      },
+    ],
+    [
+      {
+        id: SESSION,
+        title: "Lecture 2",
+        courseId: COURSE,
+        userNoteId: NOTE_A,
+        updatedAt: "2026-09-10T00:00:00Z",
+      },
+      {
+        id: SESSION_B,
+        title: "Lecture 2",
+        courseId: OTHER,
+        userNoteId: NOTE_B,
+        updatedAt: "2026-09-11T00:00:00Z",
+      },
+    ],
+    OTHER
+  );
+  assert.equal(match?.ambiguous, false);
+  assert.equal(match?.noteId, NOTE_B);
+  assert.equal(match?.courseId, OTHER);
+});
+
+test("does not stamp a null-course Lecture 2 note onto another course's session", () => {
+  const match = pickNoteForFocusLabel(
+    "Lecture 2",
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 2",
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+      },
+    ],
+    [
+      {
+        id: SESSION,
+        title: "Lecture 2",
+        courseId: COURSE,
+        userNoteId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+      },
+      {
+        id: SESSION_B,
+        title: "Lecture 2",
+        courseId: OTHER,
+        userNoteId: null,
+        updatedAt: "2026-09-11T00:00:00Z",
+      },
+    ]
+  );
+  assert.equal(match?.ambiguous, true);
+  assert.equal(match?.noteId, "");
+});

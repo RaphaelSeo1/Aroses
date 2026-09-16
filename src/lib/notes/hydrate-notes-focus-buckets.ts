@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import {
+  courseIdForNotesFocusBucket,
   isGenericFocusTitle,
   notesFocusBucketId,
   parseNotesFocusBucketNoteId,
@@ -147,10 +148,10 @@ export async function hydrateNotesFocusBucketMeta(
       | { id: string; title: string | null }[]
       | null;
     const courseRow = Array.isArray(courses) ? courses[0] : courses;
-    const courseId =
-      typeof raw.course_id === "string"
-        ? raw.course_id
-        : (courseRow?.id ?? sessionCourseByNoteId.get(id) ?? null);
+    const courseId = courseIdForNotesFocusBucket(
+      typeof raw.course_id === "string" ? raw.course_id : courseRow?.id,
+      sessionCourseByNoteId.get(id)
+    );
     const noteTitle =
       typeof raw.title === "string" && raw.title.trim()
         ? raw.title.trim()

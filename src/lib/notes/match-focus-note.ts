@@ -46,21 +46,43 @@ export function pickNoteForFocusLabel(
   if (!wanted || isGenericFocusTitle(label)) return null;
 
   const live = sessions.filter((s) => normTitle(s.title) === wanted);
+  const liveCourseIds = [
+    ...new Set(
+      live
+        .map((s) => s.courseId)
+        .filter((id): id is string => Boolean(id && UUID_RE.test(id)))
+    ),
+  ];
   const preferred =
     (preferredCourseId && UUID_RE.test(preferredCourseId)
       ? preferredCourseId
-      : null) ??
-    live.find((s) => s.courseId)?.courseId ??
-    null;
+      : null) ?? (liveCourseIds.length === 1 ? liveCourseIds[0]! : null);
 
   const candidates = notes.filter(
     (n) => !n.deleted && normTitle(n.title) === wanted
   );
+  const candidateCourseIds = [
+    ...new Set(
+      candidates
+        .map((n) => n.courseId)
+        .filter((id): id is string => Boolean(id && UUID_RE.test(id)))
+    ),
+  ];
 
-  const byCourse = preferred
-    ? candidates.filter((n) => n.courseId === preferred)
+  // Same title in two courses (PBHLTH Lecture 2 vs MCB 104 Lecture 2) must
+  // not collapse into whichever session happened to sort first.
+  if (!preferred && (liveCourseIds.length > 1 || candidateCourseIds.length > 1)) {
+    return {
+      noteId: "",
+      courseId: null,
+      sessionId: null,
+      ambiguous: true,
+    };
+  }
+
+  const pool = preferred
+    ? candidates.filter((n) => !n.courseId || n.courseId === preferred)
     : candidates;
-  const pool = byCourse.length > 0 ? byCourse : candidates;
 
   if (pool.length > 1) {
     return {
@@ -68,7 +90,7 @@ export function pickNoteForFocusLabel(
       courseId: pool.every((n) => n.courseId && n.courseId === pool[0]!.courseId)
         ? pool[0]!.courseId
         : preferred,
-      sessionId: live[0]?.id ?? null,
+      sessionId: sessionOnCourse(live, preferred)?.id ?? null,
       ambiguous: true,
     };
   }
@@ -77,9 +99,7 @@ export function pickNoteForFocusLabel(
     const note = pool[0]!;
     const session =
       live.find((s) => s.userNoteId === note.id) ??
-      live.find((s) => (preferred ? s.courseId === preferred : true)) ??
-      live[0] ??
-      null;
+      sessionOnCourse(live, note.courseId ?? preferred);
     return {
       noteId: note.id,
       courseId: note.courseId ?? session?.courseId ?? preferred,
@@ -88,7 +108,10 @@ export function pickNoteForFocusLabel(
     };
   }
 
-  const sessionWithNote = live.find(
+  const scopedLive = preferred
+    ? live.filter((s) => !s.courseId || s.courseId === preferred)
+    : live;
+  const sessionWithNote = scopedLive.find(
     (s) => typeof s.userNoteId === "string" && s.userNoteId
   );
   if (sessionWithNote?.userNoteId) {
@@ -100,12 +123,7 @@ export function pickNoteForFocusLabel(
     };
   }
 
-  const ranked = [...live].sort((a, b) => {
-    if (preferred) {
-      const aMatch = a.courseId === preferred ? 1 : 0;
-      const bMatch = b.courseId === preferred ? 1 : 0;
-      if (aMatch !== bMatch) return bMatch - aMatch;
-    }
+  const ranked = [...scopedLive].sort((a, b) => {
     const at = a.updatedAt ? Date.parse(a.updatedAt) : 0;
     const bt = b.updatedAt ? Date.parse(b.updatedAt) : 0;
     return bt - at;
@@ -119,4 +137,20 @@ export function pickNoteForFocusLabel(
     sessionId: session.id,
     ambiguous: false,
   };
+}
+
+function sessionOnCourse(
+  live: LiveSessionMatchCandidate[],
+  courseId: string | null
+): LiveSessionMatchCandidate | null {
+  if (!courseId) return null;
+  const matches = live.filter((s) => s.courseId === courseId);
+  if (matches.length === 0) return null;
+  return (
+    [...matches].sort((a, b) => {
+      const at = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+      const bt = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+      return bt - at;
+    })[0] ?? null
+  );
 }

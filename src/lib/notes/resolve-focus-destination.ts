@@ -157,8 +157,7 @@ export async function resolveFocusDestination(
         updated_at: new Date().toISOString(),
       })
       .eq("id", sourceNoteId)
-      .eq("user_id", userId)
-      .is("course_id", null);
+      .eq("user_id", userId);
     if (error && !isMissingDbColumnError(error, "course_id")) {
       console.error("[resolveFocusDestination note course]", error);
     }

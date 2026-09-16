@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  courseIdForNotesFocusBucket,
   isGenericFocusTitle,
   isNotesFocusBucketId,
+  isNotesOriginFocusCard,
   notesFocusBucketId,
   NOTES_FOCUS_BUCKET_ID,
   parseNotesFocusBucketNoteId,
@@ -25,4 +27,29 @@ test("isGenericFocusTitle rejects placeholders but keeps real note titles", () =
   assert.equal(isGenericFocusTitle("Notes"), true);
   assert.equal(isGenericFocusTitle("Lecture 2"), false);
   assert.equal(isGenericFocusTitle("PBHLTH 162A"), false);
+});
+
+test("isNotesOriginFocusCard is the note id or a notes-only row, not a PDF label", () => {
+  const noteId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const materialId = "22222222-2222-4222-8222-222222222222";
+  assert.equal(
+    isNotesOriginFocusCard({ materialId, sourceNoteId: noteId }),
+    true
+  );
+  assert.equal(
+    isNotesOriginFocusCard({ materialId: null, sourceNoteId: null }),
+    true
+  );
+  assert.equal(
+    isNotesOriginFocusCard({ materialId, sourceNoteId: null }),
+    false
+  );
+});
+
+test("live session course wins over a stale note course_id", () => {
+  const pbhlth = "44444444-4444-4444-8444-444444444444";
+  const mcb = "11111111-1111-4111-8111-111111111111";
+  assert.equal(courseIdForNotesFocusBucket(mcb, pbhlth), pbhlth);
+  assert.equal(courseIdForNotesFocusBucket(mcb, null), mcb);
+  assert.equal(courseIdForNotesFocusBucket(null, pbhlth), pbhlth);
 });

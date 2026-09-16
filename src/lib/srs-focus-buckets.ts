@@ -2,6 +2,7 @@ import type { NotesFocusBucketMeta } from "./notes/hydrate-notes-focus-buckets.t
 import {
   isGenericFocusTitle,
   isNotesFocusBucketId,
+  isNotesOriginFocusCard,
   notesFocusBucketId,
 } from "./notes/notes-focus-bucket.ts";
 import type { SrsDueByMaterial } from "./srs-due.ts";
@@ -83,8 +84,10 @@ export function addPersonalFocusCount(
   if (meta?.noteDeleted) return false;
 
   const label = noteTitle(meta, row.sourceLabel, sourceNoteId);
-  const notesOrigin =
-    Boolean(sourceNoteId) || !isGenericFocusTitle(row.sourceLabel);
+  const notesOrigin = isNotesOriginFocusCard({
+    materialId: row.materialId,
+    sourceNoteId,
+  });
 
   if (notesOrigin) {
     const bucket = ensureNotesBucket(byMaterial, noteBucketId, label, {

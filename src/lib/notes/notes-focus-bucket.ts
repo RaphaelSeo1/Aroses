@@ -43,3 +43,34 @@ export function isGenericFocusTitle(label: string | null | undefined): boolean {
     s === "from notes"
   );
 }
+
+function validUuid(id: string | null | undefined): string | null {
+  const s = (id ?? "").trim();
+  return s && UUID_RE.test(s) ? s : null;
+}
+
+/**
+ * Notes-origin focus cards belong to a `user_notes` / live-notes row.
+ * Course-origin cards sit on a study material and must not be titled into
+ * another course's note just because the PDF is also named "Lecture 2".
+ */
+export function isNotesOriginFocusCard(row: {
+  materialId?: string | null;
+  sourceNoteId?: string | null;
+}): boolean {
+  if (validUuid(row.sourceNoteId)) return true;
+  const mid = (row.materialId ?? "").trim().toLowerCase();
+  return !mid || isNotesFocusBucketId(mid);
+}
+
+/**
+ * Course for a notes-focus Review row. A live session that owns the note
+ * wins over a stale `user_notes.course_id` (title-match used to stamp the
+ * wrong course onto Lecture 2 notes).
+ */
+export function courseIdForNotesFocusBucket(
+  noteCourseId: string | null | undefined,
+  liveSessionCourseId: string | null | undefined
+): string | null {
+  return validUuid(liveSessionCourseId) ?? validUuid(noteCourseId);
+}
