@@ -1,0 +1,21 @@
+---
+description: Always commit finished product work and push to main automatically
+alwaysApply: true
+---
+
+# Auto commit & push to main
+
+When finished product/app work is ready in this repo, **commit and push to `origin/main` without waiting to be asked**.
+
+## Do
+- Commit relevant tracked/new app source (and related tests, migrations, project rules).
+- Prefer one or two why-focused commits (HEREDOC messages), then `git push origin main` (or the branch that tracks main).
+- Confirm local main matches `origin/main` after push.
+
+## Do not
+- Force push, amend unless amend rules are fully met, or skip hooks.
+- Commit secrets (`.env`, credentials) or junk: pitch decks, YC/application drafts, `*.prompt.md`, zips, business-plan docs, backups, unrelated marketing PDFs.
+- Push if the user explicitly said not to, or if the only changes are dangerous/secrets.
+
+## Default
+Treat "yes push everything to main automatically every time" as standing preference for this user/repo.
