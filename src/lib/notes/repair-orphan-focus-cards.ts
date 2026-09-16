@@ -1,9 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { isUuid } from "@/lib/voice-tutor/uuid";
-import { isGenericFocusTitle } from "@/lib/notes/notes-focus-bucket";
+import {
+  isGenericFocusTitle,
+  isNotesOriginFocusCard,
+} from "@/lib/notes/notes-focus-bucket";
 import { ensureLiveSessionUserNote } from "@/lib/live-notes/sync-standalone-note";
 import {
+  focusCardText,
+  pickLiveSessionForFocusCard,
   pickNoteForFocusLabel,
   type LiveSessionMatchCandidate,
   type NoteMatchCandidate,
@@ -11,7 +16,10 @@ import {
 
 export {
   pickNoteForFocusLabel,
+  pickLiveSessionForFocusCard,
+  focusCardText,
   type FocusNoteMatch,
+  type FocusSessionMatch,
   type LiveSessionMatchCandidate,
   type NoteMatchCandidate,
 } from "@/lib/notes/match-focus-note";
@@ -31,16 +39,38 @@ type OrphanRow = {
   source_label?: string | null;
   source_note_id?: string | null;
   material_id?: string | null;
+  item?: unknown;
 };
 
 function asId(value: unknown): string | null {
   return typeof value === "string" && isUuid(value) ? value : null;
 }
 
+async function patchNoteCourse(
+  supabase: SupabaseClient,
+  userId: string,
+  noteId: string,
+  courseId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("user_notes")
+    .update({
+      course_id: courseId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", noteId)
+    .eq("user_id", userId);
+  if (error && !isMissingDbColumnError(error, "course_id")) {
+    console.error("[repairOrphanNotesFocusCards note course]", error);
+  }
+}
+
 /**
- * Fill null `source_note_id` on notes-only personal cards, and copy
- * `course_id` onto the linked user_notes row from the live session that
- * owns it — including when a stale title-match stamped the wrong course.
+ * Fill null `source_note_id` on notes-only personal cards, ensure live
+ * sessions have standalone notes, overwrite stale `user_notes.course_id`
+ * from the owning live session, and re-home title-colliding cards onto the
+ * session whose notes body matches the card (e.g. PBHLTH 162A Lecture 2
+ * bacteria cards that were title-matched onto MCB 104's Lecture 2 note).
  * Never writes `material_id` — notes-origin cards must not attach to a PDF.
  */
 export async function repairOrphanNotesFocusCards(
@@ -49,7 +79,7 @@ export async function repairOrphanNotesFocusCards(
 ): Promise<void> {
   const first = await supabase
     .from("user_personal_quiz_items")
-    .select("id, source_label, source_note_id, material_id")
+    .select("id, source_label, source_note_id, material_id, item")
     .eq("user_id", userId)
     .limit(800);
   let rows: OrphanRow[] | null = first.data as OrphanRow[] | null;
@@ -59,12 +89,24 @@ export async function repairOrphanNotesFocusCards(
   ) {
     return;
   }
-  if (first.error) {
+  if (first.error && isMissingDbColumnError(first.error, "item")) {
+    const fallback = await supabase
+      .from("user_personal_quiz_items")
+      .select("id, source_label, source_note_id, material_id")
+      .eq("user_id", userId)
+      .limit(800);
+    rows = (fallback.data as OrphanRow[] | null) ?? null;
+    if (fallback.error) {
+      console.error("[repairOrphanNotesFocusCards load]", fallback.error);
+      return;
+    }
+  } else if (first.error) {
     console.error("[repairOrphanNotesFocusCards load]", first.error);
     return;
   }
 
-  const orphans = (rows ?? []).filter(
+  const allRows = rows ?? [];
+  const orphans = allRows.filter(
     (row) => !asId(row.source_note_id) && !asId(row.material_id)
   );
   const labeled = orphans.filter(
@@ -72,23 +114,30 @@ export async function repairOrphanNotesFocusCards(
       typeof row.source_label === "string" &&
       !isGenericFocusTitle(row.source_label)
   );
+  const notesOriginRows = allRows.filter((row) =>
+    isNotesOriginFocusCard({
+      materialId: row.material_id,
+      sourceNoteId: row.source_note_id,
+    })
+  );
   const linkedNoteIds = [
     ...new Set(
-      (rows ?? [])
+      allRows
         .map((row) => asId(row.source_note_id))
         .filter((id): id is string => Boolean(id))
     ),
   ];
 
-  if (labeled.length === 0 && linkedNoteIds.length === 0) return;
-
   const labels = [
     ...new Set(
-      labeled
-        .map((row) => (row.source_label as string).trim())
-        .filter(Boolean)
+      [...labeled, ...notesOriginRows]
+        .map((row) =>
+          typeof row.source_label === "string" ? row.source_label.trim() : ""
+        )
+        .filter((label) => label && !isGenericFocusTitle(label))
     ),
   ];
+  const labelSet = new Set(labels.map((l) => normTitle(l)));
 
   const notes: NoteMatchCandidate[] = [];
   const noteSelect = await supabase
@@ -143,12 +192,12 @@ export async function repairOrphanNotesFocusCards(
   const sessions: LiveSessionMatchCandidate[] = [];
   const sessionSelect = await supabase
     .from("live_lecture_sessions")
-    .select("id, title, course_id, user_note_id, updated_at")
+    .select("id, title, course_id, user_note_id, updated_at, notes_text")
     .eq("user_id", userId)
     .limit(400);
   if (
     sessionSelect.error &&
-    isMissingDbColumnError(sessionSelect.error, "user_note_id")
+    isMissingDbColumnError(sessionSelect.error, "user_note_id", "notes_text")
   ) {
     const fallback = await supabase
       .from("live_lecture_sessions")
@@ -162,6 +211,7 @@ export async function repairOrphanNotesFocusCards(
         courseId: asId(raw.course_id),
         userNoteId: null,
         updatedAt: typeof raw.updated_at === "string" ? raw.updated_at : null,
+        notesText: null,
       });
     }
   } else if (!sessionSelect.error) {
@@ -172,7 +222,44 @@ export async function repairOrphanNotesFocusCards(
         courseId: asId(raw.course_id),
         userNoteId: asId(raw.user_note_id),
         updatedAt: typeof raw.updated_at === "string" ? raw.updated_at : null,
+        notesText:
+          typeof (raw as { notes_text?: unknown }).notes_text === "string"
+            ? ((raw as { notes_text: string }).notes_text)
+            : null,
       });
+    }
+  } else {
+    console.error("[repairOrphanNotesFocusCards sessions]", sessionSelect.error);
+  }
+
+  // Ensure live sessions that share a focus-card label get their own note
+  // (never reuse another course's "Lecture 2" note by title).
+  for (let i = 0; i < sessions.length; i++) {
+    const session = sessions[i]!;
+    if (session.userNoteId) continue;
+    if (!labelSet.has(normTitle(session.title))) continue;
+    const ensured = await ensureLiveSessionUserNote(
+      supabase,
+      session.id,
+      userId
+    );
+    if (!ensured?.noteId) continue;
+    sessions[i] = {
+      ...session,
+      userNoteId: ensured.noteId,
+      courseId: ensured.courseId ?? session.courseId,
+    };
+    const existing = notes.find((n) => n.id === ensured.noteId);
+    if (!existing) {
+      notes.push({
+        id: ensured.noteId,
+        title: session.title,
+        courseId: ensured.courseId ?? session.courseId,
+        updatedAt: new Date().toISOString(),
+        deleted: false,
+      });
+    } else if (ensured.courseId && existing.courseId !== ensured.courseId) {
+      existing.courseId = ensured.courseId;
     }
   }
 
@@ -192,19 +279,19 @@ export async function repairOrphanNotesFocusCards(
       if (ensured?.courseId && noteId) {
         match.courseId = ensured.courseId;
       }
+      const sess = sessions.find((s) => s.id === match.sessionId);
+      if (sess && noteId) {
+        sess.userNoteId = noteId;
+        if (ensured?.courseId) sess.courseId = ensured.courseId;
+      }
     }
     if (!noteId) continue;
     noteIdByLabel.set(normTitle(label), noteId);
     if (match.courseId) {
-      await supabase
-        .from("user_notes")
-        .update({
-          course_id: match.courseId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", noteId)
-        .eq("user_id", userId)
-        .is("course_id", null);
+      // Overwrite stale stamps — title-match used to pin the wrong course.
+      await patchNoteCourse(supabase, userId, noteId, match.courseId);
+      const note = notes.find((n) => n.id === noteId);
+      if (note) note.courseId = match.courseId;
     }
   }
 
@@ -229,8 +316,56 @@ export async function repairOrphanNotesFocusCards(
     }
   }
 
-  if (linkedNoteIds.length === 0 && sessions.every((s) => !s.userNoteId)) {
-    return;
+  // Re-home already-linked cards that title-match landed on the wrong course's
+  // note (PBHLTH bacteria cards sitting on MCB Lecture 2).
+  const rehomeByNote = new Map<string, string[]>();
+  for (const row of notesOriginRows) {
+    const label =
+      typeof row.source_label === "string" ? row.source_label.trim() : "";
+    if (!label || isGenericFocusTitle(label)) continue;
+    const currentNoteId = asId(row.source_note_id);
+    const picked = pickLiveSessionForFocusCard(
+      label,
+      focusCardText(row.item),
+      sessions,
+      { currentNoteId }
+    );
+    if (!picked?.courseId) continue;
+
+    let targetNoteId = picked.noteId;
+    if (!targetNoteId && picked.sessionId) {
+      const ensured = await ensureLiveSessionUserNote(
+        supabase,
+        picked.sessionId,
+        userId
+      );
+      targetNoteId = ensured?.noteId ?? null;
+      const sess = sessions.find((s) => s.id === picked.sessionId);
+      if (sess && targetNoteId) {
+        sess.userNoteId = targetNoteId;
+        if (ensured?.courseId) sess.courseId = ensured.courseId;
+      }
+    }
+    if (!targetNoteId) continue;
+    if (currentNoteId === targetNoteId) continue;
+
+    const list = rehomeByNote.get(targetNoteId) ?? [];
+    list.push(row.id);
+    rehomeByNote.set(targetNoteId, list);
+  }
+  for (const [noteId, ids] of rehomeByNote) {
+    const { error } = await supabase
+      .from("user_personal_quiz_items")
+      .update({
+        source_note_id: noteId,
+        material_id: null,
+        module_id: null,
+      })
+      .eq("user_id", userId)
+      .in("id", ids);
+    if (error && !isMissingDbColumnError(error, "source_note_id")) {
+      console.error("[repairOrphanNotesFocusCards rehome]", error);
+    }
   }
 
   const noteById = new Map(notes.map((n) => [n.id, n]));
@@ -245,6 +380,7 @@ export async function repairOrphanNotesFocusCards(
   const noteIdsToAlign = new Set([
     ...linkedNoteIds,
     ...[...sessionByNoteId.keys()],
+    ...[...rehomeByNote.keys()],
   ]);
   for (const noteId of noteIdsToAlign) {
     const session = sessionByNoteId.get(noteId);
@@ -252,20 +388,11 @@ export async function repairOrphanNotesFocusCards(
     if (!courseId) continue;
     const note = noteById.get(noteId);
     if (note?.courseId === courseId) continue;
-    const { error } = await supabase
-      .from("user_notes")
-      .update({
-        course_id: courseId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", noteId)
-      .eq("user_id", userId);
-    if (error && !isMissingDbColumnError(error, "course_id")) {
-      console.error("[repairOrphanNotesFocusCards note course]", error);
-    }
+    await patchNoteCourse(supabase, userId, noteId, courseId);
+    if (note) note.courseId = courseId;
   }
 
-  const attachedToPdf = (rows ?? []).filter(
+  const attachedToPdf = allRows.filter(
     (row) => asId(row.source_note_id) && asId(row.material_id)
   );
   if (attachedToPdf.length === 0) return;

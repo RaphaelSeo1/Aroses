@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pickNoteForFocusLabel } from "./match-focus-note.ts";
+import {
+  contentOverlapScore,
+  pickLiveSessionForFocusCard,
+  pickNoteForFocusLabel,
+} from "./match-focus-note.ts";
 
 const NOTE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const NOTE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -235,4 +239,104 @@ test("does not stamp a null-course Lecture 2 note onto another course's session"
   );
   assert.equal(match?.ambiguous, true);
   assert.equal(match?.noteId, "");
+});
+
+test("live-session course wins over a wrongly stamped note.course_id", () => {
+  const match = pickNoteForFocusLabel(
+    "Lecture 2",
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 2",
+        // Stale stamp from title-match onto MCB while the live session is PBHLTH.
+        courseId: COURSE,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+      },
+    ],
+    [
+      {
+        id: SESSION,
+        title: "Lecture 2",
+        courseId: OTHER,
+        userNoteId: NOTE_A,
+        updatedAt: "2026-09-11T00:00:00Z",
+      },
+    ]
+  );
+  assert.equal(match?.ambiguous, false);
+  assert.equal(match?.noteId, NOTE_A);
+  assert.equal(match?.courseId, OTHER);
+});
+
+const MCB_NOTES =
+  "Nuclear pores and nucleoporins transport macromolecules through nuclei. Chromosome telomeres and centromeres organize mitotic spindle attachment.";
+const PBHLTH_NOTES =
+  "Bacteria are everywhere. Lateral gene transfer and 16S rRNA gene sequences identify bacterial samples. Frameshift mutation and ribosomal subunit 30S.";
+
+test("content overlap prefers the live-notes corpus that shares card tokens", () => {
+  const bacteriaCard =
+    "What does similarity in 16S rRNA gene sequences indicate about bacterial samples and lateral gene transfer?";
+  assert.ok(
+    contentOverlapScore(bacteriaCard, PBHLTH_NOTES) >
+      contentOverlapScore(bacteriaCard, MCB_NOTES)
+  );
+});
+
+test("rehomes Lecture 2 bacteria cards onto PBHLTH even when already linked to MCB note", () => {
+  const match = pickLiveSessionForFocusCard(
+    "Lecture 2",
+    "What does >97% similarity in 16S rRNA gene sequences indicate about two bacterial samples and lateral gene transfer?",
+    [
+      {
+        id: SESSION,
+        title: "Lecture 2",
+        courseId: COURSE,
+        userNoteId: NOTE_A,
+        updatedAt: "2026-09-15T00:00:00Z",
+        notesText: MCB_NOTES,
+      },
+      {
+        id: SESSION_B,
+        title: "Lecture 2",
+        courseId: OTHER,
+        userNoteId: NOTE_B,
+        updatedAt: "2026-09-14T00:00:00Z",
+        notesText: PBHLTH_NOTES,
+      },
+    ],
+    { currentNoteId: NOTE_A }
+  );
+  assert.equal(match?.sessionId, SESSION_B);
+  assert.equal(match?.noteId, NOTE_B);
+  assert.equal(match?.courseId, OTHER);
+});
+
+test("keeps correctly linked MCB Lecture 2 cards on the MCB live session", () => {
+  const match = pickLiveSessionForFocusCard(
+    "Lecture 2",
+    "How do nuclear pores and nucleoporins transport macromolecules through chromosome telomeres?",
+    [
+      {
+        id: SESSION,
+        title: "Lecture 2",
+        courseId: COURSE,
+        userNoteId: NOTE_A,
+        updatedAt: "2026-09-15T00:00:00Z",
+        notesText: MCB_NOTES,
+      },
+      {
+        id: SESSION_B,
+        title: "Lecture 2",
+        courseId: OTHER,
+        userNoteId: NOTE_B,
+        updatedAt: "2026-09-14T00:00:00Z",
+        notesText: PBHLTH_NOTES,
+      },
+    ],
+    { currentNoteId: NOTE_A }
+  );
+  assert.equal(match?.sessionId, SESSION);
+  assert.equal(match?.noteId, NOTE_A);
+  assert.equal(match?.courseId, COURSE);
 });

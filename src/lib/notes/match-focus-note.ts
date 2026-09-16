@@ -3,6 +3,75 @@ import { isGenericFocusTitle } from "./notes-focus-bucket.ts";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const STOP = new Set([
+  "the",
+  "and",
+  "for",
+  "that",
+  "with",
+  "this",
+  "from",
+  "which",
+  "what",
+  "when",
+  "where",
+  "into",
+  "onto",
+  "about",
+  "their",
+  "there",
+  "have",
+  "has",
+  "were",
+  "been",
+  "being",
+  "than",
+  "then",
+  "them",
+  "they",
+  "does",
+  "did",
+  "each",
+  "other",
+  "such",
+  "only",
+  "also",
+  "more",
+  "most",
+  "some",
+  "any",
+  "all",
+  "can",
+  "could",
+  "would",
+  "should",
+  "will",
+  "may",
+  "might",
+  "must",
+  "between",
+  "among",
+  "under",
+  "over",
+  "after",
+  "before",
+  "because",
+  "while",
+  "during",
+  "through",
+  "following",
+  "according",
+  "describe",
+  "explain",
+  "name",
+  "best",
+  "correctly",
+  "primary",
+  "context",
+  "notes",
+  "lecture",
+]);
+
 export type NoteMatchCandidate = {
   id: string;
   title: string;
@@ -17,6 +86,8 @@ export type LiveSessionMatchCandidate = {
   courseId: string | null;
   userNoteId: string | null;
   updatedAt: string | null;
+  /** Live-notes body — used to re-home title-colliding focus cards. */
+  notesText?: string | null;
 };
 
 export type FocusNoteMatch = {
@@ -27,8 +98,129 @@ export type FocusNoteMatch = {
   ambiguous: boolean;
 };
 
+export type FocusSessionMatch = {
+  sessionId: string;
+  noteId: string | null;
+  courseId: string | null;
+  score: number;
+};
+
 function normTitle(value: string | null | undefined): string {
   return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Flatten a personal-quiz `item` JSON blob into text for overlap scoring. */
+export function focusCardText(item: unknown): string {
+  if (item == null) return "";
+  if (typeof item === "string") return item;
+  if (typeof item !== "object") return String(item);
+  const row = item as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const key of [
+    "question",
+    "prompt",
+    "correct",
+    "answer",
+    "explanation",
+    "rationale",
+  ]) {
+    const v = row[key];
+    if (typeof v === "string" && v.trim()) parts.push(v.trim());
+  }
+  const options = row.options;
+  if (Array.isArray(options)) {
+    for (const opt of options) {
+      if (typeof opt === "string" && opt.trim()) parts.push(opt.trim());
+      else if (opt && typeof opt === "object") {
+        const text = (opt as { text?: unknown }).text;
+        if (typeof text === "string" && text.trim()) parts.push(text.trim());
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+function tokens(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []).filter(
+    (w) => !STOP.has(w)
+  );
+}
+
+/** Fraction of card tokens that appear in the live-notes corpus. */
+export function contentOverlapScore(cardText: string, corpus: string): number {
+  const card = tokens(cardText);
+  if (card.length === 0) return 0;
+  const hay = new Set(tokens(corpus));
+  if (hay.size === 0) return 0;
+  let hits = 0;
+  for (const t of card) {
+    if (hay.has(t)) hits += 1;
+  }
+  return hits / card.length;
+}
+
+/**
+ * Pick a live session for a focus card when titles collide across courses.
+ * Uses notes-body overlap so PBHLTH Lecture 2 bacteria cards do not stay on
+ * MCB 104's Lecture 2 note.
+ */
+export function pickLiveSessionForFocusCard(
+  label: string,
+  cardText: string,
+  sessions: LiveSessionMatchCandidate[],
+  opts?: { currentNoteId?: string | null }
+): FocusSessionMatch | null {
+  const wanted = normTitle(label);
+  if (!wanted || isGenericFocusTitle(label)) return null;
+
+  const live = sessions.filter((s) => normTitle(s.title) === wanted);
+  if (live.length === 0) return null;
+
+  if (live.length === 1) {
+    const only = live[0]!;
+    return {
+      sessionId: only.id,
+      noteId: only.userNoteId,
+      courseId: only.courseId,
+      score: 1,
+    };
+  }
+
+  const scored = live
+    .map((session) => ({
+      session,
+      score: contentOverlapScore(cardText, session.notesText ?? ""),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const best = scored[0];
+  if (!best) return null;
+  const second = scored[1];
+
+  const currentNoteId = opts?.currentNoteId ?? null;
+  if (currentNoteId) {
+    const current = scored.find((s) => s.session.userNoteId === currentNoteId);
+    // Keep the existing link when it is already a top match.
+    if (current && current.score >= best.score - 0.02 && current.score >= 0.06) {
+      return {
+        sessionId: current.session.id,
+        noteId: current.session.userNoteId,
+        courseId: current.session.courseId,
+        score: current.score,
+      };
+    }
+  }
+
+  const margin = second ? best.score - second.score : best.score;
+  if (best.score < 0.06) return null;
+  if (second && margin < 0.02 && best.score < 0.12) return null;
+
+  return {
+    sessionId: best.session.id,
+    noteId: best.session.userNoteId,
+    courseId: best.session.courseId,
+    score: best.score,
+  };
 }
 
 /**
@@ -102,7 +294,8 @@ export function pickNoteForFocusLabel(
       sessionOnCourse(live, note.courseId ?? preferred);
     return {
       noteId: note.id,
-      courseId: note.courseId ?? session?.courseId ?? preferred,
+      // Live-session course wins over a stale stamped note.course_id.
+      courseId: session?.courseId ?? note.courseId ?? preferred,
       sessionId: session?.id ?? null,
       ambiguous: false,
     };
