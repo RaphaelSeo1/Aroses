@@ -131,6 +131,7 @@ const en = {
   askRose: "Ask Rose",
   askRoseHint: "Ask about this card, what you missed, or what your notes say.",
   askRosePlaceholder: "Ask why this was wrong, or what your notes say…",
+  openYourNotes: "Open your notes",
   newChat: "New chat",
   chats: "Chats",
   emptyReviewChat:
@@ -267,6 +268,7 @@ const ko: typeof en = {
   askRose: "Rose에게 묻기",
   askRoseHint: "이 카드, 틀린 이유, 노트에 적힌 내용을 물어보세요.",
   askRosePlaceholder: "왜 틀렸는지, 노트에는 뭐라고 되어 있는지 물어보세요…",
+  openYourNotes: "노트 열기",
   newChat: "새 채팅",
   chats: "채팅",
   emptyReviewChat:

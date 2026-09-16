@@ -10,6 +10,7 @@ import {
 import { ChatVoiceTutorButton } from "@/components/chat-voice/ChatVoiceTutorButton";
 import { ChatVoiceTutorOrb } from "@/components/chat-voice/ChatVoiceTutorOrb";
 import { StudyChatMessageMarkdown } from "@/components/StudyChatMessageMarkdown";
+import { parseNotesFocusBucketNoteId } from "@/lib/notes/notes-focus-bucket";
 import {
   useChatVoiceTutor,
   type ChatVoiceSendContext,
@@ -37,6 +38,8 @@ export type ReviewChatCardContext = {
   moduleTitle: string;
   courseTitle: string | null;
   personalItemId?: string;
+  /** Focus-card source note — used for "Open your notes" links. */
+  sourceNoteId?: string | null;
   sourceExcerpt?: string | null;
   question: CourseQuizItem;
   revealed: boolean;
@@ -97,6 +100,14 @@ export function ReviewSessionChat({
 
   const active = threads.find((th) => th.id === activeId) ?? threads[0]!;
   const turns = active?.turns ?? [];
+  const notesHref = (() => {
+    if (!card) return null;
+    if (card.sourceNoteId && /^[0-9a-f-]{36}$/i.test(card.sourceNoteId)) {
+      return `/notes/doc/${card.sourceNoteId}`;
+    }
+    const fromBucket = parseNotesFocusBucketNoteId(card.materialId);
+    return fromBucket ? `/notes/doc/${fromBucket}` : null;
+  })();
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -251,6 +262,11 @@ export function ReviewSessionChat({
             courseTitle: currentCard?.courseTitle,
             cardKind: currentCard?.kind,
             personalItemId: currentCard?.personalItemId,
+            sourceNoteId:
+              currentCard?.sourceNoteId ??
+              (currentCard
+                ? parseNotesFocusBucketNoteId(currentCard.materialId)
+                : null),
             sourceExcerpt: currentCard?.sourceExcerpt,
             question: currentCard?.question,
             revealed: currentCard?.revealed ?? false,
@@ -512,6 +528,19 @@ export function ReviewSessionChat({
                               aria-hidden
                               className="ml-0.5 inline-block h-[0.85em] w-[0.08em] translate-y-[0.12em] animate-pulse rounded-sm bg-fuchsia-500 align-baseline"
                             />
+                          ) : null}
+                          {notesHref &&
+                          turn.content.trim() &&
+                          turn.id !== streamingId ? (
+                            <a
+                              href={notesHref}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-brand underline-offset-2 hover:underline dark:text-brand-soft"
+                            >
+                              {t.review.openYourNotes}
+                              <span aria-hidden>↗</span>
+                            </a>
                           ) : null}
                         </div>
                       ) : turn.content.trim() ? (

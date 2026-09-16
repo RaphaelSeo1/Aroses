@@ -26,18 +26,23 @@ export function StudyChatMessageMarkdown({
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          a: ({ href, children, ...rest }) => (
-            <a
-              href={href}
-              target={href?.startsWith("http") ? "_blank" : undefined}
-              rel={
-                href?.startsWith("http") ? "noreferrer noopener" : undefined
-              }
-              {...rest}
-            >
-              {children}
-            </a>
-          ),
+          a: ({ href, children, ...rest }) => {
+            const openInNewTab =
+              Boolean(href) &&
+              (href!.startsWith("http") ||
+                href!.startsWith("/notes") ||
+                href!.startsWith("/dashboard/courses"));
+            return (
+              <a
+                href={href}
+                target={openInNewTab ? "_blank" : undefined}
+                rel={openInNewTab ? "noreferrer noopener" : undefined}
+                {...rest}
+              >
+                {children}
+              </a>
+            );
+          },
         }}
       >
         {source}

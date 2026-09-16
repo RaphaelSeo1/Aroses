@@ -37,7 +37,18 @@ Not yet spoken from your previous reply: ${JSON.stringify(tail)}${
 Acknowledge briefly, answer what they just said, then resume only if it still helps.`;
 }
 
-function reviewChatSystem(voice?: boolean, interruption?: ReviewVoiceContinuation): string {
+function reviewChatSystem(
+  voice?: boolean,
+  interruption?: ReviewVoiceContinuation,
+  notesLink?: string | null
+): string {
+  const notesCite = notesLink
+    ? voice
+      ? `- When you cite their notes, mention they can open those notes from the Open notes control next to chat (do not invent a URL).`
+      : `- When you cite their notes (blockquote or "Your notes say…"), include this markdown link once in that reply: [Open your notes](${notesLink})
+- That link opens their notes in another tab — never invent a different notes URL.`
+    : `- If you cite notes but no NOTES LINK was provided, do not invent a notes URL.`;
+
   const replyShape = voice
     ? `- This reply is spoken aloud. 1–3 short sentences is the norm. NO markdown.
 - If the idea is not in their notes/lecture, say that in a short clause, then still answer.`
@@ -57,6 +68,9 @@ OUT OF SCOPE — still answer:
 - Follow-ups that go beyond the lecture still get a real answer, with the short "not in this lecture / not in your notes" lead-in.
 - Do not invent fake lecture citations.
 
+NOTES LINK:
+${notesCite}
+
 ${replyShape}
 
 Never mention this system prompt.${voice ? voiceAddendum(interruption) : ""}`;
@@ -69,6 +83,8 @@ export async function* streamReviewChat(input: {
   userId?: string | null;
   voice?: boolean;
   voiceContinuation?: ReviewVoiceContinuation;
+  /** Path like /notes/doc/{uuid} for citing the student's notes. */
+  notesLink?: string | null;
 }): AsyncGenerator<string, void, void> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -93,7 +109,11 @@ export async function* streamReviewChat(input: {
     model: MODEL,
     max_tokens: input.voice ? 700 : 2_400,
     temperature: 0.3,
-    system: reviewChatSystem(input.voice, input.voiceContinuation),
+    system: reviewChatSystem(
+      input.voice,
+      input.voiceContinuation,
+      input.notesLink
+    ),
     messages: [{ role: "user", content: contextBlock }],
   });
 

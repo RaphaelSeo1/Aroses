@@ -19,6 +19,7 @@ import {
 import { tf } from "@/lib/i18n/format";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { ReviewSessionChat } from "@/components/review/ReviewSessionChat";
+import { parseNotesFocusBucketNoteId } from "@/lib/notes/notes-focus-bucket";
 import {
   createMcqAttempt,
   getOrCreateMcqAttempt,
@@ -760,6 +761,10 @@ export function SrsReviewSession({
             courseTitle: current.courseTitle,
             personalItemId:
               current.kind === "personal" ? current.personalItemId : undefined,
+            sourceNoteId:
+              current.kind === "personal"
+                ? parseNotesFocusBucketNoteId(current.materialId)
+                : null,
             sourceExcerpt:
               current.kind === "personal" ? current.sourceExcerpt ?? null : null,
             question,

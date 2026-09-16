@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { streamReviewChat } from "@/lib/ai/review-chat";
 import { lookAtAttachmentPrompt } from "@/lib/chat/chat-attachment-formats";
 import { parseChatAttachments } from "@/lib/chat/chat-attachment-parse";
-import { isNotesFocusBucketId } from "@/lib/notes/notes-focus-bucket";
+import { isNotesFocusBucketId, parseNotesFocusBucketNoteId } from "@/lib/notes/notes-focus-bucket";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
@@ -101,6 +101,7 @@ export async function POST(request: Request) {
     courseTitle?: unknown;
     cardKind?: unknown;
     personalItemId?: unknown;
+    sourceNoteId?: unknown;
     sourceExcerpt?: unknown;
     question?: unknown;
     revealed?: unknown;
@@ -140,25 +141,48 @@ export async function POST(request: Request) {
     typeof b.personalItemId === "string" && UUID_RE.test(b.personalItemId)
       ? b.personalItemId
       : "";
-  if (personalItemId && !sourceExcerpt) {
+  let sourceNoteId =
+    typeof b.sourceNoteId === "string" && UUID_RE.test(b.sourceNoteId.trim())
+      ? b.sourceNoteId.trim()
+      : parseNotesFocusBucketNoteId(
+          typeof b.materialId === "string" ? b.materialId : null
+        );
+  if (personalItemId) {
     const excerptRes = await supabase
       .from("user_personal_quiz_items")
-      .select("source_excerpt")
+      .select("source_excerpt, source_note_id")
       .eq("id", personalItemId)
       .eq("user_id", user.id)
       .maybeSingle();
-    if (
-      !excerptRes.error &&
-      typeof excerptRes.data?.source_excerpt === "string"
-    ) {
-      sourceExcerpt = excerptRes.data.source_excerpt.trim().slice(0, MAX_NOTES);
+    if (!excerptRes.error && excerptRes.data) {
+      if (
+        !sourceExcerpt &&
+        typeof excerptRes.data.source_excerpt === "string"
+      ) {
+        sourceExcerpt = excerptRes.data.source_excerpt
+          .trim()
+          .slice(0, MAX_NOTES);
+      }
+      if (
+        !sourceNoteId &&
+        typeof excerptRes.data.source_note_id === "string" &&
+        UUID_RE.test(excerptRes.data.source_note_id)
+      ) {
+        sourceNoteId = excerptRes.data.source_note_id;
+      }
     } else if (
       excerptRes.error &&
-      !isMissingDbColumnError(excerptRes.error, "source_excerpt")
+      !isMissingDbColumnError(
+        excerptRes.error,
+        "source_excerpt",
+        "source_note_id"
+      )
     ) {
       /* ignore missing column; keep going */
     }
   }
+
+  const notesLink = sourceNoteId ? `/notes/doc/${sourceNoteId}` : null;
 
   let lessonNotes = "";
   if (materialId && UUID_RE.test(materialId) && !isNotesFocusBucketId(materialId)) {
@@ -195,6 +219,9 @@ export async function POST(request: Request) {
       : null,
     sourceExcerpt
       ? `STUDENT NOTES (quote these verbatim when they cover the question):\n${sourceExcerpt}`
+      : null,
+    notesLink
+      ? `NOTES LINK (include when citing student notes): [Open your notes](${notesLink})`
       : null,
     lessonNotes
       ? `COURSE LESSONS (this module):\n${lessonNotes}`
@@ -246,6 +273,7 @@ export async function POST(request: Request) {
           userId: user.id,
           voice: b.voice === true,
           voiceContinuation,
+          notesLink,
         })) {
           send("text", { channel: "reply", delta });
         }
