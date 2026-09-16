@@ -68,10 +68,10 @@ async function patchNoteCourse(
 /**
  * Fill null `source_note_id` on notes-only personal cards, ensure live
  * sessions have standalone notes, overwrite stale `user_notes.course_id`
- * from the owning live session, and re-home title-colliding cards onto the
- * session whose notes body matches the card (e.g. PBHLTH 162A Lecture 2
- * bacteria cards that were title-matched onto MCB 104's Lecture 2 note).
- * Never writes `material_id` — notes-origin cards must not attach to a PDF.
+ * from the owning live session, and re-home lecture-labeled cards onto the
+ * matching live-session note — including cards wrongly parked on a PDF
+ * (MCB Lecture 4/5 on Telomeres, PBHLTH 150D "Lectures 3 + 4" on Populations).
+ * Never leaves notes-origin cards on a PDF material_id.
  */
 export async function repairOrphanNotesFocusCards(
   supabase: SupabaseClient,
@@ -81,7 +81,7 @@ export async function repairOrphanNotesFocusCards(
     .from("user_personal_quiz_items")
     .select("id, source_label, source_note_id, material_id, item")
     .eq("user_id", userId)
-    .limit(800);
+    .limit(2000);
   let rows: OrphanRow[] | null = first.data as OrphanRow[] | null;
   if (
     first.error &&
@@ -94,7 +94,7 @@ export async function repairOrphanNotesFocusCards(
       .from("user_personal_quiz_items")
       .select("id, source_label, source_note_id, material_id")
       .eq("user_id", userId)
-      .limit(800);
+      .limit(2000);
     rows = (fallback.data as OrphanRow[] | null) ?? null;
     if (fallback.error) {
       console.error("[repairOrphanNotesFocusCards load]", fallback.error);
@@ -120,6 +120,13 @@ export async function repairOrphanNotesFocusCards(
       sourceNoteId: row.source_note_id,
     })
   );
+  /** Lecture-titled cards parked on a PDF — still belong to a live session. */
+  const labeledOnPdf = allRows.filter((row) => {
+    if (!asId(row.material_id)) return false;
+    const label =
+      typeof row.source_label === "string" ? row.source_label.trim() : "";
+    return Boolean(label) && !isGenericFocusTitle(label);
+  });
   const linkedNoteIds = [
     ...new Set(
       allRows
@@ -130,7 +137,7 @@ export async function repairOrphanNotesFocusCards(
 
   const labels = [
     ...new Set(
-      [...labeled, ...notesOriginRows]
+      [...labeled, ...notesOriginRows, ...labeledOnPdf]
         .map((row) =>
           typeof row.source_label === "string" ? row.source_label.trim() : ""
         )
@@ -317,18 +324,57 @@ export async function repairOrphanNotesFocusCards(
   }
 
   // Re-home already-linked cards that title-match landed on the wrong course's
-  // note (PBHLTH bacteria cards sitting on MCB Lecture 2).
+  // note, AND lecture-labeled cards wrongly parked on a PDF (Lecture 4/5 on
+  // Telomeres, "Lectures 3 + 4" on Populations).
+  const materialCourseIds = new Map<string, string>();
+  const materialIds = [
+    ...new Set(
+      [...notesOriginRows, ...labeledOnPdf]
+        .map((row) => asId(row.material_id))
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  if (materialIds.length > 0) {
+    const { data: mats, error: matErr } = await supabase
+      .from("study_materials")
+      .select("id, course_id")
+      .in("id", materialIds);
+    if (matErr) {
+      console.error("[repairOrphanNotesFocusCards materials]", matErr);
+    } else {
+      for (const raw of mats ?? []) {
+        const mid = asId(raw.id);
+        const cid = asId(raw.course_id);
+        if (mid && cid) materialCourseIds.set(mid, cid);
+      }
+    }
+  }
+
+  const sessionTitles = new Set(sessions.map((s) => normTitle(s.title)));
+  const rehomeCandidates = [...notesOriginRows, ...labeledOnPdf].filter(
+    (row) => {
+      const label =
+        typeof row.source_label === "string" ? row.source_label.trim() : "";
+      if (!label || isGenericFocusTitle(label)) return false;
+      return sessionTitles.has(normTitle(label));
+    }
+  );
+
   const rehomeByNote = new Map<string, string[]>();
-  for (const row of notesOriginRows) {
+  for (const row of rehomeCandidates) {
     const label =
       typeof row.source_label === "string" ? row.source_label.trim() : "";
     if (!label || isGenericFocusTitle(label)) continue;
     const currentNoteId = asId(row.source_note_id);
+    const materialId = asId(row.material_id);
+    const preferredCourseId = materialId
+      ? materialCourseIds.get(materialId) ?? null
+      : null;
     const picked = pickLiveSessionForFocusCard(
       label,
       focusCardText(row.item),
       sessions,
-      { currentNoteId }
+      { currentNoteId, preferredCourseId }
     );
     if (!picked?.courseId) continue;
 
@@ -347,7 +393,8 @@ export async function repairOrphanNotesFocusCards(
       }
     }
     if (!targetNoteId) continue;
-    if (currentNoteId === targetNoteId) continue;
+    // Already on the right note and not stuck on a PDF.
+    if (currentNoteId === targetNoteId && !materialId) continue;
 
     const list = rehomeByNote.get(targetNoteId) ?? [];
     list.push(row.id);

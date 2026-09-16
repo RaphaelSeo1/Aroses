@@ -340,3 +340,59 @@ test("keeps correctly linked MCB Lecture 2 cards on the MCB live session", () =>
   assert.equal(match?.noteId, NOTE_A);
   assert.equal(match?.courseId, COURSE);
 });
+
+test("unique Lecture 4 label maps to that live session even with empty card text", () => {
+  const match = pickLiveSessionForFocusCard(
+    "Lecture 4",
+    "",
+    [
+      {
+        id: SESSION,
+        title: "Lecture 4",
+        courseId: COURSE,
+        userNoteId: NOTE_A,
+        updatedAt: "2026-09-15T00:00:00Z",
+        notesText: "Meiosis recombination and crossing over.",
+      },
+      {
+        id: SESSION_B,
+        title: "Lecture 5",
+        courseId: COURSE,
+        userNoteId: NOTE_B,
+        updatedAt: "2026-09-16T00:00:00Z",
+        notesText: "Mendelian inheritance ratios.",
+      },
+    ]
+  );
+  assert.equal(match?.sessionId, SESSION);
+  assert.equal(match?.noteId, NOTE_A);
+  assert.equal(match?.courseId, COURSE);
+});
+
+test("preferredCourseId picks the matching course when Lecture titles collide", () => {
+  const match = pickLiveSessionForFocusCard(
+    "Lecture 2",
+    "generic question without distinctive tokens",
+    [
+      {
+        id: SESSION,
+        title: "Lecture 2",
+        courseId: COURSE,
+        userNoteId: NOTE_A,
+        updatedAt: "2026-09-15T00:00:00Z",
+        notesText: MCB_NOTES,
+      },
+      {
+        id: SESSION_B,
+        title: "Lecture 2",
+        courseId: OTHER,
+        userNoteId: NOTE_B,
+        updatedAt: "2026-09-14T00:00:00Z",
+        notesText: PBHLTH_NOTES,
+      },
+    ],
+    { preferredCourseId: OTHER }
+  );
+  assert.equal(match?.sessionId, SESSION_B);
+  assert.equal(match?.courseId, OTHER);
+});

@@ -160,21 +160,30 @@ export function contentOverlapScore(cardText: string, corpus: string): number {
 }
 
 /**
- * Pick a live session for a focus card when titles collide across courses.
- * Uses notes-body overlap so PBHLTH Lecture 2 bacteria cards do not stay on
- * MCB 104's Lecture 2 note.
+ * Pick a live session for a focus card whose source_label matches a lecture
+ * session title. Same-title collisions across courses use notes-body overlap
+ * (and optional preferredCourseId from the PDF the card is currently on).
  */
 export function pickLiveSessionForFocusCard(
   label: string,
   cardText: string,
   sessions: LiveSessionMatchCandidate[],
-  opts?: { currentNoteId?: string | null }
+  opts?: { currentNoteId?: string | null; preferredCourseId?: string | null }
 ): FocusSessionMatch | null {
   const wanted = normTitle(label);
   if (!wanted || isGenericFocusTitle(label)) return null;
 
-  const live = sessions.filter((s) => normTitle(s.title) === wanted);
+  let live = sessions.filter((s) => normTitle(s.title) === wanted);
   if (live.length === 0) return null;
+
+  const preferred =
+    opts?.preferredCourseId && UUID_RE.test(opts.preferredCourseId)
+      ? opts.preferredCourseId
+      : null;
+  if (preferred) {
+    const scoped = live.filter((s) => s.courseId === preferred);
+    if (scoped.length > 0) live = scoped;
+  }
 
   if (live.length === 1) {
     const only = live[0]!;
