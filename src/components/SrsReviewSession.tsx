@@ -76,6 +76,8 @@ export type SrsSessionCard =
       reviewCount: number;
       /** Verbatim notes excerpt this focus card was generated from. */
       sourceExcerpt?: string | null;
+      /** Linked user_notes row — used so Review chat can load the full note body. */
+      sourceNoteId?: string | null;
     };
 
 export type SrsSessionSummary = {
@@ -763,7 +765,8 @@ export function SrsReviewSession({
               current.kind === "personal" ? current.personalItemId : undefined,
             sourceNoteId:
               current.kind === "personal"
-                ? parseNotesFocusBucketNoteId(current.materialId)
+                ? current.sourceNoteId ??
+                  parseNotesFocusBucketNoteId(current.materialId)
                 : null,
             sourceExcerpt:
               current.kind === "personal" ? current.sourceExcerpt ?? null : null,

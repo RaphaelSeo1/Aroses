@@ -65,6 +65,11 @@ ACTIVE CARD:
 - Never ask which question or card they mean — you already have it in context.
 - Use the card prompt, their answer, and the reveal/grade (if shown) to coach what they got wrong.
 
+STUDENT NOTES ACCESS:
+- When a STUDENT NOTES section is present in the user message, you CAN see what they wrote. Read it and use it to help them answer.
+- Never say you cannot see their notes, do not have access to their notes, cannot read what they wrote, or ask them to paste their notes.
+- If STUDENT NOTES says none were found for this card, say notes weren't found for this card and help from the card / course content — still do not claim a general inability to see notes.
+
 GROUNDING:
 - Prefer STUDENT NOTES and COURSE LESSONS when the question is about this material. Cite notes verbatim when you use them.
 - If the card is NOT yet revealed, do not dump the correct MCQ letter or paste the stored reference answer. Coach the idea instead.
@@ -91,6 +96,11 @@ export async function* streamReviewChat(input: {
    * the student message so the model cannot miss which question is active.
    */
   activeCardText?: string | null;
+  /**
+   * Full / excerpt student notes for the active card. Placed next to the card
+   * so the model actually uses them while answering.
+   */
+  studentNotesText?: string | null;
   userId?: string | null;
   voice?: boolean;
   voiceContinuation?: ReviewVoiceContinuation;
@@ -108,9 +118,23 @@ export async function* streamReviewChat(input: {
     .join("\n\n");
 
   const activeCard = input.activeCardText?.trim() ?? "";
+  const studentNotes = input.studentNotesText?.trim() ?? "";
+  // Reserve room for notes + active card near the student message; truncate
+  // course/meta context first so notes are not dropped.
+  const reservedForNotesAndCard = Math.min(
+    MAX_CONTEXT,
+    (studentNotes ? Math.min(studentNotes.length, 16_000) : 0) +
+      (activeCard ? Math.min(activeCard.length, 4_000) : 0) +
+      800
+  );
+  const metaBudget = Math.max(2_000, MAX_CONTEXT - reservedForNotesAndCard);
+  const metaContext =
+    input.contextText.trim().slice(0, metaBudget) ||
+    "(no course/lesson context loaded)";
   const contextBlock = [
-    input.contextText.trim().slice(0, MAX_CONTEXT) || "(no notes loaded)",
+    metaContext,
     historyBlock ? `EARLIER TURNS:\n${historyBlock}` : null,
+    studentNotes || null,
     activeCard
       ? `ACTIVE REVIEW CARD (student is looking at this now — answer about this card unless they clearly change topic):\n${activeCard}`
       : "ACTIVE REVIEW CARD: (not provided — if they ask for help on a card, ask which one only as a last resort.)",

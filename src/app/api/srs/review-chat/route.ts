@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { streamReviewChat } from "@/lib/ai/review-chat";
 import { ensureInlineYourNotesLink } from "@/lib/ai/review-chat-notes-link";
+import { buildReviewChatStudentNotes } from "@/lib/ai/review-chat-student-notes";
 import { lookAtAttachmentPrompt } from "@/lib/chat/chat-attachment-formats";
 import { parseChatAttachments } from "@/lib/chat/chat-attachment-parse";
 import { isNotesFocusBucketId, parseNotesFocusBucketNoteId } from "@/lib/notes/notes-focus-bucket";
@@ -183,8 +184,66 @@ export async function POST(request: Request) {
     }
   }
 
-  const notesLink = sourceNoteId ? `/notes/doc/${sourceNoteId}` : null;
-  const hadStudentNotes = Boolean(sourceExcerpt);
+  let noteTitle = "";
+  let noteBody = "";
+  if (sourceNoteId) {
+    const noteRes = await supabase
+      .from("user_notes")
+      .select("title, content_text")
+      .eq("id", sourceNoteId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!noteRes.error && noteRes.data) {
+      if (typeof noteRes.data.title === "string") {
+        noteTitle = noteRes.data.title.trim();
+      }
+      if (typeof noteRes.data.content_text === "string") {
+        noteBody = noteRes.data.content_text.trim().slice(0, MAX_NOTES);
+      }
+    }
+    // Soft-fail if the standalone note is empty — try the newest live session
+    // linked to this note (content may not have synced yet).
+    if (!noteBody) {
+      const liveRes = await supabase
+        .from("live_lecture_sessions")
+        .select("notes_text, title")
+        .eq("user_note_id", sourceNoteId)
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!liveRes.error && liveRes.data) {
+        if (
+          typeof liveRes.data.notes_text === "string" &&
+          liveRes.data.notes_text.trim()
+        ) {
+          noteBody = liveRes.data.notes_text.trim().slice(0, MAX_NOTES);
+        }
+        if (
+          !noteTitle &&
+          typeof liveRes.data.title === "string" &&
+          liveRes.data.title.trim()
+        ) {
+          noteTitle = liveRes.data.title.trim();
+        }
+      } else if (
+        liveRes.error &&
+        !isMissingDbColumnError(liveRes.error, "user_note_id", "notes_text")
+      ) {
+        /* ignore schema gaps; keep going with excerpt if any */
+      }
+    }
+  }
+
+  const studentNotes = buildReviewChatStudentNotes({
+    noteTitle,
+    noteBody,
+    sourceExcerpt,
+    sourceNoteId,
+    maxLen: MAX_NOTES,
+  });
+  const hadStudentNotes = studentNotes.hadStudentNotes;
+  const notesLink = studentNotes.notesLink;
 
   let lessonNotes = "";
   if (materialId && UUID_RE.test(materialId) && !isNotesFocusBucketId(materialId)) {
@@ -222,14 +281,6 @@ export async function POST(request: Request) {
     `Course: ${typeof b.courseTitle === "string" && b.courseTitle.trim() ? b.courseTitle.trim() : "Review"}`,
     `Module: ${typeof b.moduleTitle === "string" && b.moduleTitle.trim() ? b.moduleTitle.trim() : "—"}`,
     `Card type: ${b.cardKind === "personal" ? "Focus card (from notes)" : "Module bank"}`,
-    sourceExcerpt
-      ? `STUDENT NOTES (quote these verbatim when they cover the question):\n${sourceExcerpt}`
-      : null,
-    // Only mention the URL when notes are available; model must use inline
-    // [your notes](url) — never a separate "Open your notes" CTA.
-    hadStudentNotes && notesLink
-      ? `NOTES URL (only when citing notes, link the words "your notes"): ${notesLink}`
-      : null,
     lessonNotes
       ? `COURSE LESSONS (this module):\n${lessonNotes}`
       : null,
@@ -237,6 +288,18 @@ export async function POST(request: Request) {
       ? `ATTACHED FILE${attached.name ? ` (${attached.name})` : ""}:\n${attached.text.slice(0, MAX_NOTES)}`
       : null,
   ].filter(Boolean);
+
+  // Notes sit next to the active card in the model prompt (not only in meta).
+  const studentNotesText = [
+    studentNotes.contextBlock,
+    // Only mention the URL when notes are available; model must use inline
+    // [your notes](url) — never a separate "Open your notes" CTA.
+    hadStudentNotes && notesLink
+      ? `NOTES URL (only when citing notes, link the words "your notes"): ${notesLink}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   let voiceContinuation:
     | {
@@ -279,6 +342,7 @@ export async function POST(request: Request) {
           history: asHistory(b.history),
           contextText: contextParts.join("\n\n"),
           activeCardText: activeCardParts.join("\n\n"),
+          studentNotesText: studentNotesText || null,
           userId: user.id,
           voice: b.voice === true,
           voiceContinuation,

@@ -81,6 +81,7 @@ export type SessionCard =
       isNew: boolean;
       reviewCount: number;
       sourceExcerpt?: string | null;
+      sourceNoteId?: string | null;
     };
 
 export async function GET(request: Request) {
@@ -403,6 +404,7 @@ export async function GET(request: Request) {
           typeof row.source_excerpt === "string" && row.source_excerpt.trim()
             ? row.source_excerpt.trim()
             : null,
+        sourceNoteId,
       };
 
       if (cram) {
