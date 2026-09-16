@@ -49,6 +49,7 @@ import {
   type TitleScript,
 } from "@/lib/study-ingest/normalize-ingest-title";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
+import { quizDifficultyWordingRules } from "@/lib/ai/quiz-difficulty-wording";
 import { auditModuleQuantitativeConsistency } from "@/lib/ai/course-quantitative-qa";
 import {
   DEFAULT_COURSE_OUTPUT_LANGUAGE,
@@ -883,6 +884,8 @@ QUIZ (critical): Each module needs **at least ${quizTarget} questions per module
     throw new Error(`Unhandled course build profile: ${String(_bad)}`);
   }
 
+  quizFooter = `${quizFooter}\n\n${quizDifficultyWordingRules()}`;
+
   return `You are an expert course designer and educator. You have been given raw course material (lecture slides, syllabi, notes). Your job is NOT to summarize this material. Your job is to use it as a source to BUILD a complete, professional, structured course that a student would genuinely pay for.
 ${generationContextSuffix(studyContext, outputLanguage)}
 ${sizeRules}
@@ -914,6 +917,7 @@ Generate the course in this exact JSON format:
       "quiz": [
         {
           "type": "mcq",
+          "difficulty": "easy",
           "question": "question text",
           "choices": ["A", "B", "C", "D"],
           "correct": "A",
@@ -921,6 +925,7 @@ Generate the course in this exact JSON format:
         },
         {
           "type": "free_response",
+          "difficulty": "medium",
           "question": "open-ended prompt requiring reasoning or recall",
           "reference_answer": "what a strong answer should cover — concepts, definitions, and acceptable variants",
           "explanation": "why those ideas matter and common misconceptions"
@@ -1428,7 +1433,8 @@ function moduleQuizMinForGeneration(profile: CourseBuildProfile): number {
 function moduleQuizRules(profile: CourseBuildProfile): string {
   const genMin = moduleQuizMinForGeneration(profile);
   const frMin = moduleFreeResponseMin(profile, genMin);
-  return `QUIZ (this module only): **at least ${genMin}** questions for now (with **at least ${frMin}** type free_response, reference_answer required). The rest MCQ with exactly 4 choices each. Choice text must NOT include A)/B)/C)/D) prefixes. Do not shrink lesson content to fit more quiz items — additional questions are added server-side later.`;
+  return `QUIZ (this module only): **at least ${genMin}** questions for now (with **at least ${frMin}** type free_response, reference_answer required). The rest MCQ with exactly 4 choices each. Choice text must NOT include A)/B)/C)/D) prefixes. Do not shrink lesson content to fit more quiz items — additional questions are added server-side later.
+${quizDifficultyWordingRules()}`;
 }
 
 function looksLikeTruncatedJson(text: string): boolean {

@@ -42,7 +42,17 @@ type RawQuiz = {
   correct?: unknown;
   explanation?: unknown;
   reviewDisabled?: unknown;
+  difficulty?: unknown;
 };
+
+function parseQuizDifficulty(
+  value: unknown
+): "easy" | "medium" | "hard" | undefined {
+  if (typeof value !== "string") return undefined;
+  const d = value.trim().toLowerCase();
+  if (d === "easy" || d === "medium" || d === "hard") return d;
+  return undefined;
+}
 
 function normalizeQuizMcq(raw: RawQuiz): CourseQuizMcqItem {
   if (
@@ -62,9 +72,11 @@ function normalizeQuizMcq(raw: RawQuiz): CourseQuizMcqItem {
     ? correctRaw
     : stripChoiceLetterPrefix(correctRaw);
   const correctIndex = resolveCorrectIndex(correctForResolve, choices);
+  const difficulty = parseQuizDifficulty(raw.difficulty);
   return {
     type: "mcq",
     ...(raw.reviewDisabled === true ? { reviewDisabled: true } : {}),
+    ...(difficulty ? { difficulty } : {}),
     question: raw.question,
     choices,
     correct: raw.correct.trim(),
@@ -93,9 +105,11 @@ function normalizeQuizFree(raw: Record<string, unknown>): CourseQuizFreeItem {
     throw new Error("Free-response items need a substantive reference_answer");
   }
 
+  const difficulty = parseQuizDifficulty(raw.difficulty);
   return {
     type: "free_response",
     ...(raw.reviewDisabled === true ? { reviewDisabled: true } : {}),
+    ...(difficulty ? { difficulty } : {}),
     question,
     referenceAnswer,
     explanation,

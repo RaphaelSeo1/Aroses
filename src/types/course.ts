@@ -45,6 +45,8 @@ export type CourseQuizMcqItem = {
   type?: "mcq";
   /** Keeps the stable quiz index while excluding a deleted SRS card. */
   reviewDisabled?: boolean;
+  /** Concept difficulty — drives stem wording at generation time. */
+  difficulty?: "easy" | "medium" | "hard";
   question: string;
   choices: [string, string, string, string];
   /** Original label from model ("A" or matching choice text) */
@@ -58,6 +60,8 @@ export type CourseQuizFreeItem = {
   type: "free_response";
   /** Keeps the stable quiz index while excluding a deleted SRS card. */
   reviewDisabled?: boolean;
+  /** Concept difficulty — drives stem wording at generation time. */
+  difficulty?: "easy" | "medium" | "hard";
   question: string;
   /** What a solid answer should capture (used for grading, not shown before submit) */
   referenceAnswer: string;

@@ -4,6 +4,7 @@ import {
   stripJsonFence,
 } from "@/lib/ai/course-payload";
 import { tutorChatModel } from "@/lib/ai/anthropic-models";
+import { quizDifficultyWordingRules } from "@/lib/ai/quiz-difficulty-wording";
 import type {
   CourseQuizFreeItem,
   CourseQuizItem,
@@ -499,7 +500,8 @@ function missingTypes(
   };
 }
 
-function generationPrompt(opts: {
+/** Exported for unit tests — keep in sync with generatePersonalQuizFromNotes. */
+export function buildPersonalQuizGenerationPrompt(opts: {
   corpus: string;
   mcq: number;
   freeResponse: number;
@@ -523,17 +525,17 @@ LEARNER NOTES / HIGHLIGHTS:
 ${opts.corpus}
 
 Task: Output a JSON array of EXACTLY ${total} questions: EXACTLY ${opts.mcq} multiple-choice and EXACTLY ${opts.freeResponse} free-response. Output ONLY the JSON array — no markdown fences, no commentary, no trailing text.
-MCQ object: { "type": "mcq", "question": string, "choices": [4 strings], "correct": "A"|"B"|"C"|"D", "explanation": string }
-Free-response object: { "type": "free_response", "question": string, "reference_answer": string, "explanation": string }
+MCQ object: { "type": "mcq", "difficulty": "easy"|"medium"|"hard", "question": string, "choices": [4 strings], "correct": "A"|"B"|"C"|"D", "explanation": string }
+Free-response object: { "type": "free_response", "difficulty": "easy"|"medium"|"hard", "question": string, "reference_answer": string, "explanation": string }
 
 Strict rules (follow all):
 1) TYPE COUNTS: Preserve the exact requested split. Never turn a free-response slot into multiple choice.
 2) REFERENCE RUBRIC: Every free-response item must have a substantive natural-language reference_answer (1–3 sentences) stating the key ideas a correct answer should cover. It is used by a concept-focused AI grader.
 3) DISTINCT FACTS: Each question must test a different main idea from the notes. Do not ask the same underlying fact twice using different wording.
 4) ONE PROBE PER QUESTION: Pick one concrete concept per item — mechanism, definition term, cause→effect link, contrast, or example.
-5) ELABORATE STEMS: Write clear, specific stems. Use the explanation to justify the answer briefly.
+5) ${quizDifficultyWordingRules()}
 6) COVERAGE: Spread questions across separated ideas instead of staying on one sentence.
-7) MCQ CHOICES: Every MCQ must have exactly four plausible choices and one clearly correct answer grounded in the excerpt. Choice text must NOT start with A) B) C) D) or "A." — the UI already shows those letters.
+7) MCQ CHOICES: Every MCQ must have exactly four plausible choices and one clearly correct answer grounded in the excerpt. Choice text must NOT start with A) B) C) D) or "A." — the UI already shows those letters. Use the explanation to justify the answer briefly.
 8) JSON: Double-quoted keys and strings. No trailing commas. Stop after the closing ].${avoid}${broken}`;
 }
 
@@ -556,7 +558,7 @@ export async function generatePersonalQuizFromNotes(
   const plan = planPersonalQuizTypes(count, opts?.existingCounts);
   const wanted = typeCounts(plan);
   // One backup of each type lets dedupe discard overlap without changing the mix.
-  const prompt = generationPrompt({
+  const prompt = buildPersonalQuizGenerationPrompt({
     corpus,
     mcq: wanted.mcq + 1,
     freeResponse: wanted.freeResponse + 1,
@@ -591,7 +593,7 @@ export async function generatePersonalQuizFromNotes(
       messages: [
         {
           role: "user",
-          content: generationPrompt({
+          content: buildPersonalQuizGenerationPrompt({
             corpus,
             mcq: repairMcq,
             freeResponse: repairFreeResponse,

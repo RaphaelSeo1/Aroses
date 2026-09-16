@@ -8,6 +8,7 @@ import {
   normalizeQuizItemsLoose,
   stripJsonFence,
 } from "@/lib/ai/course-payload";
+import { quizDifficultyWordingRules } from "@/lib/ai/quiz-difficulty-wording";
 import { isQuizMcq } from "@/types/course";
 import type {
   CourseQuizMcqItem,
@@ -124,7 +125,7 @@ export type LessonPlanInput = {
 // Bump when the prompt or parser changes in a way that invalidates cached
 // plans. v2 adds `keyTerms` so the immersive runner can glow phrases in the
 // source-lesson panel.
-export const LESSON_PLAN_GENERATOR_VERSION = 5;
+export const LESSON_PLAN_GENERATOR_VERSION = 6;
 const LESSON_PLAN_VERSION = LESSON_PLAN_GENERATOR_VERSION;
 
 function levelGuidance(level: KnowledgeLevel): string {
@@ -477,7 +478,7 @@ Call the submit_lesson_plan tool with a "chunks" array. Each chunk object:
 - concept: 1-line concept name (on-screen heading)
 - explanation: 3-6 sentences a tutor would say out loud. Plain prose, no markdown.
 - analogy (optional): one short fallback analogy if the student misses the question
-- checkQuestion: ONE question testing this exact concept
+- checkQuestion: ONE question testing this exact concept — match wording complexity to how hard the concept is (easy → plain/direct; hard → precise technical OK)
 - referenceAnswer: what a strong answer should say (1-3 sentences, internal grading only)
 - keyPoints: 3-5 short phrases the student's answer should hit
 - sourceLessonIndex: 0-based lesson index this chunk maps to
@@ -489,9 +490,10 @@ Strict rules:
 2) ORDER: Chunks must teach in pedagogical order — prerequisites before what depends on them.
 3) NO REPETITION: Don't re-ask the same fact across chunks.
 4) CHECK = MEANINGFUL: Each checkQuestion must be answerable with 1-3 sentences of explanation, not a trivia recall.
-5) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.
-6) DEPTH: Explanations must teach mechanisms and reasoning (why/how), not just name a concept. Include at least one concrete detail from the source (pathway, drug, number, comparison). Avoid generic openers — start with substance.
-7) KEY TERMS APPEAR IN SOURCE: Every keyTerm MUST be a substring of the lesson the chunk maps to. Do not invent terms. If a chunk is hard to anchor (e.g. pure overview), it's fine to return fewer keyTerms or an empty array.`;
+5) CHECK WORDING: ${quizDifficultyWordingRules()}
+6) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.
+7) DEPTH: Explanations must teach mechanisms and reasoning (why/how), not just name a concept. Include at least one concrete detail from the source (pathway, drug, number, comparison). Avoid generic openers — start with substance.
+8) KEY TERMS APPEAR IN SOURCE: Every keyTerm MUST be a substring of the lesson the chunk maps to. Do not invent terms. If a chunk is hard to anchor (e.g. pure overview), it's fine to return fewer keyTerms or an empty array.`;
 
   const anthropic = new Anthropic({ apiKey, timeout: 180_000, maxRetries: 0 });
 

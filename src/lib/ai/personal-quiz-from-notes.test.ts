@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countPersonalQuizTypes,
+  buildPersonalQuizGenerationPrompt,
   parsePersonalQuizModelText,
   planPersonalQuizTypes,
   selectPersonalQuizItems,
@@ -134,4 +135,16 @@ test("selected cards retain persistence-ready MCQ and FRQ shapes", () => {
     countPersonalQuizTypes(selected.map((item) => ({ item }))),
     { mcq: 1, freeResponse: 1 }
   );
+});
+
+test("buildPersonalQuizGenerationPrompt matches wording to difficulty", () => {
+  const prompt = buildPersonalQuizGenerationPrompt({
+    corpus: "Hemoglobin binds oxygen in red blood cells.",
+    mcq: 2,
+    freeResponse: 2,
+  });
+  assert.match(prompt, /DIFFICULTY THEN WORDING/i);
+  assert.match(prompt, /"difficulty": "easy"\|"medium"\|"hard"/);
+  assert.match(prompt, /ANTI-PATTERNS/i);
+  assert.doesNotMatch(prompt, /ELABORATE STEMS/i);
 });
