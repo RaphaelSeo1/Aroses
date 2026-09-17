@@ -13,6 +13,7 @@ import {
   addPersonalFocusCount,
   finalizeFocusBuckets,
 } from "@/lib/srs-focus-buckets";
+import { queryActiveStudyMaterials } from "@/lib/study-materials/soft-delete";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 
 /**
@@ -78,10 +79,23 @@ export async function GET() {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   }
 
-  const { data: matsRaw } = await supabase
-    .from("study_materials")
-    .select("id, file_name, course_id, course_payload, courses ( id, title )")
-    .eq("user_id", user.id);
+  const { data: matsRaw } = await queryActiveStudyMaterials(
+    () =>
+      supabase
+        .from("study_materials")
+        .select(
+          "id, file_name, course_id, course_payload, courses ( id, title )"
+        )
+        .eq("user_id", user.id)
+        .is("deleted_at", null),
+    () =>
+      supabase
+        .from("study_materials")
+        .select(
+          "id, file_name, course_id, course_payload, courses ( id, title )"
+        )
+        .eq("user_id", user.id)
+  );
 
   const materialById = new Map<string, MaterialRow>();
   for (const raw of matsRaw ?? []) {
@@ -142,10 +156,24 @@ export async function GET() {
     }
   }
   if (missingPersonalMats.size > 0) {
-    const { data: extraMats } = await supabase
-      .from("study_materials")
-      .select("id, file_name, course_id, course_payload, courses ( id, title )")
-      .in("id", [...missingPersonalMats]);
+    const ids = [...missingPersonalMats];
+    const { data: extraMats } = await queryActiveStudyMaterials(
+      () =>
+        supabase
+          .from("study_materials")
+          .select(
+            "id, file_name, course_id, course_payload, courses ( id, title )"
+          )
+          .in("id", ids)
+          .is("deleted_at", null),
+      () =>
+        supabase
+          .from("study_materials")
+          .select(
+            "id, file_name, course_id, course_payload, courses ( id, title )"
+          )
+          .in("id", ids)
+    );
     for (const raw of extraMats ?? []) {
       const m = raw as unknown as MaterialRow;
       materialById.set(m.id.toLowerCase(), m);

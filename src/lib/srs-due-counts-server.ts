@@ -9,6 +9,7 @@ import {
   addPersonalFocusCount,
   finalizeFocusBuckets,
 } from "@/lib/srs-focus-buckets";
+import { queryActiveStudyMaterials } from "@/lib/study-materials/soft-delete";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
 import type { CoursePayload } from "@/types/course";
@@ -102,11 +103,26 @@ export async function fetchSrsDueCountsForUser(
 
   let materials: MaterialRow[] = [];
   if (materialIds.size > 0) {
-    const { data: matsRaw, error: matsError } = await supabase
-      .from("study_materials")
-      .select("id, file_name, course_id, course_payload, courses ( id, title )")
-      .eq("user_id", userId)
-      .in("id", [...materialIds]);
+    const ids = [...materialIds];
+    const { data: matsRaw, error: matsError } = await queryActiveStudyMaterials(
+      () =>
+        supabase
+          .from("study_materials")
+          .select(
+            "id, file_name, course_id, course_payload, courses ( id, title )"
+          )
+          .eq("user_id", userId)
+          .in("id", ids)
+          .is("deleted_at", null),
+      () =>
+        supabase
+          .from("study_materials")
+          .select(
+            "id, file_name, course_id, course_payload, courses ( id, title )"
+          )
+          .eq("user_id", userId)
+          .in("id", ids)
+    );
     if (matsError) {
       throw new Error(`Could not load review materials: ${matsError.message}`);
     }
@@ -191,10 +207,21 @@ export async function fetchSrsDueCountsForUser(
     }
   }
   if (missingIds.size > 0) {
-    const { data: extraMats, error: extraMatsError } = await supabase
-      .from("study_materials")
-      .select("id, file_name, course_id, courses ( id, title )")
-      .in("id", [...missingIds]);
+    const ids = [...missingIds];
+    const { data: extraMats, error: extraMatsError } =
+      await queryActiveStudyMaterials(
+        () =>
+          supabase
+            .from("study_materials")
+            .select("id, file_name, course_id, courses ( id, title )")
+            .in("id", ids)
+            .is("deleted_at", null),
+        () =>
+          supabase
+            .from("study_materials")
+            .select("id, file_name, course_id, courses ( id, title )")
+            .in("id", ids)
+      );
     if (extraMatsError) {
       throw new Error(
         `Could not load shared review materials: ${extraMatsError.message}`

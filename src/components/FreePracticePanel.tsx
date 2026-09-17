@@ -46,10 +46,13 @@ export type FreePracticeStart = {
 export function FreePracticePanel({
   onStart,
   onCancel,
+  onMaterialsChanged,
 }: {
   /** Empty materialIds = practice everything. */
   onStart: (payload: FreePracticeStart) => void;
   onCancel: () => void;
+  /** Fired after a successful delete so the parent can refresh Deleted. */
+  onMaterialsChanged?: () => void;
 }) {
   const t = useT();
   const [data, setData] = useState<ScopeResponse | null>(null);
@@ -145,6 +148,9 @@ export function FreePracticePanel({
       const result = await deleteReviewMaterials(items);
       if (result.failed > 0) {
         setDeleteError(t.review.deleteSelectedError);
+      }
+      if (result.ok > 0) {
+        onMaterialsChanged?.();
       }
       setPendingDelete(false);
       setLoading(true);

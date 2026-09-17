@@ -18,6 +18,7 @@ import { ShareCourseButton } from "@/components/ShareCourseButton";
 import { parseCourseOutputLanguage } from "@/lib/course-output-language";
 import { fetchCoursePublishingPanels } from "@/lib/marketplace/course-publishing-data";
 import { sortStudyMaterialsForDashboard } from "@/lib/order-study-materials";
+import { queryActiveStudyMaterials } from "@/lib/study-materials/soft-delete";
 import { fetchCourseForDashboard } from "@/lib/supabase/fetch-course-dashboard";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
@@ -79,10 +80,23 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
     if (created) groups = [created];
   }
 
-  const { data: materialsRaw } = await supabase
-    .from("study_materials")
-    .select("id, file_name, created_at, exam_group_id, sort_order, course_payload")
-    .eq("course_id", course.id);
+  const { data: materialsRaw } = await queryActiveStudyMaterials(
+    () =>
+      supabase
+        .from("study_materials")
+        .select(
+          "id, file_name, created_at, exam_group_id, sort_order, course_payload"
+        )
+        .eq("course_id", course.id)
+        .is("deleted_at", null),
+    () =>
+      supabase
+        .from("study_materials")
+        .select(
+          "id, file_name, created_at, exam_group_id, sort_order, course_payload"
+        )
+        .eq("course_id", course.id)
+  );
 
   // Fetch any PDF ingest jobs that failed or are stuck, so we can warn the user.
   const { data: failedJobsRaw } = await supabase

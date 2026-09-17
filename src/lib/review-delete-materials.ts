@@ -4,9 +4,10 @@ import {
 } from "@/lib/notes/notes-focus-bucket";
 
 /**
- * Delete selected review/practice decks. Prefers deleting the study material;
- * if the user can't edit that row but owns the parent course, delete the course.
- * The notes-only focus deck is deleted via /api/notes/focus-questions.
+ * Soft-delete selected review/practice decks (module materials). Prefers
+ * soft-deleting the study material; if the user can't edit that row but owns
+ * the parent course, delete the course. The notes-only focus deck is still
+ * hard-deleted via /api/notes/focus-questions.
  */
 export async function deleteReviewMaterials(
   items: { materialId: string; courseId: string | null }[]

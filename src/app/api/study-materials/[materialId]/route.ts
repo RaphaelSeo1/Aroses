@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { canEditStudyMaterial } from "@/lib/collaboration/permissions";
 import { recordStudyMaterialEdit } from "@/lib/collaboration/record-material-edit";
 import { finalizeMaterialSectionLabel } from "@/lib/study-material-display-name";
+import {
+  purgeStudyMaterial,
+  softDeleteStudyMaterial,
+} from "@/lib/study-materials/soft-delete";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
@@ -63,7 +67,7 @@ export async function PATCH(request: Request, ctx: Params) {
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE(_request: Request, ctx: Params) {
+export async function DELETE(request: Request, ctx: Params) {
   const { materialId } = await ctx.params;
   if (!UUID_RE.test(materialId)) {
     return NextResponse.json({ error: "Invalid material id." }, { status: 400 });
@@ -82,15 +86,25 @@ export async function DELETE(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { error } = await supabase
-    .from("study_materials")
-    .delete()
-    .eq("id", materialId);
+  const permanent =
+    new URL(request.url).searchParams.get("permanent") === "1" ||
+    new URL(request.url).searchParams.get("permanent") === "true";
 
-  if (error) {
-    console.error(error);
+  if (permanent) {
+    const ok = await purgeStudyMaterial(supabase, materialId);
+    if (!ok) {
+      return NextResponse.json({ error: "Could not delete." }, { status: 500 });
+    }
+    return NextResponse.json({ ok: true, permanent: true });
+  }
+
+  const result = await softDeleteStudyMaterial(supabase, materialId);
+  if (result === "fail") {
     return NextResponse.json({ error: "Could not delete." }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({
+    ok: true,
+    permanent: result === "hard",
+  });
 }

@@ -14,6 +14,7 @@ import {
   parseSrsSessionScope,
   personalCardInScope,
 } from "@/lib/srs-session-scope";
+import { queryActiveStudyMaterials } from "@/lib/study-materials/soft-delete";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
@@ -141,12 +142,23 @@ export async function GET(request: Request) {
   // Owned materials power the global module bank. Focus/personal cards may
   // also live on materials the user can access but does not own (Explore,
   // shared, course-owner ≠ material.user_id) — those are loaded below by id.
-  const { data: ownedMaterials } = await supabase
-    .from("study_materials")
-    .select(
-      "id, course_id, file_name, course_payload, courses ( id, title )"
-    )
-    .eq("user_id", user.id);
+  const { data: ownedMaterials } = await queryActiveStudyMaterials(
+    () =>
+      supabase
+        .from("study_materials")
+        .select(
+          "id, course_id, file_name, course_payload, courses ( id, title )"
+        )
+        .eq("user_id", user.id)
+        .is("deleted_at", null),
+    () =>
+      supabase
+        .from("study_materials")
+        .select(
+          "id, course_id, file_name, course_payload, courses ( id, title )"
+        )
+        .eq("user_id", user.id)
+  );
 
   const materials = (ownedMaterials ?? [])
     .map((m) => m as unknown as MaterialRow)
@@ -286,12 +298,24 @@ export async function GET(request: Request) {
       }
     }
     if (missingMaterialIds.size > 0) {
-      const { data: extraMats } = await supabase
-        .from("study_materials")
-        .select(
-          "id, course_id, file_name, course_payload, courses ( id, title )"
-        )
-        .in("id", [...missingMaterialIds]);
+      const ids = [...missingMaterialIds];
+      const { data: extraMats } = await queryActiveStudyMaterials(
+        () =>
+          supabase
+            .from("study_materials")
+            .select(
+              "id, course_id, file_name, course_payload, courses ( id, title )"
+            )
+            .in("id", ids)
+            .is("deleted_at", null),
+        () =>
+          supabase
+            .from("study_materials")
+            .select(
+              "id, course_id, file_name, course_payload, courses ( id, title )"
+            )
+            .in("id", ids)
+      );
       for (const raw of extraMats ?? []) {
         const m = raw as unknown as MaterialRow;
         materialById.set(normId(m.id), m);

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { FreePracticePanel } from "@/components/FreePracticePanel";
+import { ReviewDeletedMaterials } from "@/components/ReviewDeletedMaterials";
 import { ReviewPickerList } from "@/components/ReviewPickerList";
 import { ReviewQuestionsPreview } from "@/components/ReviewQuestionsPreview";
 import { ReviewSettingsPanel } from "@/components/ReviewSettingsPanel";
@@ -54,6 +55,7 @@ export function ReviewDashboardClient() {
   const [pendingDelete, setPendingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletedRefreshKey, setDeletedRefreshKey] = useState(0);
   // When true, we are inside a launched session and hide the picker.
   const [sessionMode, setSessionMode] = useState<
     null | {
@@ -135,6 +137,7 @@ export function ReviewDashboardClient() {
       }
       setSelectedIds(new Set());
       setPendingDelete(false);
+      setDeletedRefreshKey((k) => k + 1);
       refresh();
     } catch {
       setDeleteError(t.review.deleteSelectedError);
@@ -222,6 +225,7 @@ export function ReviewDashboardClient() {
       <FreePracticePanel
         onStart={(payload) => startPractice(payload)}
         onCancel={() => setChoosingPractice(false)}
+        onMaterialsChanged={() => setDeletedRefreshKey((k) => k + 1)}
       />
     );
   }
@@ -433,6 +437,11 @@ export function ReviewDashboardClient() {
         noteIds={selectedSession.noteIds}
         scope={kind}
         onChanged={refresh}
+      />
+
+      <ReviewDeletedMaterials
+        refreshKey={deletedRefreshKey}
+        onRestored={refresh}
       />
 
       {/* Settings --------------------------------------------------- */}
