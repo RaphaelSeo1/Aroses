@@ -7,6 +7,7 @@ import {
   pickNoteFoldTarget,
   uniqueIncomingNoteLines,
   applySurgicalNoteRevision,
+  placeIncomingNoteLines,
 } from "./fold-note-markdown";
 
 test("extractNoteHeading reads the first ATX heading", () => {
@@ -136,5 +137,22 @@ test("live enrichment preserves the section outline and nested structure", () =>
   assert.match(next.markdown, /^### Active transport/m);
   assert.match(next.markdown, /^  - ATP can power/m);
   assert.equal((next.markdown.match(/^## /gm) ?? []).length, 1);
+});
+
+test("placeIncomingNoteLines nests a sub-bullet under the matching parent", () => {
+  const existing = [
+    "## Topic A",
+    "- **Alpha process:** Starts the workflow.",
+    "- **Beta gate:** Checks the input size.",
+  ].join("\n");
+  const next = placeIncomingNoteLines(
+    existing,
+    "  - Helper detail for Alpha process."
+  );
+  const lines = next.split("\n");
+  const alpha = lines.findIndex((l) => /Alpha process/.test(l));
+  const helper = lines.findIndex((l) => /Helper detail/.test(l));
+  const beta = lines.findIndex((l) => /Beta gate/.test(l));
+  assert.ok(helper > alpha && helper < beta);
 });
 

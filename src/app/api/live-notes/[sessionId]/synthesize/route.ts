@@ -12,6 +12,7 @@ import {
   loadSessionDeckPages,
   takeDeckSeedBatch,
 } from "@/lib/live-notes/slide-pages";
+import { sectionsOverlappingDeckPages } from "@/lib/live-notes/fold-note-markdown";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -48,7 +49,7 @@ const MAX_SYNTHESIZE_CALLS = 200;
  *
  * Streams (text/event-stream):
  *   event: thought data: { "message": string }
- *   event: op    data: { "op": "revise"|"append", "sectionId": string }
+ *   event: op    data: { "op": "revise"|"append"|"delete", "sectionId": string }
  *   event: text  data: { "delta": string }        // body of the active op
    *   event: done  data: { "appendSectionId": string, "seedRemaining"?: number, "seededThrough"?: number }
  *   event: error data: { "message": string }
@@ -132,6 +133,7 @@ export async function POST(request: Request, ctx: Params) {
             sectionId: string;
             markdown: string;
             studentEdited?: boolean;
+            transcriptExcerpt?: string;
           } =>
             !!s &&
             typeof s === "object" &&
@@ -151,6 +153,10 @@ export async function POST(request: Request, ctx: Params) {
               sectionId: s.sectionId,
               markdown,
               studentEdited: s.studentEdited === true,
+              transcriptExcerpt:
+                typeof s.transcriptExcerpt === "string"
+                  ? s.transcriptExcerpt.slice(0, MAX_EXCERPT_CHARS)
+                  : undefined,
             },
           ];
         })
@@ -268,14 +274,56 @@ export async function POST(request: Request, ctx: Params) {
           })
         );
 
-  const deckContext = seedFromDeck
-    ? seedBatch!.text
+  const liveDeckPick = seedFromDeck
+    ? null
     : pickRelevantSlidePages({
         pages: deckPages,
         transcriptSlice: newSegmentText,
         rollingSummary,
         recentHeadings,
-      }).text || undefined;
+      });
+  const deckContext = seedFromDeck
+    ? seedBatch!.text
+    : liveDeckPick?.text || undefined;
+
+  // Pull sections seeded from the matched deck pages into the focused set.
+  if (liveDeckPick && liveDeckPick.pageNums.length > 0) {
+    const excerptMap = new Map<string, string>();
+    for (const s of existingSections) {
+      if (s.transcriptExcerpt) excerptMap.set(s.sectionId, s.transcriptExcerpt);
+    }
+    for (const s of revisable) {
+      if (s.transcriptExcerpt) excerptMap.set(s.sectionId, s.transcriptExcerpt);
+    }
+    const overlapping = sectionsOverlappingDeckPages(
+      existingSections,
+      liveDeckPick.pageNums,
+      excerptMap
+    );
+    const have = new Set(revisable.map((s) => s.sectionId));
+    for (const s of overlapping) {
+      if (have.has(s.sectionId)) continue;
+      if (revisable.length >= MAX_REVISABLE_SECTIONS) break;
+      revisable.push({
+        sectionId: s.sectionId,
+        markdown: s.markdown,
+        studentEdited: s.studentEdited,
+        transcriptExcerpt: excerptMap.get(s.sectionId),
+      });
+      have.add(s.sectionId);
+    }
+  }
+
+  // Seed: allow revise against already-drafted sections. Live: client-ranked
+  // revisable, plus any sections seeded from the matched deck pages.
+  const seedPageFrom =
+    seedFromDeck && seedBatch && seedBatch.pages.length > 0
+      ? seedBatch.pages[0]!.pageNum
+      : undefined;
+  const seedPageTo =
+    seedFromDeck && seedBatch && seedBatch.pages.length > 0
+      ? seedBatch.pages[seedBatch.pages.length - 1]!.pageNum
+      : undefined;
 
   const encoder = new TextEncoder();
   const sseLine = (event: string, data: unknown): string =>
@@ -300,7 +348,8 @@ export async function POST(request: Request, ctx: Params) {
           recentHeadings,
           existingHeadings,
           existingSections,
-          revisable: seedFromDeck ? [] : revisable,
+          // Seed batches may @@revise prior drafts; do not force empty.
+          revisable,
           appendSectionId,
           lectureTitle,
           userId: user.id,
@@ -361,8 +410,12 @@ export async function POST(request: Request, ctx: Params) {
             ? {
                 seedRemaining: seedBatch.remaining,
                 seededThrough: seedBatch.throughPage,
+                seedPageFrom,
+                seedPageTo,
               }
-            : {}),
+            : liveDeckPick && liveDeckPick.pageNums.length > 0
+              ? { matchedDeckPages: liveDeckPick.pageNums }
+              : {}),
         });
       } catch (e) {
         console.error("[live-notes/synthesize]", e);

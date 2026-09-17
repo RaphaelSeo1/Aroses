@@ -4,6 +4,10 @@ import {
   summarizeLiveLecture,
 } from "@/lib/ai/live-lecture-notes";
 import {
+  dedupeSectionLines,
+} from "@/lib/live-notes/fold-note-markdown";
+import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
+import {
   applyNoteRevisions,
   collectAiNoteSections,
   setLectureRecapMarkdown,
@@ -41,11 +45,27 @@ export async function runLiveNotesWrapUp(input: {
         revisions &&
         (revisions.revisions.length > 0 || revisions.removeSectionIds.length > 0)
       ) {
+        const cleanedRevisions = revisions.revisions.map((r) => ({
+          sectionId: r.sectionId,
+          markdown: dedupeSectionLines(sanitizeNoteOutput(r.markdown)),
+        }));
         notesJson = applyNoteRevisions(
           notesJson,
-          revisions.revisions,
+          cleanedRevisions,
           revisions.removeSectionIds
         );
+      }
+
+      // Final pass: sanitizer + line-level dedupe over every remaining AI section.
+      const after = collectAiNoteSections(notesJson);
+      const polish = after
+        .map((s) => ({
+          sectionId: s.sectionId,
+          markdown: dedupeSectionLines(sanitizeNoteOutput(s.markdown)),
+        }))
+        .filter((s, i) => s.markdown !== after[i]!.markdown);
+      if (polish.length > 0) {
+        notesJson = applyNoteRevisions(notesJson, polish, []);
       }
     }
   } catch (e) {

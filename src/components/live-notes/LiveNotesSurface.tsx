@@ -30,10 +30,14 @@ import { useScreenVision } from "@/lib/live-notes/use-screen-vision";
 import { pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-pages";
 import {
   extractNoteHeading,
-  matchHeadingToSections,
-  uniqueIncomingNoteLines,
   applySurgicalNoteRevision,
+  classifyAppendChunks,
+  deleteExactNoteLines,
+  dedupeSectionLines,
+  formatDeckDraftExcerpt,
 } from "@/lib/live-notes/fold-note-markdown";
+import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
+import { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 import { chunkTypewriterText } from "@/lib/live-notes/typewriter-text";
 import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
@@ -127,6 +131,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 type PumpItem =
   | { kind: "append"; sectionId: string; dividerBefore: boolean }
   | { kind: "revise"; sectionId: string }
+  | { kind: "delete"; sectionId: string }
   | { kind: "text"; text: string };
 
 export type LiveNotesInitialSession = {
@@ -450,18 +455,21 @@ export function LiveNotesSurface({
 
       // Revisable = AI sections the new speech might belong to. Match by
       // overlap so a late mention can still @@revise an early slide draft,
-      // not only the last few sections. Six receive transcript excerpts;
-      // the complete document is sent separately for global comparison.
+      // not only the last few sections. Seed mode also sends drafts so the
+      // model can @@revise instead of duplicating.
       const excerpts = sectionExcerptsRef.current;
       // Include the complete hydrated document, not only sections created by
       // the live writer. Material-generated notes can predate section IDs;
       // listSynthesisSections assigns stable addresses for merge operations.
       const allSections = writer.listSynthesisSections(200);
-      const revisable = (
-        seedFromDeck
-          ? []
-          : pickRevisableByTranscript(allSections, pending, 6)
-      ).map((s) => ({
+      const ranked = seedFromDeck
+        ? allSections.slice(0, MAX_REVISABLE_SECTIONS)
+        : pickRevisableByTranscript(
+            allSections,
+            pending,
+            MAX_REVISABLE_SECTIONS
+          );
+      const revisable = ranked.map((s) => ({
         sectionId: s.sectionId,
         markdown: s.markdown,
         studentEdited: s.studentEdited,
@@ -488,6 +496,8 @@ export function LiveNotesSurface({
         sectionId: string;
         dividerBefore: boolean;
       } | null = null;
+      let seedPageFrom: number | undefined;
+      let seedPageTo: number | undefined;
 
       // ── Typing pump ─────────────────────────────────────────────────────
       // SSE events land in `queue`; a chained pump drains them into the
@@ -544,37 +554,116 @@ export function LiveNotesSurface({
         sectionId: string,
         incoming: string
       ) => {
+        const cleaned = sanitizeNoteOutput(incoming);
+        if (!cleaned.trim()) return;
         const live = writer
           .listSynthesisSections(200)
           .find((s) => s.sectionId === sectionId);
         if (!live) return;
-        const next = applySurgicalNoteRevision(live.markdown, incoming);
+        const next = applySurgicalNoteRevision(live.markdown, cleaned);
+        const finalMd = dedupeSectionLines(next.markdown);
+        if (finalMd.replace(/\s+$/, "") === live.markdown.replace(/\s+$/, "")) {
+          return;
+        }
+        const prefix = live.markdown.replace(/\s+$/, "");
+        const isSuffixAppend =
+          !next.patched &&
+          finalMd.startsWith(prefix) &&
+          finalMd.length > prefix.length;
+        if (isSuffixAppend) {
+          const extra = finalMd.slice(prefix.length).replace(/^\n+/, "");
+          if (!extra.trim()) return;
+          const started = writer.beginExtension(sectionId, {
+            evenIfStudentEdited: true,
+          });
+          if (!started) return;
+          await typewrite(extra);
+          writer.finishOp();
+          revisedSectionId = sectionId;
+          gotContent = true;
+          return;
+        }
+        // Mid-section placement or in-place patch: replace whole section.
         if (next.patched) {
           const started = await writer.beginRevision(sectionId, {
             evenIfStudentEdited: true,
           });
           if (!started) return;
-          await typewrite(next.markdown);
+          await typewrite(finalMd);
           writer.finishOp();
-          revisedSectionId = sectionId;
+        } else {
+          writer.replaceSectionMarkdown(sectionId, finalMd, {
+            evenIfStudentEdited: true,
+          });
+        }
+        revisedSectionId = sectionId;
+        gotContent = true;
+      };
+      const applyBufferedDelete = (sectionId: string, body: string) => {
+        const cleaned = sanitizeNoteOutput(body);
+        if (!cleaned.trim()) return;
+        const live = writer
+          .listSynthesisSections(200)
+          .find((s) => s.sectionId === sectionId);
+        if (!live || live.studentEdited) return;
+        const next = dedupeSectionLines(
+          deleteExactNoteLines(live.markdown, cleaned)
+        );
+        if (next.replace(/\s+$/, "") === live.markdown.replace(/\s+$/, "")) {
           return;
         }
-        if (!next.extraMarkdown) return;
-        const started = writer.beginExtension(sectionId, {
-          evenIfStudentEdited: true,
-        });
-        if (!started) return;
-        await typewrite(next.extraMarkdown);
-        writer.finishOp();
+        writer.replaceSectionMarkdown(sectionId, next);
         revisedSectionId = sectionId;
+        gotContent = true;
+      };
+      const flushAppendBuffer = async (
+        foldBuf: string,
+        appendMeta: { sectionId: string; dividerBefore: boolean } | null
+      ) => {
+        const cleaned = sanitizeNoteOutput(foldBuf);
+        if (!cleaned.trim()) return;
+        const liveSections = writer.listSynthesisSections(200);
+        const actions = classifyAppendChunks(cleaned, liveSections);
+        let firstNew = true;
+        for (const action of actions) {
+          if (action.kind === "fold") {
+            await applyBufferedRevision(action.sectionId, action.markdown);
+            continue;
+          }
+          const sectionId =
+            firstNew && appendMeta
+              ? appendMeta.sectionId
+              : `s-${crypto.randomUUID().slice(0, 8)}`;
+          firstNew = false;
+          pendingAppend = {
+            sectionId,
+            dividerBefore: appendMeta?.dividerBefore ?? blockCountRef.current > 0,
+          };
+          ensureAppendStarted();
+          await typewrite(action.markdown);
+          writer.finishOp();
+          appendSectionId = sectionId;
+          gotContent = true;
+          if (seedFromDeck) {
+            excerpts.set(
+              sectionId,
+              formatDeckDraftExcerpt(seedPageFrom, seedPageTo)
+            );
+          }
+        }
       };
       const runPump = async () => {
         let opValid = false;
-        let foldIntoId: string | null = null;
         let foldBuf = "";
-        let classifyingAppend = false;
+        let bufferingAppend = false;
+        let appendMeta: {
+          sectionId: string;
+          dividerBefore: boolean;
+        } | null = null;
         let surgicalReviseId: string | null = null;
         let surgicalBuf = "";
+        let deleteId: string | null = null;
+        let deleteBuf = "";
         while (true) {
           const item = queue.shift();
           if (!item) {
@@ -588,34 +677,60 @@ export function LiveNotesSurface({
               surgicalReviseId = null;
               surgicalBuf = "";
             }
-            // Defer beginAppend until the first text chunk — empty appends
-            // (merge-only calls) must leave the document untouched.
-            pendingAppend = {
+            if (deleteId) {
+              applyBufferedDelete(deleteId, deleteBuf);
+              deleteId = null;
+              deleteBuf = "";
+            }
+            // Buffer the whole append body, then classify per ## chunk.
+            bufferingAppend = true;
+            foldBuf = "";
+            appendMeta = {
               sectionId: item.sectionId,
               dividerBefore: item.dividerBefore,
             };
+            pendingAppend = appendMeta;
             opValid = true;
-            if (!seedFromDeck) {
-              classifyingAppend = true;
-              foldBuf = "";
-              foldIntoId = null;
-            }
           } else if (item.kind === "revise") {
-            classifyingAppend = false;
-            foldIntoId = null;
-            foldBuf = "";
-            pendingAppend = null;
+            if (bufferingAppend) {
+              bufferingAppend = false;
+              await flushAppendBuffer(foldBuf, appendMeta);
+              foldBuf = "";
+              appendMeta = null;
+              pendingAppend = null;
+            }
+            if (deleteId) {
+              applyBufferedDelete(deleteId, deleteBuf);
+              deleteId = null;
+              deleteBuf = "";
+            }
             writer.finishOp();
-            // Buffer enough to classify a surgical correction versus an
-            // additive enrichment. Both paths use the existing writer's
-            // character-by-character rendering; corrections also use its
-            // established fade/retype revision animation.
+            // Flush each buffered revision before starting the next.
             if (surgicalReviseId) {
               await applyBufferedRevision(surgicalReviseId, surgicalBuf);
             }
             surgicalReviseId = item.sectionId;
             surgicalBuf = "";
             revisedSectionId = item.sectionId;
+            opValid = Boolean(item.sectionId);
+          } else if (item.kind === "delete") {
+            if (bufferingAppend) {
+              bufferingAppend = false;
+              await flushAppendBuffer(foldBuf, appendMeta);
+              foldBuf = "";
+              appendMeta = null;
+              pendingAppend = null;
+            }
+            if (surgicalReviseId) {
+              await applyBufferedRevision(surgicalReviseId, surgicalBuf);
+              surgicalReviseId = null;
+              surgicalBuf = "";
+            }
+            if (deleteId) {
+              applyBufferedDelete(deleteId, deleteBuf);
+            }
+            deleteId = item.sectionId;
+            deleteBuf = "";
             opValid = Boolean(item.sectionId);
           } else if (item.kind === "text" && !opValid) {
             // Orphan text with no active op — ignore (stale revise body).
@@ -624,32 +739,11 @@ export function LiveNotesSurface({
               surgicalBuf += item.text;
               continue;
             }
-            if (classifyingAppend) {
-              foldBuf += item.text;
-              const nl = foldBuf.indexOf("\n");
-              if (nl < 0 && foldBuf.length < 160) continue;
-              const firstLine = (nl >= 0 ? foldBuf.slice(0, nl) : foldBuf).trim();
-              const match = matchHeadingToSections(firstLine, allSections);
-              classifyingAppend = false;
-              if (match) {
-                foldIntoId = match.sectionId;
-                pendingAppend = null;
-                pushAiActivity(
-                  "revise",
-                  "Adding this to the notes already written…",
-                  {
-                    sectionId: match.sectionId,
-                    sectionLabel: extractNoteHeading(match.markdown) ?? undefined,
-                  }
-                );
-                continue;
-              }
-              ensureAppendStarted();
-              await typewrite(foldBuf);
-              foldBuf = "";
+            if (deleteId) {
+              deleteBuf += item.text;
               continue;
             }
-            if (foldIntoId) {
+            if (bufferingAppend) {
               foldBuf += item.text;
               continue;
             }
@@ -662,27 +756,16 @@ export function LiveNotesSurface({
           surgicalReviseId = null;
           surgicalBuf = "";
         }
-        if (classifyingAppend && foldBuf.trim()) {
-          classifyingAppend = false;
-          ensureAppendStarted();
-          await typewrite(foldBuf);
-          foldBuf = "";
+        if (deleteId) {
+          applyBufferedDelete(deleteId, deleteBuf);
+          deleteId = null;
+          deleteBuf = "";
         }
-        if (foldIntoId) {
-          const live = writer
-            .listSynthesisSections(200)
-            .find((s) => s.sectionId === foldIntoId);
-          const extra = uniqueIncomingNoteLines(live?.markdown ?? "", foldBuf);
-          if (extra) {
-            const started = writer.beginExtension(foldIntoId, {
-              evenIfStudentEdited: true,
-            });
-            if (started) {
-              await typewrite(extra);
-              writer.finishOp();
-              revisedSectionId = foldIntoId;
-            }
-          }
+        if (bufferingAppend) {
+          bufferingAppend = false;
+          await flushAppendBuffer(foldBuf, appendMeta);
+          foldBuf = "";
+          appendMeta = null;
         }
         pendingAppend = null;
         writer.finishOp();
@@ -698,7 +781,9 @@ export function LiveNotesSurface({
               blockCountRef.current += 1;
               excerpts.set(
                 appendSectionId,
-                seedFromDeck ? DECK_DRAFT_EXCERPT : pending.slice(0, 3_000)
+                seedFromDeck
+                  ? formatDeckDraftExcerpt(seedPageFrom, seedPageTo)
+                  : pending.slice(0, 3_000)
               );
               pushAiActivity(
                 "status",
@@ -738,7 +823,12 @@ export function LiveNotesSurface({
             seedFromDeck: seedFromDeck || undefined,
             recentHeadings,
             existingHeadings,
-            existingSections: allSections,
+            existingSections: allSections.map((s) => ({
+              sectionId: s.sectionId,
+              markdown: s.markdown,
+              studentEdited: s.studentEdited,
+              transcriptExcerpt: excerpts.get(s.sectionId),
+            })),
             revisable,
             screenContext: seedFromDeck
               ? undefined
@@ -806,6 +896,12 @@ export function LiveNotesSurface({
                 }
               );
               queue.push({ kind: "revise", sectionId });
+            } else if (parsed.op === "delete" && sectionId) {
+              pushAiActivity("revise", "Cleaning a duplicate line…", {
+                sectionId,
+                sectionLabel: headingForSection(writer, sectionId),
+              });
+              queue.push({ kind: "delete", sectionId });
             }
           } else if (event === "text") {
             if (typeof parsed.delta === "string" && parsed.delta) {
@@ -829,6 +925,12 @@ export function LiveNotesSurface({
               parsed.seedRemaining > 0
             ) {
               seedAgain = true;
+            }
+            if (typeof parsed.seedPageFrom === "number") {
+              seedPageFrom = parsed.seedPageFrom;
+            }
+            if (typeof parsed.seedPageTo === "number") {
+              seedPageTo = parsed.seedPageTo;
             }
           }
         };
