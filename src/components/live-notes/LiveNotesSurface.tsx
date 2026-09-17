@@ -39,7 +39,11 @@ import {
 import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
 import { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
-import { chunkTypewriterText } from "@/lib/live-notes/typewriter-text";
+import {
+  chooseTypewriterSchedule,
+  chunkTypewriterText,
+  isDocumentHidden,
+} from "@/lib/live-notes/typewriter-text";
 import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { useT } from "@/lib/i18n/LocaleProvider";
 
@@ -545,11 +549,23 @@ export function LiveNotesSurface({
       };
       const typewrite = async (text: string) => {
         if (!text) return;
-        const step = charsPerTick();
-        for (const chunk of chunkTypewriterText(text, step)) {
+        // Background tabs throttle setTimeout — flush instead of animating so
+        // notes keep landing while the student is in another window.
+        let remaining = text;
+        while (remaining) {
+          const schedule = chooseTypewriterSchedule({
+            visibleTickMs: TYPE_TICK_MS,
+            visibleCharsPerTick: charsPerTick(),
+            pendingChars: Array.from(remaining).length,
+          });
+          const chunks = chunkTypewriterText(remaining, schedule.charsPerTick);
+          const chunk = chunks[0]!;
           writer.write(chunk);
           gotContent = true;
-          await sleep(TYPE_TICK_MS);
+          remaining = chunks.slice(1).join("");
+          if (remaining && schedule.tickMs > 0) {
+            await sleep(schedule.tickMs);
+          }
         }
       };
       const applyBufferedRevision = async (
@@ -674,7 +690,8 @@ export function LiveNotesSurface({
           const item = queue.shift();
           if (!item) {
             if (queueClosed) break;
-            await sleep(TYPE_TICK_MS);
+            // Avoid a tight spin when hidden (tickMs would be 0); still yield.
+            await sleep(isDocumentHidden() ? 50 : TYPE_TICK_MS);
             continue;
           }
           if (item.kind === "append") {
@@ -1102,6 +1119,10 @@ export function LiveNotesSurface({
     sessionId,
     stream: mediaStream,
     // Skip vision while preview is minimized or tab is backgrounded — big lag win.
+    // Audio → transcript → notes still run; only OCR frame grabs pause here.
+    // Browser limit: if the student shared a *different* tab/window and switches
+    // away from that shared surface, Chrome may freeze its video (and sometimes
+    // mute its audio) until they switch back — we cannot override that.
     enabled:
       started &&
       hasVideo &&

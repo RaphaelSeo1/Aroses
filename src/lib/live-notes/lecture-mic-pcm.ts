@@ -182,9 +182,26 @@ export async function startLecturePcmTap(
   // Keep the graph pulling samples without routing to the laptop speakers.
   const sink = ctx.createMediaStreamDestination();
   let stopped = false;
+  /** Some browsers suspend AudioContext when the tab is hidden — resume so mic → notes keeps flowing. */
+  const keepAudioRunning = () => {
+    if (stopped) return;
+    if (ctx.state === "suspended") {
+      void ctx.resume().catch(() => {
+        /* ignore — browser may refuse until a gesture */
+      });
+    }
+  };
+  ctx.addEventListener("statechange", keepAudioRunning);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", keepAudioRunning);
+  }
   const stop = () => {
     if (stopped) return;
     stopped = true;
+    ctx.removeEventListener("statechange", keepAudioRunning);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", keepAudioRunning);
+    }
     try {
       source.disconnect();
     } catch {
