@@ -49,6 +49,8 @@ export function normalizeNoteHeading(heading: string): string {
 }
 
 function stemToken(t: string): string {
+  if (t.length > 5 && t.endsWith("ies")) return `${t.slice(0, -3)}y`;
+  if (t.length > 5 && /(?:sh|ch|x|ss)es$/.test(t)) return t.slice(0, -2);
   if (t.length > 4 && t.endsWith("s") && !t.endsWith("ss")) return t.slice(0, -1);
   return t;
 }
@@ -60,6 +62,11 @@ function tokenize(raw: string): string[] {
     .split(/\s+/)
     .filter((t) => t.length >= 3 && !STOP.has(t))
     .map(stemToken);
+}
+
+/** Content tokens (lowercased, stop-words dropped, light plural stemming). */
+export function tokenizeNoteText(raw: string): string[] {
+  return tokenize(raw);
 }
 
 export function extractBoldTerms(markdown: string): string[] {
@@ -134,7 +141,7 @@ export function pickNoteFoldTarget<
   return sections[sections.length - 1] ?? null;
 }
 
-function lineTokenOverlap(a: string, b: string): number {
+export function lineTokenOverlap(a: string, b: string): number {
   const ta = new Set(tokenize(a));
   const tb = tokenize(b);
   if (ta.size === 0 && tb.length === 0) return 1;

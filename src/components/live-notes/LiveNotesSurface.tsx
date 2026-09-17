@@ -37,6 +37,7 @@ import {
   formatDeckDraftExcerpt,
 } from "@/lib/live-notes/fold-note-markdown";
 import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
+import { stripLinesAlreadyCovered } from "@/lib/notes/cross-section-dedupe";
 import { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 import {
@@ -572,14 +573,21 @@ export function LiveNotesSurface({
         sectionId: string,
         incoming: string
       ) => {
-        const cleaned = sanitizeNoteOutput(incoming, {
+        const sanitized = sanitizeNoteOutput(incoming, {
           dropTruncatedTrailing: streamAborted,
         });
-        if (!cleaned.trim()) return;
-        const live = writer
-          .listSynthesisSections(200)
-          .find((s) => s.sectionId === sectionId);
+        if (!sanitized.trim()) return;
+        const allLive = writer.listSynthesisSections(200);
+        const live = allLive.find((s) => s.sectionId === sectionId);
         if (!live) return;
+        // Cross-section guard: a fragment for this section must not re-explain
+        // something another section already establishes (same fact, any
+        // wording). Lines carrying new facts/numbers pass through.
+        const cleaned = stripLinesAlreadyCovered(
+          sanitized,
+          allLive.filter((s) => s.sectionId !== sectionId)
+        );
+        if (!cleaned.trim()) return;
         const next = applySurgicalNoteRevision(live.markdown, cleaned);
         const finalMd = dedupeSectionLines(next.markdown);
         if (finalMd.replace(/\s+$/, "") === live.markdown.replace(/\s+$/, "")) {
@@ -652,6 +660,13 @@ export function LiveNotesSurface({
             await applyBufferedRevision(action.sectionId, action.markdown);
             continue;
           }
+          // New section: drop lines that merely restate what other sections
+          // already say; skip the section entirely if nothing new remains.
+          const fresh = stripLinesAlreadyCovered(action.markdown, liveSections);
+          const hasBody = fresh
+            .split("\n")
+            .some((l) => l.trim() && !/^#{1,3}\s/.test(l.trim()));
+          if (!hasBody) continue;
           const sectionId =
             firstNew && appendMeta
               ? appendMeta.sectionId
@@ -662,7 +677,7 @@ export function LiveNotesSurface({
             dividerBefore: appendMeta?.dividerBefore ?? blockCountRef.current > 0,
           };
           ensureAppendStarted();
-          await typewrite(action.markdown);
+          await typewrite(fresh);
           writer.finishOp();
           appendSectionId = sectionId;
           gotContent = true;

@@ -6,6 +6,7 @@ import {
 import {
   dedupeSectionLines,
 } from "@/lib/live-notes/fold-note-markdown";
+import { consolidateRepeatedExplanations } from "@/lib/notes/cross-section-dedupe";
 import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
 import {
   applyNoteRevisions,
@@ -56,16 +57,26 @@ export async function runLiveNotesWrapUp(input: {
         );
       }
 
-      // Final pass: sanitizer + line-level dedupe over every remaining AI section.
+      // Final pass over every remaining AI section: sanitizer + line-level
+      // dedupe, then one more deterministic cross-section consolidation so a
+      // model revision cannot re-introduce an explanation that already lives
+      // in an earlier section.
       const after = collectAiNoteSections(notesJson);
-      const polish = after
-        .map((s) => ({
-          sectionId: s.sectionId,
-          markdown: dedupeSectionLines(sanitizeNoteOutput(s.markdown)),
-        }))
-        .filter((s, i) => s.markdown !== after[i]!.markdown);
-      if (polish.length > 0) {
-        notesJson = applyNoteRevisions(notesJson, polish, []);
+      const polished = after.map((s) => ({
+        sectionId: s.sectionId,
+        markdown: dedupeSectionLines(sanitizeNoteOutput(s.markdown)),
+      }));
+      const consolidated = consolidateRepeatedExplanations(polished);
+      const before = new Map(after.map((s) => [s.sectionId, s.markdown]));
+      const polish = consolidated.sections.filter(
+        (s) => before.get(s.sectionId) !== s.markdown
+      );
+      if (polish.length > 0 || consolidated.removeSectionIds.length > 0) {
+        notesJson = applyNoteRevisions(
+          notesJson,
+          polish,
+          consolidated.removeSectionIds
+        );
       }
     }
   } catch (e) {

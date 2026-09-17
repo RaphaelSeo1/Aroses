@@ -8,7 +8,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { KeyTerm } from "@/types/course";
 import type { MentoredLessonChunk } from "@/types/mentored";
 import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
-import { DEFAULT_NOTES_OUTLINE_RULES } from "@/lib/ai/tutor-notes-quality";
+import {
+  DEFAULT_NOTES_OUTLINE_RULES,
+  UNIFIED_NOTES_RULES,
+} from "@/lib/ai/tutor-notes-quality";
+
+/** Cap for the caller-supplied "already in the notes" coverage block. */
+export const MAX_PRIOR_NOTES_COVERAGE_CHARS = 3_000;
 
 const MODEL =
   process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
@@ -25,13 +31,21 @@ export type MentoredNotesInput = {
   roseSpoken?: string;
   /** Per-session free-text style request. Empty/missing ⇒ base SYSTEM unchanged. */
   noteInstruction?: string;
+  /**
+   * Compact concept-coverage block describing what earlier chunks already put
+   * in the student's notebook (see `buildConceptCoverageBlock`). Lets this
+   * chunk add only new information instead of re-explaining.
+   */
+  priorNotesCoverage?: string;
 };
 
 const SYSTEM = `You write excellent study notes for a student learning from a live tutoring session.
 
-Your job: produce specific, in-depth notes about what is being taught — the kind a thoughtful student would want before an exam.
+Your job: produce specific, in-depth notes about what is being taught — the kind a thoughtful student would want before an exam. These notes are ONE section of a notebook that already contains the earlier chunks of this lesson.
 
 ${DEFAULT_NOTES_OUTLINE_RULES}
+
+${UNIFIED_NOTES_RULES}
 
 Guidelines:
 - Write from the student's perspective. Be concrete: explain what things are, how they work, why they matter, and how ideas connect.
@@ -53,7 +67,7 @@ function mentoredSystem(noteInstruction: string | undefined): string {
   return `${SYSTEM}\n${modifier}`;
 }
 
-function buildUserPrompt(input: MentoredNotesInput): string {
+export function buildMentoredNotesPrompt(input: MentoredNotesInput): string {
   const {
     chunk,
     courseTitle,
@@ -63,6 +77,9 @@ function buildUserPrompt(input: MentoredNotesInput): string {
     courseKeyTerms = [],
     roseSpoken,
   } = input;
+  const priorCoverage = (input.priorNotesCoverage ?? "")
+    .trim()
+    .slice(0, MAX_PRIOR_NOTES_COVERAGE_CHARS);
 
   const termLines = courseKeyTerms
     .slice(0, 12)
@@ -90,6 +107,9 @@ function buildUserPrompt(input: MentoredNotesInput): string {
       ? `Terms in this chunk: ${chunk.keyTerms.join(", ")}`
       : null,
     termLines ? `Course vocabulary (use only when relevant):\n${termLines}` : null,
+    priorCoverage
+      ? `ALREADY IN THE STUDENT'S NOTES (from earlier chunks — do not re-define or re-explain these; write only what this chunk adds, with at most a one-clause reminder where needed):\n${priorCoverage}`
+      : null,
     lessonExcerpt?.trim()
       ? `Source lesson excerpt:\n---\n${lessonExcerpt.trim()}\n---`
       : null,
@@ -115,7 +135,7 @@ export async function* streamMentoredNotes(
     max_tokens: 3_000,
     temperature: 0.4,
     system: mentoredSystem(input.noteInstruction),
-    messages: [{ role: "user", content: buildUserPrompt(input) }],
+    messages: [{ role: "user", content: buildMentoredNotesPrompt(input) }],
   });
 
   for await (const event of stream) {

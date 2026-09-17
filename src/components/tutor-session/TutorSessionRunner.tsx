@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { confirmDialog, promptDialog } from "@/components/AppDialogs";
 import { useT } from "@/lib/i18n/LocaleProvider";
+import { buildConceptCoverageBlock } from "@/lib/notes/concept-coverage";
 import {
   NotesPanel,
   type NotesPanelHandle,
@@ -358,6 +359,15 @@ export function TutorSessionRunner({
         roseLen: roseReply.length,
       });
       try {
+        // What the notebook already establishes (compact concept state), so
+        // this turn adds only new information instead of re-explaining.
+        const priorSections =
+          notesPanelRef.current?.getStreamWriter()?.listSynthesisSections(200) ??
+          [];
+        const priorNotesCoverage = buildConceptCoverageBlock(priorSections, {
+          relevanceText: roseReply,
+          maxChars: 2_000,
+        });
         const res = await fetch(
           `/api/tutor-session/${initial.id}/synthesize-notes`,
           {
@@ -368,6 +378,7 @@ export function TutorSessionRunner({
               studentUtterance,
               // Always a string — "" clears an instruction in-flight.
               noteInstruction: noteInstructionRef.current,
+              priorNotesCoverage: priorNotesCoverage || undefined,
             }),
           }
         );

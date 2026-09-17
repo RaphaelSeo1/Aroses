@@ -10,6 +10,7 @@ import {
   DEFAULT_NOTES_OUTLINE_RULES,
   TUTOR_NOTES_JSON_SHAPE,
   TUTOR_NOTES_QUALITY_RULES,
+  UNIFIED_NOTES_RULES,
 } from "@/lib/ai/tutor-notes-quality";
 import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
 
@@ -184,11 +185,13 @@ export function normalizeBlock(raw: unknown): AutoGenerateBlock | null {
   };
 }
 
-const SYNTHESIS_SYSTEM = `You convert a tutor's SPOKEN explanation into ONE polished study-notes section for the student's notebook.
+const SYNTHESIS_SYSTEM = `You convert a tutor's SPOKEN explanation into ONE polished study-notes section for the student's notebook. The notebook already holds sections from earlier turns; this section must add to it, not repeat it.
 
 ${TUTOR_NOTES_QUALITY_RULES}
 
 ${DEFAULT_NOTES_OUTLINE_RULES}
+
+${UNIFIED_NOTES_RULES}
 
 SECTION STRUCTURE:
 - heading: short topic title (3–8 words), not Rose's first sentence.
@@ -208,6 +211,9 @@ const BACKFILL_SYSTEM = `You convert a FULL tutor session transcript into struct
 The session may span multiple exchanges. Synthesize EVERY substantive concept Rose taught — not just the final turn.
 
 ${TUTOR_NOTES_QUALITY_RULES}
+
+${UNIFIED_NOTES_RULES}
+Tutors naturally re-explain when the student asks again: consolidate each concept into the ONE section that owns it; later sections reference it briefly and add only what was new.
 
 ORGANIZE into 3–8 SECTIONS grouped by topic/theme (e.g. "Contra-Asset Accounts & Depreciation", "Revenue Recognition"). Each section uses the JSON shape below.
 
@@ -246,6 +252,8 @@ export async function synthesizeTutorNotes(input: {
   modeTag?: string | null;
   /** Per-session free-text style request. Empty/missing ⇒ base system unchanged. */
   noteInstruction?: string;
+  /** Compact concept-coverage block of what the notebook already contains. */
+  priorNotesCoverage?: string;
 }): Promise<AutoGenerateBlock | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
@@ -259,10 +267,14 @@ export async function synthesizeTutorNotes(input: {
       : "";
   const topic = input.sessionTopic?.trim().slice(0, 300) ?? "";
   const mode = input.modeTag?.replace(/_/g, " ") ?? "";
+  const prior = input.priorNotesCoverage?.trim().slice(0, 3_000) ?? "";
 
   const userPrompt = [
     topic ? `SESSION TOPIC: ${topic}` : null,
     mode ? `MODE: ${mode}` : null,
+    prior
+      ? `ALREADY IN THE NOTEBOOK (earlier turns — do not re-define or re-explain; capture only what this explanation adds, with at most a one-clause reminder):\n${prior}`
+      : null,
     student ? `STUDENT SAID:\n${student}` : null,
     `ROSE EXPLAINED (spoken — synthesize, do NOT copy verbatim):\n${rose}`,
     "\nWrite one polished study-notes section as JSON now.",
