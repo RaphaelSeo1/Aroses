@@ -125,6 +125,105 @@ export function isRepeatedDefinition(earlier: string, later: string): boolean {
   return lineTokenOverlap(na, nb) >= REPEATED_DEFINITION_THRESHOLD;
 }
 
+// ── Readability reminders vs. editorial navigation ─────────────────────────
+
+/**
+ * Generic English anaphora at the start of a line: the sentence depends on
+ * whatever came right before it. Subject-neutral (no domain words).
+ */
+const DANGLING_REFERENT_RE =
+  /^\s*(?:(?:[-*]|\d+\.)\s+)?(?:\*\*)?(?:it|its|this|these|those|they|their|them|that|such|here|the (?:same|former|latter|process|step|method|rule|idea|concept|approach|mechanism|result|effect))\b/i;
+
+export function startsWithDanglingReferent(line: string): boolean {
+  if (isProtectedNoteLine(line)) return false;
+  return DANGLING_REFERENT_RE.test(line);
+}
+
+/**
+ * Editor-like / navigation language that must not appear in student notes
+ * ("see above", "as mentioned earlier", "only new details here", …).
+ */
+const NAVIGATION_PHRASE_RE =
+  /(?:\b(?:see|refer to|cf\.?)\s+(?:the\s+)?(?:section|heading|notes?|discussion|explanation)?\s*(?:"[^"]*"\s*)?(?:above|below|earlier|previously)\b|\bas\s+(?:noted|mentioned|discussed|explained|described|covered|defined|stated|shown|we saw)\s+(?:above|below|earlier|previously|before)\b|\b(?:covered|explained|defined|described|discussed)\s+(?:above|earlier|previously)\b|\bonly new details here\b|\bsee\s+"[^"]+"\s+above\b)/i;
+
+export function containsEditorialNavigation(text: string): boolean {
+  return NAVIGATION_PHRASE_RE.test(text);
+}
+
+/**
+ * Drop lines that are nothing but navigation, and strip a leading
+ * navigation clause ("As mentioned above, X is Y" → "X is Y") from lines
+ * that still carry content. Facts are never altered.
+ */
+export function stripEditorialNavigationLines(markdown: string): string {
+  const out: string[] = [];
+  for (const line of markdown.replace(/\r\n/g, "\n").split("\n")) {
+    if (isProtectedNoteLine(line) || !containsEditorialNavigation(line)) {
+      out.push(line);
+      continue;
+    }
+    const m = line.match(/^(\s*(?:(?:[-*]|\d+\.)\s+)?)(.*)$/);
+    const prefix = m?.[1] ?? "";
+    let body = (m?.[2] ?? line).trim();
+    // Leading clause: "As mentioned earlier, …" / "See above — …"
+    body = body.replace(
+      /^(?:\(?(?:as\s+(?:noted|mentioned|discussed|explained|described|covered|defined|stated|shown|we saw)\s+(?:above|below|earlier|previously|before)|see\s+(?:"[^"]*"\s+)?(?:above|below|earlier))\)?)[,:;—–-]?\s*/i,
+      ""
+    );
+    // Trailing clause: "… — see "Topic" above; only new details here."
+    body = body.replace(
+      /\s*[—–-]?\s*\(?(?:see\s+(?:"[^"]*"\s+)?(?:above|below|earlier)|as\s+(?:noted|mentioned|discussed|explained|described|covered|defined)\s+(?:above|earlier|previously))\)?[;,.]?\s*(?:only new details here\.?)?\s*$/i,
+      ""
+    );
+    const remainder = normalizeLine(body);
+    // Pure navigation (or a bare bold label left behind) carries no fact.
+    if (remainder.length < MIN_LINE_CHARS) continue;
+    if (/^\*\*[^*]+\*\*[:：\s]*$/.test(body)) continue;
+    if (/^[a-z]/.test(body)) body = body[0]!.toUpperCase() + body.slice(1);
+    out.push(`${prefix}${body}`);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
+/** Text of a bullet after its bold lead-in and separator. */
+function definitionGist(ownerLine: string): string {
+  let text = ownerLine
+    .trim()
+    .replace(/^\s*(?:[-*]|\d+\.)\s+/, "")
+    .replace(/^\*\*[^*]+\*\*\s*(?:[:：]|[-–—])?\s*/, "")
+    .replace(/\*\*/g, "")
+    .trim();
+  // First clause only: cut at the first strong separator once long enough.
+  const cut = text.search(/;|\s[—–]\s|\(/);
+  if (cut > 24) text = text.slice(0, cut).trim();
+  if (text.length > 90) {
+    const comma = text.lastIndexOf(",", 90);
+    text = (comma > 30 ? text.slice(0, comma) : text.slice(0, 87).trimEnd()).trim();
+  }
+  text = text.replace(/[,;:\s]+$/, "");
+  return text;
+}
+
+/**
+ * One-clause recall of the owner's definition, phrased as ordinary notes
+ * ("- **Term:** gist."). Returns null when no usable gist exists.
+ */
+export function buildNaturalReminder(
+  label: string,
+  ownerLine: string,
+  depth: number
+): string | null {
+  const gist = definitionGist(ownerLine);
+  if (normalizeLine(gist).length < MIN_LINE_CHARS) return null;
+  const indent = depth === 1 ? "  " : "";
+  const sentence = /[.!?]$/.test(gist) ? gist : `${gist}.`;
+  // "**Term** is …" when the gist already carries the verb; "**Term:** …" otherwise.
+  const startsWithVerb = /^(?:is|are|was|were|refers?|means?|denotes?|describes?)\b/i.test(gist);
+  return startsWithVerb
+    ? `${indent}- **${label}** ${sentence}`
+    : `${indent}- **${label}:** ${sentence}`;
+}
+
 export type RepeatedExplanation = {
   laterSectionId: string;
   laterLineIndex: number;
@@ -195,8 +294,9 @@ function bodyLineCount(lines: string[]): number {
  * Consolidate repeated explanations across sections:
  *   - the richer copy ends up in the owner (earliest) section;
  *   - nested details under a removed later line fold into the owner;
- *   - the later section keeps everything that is new; a one-line pointer
- *     replaces a removed definition when the later section still has content;
+ *   - the later section keeps everything that is new; removal is silent
+ *     unless the next line depends on the removed sentence, in which case a
+ *     one-clause natural reminder ("- **Term:** gist.") is kept;
  *   - a later section left with nothing new is reported in removeSectionIds.
  * Student-edited sections are never modified (neither trimmed nor upgraded).
  */
@@ -281,15 +381,24 @@ export function consolidateRepeatedExplanations(
       removed.push(...group);
       changed = true;
 
-      // A removed definition leaves a one-line pointer so the later section
-      // still reads coherently (brief reminder, not a second explanation).
+      // Default: remove silently. Only when the very next kept line leans on
+      // the removed sentence (starts with a dangling referent such as "It …"
+      // / "This …") keep a one-clause reminder that reads as ordinary notes —
+      // never a "see above" pointer.
       const label = leadInLabel(line);
-      if (label && (match.kind === "definition" || isDefinitionLine(line, label))) {
-        const ownerHeading = extractNoteHeading(owner.markdown);
-        if (ownerHeading && !pointers.has(conceptKey(label))) {
+      const following = laterLines[next];
+      if (
+        label &&
+        (match.kind === "definition" || isDefinitionLine(line, label)) &&
+        following !== undefined &&
+        startsWithDanglingReferent(following) &&
+        !pointers.has(conceptKey(label))
+      ) {
+        const reminder = buildNaturalReminder(label, ownerLines[match.ei]!, depth);
+        if (reminder) {
           pointers.add(conceptKey(label));
-          pointerText = `- **${label}** — see "${ownerHeading}" above; only new details here.`;
-          keep.push(pointerText);
+          pointerText = reminder;
+          keep.push(reminder);
         }
       }
       li = next;

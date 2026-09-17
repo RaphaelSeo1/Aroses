@@ -1030,14 +1030,28 @@ export function NotesPanel({
             });
           }
         } else {
+          // Stamp AI provenance here too (tutor-session blocks) so shared
+          // consolidation can tell generated sections from student writing;
+          // the tx meta keeps the provenance tracker from flipping them to
+          // "ai-edited" on insert.
+          const sectionId = `s-${crypto.randomUUID().slice(0, 8)}`;
+          const stamped = blockNodes.map((n) => ({
+            ...n,
+            attrs: {
+              ...(n.attrs as Record<string, unknown> | undefined),
+              provenance: "ai",
+              sectionId,
+            },
+          }));
           editor
             .chain()
             .command(({ tr }) => {
+              tr.setMeta(AI_APPEND_META, true);
               if (trail) tr.delete(trail.from, trail.to);
               return true;
             })
             .focus("end")
-            .insertContent(blockNodes)
+            .insertContent(stamped)
             .run();
         }
 
@@ -1053,6 +1067,11 @@ export function NotesPanel({
         autoGenLog("insertion complete", {
           docSizeAfter: editor.state.doc.content.size,
         });
+        // Shared post-generation consolidation (deterministic, AI sections
+        // only) — same behavior as live-notes wrap-up.
+        if (streamWriterRef.current?.consolidateDocument()) {
+          autoGenLog("consolidated notes after block append");
+        }
         return true;
       },
       beginStreamedNotes: ({
@@ -1136,6 +1155,11 @@ export function NotesPanel({
         streamingChunkIdRef.current = null;
         setStreamingNotes(false);
         autoGenLog("stream finished", { chunkId });
+        // Shared post-generation consolidation (deterministic, AI sections
+        // only) — mentored chunks get the same cleanup as live wrap-up.
+        if (streamWriterRef.current?.consolidateDocument()) {
+          autoGenLog("consolidated notes after streamed chunk", { chunkId });
+        }
       },
       abortStreamedNotes: () => {
         // Discard orphan heading-only sections / restore failed revisions.

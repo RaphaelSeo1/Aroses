@@ -228,6 +228,14 @@ export function applyNoteRevisions(
         const sid = sectionIdOf(node);
         return !(sid && remove.has(sid));
       });
+      // A removed section leaves its divider behind — collapse doubled and
+      // trailing horizontal rules so the document reads cleanly.
+      content = content.filter((node, i, arr) => {
+        if (node.type !== "horizontalRule") return true;
+        const prev = arr[i - 1];
+        if (prev && prev.type === "horizontalRule") return false;
+        return i !== arr.length - 1;
+      });
     }
   }
 

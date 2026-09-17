@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applySemanticTrims,
+  buildNaturalReminder,
   consolidateRepeatedExplanations,
+  containsEditorialNavigation,
+  startsWithDanglingReferent,
+  stripEditorialNavigationLines,
   findRepeatedExplanations,
   findSemanticTrimCandidates,
   formatSemanticTrimCandidates,
@@ -63,7 +67,7 @@ test("repeated definition: second definition of the same concept is redundant, n
   );
 });
 
-test("consolidate: later re-explanation is removed, new details kept, pointer added", () => {
+test("consolidate: later re-explanation is removed silently, new details kept, no 'see above'", () => {
   const later = {
     sectionId: "s-2",
     markdown: [
@@ -83,14 +87,100 @@ test("consolidate: later re-explanation is removed, new details kept, pointer ad
   // Redundant definition + duplicate bullet gone from B.
   assert.doesNotMatch(b.markdown, /validates the input and starts/);
   assert.doesNotMatch(b.markdown, /^- Runs once per request\.$/m);
-  // Genuinely new information stays in B; a short pointer replaces the definition.
+  // Genuinely new information stays in B; the removed definition leaves no
+  // editorial pointer because the remaining lines stand on their own.
   assert.match(b.markdown, /Gamma rule/);
-  assert.match(b.markdown, /see "Topic A" above/);
+  assert.equal(containsEditorialNavigation(b.markdown), false, b.markdown);
+  assert.doesNotMatch(b.markdown, /Alpha process/);
   // Unique nested detail moved under the owner.
   assert.match(a.markdown, /Logs its start time/);
   // Emphasis line untouched.
   assert.match(a.markdown, /Why it matters/);
   assertNoDuplicateTopics(res.sections);
+});
+
+test("consolidate: a natural one-clause reminder stays only when the next line depends on it", () => {
+  const dependent = {
+    sectionId: "s-dep",
+    markdown: [
+      "## Topic D",
+      "- **Alpha process:** Starts the workflow and validates the input.",
+      "- It also emits a heartbeat every 5 seconds while it runs.",
+      "- **Delta step:** Runs after the heartbeat is confirmed.",
+    ].join("\n"),
+  };
+  const res = consolidateRepeatedExplanations([owner, dependent]);
+  const d = res.sections.find((s) => s.sectionId === "s-dep")!;
+  // The dependent "It also …" line would dangle, so a short recall is kept —
+  // phrased as ordinary notes, not as navigation.
+  assert.match(d.markdown, /^- \*\*Alpha process:\*\* Starts the workflow and validates the input\.$/m);
+  assert.match(d.markdown, /It also emits a heartbeat/);
+  assert.match(d.markdown, /Delta step/);
+  assert.equal(containsEditorialNavigation(d.markdown), false, d.markdown);
+  assert.equal(res.trimmed[0]!.pointer !== undefined, true);
+
+  // Same removal, but the next line stands on its own → nothing is kept.
+  const independent = {
+    sectionId: "s-ind",
+    markdown: [
+      "## Topic E",
+      "- **Alpha process:** Starts the workflow and validates the input.",
+      "- **Delta step:** Runs after the heartbeat is confirmed.",
+    ].join("\n"),
+  };
+  const res2 = consolidateRepeatedExplanations([owner, independent]);
+  const e = res2.sections.find((s) => s.sectionId === "s-ind")!;
+  assert.doesNotMatch(e.markdown, /Alpha process/);
+  assert.equal(res2.trimmed[0]!.pointer, undefined);
+});
+
+test("reminder helpers: dangling referents and natural phrasing", () => {
+  assert.equal(startsWithDanglingReferent("- It runs twice."), true);
+  assert.equal(startsWithDanglingReferent("- This means the gate closes."), true);
+  assert.equal(startsWithDanglingReferent("- **Beta gate:** Checks size."), false);
+  assert.equal(startsWithDanglingReferent("- **Why it matters:** exam."), false);
+  const r = buildNaturalReminder(
+    "Alpha process",
+    "- **Alpha process:** Starts the workflow and validates the input; retries twice (see logs).",
+    0
+  );
+  assert.equal(r, "- **Alpha process:** Starts the workflow and validates the input.");
+  assert.equal(containsEditorialNavigation(r!), false);
+});
+
+test("navigation language is detected and stripped without touching facts", () => {
+  for (const bad of [
+    '- **Alpha process** — see "Topic A" above; only new details here.',
+    "- As mentioned earlier, the beta gate checks the input size.",
+    "- The gamma rule (covered above) applies after alpha.",
+    "See above for the definition.",
+  ]) {
+    assert.equal(containsEditorialNavigation(bad), true, bad);
+  }
+  for (const ok of [
+    "- Recall that the alpha process validates input before anything else runs.",
+    "- **Why it matters:** The first stage is a common exam question.",
+    "- The receiver sees the frame above the threshold and drops it.",
+  ]) {
+    assert.equal(containsEditorialNavigation(ok), false, ok);
+  }
+  const stripped = stripEditorialNavigationLines(
+    [
+      "## Topic",
+      '- **Alpha process** — see "Topic A" above; only new details here.',
+      "- As mentioned earlier, the beta gate checks the input size before anything else runs.",
+      "- **Gamma rule:** Applies after alpha.",
+    ].join("\n")
+  );
+  assert.equal(
+    stripped,
+    [
+      "## Topic",
+      "- The beta gate checks the input size before anything else runs.",
+      "- **Gamma rule:** Applies after alpha.",
+    ].join("\n")
+  );
+  assert.equal(containsEditorialNavigation(stripped), false);
 });
 
 test("consolidate: a later section that only restates earlier material is removed", () => {
