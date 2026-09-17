@@ -31,8 +31,8 @@ import { pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-
 import {
   extractNoteHeading,
   applySurgicalNoteRevision,
+  applyAiLineDeletes,
   classifyAppendChunks,
-  deleteExactNoteLines,
   dedupeSectionLines,
   formatDeckDraftExcerpt,
 } from "@/lib/live-notes/fold-note-markdown";
@@ -498,6 +498,8 @@ export function LiveNotesSurface({
       } | null = null;
       let seedPageFrom: number | undefined;
       let seedPageTo: number | undefined;
+      /** True when the SSE stream aborted/errored — drop mid-word trailing lines. */
+      let streamAborted = false;
 
       // ── Typing pump ─────────────────────────────────────────────────────
       // SSE events land in `queue`; a chained pump drains them into the
@@ -554,7 +556,9 @@ export function LiveNotesSurface({
         sectionId: string,
         incoming: string
       ) => {
-        const cleaned = sanitizeNoteOutput(incoming);
+        const cleaned = sanitizeNoteOutput(incoming, {
+          dropTruncatedTrailing: streamAborted,
+        });
         if (!cleaned.trim()) return;
         const live = writer
           .listSynthesisSections(200)
@@ -600,15 +604,15 @@ export function LiveNotesSurface({
         gotContent = true;
       };
       const applyBufferedDelete = (sectionId: string, body: string) => {
-        const cleaned = sanitizeNoteOutput(body);
+        const cleaned = sanitizeNoteOutput(body, {
+          dropTruncatedTrailing: streamAborted,
+        });
         if (!cleaned.trim()) return;
         const live = writer
           .listSynthesisSections(200)
           .find((s) => s.sectionId === sectionId);
-        if (!live || live.studentEdited) return;
-        const next = dedupeSectionLines(
-          deleteExactNoteLines(live.markdown, cleaned)
-        );
+        if (!live) return;
+        const next = dedupeSectionLines(applyAiLineDeletes(live, cleaned));
         if (next.replace(/\s+$/, "") === live.markdown.replace(/\s+$/, "")) {
           return;
         }
@@ -620,7 +624,9 @@ export function LiveNotesSurface({
         foldBuf: string,
         appendMeta: { sectionId: string; dividerBefore: boolean } | null
       ) => {
-        const cleaned = sanitizeNoteOutput(foldBuf);
+        const cleaned = sanitizeNoteOutput(foldBuf, {
+          dropTruncatedTrailing: streamAborted,
+        });
         if (!cleaned.trim()) return;
         const liveSections = writer.listSynthesisSections(200);
         const actions = classifyAppendChunks(cleaned, liveSections);
@@ -955,6 +961,7 @@ export function LiveNotesSurface({
         }
         queueClosed = true;
       } catch {
+        streamAborted = true;
         if (!seedFromDeck) {
           unsynthesizedRef.current =
             `${pending} ${unsynthesizedRef.current}`.trim();

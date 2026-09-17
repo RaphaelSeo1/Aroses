@@ -34,6 +34,7 @@ import {
   applySurgicalNoteRevision,
   pickNoteFoldTarget,
 } from "@/lib/live-notes/fold-note-markdown";
+import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
 import {
   loadReviewChatThreads,
   saveReviewChatThreads,
@@ -442,7 +443,8 @@ export function LiveNotesChat({
         let applied = 0;
         let failed = 0;
         const existing = writer.listAllSections(200);
-        const noteBody = (raw: string) => extractStudyNoteLines(raw);
+        const noteBody = (raw: string) =>
+          sanitizeNoteOutput(extractStudyNoteLines(raw));
         const preferredId =
           notesRef.current?.getSelectedSectionId() ||
           notesRef.current?.getVisibleSectionId() ||

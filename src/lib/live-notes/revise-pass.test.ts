@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sanitizeNoteOutput } from "./sanitize-note-output";
 import { createMarkerParser } from "./marker-protocol";
+import { takeDeckSeedBatch } from "./slide-pages";
 import {
   applyAppendChunkActions,
+  applyAiLineDeletes,
   applySurgicalNoteRevision,
   assertNoDuplicateTopics,
   classifyAppendChunks,
@@ -72,6 +74,24 @@ test("seed: recap batch restating A and B creates no new sections", () => {
   );
   assert.equal(afterRecap.length, 2);
   assertNoDuplicateTopics(afterRecap);
+
+  // Production hard filter: a review-titled chunk that does not match a
+  // section heading must not create a new section.
+  const reviewOnly = classifyAppendChunks(
+    [
+      "## Key concepts review",
+      "- Topic A",
+      "- Topic B",
+      "- Alpha process",
+      "- Gamma rule",
+    ].join("\n"),
+    seeded
+  );
+  assert.equal(
+    reviewOnly.filter((a) => a.kind === "new").length,
+    0,
+    "recap/outline slide must not become a new section"
+  );
 });
 
 test("seed: empty-text slides produce no output lines", () => {
@@ -79,6 +99,19 @@ test("seed: empty-text slides produce no output lines", () => {
   assert.equal(cleaned, "");
   const actions = classifyAppendChunks("", [topicA]);
   assert.deepEqual(actions, []);
+
+  const batch = takeDeckSeedBatch(
+    [
+      { pageNum: 1, title: "", extractedText: "   " },
+      { pageNum: 2, title: "Topic A", extractedText: "## Topic A\n- point" },
+      { pageNum: 3, title: "", extractedText: "" },
+    ],
+    0
+  );
+  assert.equal(batch.pages.length, 1);
+  assert.equal(batch.pages[0]!.pageNum, 2);
+  assert.doesNotMatch(batch.text, /\[slide 1\]/);
+  assert.doesNotMatch(batch.text, /\[slide 3\]/);
 });
 
 test("live: multi-target revise parser flushes each revision", () => {
@@ -174,6 +207,15 @@ test("sanitizer drops placeholders, protocol leaks, meta, empty heading, danglin
   assert.match(clean, /Alpha process/);
 });
 
+test("sanitizer drops truncated trailing line on abnormal end", () => {
+  const cut = "## Topic A\n- **Alpha process:** Starts the workflow.\n- while the cell sur";
+  const kept = sanitizeNoteOutput(cut, { dropTruncatedTrailing: true });
+  assert.match(kept, /Alpha process/);
+  assert.doesNotMatch(kept, /while the cell sur/);
+  const normal = sanitizeNoteOutput(cut);
+  assert.match(normal, /while the cell sur/);
+});
+
 test("extension placement: sub-detail lands under its parent", () => {
   const existing = [
     "## Topic A",
@@ -214,7 +256,7 @@ test("extension placement: new top-level bullet appends at end; duplicates drop"
   assert.equal(nearDup, "");
 });
 
-test("@@delete removes exact AI line; ignored for unknown patterns", () => {
+test("@@delete removes exact AI line; ignored for student-edited and unknown", () => {
   const existing = [
     "## Topic A",
     "- **Alpha process:** Starts the workflow.",
@@ -232,6 +274,21 @@ test("@@delete removes exact AI line; ignored for unknown patterns", () => {
     deleteExactNoteLines(existing, "- **Zeta:** Not present."),
     existing
   );
+
+  // Student-edited sections ignore @@delete (production pump uses this helper).
+  const student = applyAiLineDeletes(
+    { markdown: existing, studentEdited: true },
+    "- **Alpha process:** Starts the workflow."
+  );
+  assert.equal(student, existing);
+  assert.match(student, /Alpha process/);
+
+  const aiOk = applyAiLineDeletes(
+    { markdown: existing, studentEdited: false },
+    "- **Alpha process:** Starts the workflow."
+  );
+  assert.doesNotMatch(aiOk, /Alpha process/);
+  assert.match(aiOk, /Beta gate/);
 });
 
 test("wrap-up: three reworded Topic A copies consolidate to one earliest id", () => {

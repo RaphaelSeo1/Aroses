@@ -244,6 +244,8 @@ export type AppendChunkAction =
 /**
  * Classify each `## ` chunk of an append: fold into a matching section or
  * create a new one. Headless chunks go to the most recent matched section.
+ * Recap/outline/review chunks never become new sections — fold when matched,
+ * otherwise drop (hard filter for seed + live append paths).
  */
 export function classifyAppendChunks<
   T extends { sectionId: string; markdown: string },
@@ -256,6 +258,9 @@ export function classifyAppendChunks<
   if (chunks.length === 0) return [];
   const actions: AppendChunkAction[] = [];
   let lastFoldId: string | null = preferredSectionId ?? null;
+  const existingHeadings = sections
+    .map((s) => extractNoteHeading(s.markdown))
+    .filter((h): h is string => Boolean(h));
 
   for (const chunk of chunks) {
     const hasHeading = /^##\s+/m.test(chunk.trim());
@@ -270,6 +275,21 @@ export function classifyAppendChunks<
       } else {
         // No existing section to attach to — emit as new (pump will add heading).
         actions.push({ kind: "new", markdown: chunk });
+      }
+      continue;
+    }
+    const title = extractNoteHeading(chunk) ?? "";
+    // Recap/outline/agenda/review — never create a section. Fold only when the
+    // heading itself matches an existing topic; otherwise drop the chunk.
+    if (looksLikeRecapOrOutlineSlide(title, chunk, existingHeadings)) {
+      const byHeading = matchHeadingToSections(chunk, sections);
+      if (byHeading) {
+        actions.push({
+          kind: "fold",
+          sectionId: byHeading.sectionId,
+          markdown: chunk,
+        });
+        lastFoldId = byHeading.sectionId;
       }
       continue;
     }
@@ -629,6 +649,18 @@ export function deleteExactNoteLines(
     return !targets.has(n);
   });
   return kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
+/**
+ * Apply @@delete body to a section. Student-edited sections are never
+ * mutated (returns the original markdown unchanged).
+ */
+export function applyAiLineDeletes(
+  section: { markdown: string; studentEdited?: boolean },
+  deleteBody: string
+): string {
+  if (section.studentEdited) return section.markdown;
+  return deleteExactNoteLines(section.markdown, deleteBody);
 }
 
 /** Compact outline line for prompts: `[id] heading — top bold terms`. */
