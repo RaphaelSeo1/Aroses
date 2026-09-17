@@ -95,8 +95,8 @@ export function DailyCheckInCard() {
         {checkedIn ? (
           <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-brand-border/70 bg-brand-blush/90 px-2.5 py-1 text-[11px] font-semibold text-brand-ink dark:border-brand-border/30 dark:bg-[#1e1616]/80 dark:text-brand-soft">
             <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-soft-pulse rounded-full bg-brand opacity-60" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
+              <span className="absolute inline-flex h-full w-full animate-soft-pulse rounded-full bg-emerald-400 opacity-60" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(52,211,153,0.85),0_0_12px_rgba(16,185,129,0.55)]" />
             </span>
             {t.checkin.checkedIn}
           </span>
