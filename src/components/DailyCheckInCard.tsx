@@ -27,6 +27,8 @@ function RoseGlyph({ className }: { className?: string }) {
   );
 }
 
+const MILESTONES = [10, 20, 30] as const;
+
 export function DailyCheckInCard() {
   const t = useT();
   const { status, busy, error, checkIn } = useDailyCheckIn();
@@ -42,6 +44,8 @@ export function DailyCheckInCard() {
   const plusUnlocked = Boolean(
     status?.plusGrants || status?.plusGrantPeriodEnd
   );
+  const showHeroStreak = streak > 0;
+  const remaining = Math.max(0, goal - progress);
 
   const onCheckIn = async () => {
     const result = await checkIn();
@@ -68,47 +72,130 @@ export function DailyCheckInCard() {
   return (
     <section
       id="daily-check-in"
-      className="relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-gradient-to-br from-rose-50/90 via-white to-white p-5 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md dark:border-zinc-800 dark:from-rose-950/35 dark:via-zinc-950 dark:to-zinc-950 dark:ring-zinc-700/30"
+      className="relative overflow-hidden rounded-3xl border border-zinc-200/90 bg-gradient-to-br from-rose-50/95 via-white to-white p-5 shadow-lg shadow-zinc-900/[0.05] ring-1 ring-white/50 backdrop-blur-md dark:border-zinc-800 dark:from-rose-950/40 dark:via-zinc-950 dark:to-zinc-950 dark:ring-zinc-700/30"
     >
       <div
-        className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-brand/15 blur-2xl dark:bg-brand/20"
+        className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-brand/20 blur-3xl dark:bg-brand/25"
         aria-hidden
       />
+      <div
+        className="pointer-events-none absolute -bottom-14 -left-10 h-28 w-28 rounded-full bg-rose-200/40 blur-3xl dark:bg-rose-900/25"
+        aria-hidden
+      />
+
       <div className="relative flex items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
             {t.checkin.title}
           </p>
-          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
             {t.checkin.hint}
           </p>
         </div>
-        {streak > 0 ? (
-          <span className="shrink-0 rounded-full bg-brand-blush/80 px-2.5 py-1 text-xs font-semibold text-brand-ink dark:bg-[#1e1616]/70 dark:text-brand-soft">
-            {streak === 1
-              ? tf(t.checkin.streakOne, { count: streak })
-              : tf(t.checkin.streakMany, { count: streak })}
+        {checkedIn ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-brand-border/70 bg-brand-blush/90 px-2.5 py-1 text-[11px] font-semibold text-brand-ink dark:border-brand-border/30 dark:bg-[#1e1616]/80 dark:text-brand-soft">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-soft-pulse rounded-full bg-brand opacity-60" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
+            </span>
+            {t.checkin.checkedIn}
           </span>
         ) : null}
       </div>
 
+      {showHeroStreak ? (
+        <div className="relative mt-4 flex items-end gap-2.5">
+          <p
+            className={[
+              "text-[2.75rem] font-semibold leading-none tracking-tight tabular-nums text-brand dark:text-brand-soft",
+              celebrate === "plain" || celebrate === "plus"
+                ? "origin-bottom-left transition-transform duration-500 ease-out motion-safe:scale-105"
+                : "",
+            ].join(" ")}
+            aria-label={
+              streak === 1
+                ? tf(t.checkin.streakOne, { count: streak })
+                : tf(t.checkin.streakMany, { count: streak })
+            }
+          >
+            {streak}
+          </p>
+          <div className="mb-1.5 min-w-0">
+            <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              {streak === 1
+                ? t.checkin.streakLabelOne
+                : t.checkin.streakLabelMany}
+            </p>
+            <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+              {plusUnlocked
+                ? t.checkin.progressDone
+                : tf(t.checkin.daysToPlus, { remaining })}
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <div className="relative mt-4">
-        <div className="flex items-center justify-between gap-3 text-[11px]">
-          <span className="font-medium text-zinc-600 dark:text-zinc-300">
-            {plusUnlocked
-              ? t.checkin.progressDone
-              : tf(t.checkin.progress, { current: progress, goal })}
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            {plusUnlocked ? t.checkin.progressDoneShort : t.checkin.progressLabel}
           </span>
-          <span className="tabular-nums text-zinc-500 dark:text-zinc-400">
-            {progress}/{goal}
+          <span className="text-xs font-semibold tabular-nums text-zinc-800 dark:text-zinc-100">
+            {tf(t.checkin.progressCount, { current: progress, goal })}
           </span>
         </div>
-        <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-zinc-200/95 ring-1 ring-inset ring-zinc-300/70 dark:bg-zinc-800 dark:ring-zinc-600/70">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-rose-400 via-brand to-rose-600 shadow-[0_0_10px_rgba(225,29,72,0.45)] transition-[width] duration-500"
-            style={{ width: `${pct}%` }}
-          />
+
+        <div className="relative mt-2.5">
+          <div className="h-3.5 w-full overflow-hidden rounded-full bg-zinc-200/90 ring-1 ring-inset ring-zinc-300/60 dark:bg-zinc-800 dark:ring-zinc-600/60">
+            <div
+              className="relative h-full rounded-full bg-gradient-to-r from-rose-400 via-brand to-rose-600 transition-[width] duration-500 ease-out"
+              style={{
+                width: `${pct}%`,
+                minWidth: progress > 0 && pct < 8 ? "0.75rem" : undefined,
+              }}
+            >
+              <div
+                className="absolute inset-y-0 right-0 w-2 rounded-full bg-white/35"
+                aria-hidden
+              />
+            </div>
+          </div>
+          {!plusUnlocked ? (
+            <div
+              className="pointer-events-none absolute inset-x-0 top-0 h-3.5"
+              aria-hidden
+            >
+              {MILESTONES.filter((m) => m < goal).map((m) => (
+                <span
+                  key={m}
+                  className="absolute top-0.5 bottom-0.5 w-px bg-white/80 dark:bg-zinc-950/55"
+                  style={{ left: `${(m / goal) * 100}%` }}
+                />
+              ))}
+            </div>
+          ) : null}
         </div>
+
+        {!plusUnlocked ? (
+          <div className="relative mt-1.5 h-3.5 text-[10px] tabular-nums text-zinc-400 dark:text-zinc-500">
+            <span className="absolute left-0">0</span>
+            {MILESTONES.filter((m) => m <= goal).map((m) => (
+              <span
+                key={m}
+                className={[
+                  "absolute",
+                  m === goal ? "right-0" : "-translate-x-1/2",
+                  progress >= m
+                    ? "font-medium text-brand dark:text-brand-soft"
+                    : "",
+                ].join(" ")}
+                style={m === goal ? undefined : { left: `${(m / goal) * 100}%` }}
+              >
+                {m}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       {celebrate === "plus" ? (
@@ -124,10 +211,7 @@ export function DailyCheckInCard() {
         </p>
       ) : celebrate === "plain" || checkedIn ? (
         <p className="relative mt-4 text-sm font-medium text-zinc-800 dark:text-zinc-100">
-          {tf(t.checkin.celebrationBody, { streak })}
-          <span className="mt-1 block text-xs font-normal text-zinc-500 dark:text-zinc-400">
-            {t.checkin.comeBackTomorrow}
-          </span>
+          {t.checkin.celebrationBody}
         </p>
       ) : null}
 
