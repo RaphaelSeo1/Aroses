@@ -225,7 +225,7 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     lectureRecordings: 25,
     generationDepth: "comprehensive",
     earlyAccess: true,
-    tagline: "Comprehensive AI studying at our best promotional value.",
+    tagline: "Comprehensive depth, higher limits, and early access.",
     highlights: [
       "Comprehensive course generation",
       "10 AI course generations",
