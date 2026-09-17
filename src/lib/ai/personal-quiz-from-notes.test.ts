@@ -141,7 +141,6 @@ test("selected cards retain persistence-ready MCQ and FRQ shapes", () => {
 test("buildPersonalQuizGenerationPrompt matches wording to difficulty", () => {
   const prompt = buildPersonalQuizGenerationPrompt({
     corpus: "Hemoglobin binds oxygen in red blood cells.",
-    softMax: 4,
   });
   assert.match(prompt, /DIFFICULTY THEN WORDING/i);
   assert.match(prompt, /"difficulty": "easy"\|"medium"\|"hard"/);
@@ -149,15 +148,15 @@ test("buildPersonalQuizGenerationPrompt matches wording to difficulty", () => {
   assert.doesNotMatch(prompt, /ELABORATE STEMS/i);
 });
 
-test("buildPersonalQuizGenerationPrompt uses adaptive volume not a fixed count", () => {
+test("buildPersonalQuizGenerationPrompt uses importance-driven volume without a fixed cap", () => {
   const prompt = buildPersonalQuizGenerationPrompt({
     corpus: "Hemoglobin binds oxygen in red blood cells.",
-    softMax: 6,
   });
   assert.match(prompt, /QUESTION VOLUME/i);
-  assert.match(prompt, /BETWEEN 1 and 6/i);
-  assert.match(prompt, /distinct teachable units/i);
-  assert.match(prompt, /One term\/definition/);
+  assert.match(prompt, /no artificial maximum/i);
+  assert.match(prompt, /one per important idea/i);
+  assert.match(prompt, /important to understand/i);
+  assert.doesNotMatch(prompt, /BETWEEN 1 and \d+/i);
   assert.doesNotMatch(prompt, /EXACTLY 6 questions/i);
   assert.doesNotMatch(prompt, /EXACTLY \d+ multiple-choice/i);
 });

@@ -5,11 +5,7 @@ import {
 } from "@/lib/ai/course-payload";
 import { tutorChatModel } from "@/lib/ai/anthropic-models";
 import { quizDifficultyWordingRules } from "@/lib/ai/quiz-difficulty-wording";
-import {
-  QUIZ_QUESTION_VOLUME_MAX,
-  clampQuizQuestionSoftMax,
-  quizQuestionVolumeRules,
-} from "@/lib/ai/quiz-question-volume";
+import { quizQuestionVolumeRules } from "@/lib/ai/quiz-question-volume";
 import type {
   CourseQuizFreeItem,
   CourseQuizItem,
@@ -39,9 +35,10 @@ const EMPTY_TYPE_COUNTS: PersonalQuizTypeCounts = {
   freeResponse: 0,
 };
 
-/** Soft max for adaptive volume (1–6). Client `count` is an upper bound only. */
-function targetQuestionCount(count: number): number {
-  return clampQuizQuestionSoftMax(count);
+/** Normalize a plan length for type balancing (no artificial max). */
+function normalizePlanLength(count: number): number {
+  if (!Number.isFinite(count) || count < 1) return 1;
+  return Math.floor(count);
 }
 
 /**
@@ -53,7 +50,7 @@ export function planPersonalQuizTypes(
   count: number,
   existing: PersonalQuizTypeCounts = EMPTY_TYPE_COUNTS
 ): PersonalQuizType[] {
-  const total = targetQuestionCount(count);
+  const total = normalizePlanLength(count);
   const half = Math.floor(total / 2);
   let mcq = half;
   let freeResponse = half;
@@ -508,16 +505,12 @@ function preferTypeWhenOne(
 /** Exported for unit tests — keep in sync with generatePersonalQuizFromNotes. */
 export function buildPersonalQuizGenerationPrompt(opts: {
   corpus: string;
-  softMax?: number;
   existingCounts?: PersonalQuizTypeCounts;
   /** Repair path: force a single item of this type. */
   repairSingleType?: PersonalQuizType;
   avoidQuestions?: string[];
   brokenOutput?: string;
 }): string {
-  const softMax = clampQuizQuestionSoftMax(
-    opts.softMax ?? QUIZ_QUESTION_VOLUME_MAX
-  );
   const existing = opts.existingCounts ?? EMPTY_TYPE_COUNTS;
   const preferOne = opts.repairSingleType ?? preferTypeWhenOne(existing);
   const avoid =
@@ -532,7 +525,7 @@ export function buildPersonalQuizGenerationPrompt(opts: {
 
   const task = opts.repairSingleType
     ? `Task: Output a JSON array of EXACTLY 1 question with "type": "${opts.repairSingleType}". Output ONLY the JSON array — no markdown fences, no commentary, no trailing text.`
-    : `Task: Output a JSON array of BETWEEN 1 and ${softMax} questions (inclusive). Decide the count using QUESTION VOLUME below — never pad. Output ONLY the JSON array — no markdown fences, no commentary, no trailing text.
+    : `Task: Output a JSON array of questions (at least 1). Decide the count using QUESTION VOLUME below — one per important idea; never pad; no artificial maximum. Output ONLY the JSON array — no markdown fences, no commentary, no trailing text.
 Type mix: when writing 2+, prefer roughly half multiple-choice and half free-response, but undershoot a type rather than invent filler. When writing exactly 1, prefer type "${preferOne}".`;
 
   return `You are writing practice quiz questions for ONE learner. Use ONLY the excerpts below — do not invent facts not grounded in this text.
@@ -545,7 +538,7 @@ MCQ object: { "type": "mcq", "difficulty": "easy"|"medium"|"hard", "question": s
 Free-response object: { "type": "free_response", "difficulty": "easy"|"medium"|"hard", "question": string, "reference_answer": string, "explanation": string }
 
 Strict rules (follow all):
-1) ${quizQuestionVolumeRules(softMax)}
+1) ${quizQuestionVolumeRules()}
 2) TYPE MIX: Prefer balanced MCQ / free-response when content supports multiple items. Never turn a needed free-response into MCQ just to hit a count. Do not invent items to balance types.
 3) REFERENCE RUBRIC: Every free-response item must have a substantive natural-language reference_answer (1–3 sentences) stating the key ideas a correct answer should cover. It is used by a concept-focused AI grader.
 4) DISTINCT FACTS: Each question must test a different main idea from the notes. Do not ask the same underlying fact twice using different wording.
@@ -558,11 +551,10 @@ Strict rules (follow all):
 
 /**
  * Generate practice items from the learner's highlights/notes.
- * `count` is a soft maximum (1–6); the model chooses volume from content.
+ * Volume is content-driven: the model decides how many questions matter.
  */
 export async function generatePersonalQuizFromNotes(
   learnerNotes: string,
-  count: number = QUIZ_QUESTION_VOLUME_MAX,
   opts?: { existingCounts?: PersonalQuizTypeCounts }
 ): Promise<CourseQuizItem[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -575,14 +567,9 @@ export async function generatePersonalQuizFromNotes(
     throw new Error("Add a bit more text — paste a highlight or note first.");
   }
 
-  const softMax = targetQuestionCount(count);
   const existing = opts?.existingCounts ?? EMPTY_TYPE_COUNTS;
-  // Preference order up to softMax — selection keeps only items the model
-  // actually produced (no padding to fill the plan).
-  const plan = planPersonalQuizTypes(softMax, existing);
   const prompt = buildPersonalQuizGenerationPrompt({
     corpus,
-    softMax,
     existingCounts: existing,
   });
 
@@ -602,6 +589,8 @@ export async function generatePersonalQuizFromNotes(
   }
 
   let parsed = parsePersonalQuizModelText(block.text);
+  // Plan length follows what the model actually produced — no artificial cap.
+  const plan = planPersonalQuizTypes(Math.max(parsed.length, 1), existing);
   let selected = selectPersonalQuizItems(parsed, plan, { fillRemainder: true });
   if (selected.length === 0) {
     const repairType = preferTypeWhenOne(existing);
@@ -614,7 +603,6 @@ export async function generatePersonalQuizFromNotes(
           role: "user",
           content: buildPersonalQuizGenerationPrompt({
             corpus,
-            softMax: 1,
             existingCounts: existing,
             repairSingleType: repairType,
             brokenOutput: block.text,
@@ -632,7 +620,7 @@ export async function generatePersonalQuizFromNotes(
   if (selected.length === 0) {
     console.error(
       "[personal-quiz-from-notes] no usable questions from model",
-      { softMax, output: block.text.slice(0, 400) }
+      { output: block.text.slice(0, 400) }
     );
     throw new Error("Could not build questions from that note.");
   }

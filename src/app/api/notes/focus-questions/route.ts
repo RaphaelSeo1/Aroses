@@ -3,7 +3,6 @@ import {
   countPersonalQuizTypes,
   generatePersonalQuizFromNotes,
 } from "@/lib/ai/personal-quiz-from-notes";
-import { QUIZ_QUESTION_VOLUME_MAX } from "@/lib/ai/quiz-question-volume";
 import {
   NOTES_FOCUS_BUCKET_ID,
   parseNotesFocusBucketNoteId,
@@ -90,7 +89,6 @@ export async function POST(request: Request) {
   try {
     items = await generatePersonalQuizFromNotes(
       excerpt.slice(0, MAX_CORPUS),
-      QUIZ_QUESTION_VOLUME_MAX,
       {
         existingCounts: countPersonalQuizTypes(existingRows ?? []),
       }

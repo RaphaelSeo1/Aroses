@@ -3,10 +3,6 @@ import {
   countPersonalQuizTypes,
   generatePersonalQuizFromNotes,
 } from "@/lib/ai/personal-quiz-from-notes";
-import {
-  QUIZ_QUESTION_VOLUME_MAX,
-  clampQuizQuestionSoftMax,
-} from "@/lib/ai/quiz-question-volume";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import type { CourseQuizItem } from "@/types/course";
@@ -49,19 +45,12 @@ export async function POST(request: Request, ctx: Params) {
     moduleId?: unknown;
     noteIds?: unknown;
     extraContext?: unknown;
-    count?: unknown;
   };
 
   const moduleId = typeof b.moduleId === "number" ? b.moduleId : Number.NaN;
   if (!Number.isFinite(moduleId)) {
     return NextResponse.json({ error: "moduleId required." }, { status: 400 });
   }
-
-  // Client `count` is a soft max only; the model decides volume within 1–softMax.
-  const softMax =
-    typeof b.count === "number" && Number.isFinite(b.count)
-      ? clampQuizQuestionSoftMax(b.count)
-      : QUIZ_QUESTION_VOLUME_MAX;
 
   let corpus = "";
   if (Array.isArray(b.noteIds) && b.noteIds.length > 0) {
@@ -108,7 +97,7 @@ export async function POST(request: Request, ctx: Params) {
 
   let items: CourseQuizItem[];
   try {
-    items = await generatePersonalQuizFromNotes(corpus, softMax, {
+    items = await generatePersonalQuizFromNotes(corpus, {
       existingCounts: countPersonalQuizTypes(existingRows ?? []),
     });
   } catch (e) {
