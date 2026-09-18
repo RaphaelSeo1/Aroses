@@ -274,39 +274,72 @@ test("stripLinesAlreadyCovered: drops restatements, keeps new lines, promotes ne
   assert.match(out, /Zeta cache/);
 });
 
-test("semantic candidates: only later explanations are offered; parse rejects unknown lines", () => {
+test("semantic candidates: only later re-explanations are offered; parse rejects unknown lines", () => {
   const later = {
     sectionId: "s-9",
     markdown: [
       "## Applications",
-      "- The **alpha process** can be thought of as the entry checkpoint that admits work into the pipeline.",
+      "- **Alpha process** is the entry stage that validates the input and then starts the workflow.",
       "- Used by three downstream services.",
+      "- The alpha process rejects any **Northwind** payload above 4 KB before validation.",
     ].join("\n"),
   };
   const candidates = findSemanticTrimCandidates([owner, later]);
   const alpha = candidates.find((c) => c.label.toLowerCase() === "alpha process");
   assert.ok(alpha, "alpha process should be a candidate");
   assert.equal(alpha!.later[0]!.sectionId, "s-9");
-  assert.equal(alpha!.later[0]!.lines[0]!.n, 2);
+  const offered = alpha!.later[0]!.lines.map((l) => l.n);
+  assert.ok(offered.includes(2), "reworded definition is offered to the model");
+  assert.equal(offered.includes(3), false, "a line that does not mention the concept is not offered");
   const text = formatSemanticTrimCandidates(candidates);
   assert.match(text, /OWNER \[s-1\] Topic A/);
 
   const trims = parseSemanticTrimJson(
     JSON.stringify({
       trims: [
-        { sectionId: "s-9", dropLineNumbers: [2, 3, 99] },
+        { sectionId: "s-9", dropLineNumbers: [2, 3, 4, 99] },
         { sectionId: "s-1", dropLineNumbers: [2] },
       ],
     }),
     candidates
   );
-  assert.deepEqual(trims, [{ sectionId: "s-9", dropLineNumbers: [2] }]);
+  assert.equal(trims.length, 1);
+  assert.equal(trims[0]!.sectionId, "s-9");
+  assert.ok(trims[0]!.dropLineNumbers.includes(2));
+  assert.equal(trims[0]!.dropLineNumbers.includes(3), false, "unoffered lines cannot be dropped");
 
-  const applied = applySemanticTrims([owner, later], trims);
+  const applied = applySemanticTrims([owner, later], trims, candidates);
   assert.equal(applied.changed, true);
   const s9 = applied.sections.find((s) => s.sectionId === "s-9")!;
-  assert.doesNotMatch(s9.markdown, /entry checkpoint/);
+  // Pure rewording of the owner's definition → trimmed.
+  assert.doesNotMatch(s9.markdown, /entry stage that validates/);
   assert.match(s9.markdown, /three downstream services/);
+  // Even if offered and requested, a line with a new number + named term is
+  // refused by the deterministic guard.
+  if (offered.includes(4)) {
+    assert.match(s9.markdown, /Northwind/);
+    assert.match(s9.markdown, /4 KB/);
+  }
+});
+
+test("semantic guard: a requested trim that clearly loses information is refused", () => {
+  const later = {
+    sectionId: "s-9b",
+    markdown: [
+      "## Applications",
+      "- **Alpha process:** Starts the workflow and validates the input; retries 3 times on failure.",
+      "- **Alpha process** is the stage that validates the input and starts the workflow.",
+    ].join("\n"),
+  };
+  const candidates = findSemanticTrimCandidates([owner, later]);
+  const applied = applySemanticTrims(
+    [owner, later],
+    [{ sectionId: "s-9b", dropLineNumbers: [2, 3] }],
+    candidates
+  );
+  const s = applied.sections.find((x) => x.sectionId === "s-9b")!;
+  assert.match(s.markdown, /retries 3 times/, "new number ⇒ kept");
+  assert.doesNotMatch(s.markdown, /is the stage that validates/, "pure rewording ⇒ trimmed");
 });
 
 test("semantic trims never empty a section", () => {

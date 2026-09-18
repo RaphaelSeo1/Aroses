@@ -17,9 +17,11 @@
 import {
   dedupeSectionLines,
   extractNoteHeading,
+  findUncoveredLines,
   headingsReferToSameTopic,
   mergeDuplicateGroup,
-  sectionBodySimilarity,
+  SECTION_COVERED_MERGE_RATIO,
+  sectionCoveredRatio,
   type NoteSectionRef,
 } from "@/lib/live-notes/fold-note-markdown";
 import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
@@ -39,22 +41,13 @@ export type ConsolidateNoteDocumentResult = {
   changed: boolean;
 };
 
-/** Body similarity at/above which two differently-headed sections are one topic. */
-const SAME_TOPIC_BODY_THRESHOLD = 0.6;
-/** A section needs this many body bullets before body similarity alone can absorb it. */
-const MIN_BULLETS_FOR_BODY_MERGE = 3;
-
-function bulletCount(markdown: string): number {
-  return markdown
-    .split("\n")
-    .filter((l) => /^\s*(?:[-*]|\d+\.)\s/.test(l)).length;
-}
-
 /**
  * Same-topic groups (earliest kept). Runs AFTER repeated lines were removed,
- * so similarity reflects what each section still says on its own. Heading
- * sameness is decisive; body similarity alone must be strong and backed by
- * enough bullets — a small section with one overlapping bullet is not merged.
+ * so coverage reflects what each section still says on its own. Heading
+ * sameness is decisive (the merge keeps every unique line, so it only
+ * changes structure). On body alone a section is absorbed only when
+ * essentially ALL of it is already said by the keeper — loose similarity
+ * between parallel-structured sections about different things never merges.
  */
 function findSameTopicGroups(
   sections: NoteSectionRef[]
@@ -73,10 +66,9 @@ function findSameTopicGroups(
       const hb = extractNoteHeading(b.markdown);
       if (!hb) continue;
       const sameHeading = headingsReferToSameTopic(ha, hb);
-      const sameBody =
-        bulletCount(b.markdown) >= MIN_BULLETS_FOR_BODY_MERGE &&
-        sectionBodySimilarity(a.markdown, b.markdown) >= SAME_TOPIC_BODY_THRESHOLD;
-      if (sameHeading || sameBody) {
+      const fullyCovered =
+        sectionCoveredRatio(a.markdown, b.markdown) >= SECTION_COVERED_MERGE_RATIO;
+      if (sameHeading || fullyCovered) {
         absorb.push(b);
         used.add(b.sectionId);
       }
@@ -104,12 +96,40 @@ export function consolidateNoteDocument(
 
   // 2) Repeated explanations across sections (owner keeps the explanation,
   //    unique details fold into it, later sections keep only what is new).
+  const beforeRepeats = working;
   const consolidated = consolidateRepeatedExplanations(working);
-  for (const id of consolidated.removeSectionIds) removeSet.add(id);
   working = consolidated.sections;
+  // Source-coverage safeguard: a section is only dropped wholesale when EVERY
+  // body line it had is already said somewhere in the surviving document.
+  // Anything that still adds information is restored under its heading.
+  for (const id of consolidated.removeSectionIds) {
+    const dropped = beforeRepeats.find((s) => s.sectionId === id);
+    if (!dropped) continue;
+    const uncovered = findUncoveredLines(
+      dropped.markdown,
+      working.filter((s) => s.sectionId !== id)
+    );
+    if (uncovered.length === 0) {
+      removeSet.add(id);
+      continue;
+    }
+    const heading = dropped.markdown
+      .split("\n")
+      .find((l) => /^#{1,3}\s/.test(l.trim()));
+    const restored = [heading, ...uncovered].filter((l): l is string => Boolean(l)).join("\n");
+    const idx = beforeRepeats.findIndex((s) => s.sectionId === id);
+    const insertAt = working.findIndex(
+      (s) => beforeRepeats.findIndex((b) => b.sectionId === s.sectionId) > idx
+    );
+    const section = { ...dropped, markdown: restored };
+    if (insertAt < 0) working.push(section);
+    else working.splice(insertAt, 0, section);
+  }
 
   // 3) Same-topic sections → one section. Only AI-owned sections may be
   //    merged or absorbed; student sections are invisible to this step.
+  //    `mergeDuplicateGroup` appends every absorbed line the merged section
+  //    does not already say, so this step changes structure, not content.
   const mergeable = working.filter((s) => !s.studentEdited && s.markdown.trim());
   for (const group of findSameTopicGroups(mergeable)) {
     const merged = mergeDuplicateGroup(group);

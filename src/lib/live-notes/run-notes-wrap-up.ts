@@ -7,6 +7,11 @@ import {
   dedupeSectionLines,
 } from "@/lib/live-notes/fold-note-markdown";
 import { consolidateNoteDocument } from "@/lib/notes/consolidate-notes";
+import {
+  findUnrepresentedDeckPages,
+  formatUnrepresentedPages,
+  type CoverageDeckPage,
+} from "@/lib/notes/source-coverage";
 import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
 import {
   applyNoteRevisions,
@@ -24,6 +29,8 @@ export async function runLiveNotesWrapUp(input: {
   transcript: string;
   screenContent?: string;
   deckContent?: string;
+  /** Raw deck pages — diagnostic coverage report only (no model call). */
+  deckPages?: CoverageDeckPage[];
   lectureTitle?: string;
   durationSeconds?: number | null;
   startedAt?: string | null;
@@ -68,6 +75,20 @@ export async function runLiveNotesWrapUp(input: {
           consolidated.revisions,
           consolidated.removeSectionIds
         );
+      }
+
+      // Diagnostic only: substantive deck pages with no footprint in the
+      // final notes. Never alters the notes; surfaces silent thinning.
+      if (input.deckPages && input.deckPages.length > 0) {
+        const finalMd = collectAiNoteSections(notesJson)
+          .map((s) => s.markdown)
+          .join("\n");
+        const missing = findUnrepresentedDeckPages(input.deckPages, finalMd);
+        if (missing.length > 0) {
+          console.warn(
+            `[live-notes wrap-up] ${missing.length}/${input.deckPages.length} substantive deck pages unrepresented in notes: ${formatUnrepresentedPages(missing)}`
+          );
+        }
       }
     }
   } catch (e) {

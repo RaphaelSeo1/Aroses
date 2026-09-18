@@ -249,11 +249,20 @@ test("extension placement: new top-level bullet appends at end; duplicates drop"
   );
   assert.equal(dup, "");
 
-  const nearDup = uniqueIncomingNoteLines(
+  // Same tokens, reordered / unlabeled → pure restatement → dropped.
+  const reworded = uniqueIncomingNoteLines(
+    existing,
+    "- The alpha process starts the workflow."
+  );
+  assert.equal(reworded, "");
+
+  // A short line with a new content word may be a new fact — kept (when
+  // uncertain, keep; minor redundancy beats information loss).
+  const qualified = uniqueIncomingNoteLines(
     existing,
     "- **Alpha process:** Starts the overall workflow."
   );
-  assert.equal(nearDup, "");
+  assert.match(qualified, /overall workflow/);
 });
 
 test("@@delete removes exact AI line; ignored for student-edited and unknown", () => {

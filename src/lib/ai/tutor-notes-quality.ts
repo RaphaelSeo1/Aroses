@@ -31,14 +31,15 @@ export const DEFAULT_NOTES_OUTLINE_RULES = `DEFAULT NOTES OUTLINE:
  * a window of the document, so they are told explicitly how to treat material
  * the document already establishes. Subject-neutral by design.
  */
-export const UNIFIED_NOTES_RULES = `ONE COHERENT DOCUMENT (redundancy control):
+export const UNIFIED_NOTES_RULES = `ONE COHERENT DOCUMENT (deduplicate repetition, never information):
+- Produce comprehensive study notes representing ALL meaningful unique information in the supplied course material. Condense repeated wording, not unique content. Length reduction is never the goal; a missing fact is a failure, a slightly repeated phrase is not.
 - You are producing one coherent set of notes from the complete course material — not a stack of independent summaries. Whatever you write must fit the document that already exists.
-- Repeated source material (the instructor reviewing, restarting an explanation, answering a question by re-explaining, summarizing what was just said) is repeated EVIDENCE, not new note content.
-- Before explaining a concept, check what the notes already establish (the CONCEPT COVERAGE / existing sections you were given). If it is already DEFINED or EXPLAINED there, do not re-define or re-explain it. Write only what is genuinely new — a new example, evidence, exception, qualification, mechanism step, application, contrast, or connection — and put it where that concept's explanation lives when it belongs there.
+- Repeated source material (the instructor reviewing, restarting an explanation, answering a question by re-explaining, summarizing what was just said) is repeated EVIDENCE, not new note content — unless the repeat carries a detail the notes do not have yet, in which case capture that detail.
+- CONCEPT COVERAGE / existing sections tell you what is already ESTABLISHED, not what is "done". If a concept is already DEFINED or EXPLAINED there, do not re-define or re-explain the same content (no second definition, no second full explanation). DO add every new fact, example, mechanism, stage, step, number, unit, name, date, exception, qualification, comparison, evidence, application, consequence, or instructor emphasis about that concept — the same concept appearing again with new material is the normal case, not a duplicate. Put such additions where that concept's explanation lives when they belong there.
 - Naming an established concept again is fine (repeated terminology is expected). When readability needs it, add ONE short reminder clause ("recall that X does Y") — never a second full explanation.
 - A concept that is so far only MENTIONED gets its first real explanation the first time the source explains it substantively.
-- Never drop or thin genuinely new details just because the concept appeared earlier. Optimize for completeness with no repeated explanations — not for shorter output.
-- Before starting a new heading, ask whether the material introduces enough unique information to justify its own section. If most of it already exists elsewhere, fold the new details into that section instead.`;
+- Never drop or thin genuinely new details just because the concept appeared earlier, and never merge two different facts into one vaguer sentence. Optimize for completeness with no repeated explanations — not for shorter output. Only material whose removal loses essentially nothing may be skipped. When unsure whether something is new, include it.
+- Before starting a new heading, ask whether the material introduces enough unique information to justify its own section. If most of it already exists elsewhere, fold the new details into that section instead — fold, do not drop.`;
 
 /**
  * How to treat low-confidence source content (STT mishears, garbled slides).

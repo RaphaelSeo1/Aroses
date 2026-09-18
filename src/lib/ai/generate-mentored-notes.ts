@@ -108,7 +108,7 @@ export function buildMentoredNotesPrompt(input: MentoredNotesInput): string {
       : null,
     termLines ? `Course vocabulary (use only when relevant):\n${termLines}` : null,
     priorCoverage
-      ? `ALREADY IN THE STUDENT'S NOTES (from earlier chunks — do not re-define or re-explain these; write only what this chunk adds, with at most a one-clause reminder where needed):\n${priorCoverage}`
+      ? `ALREADY IN THE STUDENT'S NOTES (from earlier chunks — established background, not finished topics: do not re-define or re-explain the same content; DO write every new fact, example, mechanism, step, number, exception, or qualification this chunk adds about these concepts, with at most a one-clause reminder where needed):\n${priorCoverage}`
       : null,
     lessonExcerpt?.trim()
       ? `Source lesson excerpt:\n---\n${lessonExcerpt.trim()}\n---`

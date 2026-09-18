@@ -40,11 +40,10 @@ test("seed thoroughness rules override fold/skip habits so multi-page decks stay
   assert.doesNotMatch(SEED_THOROUGHNESS_RULES, /\b(virus|cell|enzyme|accounting)\b/i);
 });
 
-test("pump-time strip would drop later-slide elaborations — seed must skip that guard", () => {
-  // Early batch drafted a short definition; a later slide elaborates with
-  // mechanism + numbers. stripLinesAlreadyCovered treats the bold lead-in as
-  // a repeated definition and can wipe the elaboration — which is why seed
-  // mode must not run this guard (LiveNotesSurface seedFromDeck path).
+test("pump-time strip keeps later-slide elaborations; only exact restatements go", () => {
+  // Early batch drafted a short definition; a later slide elaborates with a
+  // qualification + mechanism + numbers. A definition-shaped lead-in that ADDS
+  // to the earlier one is new information and must survive the live guard.
   const earlier = [
     {
       sectionId: "s-early",
@@ -57,18 +56,17 @@ test("pump-time strip would drop later-slide elaborations — seed must skip tha
     "- **Alpha process:** Starts the workflow and validates the input before the beta gate runs.",
     "  - Emits a heartbeat every 5 seconds while it runs.",
     "- **Gamma rule:** Applies after the alpha process finishes; skipped on weekends.",
+    "- The alpha process validates the input and starts the workflow.",
   ].join("\n");
   const stripped = stripLinesAlreadyCovered(laterSlideDraft, earlier);
-  // The definition-shaped lead-in is stripped — proving why seed must keep
-  // the raw draft instead of running this live guard.
-  assert.doesNotMatch(
+  assert.match(
     stripped,
-    /\*\*Alpha process:\*\* Starts the workflow and validates the input before the beta gate/
+    /\*\*Alpha process:\*\* Starts the workflow and validates the input before the beta gate runs\./
   );
-  assert.ok(
-    stripped.length < laterSlideDraft.length,
-    "strip must remove something — otherwise this regression probe is invalid"
-  );
+  assert.match(stripped, /Emits a heartbeat every 5 seconds/);
+  assert.match(stripped, /Gamma rule/);
+  // The pure restatement (same tokens, reordered) is the only line removed.
+  assert.doesNotMatch(stripped, /^- The alpha process validates the input and starts the workflow\.$/m);
 });
 
 test("seed revisable ranking prefers sections overlapping the current slide batch", () => {

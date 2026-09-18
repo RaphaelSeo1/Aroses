@@ -290,6 +290,7 @@ export async function POST(request: Request, ctx: Params) {
       transcript: transcriptOnly,
       screenContent: screenContent || undefined,
       deckContent: deckForWrapUp || undefined,
+      deckPages,
       lectureTitle: title,
       durationSeconds:
         typeof session.duration_seconds === "number"

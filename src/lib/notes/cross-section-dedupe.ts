@@ -20,9 +20,18 @@ import {
   dedupeSectionLines,
   extractBoldTerms,
   extractNoteHeading,
+  lineAddsNewInformation,
   lineTokenOverlap,
   normalizeLine,
+  novelContentTokens,
   placeIncomingNoteLines,
+  tokenizeNoteText,
+} from "@/lib/live-notes/fold-note-markdown";
+
+export {
+  lineAddsNewInformation,
+  linesAreEquivalent,
+  novelContentTokens,
 } from "@/lib/live-notes/fold-note-markdown";
 import {
   conceptKey,
@@ -33,11 +42,17 @@ import {
   type NoteSectionLike,
 } from "@/lib/notes/concept-coverage";
 
-/** Token-set overlap at/above which two body lines say the same thing. */
+/**
+ * Token-set overlap at/above which two body lines MAY say the same thing.
+ * Overlap alone never removes a line: the later line must also add no new
+ * information (`lineAddsNewInformation`) — differing tokens are the fact.
+ */
 export const CROSS_SECTION_DUPLICATE_THRESHOLD = 0.72;
-/** Overlap at/above which a second definition of an already-defined concept is redundant. */
+/** Overlap at/above which a second definition of an already-defined concept MAY be redundant (same guard). */
 export const REPEATED_DEFINITION_THRESHOLD = 0.45;
 const MIN_LINE_CHARS = 12;
+/** A later line must be at least this long before substring containment counts. */
+const MIN_CONTAINMENT_CHARS = 24;
 
 export type DedupeSection = NoteSectionLike & { studentEdited?: boolean };
 
@@ -81,7 +96,9 @@ function lineRichness(line: string): number {
 
 /**
  * Is `later` a restatement of `earlier` (same fact, possibly reworded)?
- * Different numbers ⇒ different facts ⇒ false.
+ * Different numbers ⇒ different facts ⇒ false. Any new content token,
+ * number or named term in `later` ⇒ different (or richer) fact ⇒ false —
+ * a longer line that merely CONTAINS the earlier one is never a repeat.
  */
 export function isRepeatedNoteLine(earlier: string, later: string): boolean {
   if (isProtectedNoteLine(earlier) || isProtectedNoteLine(later)) return false;
@@ -91,10 +108,28 @@ export function isRepeatedNoteLine(earlier: string, later: string): boolean {
   if (na === nb) return true;
   if (isNumberedStep(earlier) || isNumberedStep(later)) return false;
   if (numbersOf(na) !== numbersOf(nb)) return false;
-  const shorter = na.length <= nb.length ? na : nb;
-  const longer = na.length <= nb.length ? nb : na;
-  if (shorter.length >= 24 && longer.includes(shorter)) return true;
+  if (lineAddsNewInformation(earlier, later)) return false;
+  if (nb.length >= MIN_CONTAINMENT_CHARS && na.includes(nb)) return true;
+  if (na.length >= MIN_CONTAINMENT_CHARS && nb.includes(na)) return true;
   return lineTokenOverlap(na, nb) >= CROSS_SECTION_DUPLICATE_THRESHOLD;
+}
+
+/**
+ * `later` restates `earlier` AND adds to it (its normalized text contains
+ * the earlier line). The union is `later` itself, so an owner may adopt it
+ * losslessly. Different numbers or worked steps never qualify.
+ */
+export function laterLineSupersedes(earlier: string, later: string): boolean {
+  if (isProtectedNoteLine(earlier) || isProtectedNoteLine(later)) return false;
+  if (isNumberedStep(earlier) || isNumberedStep(later)) return false;
+  const na = normalizeLine(earlier);
+  const nb = normalizeLine(later);
+  if (na.length < MIN_CONTAINMENT_CHARS || nb.length <= na.length) return false;
+  if (!nb.includes(na)) return false;
+  // Every number the earlier line states must survive in the later one.
+  const numsB = new Set(nb.match(/\d+(?:\.\d+)?/g) ?? []);
+  for (const n of na.match(/\d+(?:\.\d+)?/g) ?? []) if (!numsB.has(n)) return false;
+  return true;
 }
 
 /** Bold lead-in label of a bullet, if any. */
@@ -122,6 +157,9 @@ export function isRepeatedDefinition(earlier: string, later: string): boolean {
   const na = normalizeLine(earlier);
   const nb = normalizeLine(later);
   if (numbersOf(na) !== numbersOf(nb)) return false;
+  // A second definition that adds a mechanism / qualification / example is
+  // new information about the concept, not a repeat.
+  if (lineAddsNewInformation(earlier, later)) return false;
   return lineTokenOverlap(na, nb) >= REPEATED_DEFINITION_THRESHOLD;
 }
 
@@ -334,11 +372,15 @@ export function consolidateRepeatedExplanations(
         }
       }
 
-      let match: { i: number; ei: number; kind: "duplicate" | "definition" } | null =
-        null;
+      let match: {
+        i: number;
+        ei: number;
+        kind: "duplicate" | "definition" | "supersedes";
+      } | null = null;
       if (!isProtectedNoteLine(line) && normalizeLine(line).length >= MIN_LINE_CHARS) {
         for (let i = 0; i < j && !match; i++) {
           const earlierLines = lines[i]!;
+          const earlierOwner = sections[i]!;
           for (let ei = 0; ei < earlierLines.length; ei++) {
             const earlier = earlierLines[ei]!;
             if (isRepeatedNoteLine(earlier, line)) {
@@ -347,6 +389,17 @@ export function consolidateRepeatedExplanations(
             }
             if (isRepeatedDefinition(earlier, line)) {
               match = { i, ei, kind: "definition" };
+              break;
+            }
+            // Later line = earlier line + more. Only when the owner can adopt
+            // the richer line (AI-owned, same nesting) is this a lossless
+            // union; otherwise the later line stays where it is.
+            if (
+              !earlierOwner.studentEdited &&
+              bulletDepth(earlier) === bulletDepth(line) &&
+              laterLineSupersedes(earlier, line)
+            ) {
+              match = { i, ei, kind: "supersedes" };
               break;
             }
           }
@@ -363,8 +416,15 @@ export function consolidateRepeatedExplanations(
       const ownerLines = lines[match.i]!;
       const ownerLine = ownerLines[match.ei]!;
       if (!owner.studentEdited) {
-        // Keep the richer wording in the owner, then fold unique children in.
-        if (lineRichness(line) > lineRichness(ownerLine) && bulletDepth(line) === bulletDepth(ownerLine)) {
+        // Owner adopts the later wording only when that loses nothing: the
+        // later line supersedes (contains) the owner line, or the two are
+        // equivalent and the later one is richer (more bold terms / longer).
+        const upgrade =
+          bulletDepth(line) === bulletDepth(ownerLine) &&
+          (match.kind === "supersedes" ||
+            (lineRichness(line) > lineRichness(ownerLine) &&
+              !lineAddsNewInformation(line, ownerLine)));
+        if (upgrade) {
           ownerLines[match.ei] = line;
         }
         const children = group.slice(1);
@@ -389,7 +449,7 @@ export function consolidateRepeatedExplanations(
       const following = laterLines[next];
       if (
         label &&
-        (match.kind === "definition" || isDefinitionLine(line, label)) &&
+        (match.kind !== "duplicate" || isDefinitionLine(line, label)) &&
         following !== undefined &&
         startsWithDanglingReferent(following) &&
         !pointers.has(conceptKey(label))
@@ -534,6 +594,15 @@ export function findSemanticTrimCandidates(
       for (let i = 0; i < lines.length; i++) {
         const l = lines[i]!;
         if (isProtectedNoteLine(l) || !lineMentionsConcept(l, c.key)) continue;
+        // Only lines that could plausibly re-explain the owner's material are
+        // offered: a definition shape, or real wording overlap with an owner
+        // line. Lines that merely mention the concept while stating their own
+        // fact (numbers, steps, examples) are not the model's to judge.
+        if (isNumberedStep(l)) continue;
+        const resembles = ownerLines.some(
+          (o) => lineTokenOverlap(normalizeLine(o), normalizeLine(l)) >= 0.35
+        );
+        if (!isDefinitionLine(l, c.label) && !resembles) continue;
         if (isDefinitionLine(l, c.label) || normalizeLine(l).length >= 60) {
           explanatory = true;
         }
@@ -562,6 +631,18 @@ export function findSemanticTrimCandidates(
   return out;
 }
 
+/**
+ * Job description for the bounded model pass. Its only job is to find later
+ * lines whose removal loses effectively nothing — never to shorten notes.
+ */
+export const REPEATED_EXPLANATIONS_JOB_RULES = `3) REPEATED EXPLANATIONS — Given CANDIDATE concepts with an OWNER section (first real explanation) and LATER sections whose numbered lines mention the same concept: identify ONLY the later lines whose removal produces effectively ZERO information loss — the reader would learn nothing from them that the OWNER lines do not already say. Judge by MEANING, not wording. Before dropping a line, run this checklist against the owner lines; if ANY answer is "yes, and the owner does not have it", KEEP the whole line:
+   - a fact the owner lacks? - a distinct example or case? - a different angle, analogy, or framing that aids understanding? - a mechanism / how-it-works step? - a qualification, condition, exception, or limit? - a number, unit, name, date, stage, relationship, comparison, or distinction? - instructor context (emphasis, exam relevance, what is coming next)?
+   Same concept is NOT the same content. A line that restates a little AND adds something stays. Lines that only NAME the concept in passing stay. When uncertain, keep — minor redundancy is acceptable, lost information is not. Never drop owner lines; never drop lines you were not shown. Length reduction is not a goal.`;
+
+/** User-prompt instruction for the bounded semantic trim call. */
+export const SEMANTIC_TRIM_INSTRUCTION =
+  'Return the JSON now. Drop ONLY later line numbers whose removal loses effectively zero information — everything they say is already in the OWNER lines. Apply the job-3 checklist per line (unique fact? distinct example? different angle? mechanism? qualification/exception? number/name/stage/relationship/distinction? instructor context?): if any item is unique to the later line, keep that entire line. Same concept is not the same content. When uncertain, keep. Return { "trims": [] } when nothing is a pure repeat. Output the JSON object only — no reasoning, no prose.';
+
 export function formatSemanticTrimCandidates(
   candidates: SemanticTrimCandidate[]
 ): string {
@@ -585,6 +666,39 @@ export function formatSemanticTrimCandidates(
 export type SemanticTrim = { sectionId: string; dropLineNumbers: number[] };
 
 /**
+ * First balanced `{…}` object in a model reply, tolerant of code fences and
+ * of prose ("Reasoning: …") before or after the JSON. Null when none parses.
+ */
+function extractFirstJsonObject(raw: string): unknown | null {
+  const text = raw.replace(/```(?:json)?/gi, "").trim();
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (ch === "\\") i += 1;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1)) as unknown;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Parse `{ "trims": [{ "sectionId", "dropLineNumbers": [n, …] }] }`.
  * Only section ids and line numbers that were actually offered are accepted —
  * the model cannot delete anything it was not shown.
@@ -593,17 +707,8 @@ export function parseSemanticTrimJson(
   raw: string,
   candidates: SemanticTrimCandidate[]
 ): SemanticTrim[] {
-  const text = raw
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-  let parsed: { trims?: unknown };
-  try {
-    parsed = JSON.parse(text) as { trims?: unknown };
-  } catch {
-    return [];
-  }
+  const parsed = extractFirstJsonObject(raw) as { trims?: unknown } | null;
+  if (!parsed) return [];
   if (!Array.isArray(parsed.trims)) return [];
   const offered = new Map<string, Set<number>>();
   for (const c of candidates) {
@@ -633,16 +738,72 @@ export function parseSemanticTrimJson(
   }));
 }
 
+/** Above this share of novel content tokens a line clearly states its own fact. */
+const SEMANTIC_TRIM_MAX_NOVEL_RATIO = 0.5;
+
+/**
+ * Deterministic veto for a model-proposed trim: the later line clearly adds
+ * information when it carries a number or named term absent from every
+ * owner line, or when at least half of its content tokens appear in no
+ * owner line. Pure rewordings (synonyms, reordering) pass through.
+ */
+export function semanticTrimClearlyLosesInformation(
+  ownerLines: string[],
+  laterLine: string
+): boolean {
+  if (ownerLines.length === 0) return true;
+  const ownerJoined = ownerLines.join(" ");
+  const nb = normalizeLine(laterLine);
+  const ownerNums = new Set(normalizeLine(ownerJoined).match(/\d+(?:\.\d+)?/g) ?? []);
+  for (const n of nb.match(/\d+(?:\.\d+)?/g) ?? []) if (!ownerNums.has(n)) return true;
+  const novel = novelContentTokens(ownerJoined, laterLine);
+  if (novel.length === 0) return false;
+  const novelSet = new Set(novel);
+  if (capitalizedTermsOf(laterLine).some((c) => novelSet.has(c))) return true;
+  const total = tokenizeNoteText(nb).length;
+  return novel.length / Math.max(total, 1) >= SEMANTIC_TRIM_MAX_NOVEL_RATIO;
+}
+
+function capitalizedTermsOf(raw: string): string[] {
+  const body = raw
+    .trim()
+    .replace(/^\s*(?:[-*]|\d+\.)\s+/, "")
+    .replace(/\*\*/g, "")
+    .trim();
+  const words = body.split(/\s+/);
+  const out: string[] = [];
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i]!.replace(/^[("'“‘]+|[)"'”’.,;:!?]+$/g, "");
+    if (/^[A-Z][A-Za-z0-9-]{2,}$/.test(w)) out.push(...tokenizeNoteText(w));
+  }
+  return out;
+}
+
 /**
  * Apply accepted trims. A trim that would leave a section with no body is
  * skipped (pure duplicates are the deterministic pass's job, not the model's).
+ * When `candidates` are supplied, a line the model asked to drop is kept
+ * anyway if it clearly adds information beyond the owner lines it was
+ * compared against (`semanticTrimClearlyLosesInformation`).
  */
 export function applySemanticTrims(
   sections: DedupeSection[],
-  trims: SemanticTrim[]
+  trims: SemanticTrim[],
+  candidates?: SemanticTrimCandidate[]
 ): { sections: DedupeSection[]; changed: boolean } {
   if (trims.length === 0) return { sections, changed: false };
   const byId = new Map(trims.map((t) => [t.sectionId, new Set(t.dropLineNumbers)]));
+  // sectionId → line number → owner lines the model compared it with.
+  const ownersFor = new Map<string, Map<number, string[]>>();
+  for (const c of candidates ?? []) {
+    for (const l of c.later) {
+      const perLine = ownersFor.get(l.sectionId) ?? new Map<number, string[]>();
+      for (const x of l.lines) {
+        perLine.set(x.n, [...(perLine.get(x.n) ?? []), ...c.ownerLines]);
+      }
+      ownersFor.set(l.sectionId, perLine);
+    }
+  }
   let changed = false;
   const next = sections.map((s) => {
     const drop = byId.get(s.sectionId);
@@ -650,7 +811,12 @@ export function applySemanticTrims(
     const lines = s.markdown.split("\n");
     const kept = lines.filter((l, i) => {
       if (!drop.has(i + 1)) return true;
-      return isProtectedNoteLine(l);
+      if (isProtectedNoteLine(l)) return true;
+      if (candidates) {
+        const owners = ownersFor.get(s.sectionId)?.get(i + 1) ?? [];
+        if (semanticTrimClearlyLosesInformation(owners, l)) return true;
+      }
+      return false;
     });
     if (bodyLineCount(kept) === 0) return s;
     if (kept.length === lines.length) return s;

@@ -114,9 +114,8 @@ export async function POST(_request: Request, ctx: Params) {
     /* migration not applied */
   }
 
-  const deckContent = formatDeckForWrapUp(
-    await loadSessionDeckPages(supabase, sessionId)
-  );
+  const deckPages = await loadSessionDeckPages(supabase, sessionId);
+  const deckContent = formatDeckForWrapUp(deckPages);
 
   try {
     const next = await runLiveNotesWrapUp({
@@ -124,6 +123,7 @@ export async function POST(_request: Request, ctx: Params) {
       transcript: transcriptOnly,
       screenContent: screenContent || undefined,
       deckContent: deckContent || undefined,
+      deckPages,
       lectureTitle: title,
       durationSeconds:
         typeof session.duration_seconds === "number"
