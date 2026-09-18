@@ -580,13 +580,16 @@ export function LiveNotesSurface({
         const allLive = writer.listSynthesisSections(200);
         const live = allLive.find((s) => s.sectionId === sectionId);
         if (!live) return;
-        // Cross-section guard: a fragment for this section must not re-explain
-        // something another section already establishes (same fact, any
-        // wording). Lines carrying new facts/numbers pass through.
-        const cleaned = stripLinesAlreadyCovered(
-          sanitized,
-          allLive.filter((s) => s.sectionId !== sectionId)
-        );
+        // Cross-section guard (live speech only): drop restatements of facts
+        // another section already establishes. Skip during slide seed — the
+        // same concept often gains new mechanisms/examples across pages, and
+        // stripping those left multi-page decks as thin 1–2 page notes.
+        const cleaned = seedFromDeck
+          ? sanitized
+          : stripLinesAlreadyCovered(
+              sanitized,
+              allLive.filter((s) => s.sectionId !== sectionId)
+            );
         if (!cleaned.trim()) return;
         const next = applySurgicalNoteRevision(live.markdown, cleaned);
         const finalMd = dedupeSectionLines(next.markdown);
@@ -660,9 +663,12 @@ export function LiveNotesSurface({
             await applyBufferedRevision(action.sectionId, action.markdown);
             continue;
           }
-          // New section: drop lines that merely restate what other sections
-          // already say; skip the section entirely if nothing new remains.
-          const fresh = stripLinesAlreadyCovered(action.markdown, liveSections);
+          // New section: during live speech, drop pure restatements. During
+          // slide seed, keep the model's draft intact (seed prompt already
+          // handles revisiting vs. new facets).
+          const fresh = seedFromDeck
+            ? action.markdown
+            : stripLinesAlreadyCovered(action.markdown, liveSections);
           const hasBody = fresh
             .split("\n")
             .some((l) => l.trim() && !/^#{1,3}\s/.test(l.trim()));

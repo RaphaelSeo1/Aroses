@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { voiceRules } from "@/lib/ai/study-generation";
 import {
   DEFAULT_NOTES_OUTLINE_RULES,
+  SEED_THOROUGHNESS_RULES,
   SOURCE_CONFIDENCE_RULES,
   TUTOR_NOTES_QUALITY_RULES,
   UNIFIED_NOTES_RULES,
@@ -181,30 +182,37 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 @@summary
 <updated rolling summary, max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown. It is a CONCEPT STATE record, not prose: "TOPICS: <topic names in order>. DEFINED: <concept — 3-6 word gist>; … EXPLAINED: <concept — gist>; … MENTIONED ONLY: <concepts named but not yet explained>. OPEN: <unresolved questions / things the lecturer said are coming later>." Merge the previous summary with this slice; re-compress aggressively; never drop a concept from DEFINED/EXPLAINED once it is there.>`;
 
+/**
+ * Seed-mode overrides: slide decks must stay thorough. Live redundancy rules
+ * (fold / skip restatements) otherwise turn a multi-page deck into a thin
+ * synopsis once early batches populate CONCEPT COVERAGE.
+ */
+export { SEED_THOROUGHNESS_RULES };
+
 const SEED_SYSTEM = `You are drafting study notes from a pre-uploaded lecture slide deck BEFORE any speech has been transcribed. There is no lecture audio yet.
 
 ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
+${SEED_THOROUGHNESS_RULES}
+
 SEED RULES (override live-lecture habits):
 - Source of truth is DECK SLIDES only. Cover teachable content on those pages. Do not invent explanations.
 - Do NOT use outside/textbook knowledge. If a slide is sparse, write a short heading + the bullets that are actually there.
-- You receive an OUTLINE of sections already drafted from earlier batches. If this batch continues or restates an already-drafted topic, @@revise that sectionId with ONLY the new lines — do not @@append a second copy.
-- @@append only for genuinely NEW topics that have no matching outline entry.
-- Recap / summary / review / "key concepts" / "reference only" / agenda / outline slides: NEVER create new sections. Fold any genuinely new line into the matching existing section via @@revise; otherwise leave @@append empty and emit no revise body.
+- You receive an OUTLINE of sections already drafted from earlier batches. Continue those topics via @@revise with new lines; do not @@append a second copy of the same topic heading.
+- @@append for genuinely NEW topics or distinct facets that have no matching outline entry.
 - Slides with no extractable text: emit nothing after the markers (empty @@append). Never write sentences about the slides, extraction, OCR, or future updates.
 - Structure with "## " headings per topic (not automatically one heading per slide). Include formulas, definitions, tables, and load-bearing labels from the slides.
 - @@thought: one short line that you are drafting from the uploaded slides (mention slide numbers if present).
 - @@summary: concept-state record of what has been drafted so far (previous summary + these slides).
-- CONCEPT COVERAGE lists what earlier batches already define/explain. A slide that restates one of those concepts adds nothing unless it carries a new fact; in that case @@revise the owning section with only that fact.
 
 OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
 @@thought <one short sentence>
 @@revise <sectionId>
 <ONLY new lines for an already-drafted topic; omit the marker when unused; you MAY emit multiple @@revise blocks>
 @@append
-<markdown for NEW topics only; leave the body empty when everything folded into @@revise or the slides had nothing to draft>
+<markdown for NEW topics / distinct facets; leave the body empty only when every teachable line on these slides is already in the notes or the slides had nothing to draft>
 @@summary
 <updated rolling summary, max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown, in the same CONCEPT STATE format: "TOPICS: …. DEFINED: <concept — gist>; … EXPLAINED: …. MENTIONED ONLY: …. OPEN: …">`;
 
@@ -359,7 +367,9 @@ export async function* streamLiveLectureNotes(input: {
     maxChars: MAX_CONCEPT_COVERAGE_CHARS,
   });
   const coveragePrompt = coverageBlock
-    ? `CONCEPT COVERAGE (what the notes ALREADY establish — do not re-define or re-explain these; add only genuinely new facts, and put them in the owning [sectionId] via @@revise when they belong there):\n${coverageBlock}`
+    ? mode === "seed"
+      ? `CONCEPT COVERAGE (already drafted — do NOT rewrite these definitions verbatim; still capture every NEW fact, formula, example, step, number, distinction, table cell, or mechanism from THESE slides via @@revise into the owning [sectionId], or @@append a distinct facet heading when substantial):\n${coverageBlock}`
+      : `CONCEPT COVERAGE (what the notes ALREADY establish — do not re-define or re-explain these; add only genuinely new facts, and put them in the owning [sectionId] via @@revise when they belong there):\n${coverageBlock}`
     : null;
 
   const userPrompt =
@@ -372,15 +382,15 @@ export async function* streamLiveLectureNotes(input: {
             ? `ROLLING SUMMARY OF TOPICS DRAFTED SO FAR:\n${summary}`
             : "ROLLING SUMMARY OF TOPICS DRAFTED SO FAR: (none yet)",
           outlineBlock
-            ? `ALREADY-DRAFTED SECTION OUTLINE (if this batch continues/restates one of these topics, @@revise that id with only new lines; never @@append a duplicate):\n${outlineBlock}`
+            ? `ALREADY-DRAFTED SECTION OUTLINE (if this batch continues one of these topics, @@revise that id with only the NEW lines from these slides; @@append a distinct facet when needed; never @@append a duplicate of the same heading):\n${outlineBlock}`
             : null,
           coveragePrompt,
           sectionsBlock
             ? `FOCUSED SECTION BODIES (full markdown for revise targets):\n\n${sectionsBlock}`
             : null,
-          `DECK SLIDES (draft study notes covering teachable content on these pages; no outside knowledge):\n${deckText || "(no extractable text on these slides)"}`,
-          "NO SPEECH YET. Draft from the slides only. Recap/outline/review slides: revise existing topics or emit empty bodies — never new duplicate sections. Empty slides: emit empty @@append.",
-          "\nEmit the protocol now. @@revise existing topics when matched; @@append ONLY for new topics. Leave bodies empty when there is nothing to add.",
+          `DECK SLIDES (draft thorough study notes covering teachable content on EVERY page below; no outside knowledge):\n${deckText || "(no extractable text on these slides)"}`,
+          "NO SPEECH YET. Draft from the slides only. Empty / logistics-only slides: empty @@append. Review/key-concept slides: capture uncovered teachable lines. Do not thin a multi-page deck into a short synopsis.",
+          "\nEmit the protocol now. @@revise matched topics with every new teachable line from these slides; @@append for new topics/facets. Leave bodies empty ONLY when every teachable line on these pages is already drafted.",
         ]
           .filter(Boolean)
           .join("\n\n")
@@ -417,7 +427,9 @@ export async function* streamLiveLectureNotes(input: {
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
   const stream = anthropic.messages.stream({
     model: MODEL,
-    max_tokens: mode === "seed" ? 5_000 : 4_000,
+    // Seed batches cover up to ~6 dense slides — need enough room to draft
+    // them thoroughly. Live slices stay tighter.
+    max_tokens: mode === "seed" ? 8_000 : 4_000,
     temperature: 0.35,
     system: liveNotesSystem(input.noteInstruction, mode),
     messages: [{ role: "user", content: userPrompt }],

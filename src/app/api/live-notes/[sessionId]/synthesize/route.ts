@@ -6,7 +6,7 @@ import {
   type RevisableSection,
 } from "@/lib/ai/live-lecture-notes";
 import { clampNoteInstruction } from "@/lib/ai/note-instruction";
-import { pickRelevantSlidePages } from "@/lib/live-notes/pick-relevant-slide-pages";
+import { pickRelevantSlidePages, pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-pages";
 import {
   isSlideDeckSchemaError,
   loadSessionDeckPages,
@@ -286,6 +286,31 @@ export async function POST(request: Request, ctx: Params) {
     ? seedBatch!.text
     : liveDeckPick?.text || undefined;
 
+  // Seed: re-rank focused sections by overlap with THIS batch's slide text.
+  // The client previously sent only the first N sections in document order,
+  // so later pages could not @@revise the matching drafted topics.
+  let seedRevisable = revisable;
+  if (seedFromDeck && seedBatch && existingSections.length > 0) {
+    const ranked = pickRevisableByTranscript(
+      existingSections,
+      seedBatch.text,
+      MAX_REVISABLE_SECTIONS
+    );
+    const excerptById = new Map<string, string>();
+    for (const s of existingSections) {
+      if (s.transcriptExcerpt) excerptById.set(s.sectionId, s.transcriptExcerpt);
+    }
+    for (const s of revisable) {
+      if (s.transcriptExcerpt) excerptById.set(s.sectionId, s.transcriptExcerpt);
+    }
+    seedRevisable = ranked.map((s) => ({
+      sectionId: s.sectionId,
+      markdown: s.markdown,
+      studentEdited: s.studentEdited,
+      transcriptExcerpt: excerptById.get(s.sectionId),
+    }));
+  }
+
   // Pull sections seeded from the matched deck pages into the focused set.
   if (liveDeckPick && liveDeckPick.pageNums.length > 0) {
     const excerptMap = new Map<string, string>();
@@ -348,8 +373,8 @@ export async function POST(request: Request, ctx: Params) {
           recentHeadings,
           existingHeadings,
           existingSections,
-          // Seed batches may @@revise prior drafts; do not force empty.
-          revisable,
+          // Seed: use slide-overlap ranking so later batches revise the right topics.
+          revisable: seedFromDeck ? seedRevisable : revisable,
           appendSectionId,
           lectureTitle,
           userId: user.id,

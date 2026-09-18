@@ -50,6 +50,19 @@ export const SOURCE_CONFIDENCE_RULES = `SOURCE CONFIDENCE (imperfect transcripts
 - When you remain unsure: omit the questionable detail, or — if it is load-bearing — keep it visible as "- **Open question:** heard "<as transcribed>" — unclear term/number." Never fabricate a plausible-looking term.
 - Represent what THIS course taught (its wording, order, and emphasis). Do not drift into a generic textbook chapter.`;
 
+/**
+ * Slide-seed overrides. Live redundancy rules (fold / skip restatements)
+ * otherwise collapse a multi-page deck into a thin synopsis once early
+ * batches populate concept coverage.
+ */
+export const SEED_THOROUGHNESS_RULES = `SEED COMPLETENESS (overrides the "fold / skip restatement" habits above for this call):
+- Thin notes are a failure. Cover the teachable content on EVERY page in this batch — definitions, formulas, tables, numbered steps, numbers/units, named examples, distinctions, and load-bearing labels that appear on the slides.
+- CONCEPT COVERAGE / earlier sections only block rewriting the SAME definition or the SAME bullet already captured. They do NOT license skipping a later slide that elaborates, adds a mechanism, example, exception, formula, table, or new facet of a known concept.
+- Prefer @@revise the owning section with ONLY the new lines when this batch continues an already-drafted topic. @@append a new "## " heading when the material is a distinct facet/subtopic or would make the existing section unreadable if folded in.
+- Pure agenda / title / "today we will cover" / logistics slides with no teachable bullets: leave bodies empty.
+- "Key concepts" / summary / review slides that still list definitions, formulas, or facts: capture every line not already in the notes (@@revise matches; @@append only when no match). Do not blank an entire review slide that still has uncovered teachable lines.
+- Never reduce a multi-page deck to a one-page synopsis. Completeness of slide content wins over brevity.`;
+
 export const TUTOR_NOTES_JSON_SHAPE = `{
   "emoji"?: string,
   "heading": string,
