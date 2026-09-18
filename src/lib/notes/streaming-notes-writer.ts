@@ -868,6 +868,22 @@ export class StreamingNotesWriter {
     return changed;
   }
 
+  /** Doc-level attrs (RoseDocument metadata persisted with the notes JSON). */
+  getDocAttrs(): Record<string, unknown> {
+    if (this.editor.isDestroyed) return {};
+    return (this.editor.state.doc.attrs ?? {}) as Record<string, unknown>;
+  }
+
+  /** Merge doc-level attrs; saved with the next notes autosave. */
+  setDocAttrs(attrs: Record<string, unknown>): boolean {
+    if (this.destroyed || this.editor.isDestroyed) return false;
+    try {
+      return this.editor.commands.updateAttributes("doc", attrs);
+    } catch {
+      return false;
+    }
+  }
+
   /** Remove doubled / trailing section dividers left behind by a removal. */
   private collapseDividers(): void {
     if (this.destroyed || this.editor.isDestroyed) return;

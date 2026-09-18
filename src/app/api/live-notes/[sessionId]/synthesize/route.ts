@@ -13,6 +13,13 @@ import {
   takeDeckSeedBatch,
 } from "@/lib/live-notes/slide-pages";
 import { sectionsOverlappingDeckPages } from "@/lib/live-notes/fold-note-markdown";
+import { deckPagesToSourceUnits } from "@/lib/notes/source-coverage";
+import {
+  buildSourceCoverageLedger,
+  formatSourceCoverageAudit,
+  repairSourceCoverage,
+  summarizeSourceCoverageAudit,
+} from "@/lib/notes/source-coverage-ledger";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -28,6 +35,8 @@ const MAX_SECTION_CHARS = 8_000;
 const MAX_EXCERPT_CHARS = 3_000;
 const MAX_EXISTING_SECTIONS = 200;
 const MAX_EXISTING_NOTES_CHARS = 100_000;
+/** Per-section cap for the coverage audit only (no model sees this text). */
+const MAX_AUDIT_SECTION_CHARS = 60_000;
 /**
  * Hard per-session cap on Haiku note calls (runaway guard). The client
  * fires roughly every ~45–60s of continuous speech (5s heartbeat gated on
@@ -90,8 +99,11 @@ export async function POST(request: Request, ctx: Params) {
     screenContext?: unknown;
     noteInstruction?: unknown;
     seedFromDeck?: unknown;
+    coverageChecked?: unknown;
   };
   const seedFromDeck = b.seedFromDeck === true;
+  /** Deck already audited + repaired earlier (persisted on the notes doc); skip re-auditing on reload. */
+  const coverageChecked = b.coverageChecked === true;
   if (
     !seedFromDeck &&
     (typeof b.newSegmentText !== "string" || !b.newSegmentText.trim())
@@ -126,6 +138,11 @@ export async function POST(request: Request, ctx: Params) {
         }))
     : [];
   let existingChars = 0;
+  /**
+   * Untruncated copy for the slide-coverage audit: a section cut at
+   * MAX_SECTION_CHARS would hide its own tail and get that tail re-copied in.
+   */
+  const fullSections: Array<{ sectionId: string; markdown: string; studentEdited: boolean }> = [];
   const existingSections = Array.isArray(b.existingSections)
     ? b.existingSections
         .filter(
@@ -144,6 +161,11 @@ export async function POST(request: Request, ctx: Params) {
         )
         .slice(0, MAX_EXISTING_SECTIONS)
         .flatMap((s) => {
+          fullSections.push({
+            sectionId: s.sectionId,
+            markdown: s.markdown.slice(0, MAX_AUDIT_SECTION_CHARS),
+            studentEdited: s.studentEdited === true,
+          });
           const remaining = MAX_EXISTING_NOTES_CHARS - existingChars;
           if (remaining <= 0) return [];
           const markdown = s.markdown.slice(0, Math.min(MAX_SECTION_CHARS, remaining));
@@ -230,7 +252,35 @@ export async function POST(request: Request, ctx: Params) {
     ? takeDeckSeedBatch(deckPages, seededThrough)
     : null;
   if (seedFromDeck && (!seedBatch || seedBatch.pages.length === 0)) {
-    return NextResponse.json({ seedDone: true });
+    // Every page is drafted. Audit the deck sentence-by-sentence against the
+    // client's current sections and hand back deterministic repairs (source
+    // wording copied into the best AI section, or a new section). No model
+    // call: a model "repair" pass was measured to paraphrase away the slide's
+    // terms, duplicate lines the notes already had, and add outside
+    // knowledge — the opposite of source fidelity.
+    if (coverageChecked || deckPages.length === 0) {
+      return NextResponse.json({ seedDone: true });
+    }
+    const ledger = buildSourceCoverageLedger(deckPagesToSourceUnits(deckPages));
+    const result = repairSourceCoverage(ledger, fullSections);
+    console.info(
+      `[live-notes seed] source coverage for ${sessionId}: ${formatSourceCoverageAudit(result.before)}` +
+        (result.repairs.length > 0
+          ? ` → repaired (${result.repairs.length} op(s), ${result.passes} pass(es)): ${formatSourceCoverageAudit(result.after)}`
+          : "")
+    );
+    return NextResponse.json({
+      seedDone: true,
+      pageCount: deckPages.length,
+      coverage: summarizeSourceCoverageAudit(result.before),
+      coverageAfterRepair: summarizeSourceCoverageAudit(result.after),
+      repairs: result.repairs.map((r) => ({
+        kind: r.kind,
+        sectionId: r.sectionId,
+        markdown: r.markdown,
+        unitIds: r.unitIds,
+      })),
+    });
   }
 
   const calls =
@@ -433,6 +483,9 @@ export async function POST(request: Request, ctx: Params) {
           appendSectionId,
           ...(seedFromDeck && seedBatch
             ? {
+                // The client keeps calling with seedFromDeck while pages
+                // remain; the final call (no pages left) returns the JSON
+                // coverage audit + deterministic repairs instead of a stream.
                 seedRemaining: seedBatch.remaining,
                 seededThrough: seedBatch.throughPage,
                 seedPageFrom,

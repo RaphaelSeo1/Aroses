@@ -8,6 +8,7 @@ import {
   dedupeSectionLines,
   findDuplicateTopicGroups,
   findUncoveredLines,
+  headingsAreSameTitle,
   isCorrectedNoteLine,
   lineAddsNewInformation,
   mergeDuplicateGroup,
@@ -25,6 +26,7 @@ import {
   parseSemanticTrimJson,
   REPEATED_EXPLANATIONS_JOB_RULES,
   SEMANTIC_TRIM_INSTRUCTION,
+  semanticTrimClearlyLosesInformation,
   stripEditorialNavigationLines,
   stripLinesAlreadyCovered,
 } from "./cross-section-dedupe";
@@ -594,4 +596,94 @@ test("prompt text: coverage means 'don't repeat background', never 'write less'"
     assert.match(s, /established background, not finished topics/, file);
     assert.match(s, /DO (write|capture) every new fact/, file);
   }
+});
+
+// ── Formula / definition guards (measured failures on a dense chemistry deck) ─
+
+test("formulas: different equations are different facts even when their tokens match", () => {
+  // Variables are single letters the tokenizer drops; only the math signature tells these apart.
+  assert.equal(
+    lineAddsNewInformation("- $\\Delta G° = -RT \\ln K$", "  $$\\Delta G = \\Delta G° + RT \\ln Q$$"),
+    true
+  );
+  assert.equal(
+    lineAddsNewInformation(
+      "- The rate law is $\\text{rate} = k[\\text{NO}]^2[\\text{O}_2]$.",
+      "- The overall rate law is $\\text{rate} = k[\\text{NO}]^2[\\text{Br}_2]$."
+    ),
+    true
+  );
+  // Same equation, different wrapping / emphasis: still a repeat.
+  assert.equal(
+    lineAddsNewInformation("- ΔG = ΔH − TΔS", "**ΔG = ΔH − TΔS**."),
+    false
+  );
+  assert.equal(
+    isRepeatedNoteLine("- $\\Delta G° = -RT \\ln K$ at equilibrium.", "- At equilibrium $\\Delta G = \\Delta G° + RT \\ln Q$ holds."),
+    false
+  );
+});
+
+test("semantic trim veto: new equation, concept definition, or a third novel content is never zero-loss", () => {
+  const owners = [
+    "The **rate-determining step** (RDS) is the slowest elementary step in a mechanism; it limits the overall rate.",
+    "- **Heterogeneous catalysts** are in a different phase from the reactants; the mechanism involves adsorption, reaction, and desorption.",
+  ];
+  const definition =
+    "A **mechanism** is the sequence of elementary steps that describes how a reaction proceeds at the molecular level.";
+  assert.equal(semanticTrimClearlyLosesInformation(owners, definition, "mechanism"), true);
+  assert.equal(semanticTrimClearlyLosesInformation(owners, definition), true); // ≥ 1/3 novel tokens
+  assert.equal(
+    semanticTrimClearlyLosesInformation(
+      ["A **rate law** expresses the rate as a function of concentrations; example: rate = k[NO]²[O₂]."],
+      "The overall rate law is rate = k[NO]²[Br₂], consistent with experiment."
+    ),
+    true
+  );
+  // Possessive names count as named terms ("Hess's law").
+  assert.equal(
+    semanticTrimClearlyLosesInformation(
+      ["**Enthalpy** is defined as H = U + PV; at constant pressure ΔH = qp."],
+      "Because enthalpy is a **state function**, the change for an overall reaction is the sum of its steps. This is **Hess's law**."
+    ),
+    true
+  );
+  // A pure rewording still passes through to the model's judgement.
+  assert.equal(
+    semanticTrimClearlyLosesInformation(
+      ["- **Osmosis** is the diffusion of water across a selectively permeable membrane."],
+      "- Osmosis: water diffuses across a selectively permeable membrane."
+    ),
+    false
+  );
+});
+
+test("same-topic merge keeps a facet section's heading as a sub-heading (organization merged, structure kept)", () => {
+  const keep = {
+    sectionId: "k",
+    markdown: "## Price Elasticity of Demand\n- **PED** measures the % change in quantity demanded for a 1% change in price.",
+  };
+  const absorb = [
+    {
+      sectionId: "d",
+      markdown:
+        "## Determinants of Price Elasticity\n- **Substitutes:** more substitutes → more elastic (butter vs. margarine).\n- **Time horizon:** gasoline ≈ 0.25 short run, ≈ 0.6 over 5+ years.",
+    },
+    {
+      sectionId: "o",
+      markdown: "## Price elasticity of demand (overview)\n- PED measures the percentage change in quantity demanded for a 1% price change.",
+    },
+  ];
+  assert.equal(headingsAreSameTitle(keep.markdown.split("\n")[0]!.slice(3), "Price elasticity of demand (overview)"), true);
+  assert.equal(headingsAreSameTitle("Price Elasticity of Demand", "Determinants of Price Elasticity"), false);
+  const groups = findDuplicateTopicGroups([keep, ...absorb]);
+  assert.equal(groups.length, 1);
+  const merged = mergeDuplicateGroup(groups[0]!);
+  assert.match(merged.markdown, /^### Determinants of Price Elasticity$/m);
+  assert.match(merged.markdown, /butter vs\. margarine/);
+  assert.match(merged.markdown, /0\.6 over 5\+ years/);
+  // The reworded same-title copy folds in without a sub-heading or a second definition.
+  assert.doesNotMatch(merged.markdown, /^### Price elasticity of demand/m);
+  assert.equal((merged.markdown.match(/1% (?:change in )?price/g) ?? []).length, 1);
+  assert.deepEqual(merged.removeSectionIds.sort(), ["d", "o"]);
 });

@@ -70,6 +70,21 @@ export function collectAiNoteSections(
     .filter((s) => s.markdown.trim().length > 0);
 }
 
+/**
+ * Markdown of everything that is NOT a fully-AI section: student-authored or
+ * student-edited sections and blocks without a section id. Counts as present
+ * for source-coverage checks, but is never a repair target.
+ */
+export function collectNonAiNoteMarkdown(notesJson: unknown): string {
+  const aiIds = new Set(collectAiNoteSections(notesJson).map((s) => s.sectionId));
+  const nodes = topLevelNodes(notesJson).filter((node) => {
+    const sid = sectionIdOf(node);
+    if (sid === LECTURE_SUMMARY_SECTION_ID) return false;
+    return !sid || !aiIds.has(sid);
+  });
+  return nodes.length > 0 ? noteNodesToMarkdown(nodes).trim() : "";
+}
+
 /** Markdown for the Lecture summary / tutor-style recap, if present. */
 export function extractLectureSummaryMarkdown(
   notesJson: unknown

@@ -21,6 +21,7 @@ import {
   extractBoldTerms,
   extractNoteHeading,
   lineAddsNewInformation,
+  lineStatesNewMath,
   lineTokenOverlap,
   normalizeLine,
   novelContentTokens,
@@ -763,24 +764,42 @@ export function parseSemanticTrimJson(
   }));
 }
 
-/** Above this share of novel content tokens a line clearly states its own fact. */
-const SEMANTIC_TRIM_MAX_NOVEL_RATIO = 0.5;
+/**
+ * Above this share of novel content tokens a line clearly states its own
+ * fact. A third of a line being new to the owner is not "zero information
+ * loss" (measured: a 0.5 ceiling let a concept's actual definition through).
+ */
+const SEMANTIC_TRIM_MAX_NOVEL_RATIO = 0.34;
 
 /**
  * Deterministic veto for a model-proposed trim: the later line clearly adds
- * information when it carries a number or named term absent from every
- * owner line, or when at least half of its content tokens appear in no
+ * information when it carries a number, named term, or equation absent from
+ * every owner line, is the concept's definition while the owner only uses
+ * the term, or when a third or more of its content tokens appear in no
  * owner line. Pure rewordings (synonyms, reordering) pass through.
  */
 export function semanticTrimClearlyLosesInformation(
   ownerLines: string[],
-  laterLine: string
+  laterLine: string,
+  label?: string
 ): boolean {
   if (ownerLines.length === 0) return true;
   const ownerJoined = ownerLines.join(" ");
   const nb = normalizeLine(laterLine);
   const ownerNums = new Set(numberTokens(normalizeLine(ownerJoined)));
   for (const n of numberTokens(nb)) if (!ownerNums.has(n)) return true;
+  // An equation the owner lines do not state ("rate = k[NO]²[Br₂]" vs the
+  // owner's "rate = k[NO]²[O₂]") is a different fact.
+  if (lineStatesNewMath(ownerLines, laterLine)) return true;
+  // The concept's actual definition is never a repeat of lines that only
+  // use the term ("…the slowest step in a mechanism" does not define one).
+  if (
+    label &&
+    isDefinitionLine(laterLine, label) &&
+    !ownerLines.some((o) => isDefinitionLine(o, label))
+  ) {
+    return true;
+  }
   // A negated line is never a repeat of owner lines that carry no negation.
   if (/\b(?:not|no|never|cannot|\w+n t)\b/.test(nb) && !/\b(?:not|no|never|cannot|\w+n t)\b/.test(normalizeLine(ownerJoined))) {
     return true;
@@ -803,7 +822,8 @@ function capitalizedTermsOf(raw: string): string[] {
   const out: string[] = [];
   for (let i = 1; i < words.length; i++) {
     const w = words[i]!.replace(/^[("'“‘]+|[)"'”’.,;:!?]+$/g, "");
-    if (/^[A-Z][A-Za-z0-9-]{2,}$/.test(w)) out.push(...tokenizeNoteText(w));
+    // Possessives keep the name ("Hess's law", "Boltzmann’s constant").
+    if (/^[A-Z][A-Za-z0-9'’-]{2,}$/.test(w)) out.push(...tokenizeNoteText(w));
   }
   return out;
 }
@@ -822,13 +842,19 @@ export function applySemanticTrims(
 ): { sections: DedupeSection[]; changed: boolean } {
   if (trims.length === 0) return { sections, changed: false };
   const byId = new Map(trims.map((t) => [t.sectionId, new Set(t.dropLineNumbers)]));
-  // sectionId → line number → owner lines the model compared it with.
-  const ownersFor = new Map<string, Map<number, string[]>>();
+  // sectionId → line number → owner lines (and concept labels) the model
+  // compared it with.
+  type Compared = { owners: string[]; labels: string[] };
+  const ownersFor = new Map<string, Map<number, Compared>>();
   for (const c of candidates ?? []) {
     for (const l of c.later) {
-      const perLine = ownersFor.get(l.sectionId) ?? new Map<number, string[]>();
+      const perLine = ownersFor.get(l.sectionId) ?? new Map<number, Compared>();
       for (const x of l.lines) {
-        perLine.set(x.n, [...(perLine.get(x.n) ?? []), ...c.ownerLines]);
+        const prev = perLine.get(x.n) ?? { owners: [], labels: [] };
+        perLine.set(x.n, {
+          owners: [...prev.owners, ...c.ownerLines],
+          labels: [...prev.labels, c.label],
+        });
       }
       ownersFor.set(l.sectionId, perLine);
     }
@@ -842,8 +868,15 @@ export function applySemanticTrims(
       if (!drop.has(i + 1)) return true;
       if (isProtectedNoteLine(l)) return true;
       if (candidates) {
-        const owners = ownersFor.get(s.sectionId)?.get(i + 1) ?? [];
-        if (semanticTrimClearlyLosesInformation(owners, l)) return true;
+        const compared = ownersFor.get(s.sectionId)?.get(i + 1);
+        const owners = compared?.owners ?? [];
+        const labels = compared?.labels ?? [];
+        if (
+          semanticTrimClearlyLosesInformation(owners, l) ||
+          labels.some((label) => semanticTrimClearlyLosesInformation(owners, l, label))
+        ) {
+          return true;
+        }
       }
       return false;
     });

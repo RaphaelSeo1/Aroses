@@ -268,6 +268,36 @@ export function numberTokens(norm: string): string[] {
   return out;
 }
 
+/** A line that carries an equation / expression (LaTeX, "=", math operators). */
+const MATH_LINE_RE = /\$|\\[a-zA-Z]{2,}|[=≈≠≤≥→⇌∑∫√×÷±]|\^|_\{/;
+
+/**
+ * Canonical form of a line's math: markdown emphasis, math delimiters, LaTeX
+ * wrappers, braces, whitespace, and list markers removed; case-folded.
+ */
+function mathSignature(line: string): string {
+  return line
+    .replace(/^\s*(?:[-*]|\d+\.)\s+/, "")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\$+/g, " ")
+    .replace(/\\(?:text|mathrm|mathbf|mathit|left|right|displaystyle)\b/g, "")
+    .replace(/[{}]/g, "")
+    .replace(/[.:;,]+$/g, "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+/**
+ * `later` states an equation / expression that none of `earlier` states.
+ * Variables are single letters the tokenizer drops, so math must be
+ * compared by its canonical signature, not by content tokens.
+ */
+export function lineStatesNewMath(earlier: string[], later: string): boolean {
+  if (!MATH_LINE_RE.test(later)) return false;
+  const sig = mathSignature(later);
+  return !earlier.some((e) => MATH_LINE_RE.test(e) && mathSignature(e) === sig);
+}
+
 /**
  * Does `later` carry information that `earlier` does not? True when `later`
  * has a number (with its unit) the earlier line lacks, flips negation, has a
@@ -283,6 +313,15 @@ export function lineAddsNewInformation(earlier: string, later: string): boolean 
   const na = normalizeLine(earlier);
   const nb = normalizeLine(later);
   if (!nb || na === nb) return false;
+  // Formulas: variables are single letters the tokenizer drops, so
+  // "ΔG = ΔG° + RT ln Q" and "ΔG° = −RT ln K" look identical by tokens.
+  // Two math-bearing lines are the same fact only when their math matches.
+  if (
+    (MATH_LINE_RE.test(earlier) || MATH_LINE_RE.test(later)) &&
+    mathSignature(earlier) !== mathSignature(later)
+  ) {
+    return true;
+  }
   if (NEGATION_RE.test(na) !== NEGATION_RE.test(nb)) return true;
   const numsA = new Set(numberTokens(na));
   for (const n of numberTokens(nb)) {
@@ -1141,12 +1180,55 @@ export function sectionCoveredRatio(keeperMd: string, otherMd: string): number {
 /** A section may be absorbed on body alone only when essentially all of it is already said. */
 export const SECTION_COVERED_MERGE_RATIO = 0.9;
 
+/** Heading words that do not name a facet ("Overview", "Part 2", "cont."). */
+const GENERIC_HEADING_TOKENS = new Set([
+  "overview", "introduction", "intro", "summary", "recap", "review", "continued",
+  "cont", "part", "section", "notes", "key", "concepts", "concept", "basics",
+  "background", "general", "more", "further", "additional", "details", "detail",
+  "topic", "topics", "lecture", "slide", "slides", "i", "ii", "iii", "iv",
+]);
+const HEADING_FUNCTION_WORDS = new Set([
+  "of", "the", "and", "or", "for", "to", "in", "on", "with", "an", "its", "vs",
+]);
+
+/**
+ * Two headings are the same TITLE (not merely the same broad topic): equal
+ * after normalization, or they differ only by generic words. "Price
+ * Elasticity of Demand" vs "Determinants of Price Elasticity" share the
+ * topic but "Determinants" names a distinct facet — that is organization,
+ * not duplication, so the sections are never merged on the heading alone.
+ */
+export function headingsAreSameTitle(a: string, b: string): boolean {
+  const na = normalizeNoteHeading(a);
+  const nb = normalizeNoteHeading(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const facet = (h: string) =>
+    h
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter(
+        (t) =>
+          !GENERIC_HEADING_TOKENS.has(t) &&
+          !HEADING_FUNCTION_WORDS.has(t) &&
+          !/^\d+$/.test(t)
+      );
+  const ta = facet(na);
+  const tb = facet(nb);
+  if (ta.length === 0 || tb.length === 0) return false;
+  const sa = new Set(ta);
+  const sb = new Set(tb);
+  return ta.every((t) => sb.has(t)) && tb.every((t) => sa.has(t));
+}
+
 /**
  * Deterministic duplicate topic groups (document order). Earliest id is kept.
  * A section joins a group when its heading names the same topic, or when
  * essentially ALL of its body is already said by the keeper — never on
  * loose body similarity (parallel-structured sections about different
- * things look alike token-wise).
+ * things look alike token-wise). Facet sections ("Topic: mechanism") merge
+ * INTO the topic but keep their heading as a sub-heading (see
+ * `mergeDuplicateGroup`) — organization is merged, information is not.
  */
 export function findDuplicateTopicGroups(
   sections: NoteSectionRef[]
@@ -1190,8 +1272,28 @@ export function mergeDuplicateGroup(group: {
   absorb: NoteSectionRef[];
 }): { sectionId: string; markdown: string; removeSectionIds: string[] } {
   let md = group.keep.markdown;
+  const keepHeading = extractNoteHeading(md);
   for (const other of group.absorb) {
-    md = placeIncomingNoteLines(md, other.markdown);
+    const otherHeading = extractNoteHeading(other.markdown);
+    const facet =
+      keepHeading && otherHeading && !headingsAreSameTitle(keepHeading, otherHeading)
+        ? otherHeading
+        : null;
+    if (!facet) {
+      md = placeIncomingNoteLines(md, other.markdown);
+      continue;
+    }
+    // A facet of the topic ("Determinants of …", "… examples"): its unique
+    // lines stay grouped under their own sub-heading instead of being
+    // interleaved into the parent — the reader keeps the structure.
+    const body = other.markdown
+      .split("\n")
+      .filter((l, i) => !(i === 0 && /^#{1,3}\s/.test(l.trim())))
+      .join("\n");
+    const unique = uniqueIncomingNoteLines(md, body);
+    if (unique.trim()) {
+      md = `${md.replace(/\s+$/, "")}\n\n### ${facet}\n${unique.replace(/^\n+/, "")}`;
+    }
   }
   md = dedupeSectionLines(md);
   const missing: string[] = [];

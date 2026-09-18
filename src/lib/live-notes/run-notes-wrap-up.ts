@@ -9,18 +9,63 @@ import {
 import { consolidateNoteDocument } from "@/lib/notes/consolidate-notes";
 import {
   deckPagesToSourceUnits,
-  formatUnrepresentedUnits,
-  findUnrepresentedSourceUnits,
-  restoreUnrepresentedSourceUnits,
   type CoverageDeckPage,
 } from "@/lib/notes/source-coverage";
+import {
+  buildSourceCoverageLedger,
+  formatSourceCoverageAudit,
+  repairSourceCoverage,
+} from "@/lib/notes/source-coverage-ledger";
 import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
 import {
   appendAiNoteSections,
   applyNoteRevisions,
   collectAiNoteSections,
+  collectNonAiNoteMarkdown,
   setLectureRecapMarkdown,
 } from "@/lib/live-notes/notes-review";
+
+/**
+ * Deterministic source-coverage repair over a stored notes doc. Coverage is
+ * checked against the whole document (student sections count as present);
+ * repairs extend fully-AI sections or append new AI sections. Returns the
+ * (possibly) updated doc and logs the before/after audit.
+ */
+export function repairNotesSourceCoverage(
+  notesJson: unknown,
+  deckPages: CoverageDeckPage[]
+): unknown {
+  const ledger = buildSourceCoverageLedger(deckPagesToSourceUnits(deckPages));
+  const aiSections = collectAiNoteSections(notesJson);
+  const aiIds = new Set(aiSections.map((s) => s.sectionId));
+  const result = repairSourceCoverage(ledger, aiSections, {
+    extraMarkdown: collectNonAiNoteMarkdown(notesJson),
+  });
+  const before = formatSourceCoverageAudit(result.before);
+  if (result.repairs.length === 0) {
+    if (result.before.counts.missing > 0) {
+      console.warn(`[live-notes wrap-up] source coverage (unrepairable): ${before}`);
+    } else {
+      console.info(`[live-notes wrap-up] source coverage: ${before}`);
+    }
+    return notesJson;
+  }
+  const revisions = result.sections
+    .filter((s) => aiIds.has(s.sectionId))
+    .filter((s) => {
+      const prev = aiSections.find((a) => a.sectionId === s.sectionId);
+      return prev && prev.markdown.replace(/\s+$/, "") !== s.markdown.replace(/\s+$/, "");
+    })
+    .map((s) => ({ sectionId: s.sectionId, markdown: s.markdown }));
+  const added = result.sections.filter((s) => !aiIds.has(s.sectionId));
+  let next = notesJson;
+  if (revisions.length > 0) next = applyNoteRevisions(next, revisions);
+  if (added.length > 0) next = appendAiNoteSections(next, added);
+  console.warn(
+    `[live-notes wrap-up] source coverage repaired in ${result.passes} pass(es): ${before} → ${formatSourceCoverageAudit(result.after)}; ${revisions.length} section(s) extended, ${added.length} added`
+  );
+  return next;
+}
 
 /**
  * Finish wrap-up: factual review of AI sections, then store a tutor-style
@@ -79,42 +124,23 @@ export async function runLiveNotesWrapUp(input: {
           consolidated.removeSectionIds
         );
       }
-
-      // Final coverage vs ORIGINAL source units (slides/pages). Diagnostic
-      // log plus a deterministic restore of unique source lines the notes
-      // never captured — no extra model call, no invented facts.
-      if (input.deckPages && input.deckPages.length > 0) {
-        const finalMd = collectAiNoteSections(notesJson)
-          .map((s) => s.markdown)
-          .join("\n");
-        const restored = restoreUnrepresentedSourceUnits(
-          deckPagesToSourceUnits(input.deckPages),
-          finalMd
-        );
-        if (restored.sections.length > 0) {
-          notesJson = appendAiNoteSections(notesJson, restored.sections);
-          const after = collectAiNoteSections(notesJson)
-            .map((s) => s.markdown)
-            .join("\n");
-          const still = findUnrepresentedSourceUnits(
-            deckPagesToSourceUnits(input.deckPages),
-            after
-          );
-          console.warn(
-            `[live-notes wrap-up] restored unique lines from ${restored.sections.length} skipped source range(s)` +
-              (still.length
-                ? `; still unrepresented: ${formatUnrepresentedUnits(still)}`
-                : "")
-          );
-        } else if (restored.missing.length > 0) {
-          console.warn(
-            `[live-notes wrap-up] ${restored.missing.length}/${input.deckPages.length} substantive source units unrepresented in notes: ${formatUnrepresentedUnits(restored.missing)}`
-          );
-        }
-      }
     }
   } catch (e) {
     console.error("[live-notes wrap-up] review", e);
+  }
+
+  // Final source-coverage audit against the ORIGINAL source units, run AFTER
+  // every model review, consolidation, and merge: each substantive slide /
+  // page must end as COVERED, REDUNDANT, NON-SUBSTANTIVE, or VISUAL-ONLY.
+  // MISSING contributions are copied back in the source's own wording into
+  // the best-matching AI section (or a new one) — no model call, nothing
+  // invented, student-owned sections never edited.
+  try {
+    if (input.deckPages && input.deckPages.length > 0) {
+      notesJson = repairNotesSourceCoverage(notesJson, input.deckPages);
+    }
+  } catch (e) {
+    console.error("[live-notes wrap-up] source coverage", e);
   }
 
   try {

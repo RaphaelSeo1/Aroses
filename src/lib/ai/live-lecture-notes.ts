@@ -30,6 +30,7 @@ import {
   findDuplicateTopicGroups,
   mergeDuplicateGroup,
 } from "@/lib/live-notes/fold-note-markdown";
+import { isOverCutRevision, selectDeckExcerptFor } from "@/lib/live-notes/review-guards";
 import { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
 
 export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
@@ -202,10 +203,12 @@ ${SEED_THOROUGHNESS_RULES}
 SEED RULES (override live-lecture habits):
 - Source of truth is DECK SLIDES only. Cover teachable content on those pages. Do not invent explanations.
 - Do NOT use outside/textbook knowledge. If a slide is sparse, write a short heading + the bullets that are actually there.
+- SOURCE FIDELITY: every note line must be traceable to a line on these slides. A bare term or figure label on a slide becomes a bare (bolded) term in the notes — never an explanation the slide does not give. Do not add background, definitions, consequences, comparisons, or examples the slides do not state, even when you know them; a scientifically correct line that is not on the slides misrepresents this lecture. Keep the slides' own key terms and abbreviations exactly as written.
 - You receive an OUTLINE of sections already drafted from earlier batches. Continue those topics via @@revise with new lines; do not @@append a second copy of the same topic heading.
 - @@append for genuinely NEW topics or distinct facets that have no matching outline entry.
 - Slides with no extractable text: emit nothing after the markers (empty @@append). Never write sentences about the slides, extraction, OCR, or future updates.
-- Structure with "## " headings per topic (not automatically one heading per slide). Include formulas, definitions, tables, and load-bearing labels from the slides.
+- Structure with "## " headings per topic — not automatically one heading per slide, but never one heading for the whole deck either. When a batch opens a distinct facet (a new mechanism, stage, experiment, comparison, application, or set of examples), give it its own "## " heading instead of growing one section past roughly a dozen top-level bullets. Include formulas, definitions, tables, and load-bearing labels from the slides.
+- COVERAGE CONTRACT: every sentence, number, name, comparison, exception, and mechanism on these slides must land in a @@revise or @@append line. Compress wording, never drop content; the notes are audited slide-by-slide afterwards and anything skipped is copied back in verbatim.
 - @@thought: one short line that you are drafting from the uploaded slides (mention slide numbers if present).
 - @@summary: concept-state record of what has been drafted so far (previous summary + these slides).
 
@@ -392,7 +395,7 @@ export async function* streamLiveLectureNotes(input: {
             : null,
           `DECK SLIDES (draft thorough study notes covering teachable content on EVERY page below; no outside knowledge):\n${deckText || "(no extractable text on these slides)"}`,
           "NO SPEECH YET. Draft from the slides only. Empty / logistics-only slides: empty @@append. Review/key-concept slides: capture uncovered teachable lines. Do not thin a multi-page deck into a short synopsis.",
-          "\nEmit the protocol now. @@revise matched topics with every new teachable line from these slides; @@append for new topics/facets. Leave bodies empty ONLY when every teachable line on these pages is already drafted.",
+          "\nEmit the protocol now. @@revise matched topics with every new teachable line from these slides; @@append for new topics/facets. Leave bodies empty ONLY when every teachable line on these pages is already drafted. Before @@summary, re-read every slide in this batch: any sentence, number, name, comparison, or mechanism that has not landed in a @@revise or @@append must be added now.",
         ]
           .filter(Boolean)
           .join("\n\n")
@@ -484,8 +487,9 @@ Do the job you are asked for:
 1) FACTUAL / SPELLING FIXES — Return a revision ONLY when a section has a clear, narrow error:
    - STT/spelling/symbol/proper-name mistake (prefer the slide token),
    - an unambiguous wrong number or inverted relationship the lecture clearly establishes,
-   - content that was never said/shown (outside "> (AI)" or "**Open question:**" lines).
-   When revising, keep the rest of the section verbatim — minimal token/bullet fixes only.
+   - a line the sources positively CONTRADICT (outside "> (AI)" or "**Open question:**" lines).
+   When revising, keep the rest of the section verbatim — minimal token/bullet fixes only. A revision must contain every line of the original except the one(s) you fixed; a shorter section is not a fix.
+   The transcript, screen, and deck excerpts you receive may be PARTIAL (long decks are excerpted per batch, the lecturer may not have spoken about every slide, the recording may have started late). Absence from the excerpt is NEVER evidence that a line is wrong: never delete, shorten, or "tidy" a line because you cannot find it in the sources. Slide-drafted notes stand on the deck even when the transcript never mentions them.
    CONSISTENCY (same call): if the batch names one concept two different ways, gives two different numbers for the same quantity, or orders the same sequence differently, fix it ONLY when transcript/screen/deck clearly supports one version (use the source's own term); otherwise add one **Open question:** line. Do not "fix" wording that merely varies.
    UNCERTAIN TOKENS: a term/number that is garbled in speech and absent from screen/deck must not be normalized into a confident technical term — leave it as an **Open question:** line or drop the non-load-bearing detail.
    SUBSTANTIVE CONTRADICTIONS (lecture said A earlier and B later, or speech vs slide disagree on meaning): do NOT pick a winner or delete either claim. Instead revise that section (or leave it and rely on an existing open question) so both sides remain visible as:
@@ -515,6 +519,10 @@ Return { "trims": [] } when every later line adds something new.`;
 const MAX_REVIEW_TRANSCRIPT_CHARS = 60_000;
 const MAX_REVIEW_SCREEN_CHARS = 20_000;
 const MAX_REVIEW_SECTIONS_PER_BATCH = 8;
+/** Below this much speech the factual pass has nothing to check notes against. */
+const MIN_REVIEW_TRANSCRIPT_CHARS = 400;
+/** Sections longer than this are context-only in the factual pass (never truncated into a revision). */
+const MAX_REVIEW_SECTION_CHARS = 12_000;
 
 export type LiveNotesReviewResult = {
   revisions: Array<{ sectionId: string; markdown: string }>;
@@ -727,7 +735,12 @@ export async function reviewLiveLectureNotes(input: {
         userId: input.userId,
       });
 
-      if (llm && llm.revisions.length > 0) {
+      // The deterministic baseline is the union of the group's lines. A model
+      // merge that sheds a sizeable share of those lines lost information —
+      // fall back to the baseline rather than accept the shorter merge.
+      const kept = llm?.revisions.find((r) => r.sectionId === baseline.sectionId);
+      const overCut = kept ? isOverCutRevision(baseline.markdown, kept.markdown) : false;
+      if (llm && llm.revisions.length > 0 && !overCut) {
         allRevisions.push(...llm.revisions);
         for (const id of llm.removeSectionIds) allRemoves.add(id);
         for (const id of baseline.removeSectionIds) allRemoves.add(id);
@@ -784,7 +797,14 @@ export async function reviewLiveLectureNotes(input: {
   }
 
   // 2) Factual review in batches that fit the budget (requires API key).
-  if (process.env.ANTHROPIC_API_KEY) {
+  //    Skipped for slides-only sessions (no speech, no screen): the notes
+  //    were drafted from the deck itself, so the only thing this pass could
+  //    do is misread "not in the transcript" as "wrong" and cut content.
+  const transcriptText = input.transcript.trim();
+  const screenText = (input.screenContent ?? "").trim();
+  const hasSpokenOrScreenEvidence =
+    transcriptText.length >= MIN_REVIEW_TRANSCRIPT_CHARS || screenText.length > 0;
+  if (process.env.ANTHROPIC_API_KEY && hasSpokenOrScreenEvidence) {
     const forFactual = applyWorking();
 
     for (
@@ -793,27 +813,37 @@ export async function reviewLiveLectureNotes(input: {
       i += MAX_REVIEW_SECTIONS_PER_BATCH
     ) {
       const batch = forFactual.slice(i, i + MAX_REVIEW_SECTIONS_PER_BATCH);
-      const allowed = new Set(batch.map((s) => s.sectionId));
+      // A section longer than the prompt slice can only come back truncated
+      // — it is shown for context but is never a revision/removal target.
+      const revisable = batch.filter(
+        (s) => s.markdown.length <= MAX_REVIEW_SECTION_CHARS
+      );
+      if (revisable.length === 0) continue;
+      const allowed = new Set(revisable.map((s) => s.sectionId));
       const sectionsBlock = batch
-        .map(
-          (s) =>
-            `[SECTION ${s.sectionId}]\n${s.markdown.slice(0, MAX_SECTION_MARKDOWN_CHARS)}`
+        .map((s) =>
+          allowed.has(s.sectionId)
+            ? `[SECTION ${s.sectionId}]\n${s.markdown}`
+            : `[SECTION ${s.sectionId} — context only, do not revise]\n${s.markdown.slice(0, MAX_SECTION_MARKDOWN_CHARS)}…`
         )
         .join("\n\n");
-      const screen = (input.screenContent ?? "").trim();
-      const deck = (input.deckContent ?? "").trim();
+      const deck = selectDeckExcerptFor(
+        batch.map((s) => s.markdown).join("\n"),
+        (input.deckContent ?? "").trim(),
+        MAX_REVIEW_SCREEN_CHARS
+      );
       const userPrompt = [
         input.lectureTitle
           ? `LECTURE: ${input.lectureTitle.slice(0, 200)}`
           : null,
         `NOTE SECTIONS TO VERIFY (document order — earliest first):\n\n${sectionsBlock}`,
-        screen
-          ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
+        screenText
+          ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n${screenText.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
           : null,
         deck
-          ? `DECK SLIDES (pre-uploaded lecture deck — spellings/formulas/tables for topics that were discussed):\n${deck.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
+          ? `DECK SLIDES (excerpt of the pre-uploaded deck most relevant to these sections — other slides exist but are not shown; spellings/formulas/tables):\n${deck}`
           : null,
-        `FULL LECTURE TRANSCRIPT:\n${input.transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
+        `LECTURE TRANSCRIPT (may be partial):\n${transcriptText.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
         "\nReturn the JSON now. FACTUAL / SPELLING FIXES only for this batch — do not invent structural merges unless a clear pure duplicate remains.",
       ]
         .filter(Boolean)
@@ -824,16 +854,27 @@ export async function reviewLiveLectureNotes(input: {
           "This call is FACTUAL / SPELLING FIXES for the listed batch. Avoid structural merges unless a pure duplicate is obvious.",
         userPrompt,
         allowed,
-        maxRevisions: batch.length,
+        maxRevisions: revisable.length,
         userId: input.userId,
       });
       if (!llm) continue;
+      const originals = new Map(revisable.map((s) => [s.sectionId, s.markdown]));
       for (const rev of llm.revisions) {
+        // Deterministic over-cut guard: a narrow factual fix cannot shed a
+        // large share of the section's lines. Reject such revisions whole.
+        const original = originals.get(rev.sectionId);
+        if (original && isOverCutRevision(original, rev.markdown)) {
+          console.warn(
+            `[live-lecture-notes] review over-cut rejected for ${rev.sectionId} (${original.length} → ${rev.markdown.length} chars)`
+          );
+          continue;
+        }
         const idx = allRevisions.findIndex((r) => r.sectionId === rev.sectionId);
         if (idx >= 0) allRevisions[idx] = rev;
         else allRevisions.push(rev);
       }
-      for (const id of llm.removeSectionIds) allRemoves.add(id);
+      // Factual review may not delete sections: "not in the sources" is not
+      // evidence. Whole-section removal is the consolidation step's job.
     }
   }
 
