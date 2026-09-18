@@ -8,12 +8,15 @@ import {
 } from "@/lib/live-notes/fold-note-markdown";
 import { consolidateNoteDocument } from "@/lib/notes/consolidate-notes";
 import {
-  findUnrepresentedDeckPages,
-  formatUnrepresentedPages,
+  deckPagesToSourceUnits,
+  formatUnrepresentedUnits,
+  findUnrepresentedSourceUnits,
+  restoreUnrepresentedSourceUnits,
   type CoverageDeckPage,
 } from "@/lib/notes/source-coverage";
 import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
 import {
+  appendAiNoteSections,
   applyNoteRevisions,
   collectAiNoteSections,
   setLectureRecapMarkdown,
@@ -29,7 +32,7 @@ export async function runLiveNotesWrapUp(input: {
   transcript: string;
   screenContent?: string;
   deckContent?: string;
-  /** Raw deck pages — diagnostic coverage report only (no model call). */
+  /** Original source units (slides/pages/chunks) — coverage restore, no model. */
   deckPages?: CoverageDeckPage[];
   lectureTitle?: string;
   durationSeconds?: number | null;
@@ -77,16 +80,35 @@ export async function runLiveNotesWrapUp(input: {
         );
       }
 
-      // Diagnostic only: substantive deck pages with no footprint in the
-      // final notes. Never alters the notes; surfaces silent thinning.
+      // Final coverage vs ORIGINAL source units (slides/pages). Diagnostic
+      // log plus a deterministic restore of unique source lines the notes
+      // never captured — no extra model call, no invented facts.
       if (input.deckPages && input.deckPages.length > 0) {
         const finalMd = collectAiNoteSections(notesJson)
           .map((s) => s.markdown)
           .join("\n");
-        const missing = findUnrepresentedDeckPages(input.deckPages, finalMd);
-        if (missing.length > 0) {
+        const restored = restoreUnrepresentedSourceUnits(
+          deckPagesToSourceUnits(input.deckPages),
+          finalMd
+        );
+        if (restored.sections.length > 0) {
+          notesJson = appendAiNoteSections(notesJson, restored.sections);
+          const after = collectAiNoteSections(notesJson)
+            .map((s) => s.markdown)
+            .join("\n");
+          const still = findUnrepresentedSourceUnits(
+            deckPagesToSourceUnits(input.deckPages),
+            after
+          );
           console.warn(
-            `[live-notes wrap-up] ${missing.length}/${input.deckPages.length} substantive deck pages unrepresented in notes: ${formatUnrepresentedPages(missing)}`
+            `[live-notes wrap-up] restored unique lines from ${restored.sections.length} skipped source range(s)` +
+              (still.length
+                ? `; still unrepresented: ${formatUnrepresentedUnits(still)}`
+                : "")
+          );
+        } else if (restored.missing.length > 0) {
+          console.warn(
+            `[live-notes wrap-up] ${restored.missing.length}/${input.deckPages.length} substantive source units unrepresented in notes: ${formatUnrepresentedUnits(restored.missing)}`
           );
         }
       }

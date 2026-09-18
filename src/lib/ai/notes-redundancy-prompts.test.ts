@@ -31,9 +31,9 @@ test("source confidence rules: uncertain transcript tokens never become facts", 
 
 test("seed thoroughness rules override fold/skip habits so multi-page decks stay complete", () => {
   assert.match(SEED_THOROUGHNESS_RULES, /Thin notes are a failure/);
-  assert.match(SEED_THOROUGHNESS_RULES, /EVERY page/);
+  assert.match(SEED_THOROUGHNESS_RULES, /EVERY source unit/);
   assert.match(SEED_THOROUGHNESS_RULES, /do NOT license skipping/i);
-  assert.match(SEED_THOROUGHNESS_RULES, /Completeness of slide content wins/);
+  assert.match(SEED_THOROUGHNESS_RULES, /Completeness of unique source content wins/);
   assert.match(SEED_THOROUGHNESS_RULES, /Key concepts/);
   // Must not tell the model that restating a covered concept "adds nothing".
   assert.doesNotMatch(SEED_THOROUGHNESS_RULES, /adds nothing/);

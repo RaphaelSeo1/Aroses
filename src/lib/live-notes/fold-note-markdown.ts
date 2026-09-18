@@ -404,14 +404,18 @@ export function sectionBodySimilarity(a: string, b: string): number {
 export const BODY_SIMILARITY_MATCH_THRESHOLD = 0.42;
 
 /**
- * Match a chunk by heading first, then by body similarity when the heading
- * is missing or ambiguous.
+ * Match a chunk by heading first. A distinct `## ` heading that does not
+ * name an existing topic becomes a new section — body similarity alone
+ * must not fold two different topics together (parallel structure looks
+ * alike even when every fact is unique). Unheaded fragments may still
+ * attach by strong body overlap.
  */
 export function matchChunkToSections<
   T extends { sectionId: string; markdown: string },
 >(chunk: string, sections: T[]): T | null {
   const byHeading = matchHeadingToSections(chunk, sections);
   if (byHeading) return byHeading;
+  if (extractNoteHeading(chunk)) return null;
   if (sections.length === 0) return null;
   let best: T | null = null;
   let bestScore = 0;
@@ -498,6 +502,23 @@ export function classifyAppendChunks<
           markdown: chunk,
         });
         lastFoldId = byHeading.sectionId;
+        continue;
+      }
+      // Recap/agenda titles must not spawn a second outline section — but
+      // unique facts on that slide (a number, exception, new example) still
+      // have to land somewhere. Fold uncovered lines into the last section;
+      // skip the chunk only when every body line is already represented.
+      const uncovered = findUncoveredLines(chunk, sections);
+      const target =
+        lastFoldId ??
+        (sections.length > 0 ? sections[sections.length - 1]!.sectionId : null);
+      if (uncovered.length > 0 && target) {
+        actions.push({
+          kind: "fold",
+          sectionId: target,
+          markdown: uncovered.join("\n"),
+        });
+        lastFoldId = target;
       }
       continue;
     }

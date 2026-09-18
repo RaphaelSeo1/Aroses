@@ -480,7 +480,7 @@ test("deck coverage report flags substantive pages with no footprint in the note
 
 test("prompt text: coverage means 'don't repeat background', never 'write less'", () => {
   assert.match(UNIFIED_NOTES_RULES, /Produce comprehensive study notes representing ALL meaningful unique information/);
-  assert.match(UNIFIED_NOTES_RULES, /Condense repeated wording, not unique content/);
+  assert.match(UNIFIED_NOTES_RULES, /not unique educational content/);
   assert.match(UNIFIED_NOTES_RULES, /not what is "done"/);
   assert.match(UNIFIED_NOTES_RULES, /DO add every new fact/);
   assert.match(UNIFIED_NOTES_RULES, /When unsure whether something is new, include it/);

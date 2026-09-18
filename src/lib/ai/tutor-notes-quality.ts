@@ -20,7 +20,7 @@ export const TUTOR_NOTES_QUALITY_RULES = `QUALITY BAR (match a polished session 
 export const DEFAULT_NOTES_OUTLINE_RULES = `DEFAULT NOTES OUTLINE:
 - Start each genuinely new topic with a short, specific topic heading.
 - Follow the heading with a 1–2 sentence framing paragraph when there is enough material to explain the topic, rather than turning every sentence into a bullet.
-- Group the load-bearing points into 2–6 top-level bullets. Use **bold lead-ins** for terms or concepts, and nested children for definitions, steps, examples, contrasts, evidence, or supporting details. Avoid a long flat list of same-level bullets.
+- Group the load-bearing points into as many top-level bullets as unique facts require. Use **bold lead-ins** for terms or concepts, and nested children for definitions, steps, examples, contrasts, evidence, or supporting details. Do not cap the number of bullets to make a section look short.
 - Use a short worked-example/formula block when calculations, procedures, or equations were taught.
 - Add vocabulary, a takeaway/callout, or self-check prompts only when they materially help; do not force boilerplate subsections into every topic.
 - Keep one coherent topic section together. Continued detail enriches that section's existing organization instead of creating another heading.`;
@@ -32,7 +32,8 @@ export const DEFAULT_NOTES_OUTLINE_RULES = `DEFAULT NOTES OUTLINE:
  * the document already establishes. Subject-neutral by design.
  */
 export const UNIFIED_NOTES_RULES = `ONE COHERENT DOCUMENT (deduplicate repetition, never information):
-- Produce comprehensive study notes representing ALL meaningful unique information in the supplied course material. Condense repeated wording, not unique content. Length reduction is never the goal; a missing fact is a failure, a slightly repeated phrase is not.
+- Produce comprehensive study notes representing ALL meaningful unique information in the supplied course material. Condense repeated wording, not unique educational content. Length reduction is never the goal; a missing fact is a failure, a slightly repeated phrase is not. Note length is determined by unique information density, never by slide/page/word count of the source.
+- A source unit is whatever the upload naturally is — a slide, PDF page, reading paragraph, transcript segment, figure/table, or ingest chunk. Related units may share a heading. Their unique facts may not disappear. Later units about a concept already introduced still add mechanisms, stages, evidence, exceptions, numbers, and examples.
 - You are producing one coherent set of notes from the complete course material — not a stack of independent summaries. Whatever you write must fit the document that already exists.
 - Repeated source material (the instructor reviewing, restarting an explanation, answering a question by re-explaining, summarizing what was just said) is repeated EVIDENCE, not new note content — unless the repeat carries a detail the notes do not have yet, in which case capture that detail.
 - CONCEPT COVERAGE / existing sections tell you what is already ESTABLISHED, not what is "done". If a concept is already DEFINED or EXPLAINED there, do not re-define or re-explain the same content (no second definition, no second full explanation). DO add every new fact, example, mechanism, stage, step, number, unit, name, date, exception, qualification, comparison, evidence, application, consequence, or instructor emphasis about that concept — the same concept appearing again with new material is the normal case, not a duplicate. Put such additions where that concept's explanation lives when they belong there.
@@ -57,12 +58,12 @@ export const SOURCE_CONFIDENCE_RULES = `SOURCE CONFIDENCE (imperfect transcripts
  * batches populate concept coverage.
  */
 export const SEED_THOROUGHNESS_RULES = `SEED COMPLETENESS (overrides the "fold / skip restatement" habits above for this call):
-- Thin notes are a failure. Cover the teachable content on EVERY page in this batch — definitions, formulas, tables, numbered steps, numbers/units, named examples, distinctions, and load-bearing labels that appear on the slides.
-- CONCEPT COVERAGE / earlier sections only block rewriting the SAME definition or the SAME bullet already captured. They do NOT license skipping a later slide that elaborates, adds a mechanism, example, exception, formula, table, or new facet of a known concept.
+- Thin notes are a failure. Cover the teachable content on EVERY source unit in this batch (slide, page, figure, table, or chunk) — definitions, formulas, tables, numbered steps, numbers/units, named examples, distinctions, diagram labels, and load-bearing labels that appear in the source.
+- CONCEPT COVERAGE / earlier sections only block rewriting the SAME definition or the SAME bullet already captured. They do NOT license skipping a later unit that elaborates, adds a mechanism, example, exception, formula, table, figure detail, or new facet of a known concept.
 - Prefer @@revise the owning section with ONLY the new lines when this batch continues an already-drafted topic. @@append a new "## " heading when the material is a distinct facet/subtopic or would make the existing section unreadable if folded in.
-- Pure agenda / title / "today we will cover" / logistics slides with no teachable bullets: leave bodies empty.
-- "Key concepts" / summary / review slides that still list definitions, formulas, or facts: capture every line not already in the notes (@@revise matches; @@append only when no match). Do not blank an entire review slide that still has uncovered teachable lines.
-- Never reduce a multi-page deck to a one-page synopsis. Completeness of slide content wins over brevity.`;
+- Pure agenda / title / "today we will cover" / logistics units with no teachable bullets: leave bodies empty.
+- "Key concepts" / summary / review units that still list definitions, formulas, or facts: capture every line not already in the notes (@@revise matches; @@append only when no match). Do not blank an entire review unit that still has uncovered teachable lines.
+- Never reduce a dense source to a short synopsis. Completeness of unique source content wins over brevity. Source length does not set note length.`;
 
 export const TUTOR_NOTES_JSON_SHAPE = `{
   "emoji"?: string,

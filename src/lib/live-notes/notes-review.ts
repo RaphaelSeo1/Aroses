@@ -241,3 +241,34 @@ export function applyNoteRevisions(
 
   return { ...doc, content };
 }
+
+/**
+ * Append fully-AI markdown sections at the end of the notes doc (coverage
+ * restore). Does not touch existing sections. Empty markdown is skipped.
+ */
+export function appendAiNoteSections(
+  notesJson: unknown,
+  sections: Array<{ sectionId: string; markdown: string }>
+): unknown {
+  const usable = sections.filter((s) => s.sectionId && s.markdown.trim());
+  if (usable.length === 0) return notesJson;
+  const doc = notesJson as PmDoc | null;
+  const existing = doc && Array.isArray(doc.content) ? [...doc.content] : [];
+  const content = [...existing];
+  for (const s of usable) {
+    const nodes = markdownToNoteNodes(s.markdown, {
+      sectionId: s.sectionId,
+      provenance: "ai",
+    });
+    if (nodes.length === 0) continue;
+    if (content.length > 0 && content[content.length - 1]?.type !== "horizontalRule") {
+      content.push({ type: "horizontalRule", attrs: { provenance: "ai" } });
+    }
+    content.push(...nodes);
+  }
+  return {
+    type: "doc",
+    ...(doc?.attrs ? { attrs: doc.attrs } : {}),
+    content,
+  };
+}
