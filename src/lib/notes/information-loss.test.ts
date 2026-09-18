@@ -17,6 +17,7 @@ import {
 import {
   applySemanticTrims,
   consolidateRepeatedExplanations,
+  containsEditorialNavigation,
   findSemanticTrimCandidates,
   isRepeatedDefinition,
   isRepeatedNoteLine,
@@ -24,6 +25,7 @@ import {
   parseSemanticTrimJson,
   REPEATED_EXPLANATIONS_JOB_RULES,
   SEMANTIC_TRIM_INSTRUCTION,
+  stripEditorialNavigationLines,
   stripLinesAlreadyCovered,
 } from "./cross-section-dedupe";
 import { consolidateNoteDocument } from "./consolidate-notes";
@@ -197,6 +199,31 @@ test("lineAddsNewInformation: rewording is not new; numbers, names, parallel fac
   assert.equal(lineAddsNewInformation("- Skipped for weekend runs.", "- Skipped for holiday runs."), true);
 });
 
+test("a flipped negation or a changed unit is a different fact, not a rewording", () => {
+  const cases: Array<[string, string]> = [
+    ["- The gamma ledger is reversible once committed.", "- The gamma ledger is not reversible once committed."],
+    ["- Delta window has a retry budget.", "- Delta window has no retry budget."],
+    ["- The iota bus is shared.", "- The iota bus isn't shared."],
+    ["- The eta cache holds 4 KB per entry.", "- The eta cache holds 4 MB per entry."],
+    ["- Give 3 mg every 40 ms.", "- Give 3 g every 40 ms."],
+  ];
+  for (const [a, b] of cases) {
+    assert.equal(lineAddsNewInformation(a, b), true, `adds: ${b}`);
+    assert.equal(isRepeatedNoteLine(a, b), false, `repeat: ${b}`);
+    const intra = dedupeSectionLines(`## T\n${a}\n${b}`);
+    assert.ok(intra.includes(a) && intra.includes(b), `intra-section lost one of: ${a} / ${b}`);
+    const strip = stripLinesAlreadyCovered(`## X\n${b}`, [{ sectionId: "a", markdown: `## Topic\n${a}` }]);
+    assert.ok(strip.includes(b.replace(/^- /, "")), `live guard dropped: ${b}`);
+    const doc = join(consolidateNoteDocument([
+      { sectionId: "a", markdown: `## Topic\n${a}` },
+      { sectionId: "b", markdown: `## Topic again\n${b}` },
+    ]).sections);
+    assert.ok(doc.includes(a.replace(/^- /, "")) && doc.includes(b.replace(/^- /, "")), `document lost one of: ${a} / ${b}`);
+  }
+  // A short word after a number that is not a unit does not block a real repeat.
+  assert.equal(lineAddsNewInformation("- Holds 3 of the frames.", "- Holds 3 frames."), false);
+});
+
 test("repeated line / definition predicates require near-equivalent meaning", () => {
   const a = "- **Beta gate:** Checks the input size before anything else runs.";
   assert.equal(isRepeatedNoteLine(a, "- The beta gate checks the input size before anything else runs."), true);
@@ -330,6 +357,65 @@ test("a section is removed only when every body line is already said elsewhere",
   assert.equal(res.removeSectionIds.includes("m"), false, "section with a unique fact kept");
   assert.match(join(res.sections), /above 4 KB/);
   assert.deepEqual(findUncoveredLines(pureRepeat.markdown, [owner]), []);
+});
+
+test("a student-owned owner cannot absorb nested details, so the repeated parent keeps them", () => {
+  const owner = {
+    sectionId: "o",
+    studentEdited: true,
+    markdown: "## Alpha gate\n- **Alpha gate:** Coordinates the hand-off between the input stage and the processing stage.",
+  };
+  const later = {
+    sectionId: "l",
+    markdown: [
+      "## Alpha gate again",
+      "- **Alpha gate:** Coordinates the hand-off between the input stage and the processing stage.",
+      "  - Only the granite variant supports a 3-way hand-off.",
+      "  - The velvet variant times out after 40 ms.",
+      "- **Exception:** Skipped for harbor payloads.",
+    ].join("\n"),
+  };
+  for (const text of [join(consolidateRepeatedExplanations([owner, later]).sections), join(consolidateNoteDocument([owner, later]).sections)]) {
+    assert.match(text, /granite variant/);
+    assert.match(text, /40 ms/);
+    assert.match(text, /harbor payloads/);
+  }
+  // With an AI-owned owner the children fold into it and the repeat is removed.
+  const aiOwner = { ...owner, studentEdited: false };
+  const res = consolidateRepeatedExplanations([aiOwner, later]);
+  const o = res.sections.find((s) => s.sectionId === "o")!;
+  assert.match(o.markdown, /granite variant/);
+  assert.equal(join(res.sections).split("Coordinates the hand-off").length - 1, 1);
+});
+
+test("semantic trim never offers a parallel fact about another established concept", () => {
+  const secs = [
+    { sectionId: "a", markdown: "## Alpha gate\n- **Alpha gate:** Holds the granite record until the downstream side is idle.\n- **Consequence:** Disabling the alpha gate doubles coral latency.\n- **Stage 1:** During the lantern phase the alpha gate buffers input." },
+    { sectionId: "b", markdown: "## Beta relay\n- **Beta relay:** Holds the velvet record until the downstream side is idle.\n- **Consequence:** Disabling the beta relay doubles dune latency.\n- **Stage 1:** During the meadow phase the beta relay buffers input." },
+  ];
+  const cands = findSemanticTrimCandidates(secs);
+  const offered = cands.flatMap((c) => c.later.flatMap((l) => l.lines.map((x) => x.text)));
+  assert.deepEqual(offered.filter((t) => /dune|meadow/.test(t)), [], `offered: ${offered.join(" | ")}`);
+  // Worst case (model drops everything offered) still keeps every fact.
+  const trims = cands.flatMap((cd) => cd.later.map((l) => ({ sectionId: l.sectionId, dropLineNumbers: l.lines.map((x) => x.n) })));
+  const text = join(applySemanticTrims(secs, trims, cands).sections);
+  for (const m of ["coral", "dune", "lantern", "meadow", "granite", "velvet"]) assert.ok(text.includes(m), `lost ${m}`);
+});
+
+test("navigation strip removes 'see above for the …' and 'only new details here' fragments", () => {
+  const out = stripEditorialNavigationLines(
+    [
+      "## Alpha gate again",
+      "- See above for the definition; only new details here.",
+      "- See above for details, the granite variant is skipped.",
+      "- The velvet variant times out after 40 ms (only new details here).",
+    ].join("\n")
+  );
+  assert.equal(containsEditorialNavigation(out), false, out);
+  assert.doesNotMatch(out, /only new details here/i);
+  assert.doesNotMatch(out, /^- For the definition/m);
+  assert.match(out, /granite variant is skipped/);
+  assert.match(out, /velvet variant times out after 40 ms/);
 });
 
 test("mergeDuplicateGroup keeps every unique line of absorbed sections", () => {

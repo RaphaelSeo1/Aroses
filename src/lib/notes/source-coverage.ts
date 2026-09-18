@@ -251,7 +251,13 @@ function lineCoveredByNotes(line: string, noteLines: string[]): boolean {
  */
 export function uncoveredSourceLines(unit: SourceUnit, notesMarkdown: string): string[] {
   const noteLines = notesMarkdown.split("\n").filter((l) => l.trim().length >= 8);
-  return sourceLines(unit.text).filter((l) => !lineCoveredByNotes(l, noteLines));
+  const picked: string[] = [];
+  for (const line of sourceLines(unit.text)) {
+    // A sentence the source itself repeats is copied once.
+    if (lineCoveredByNotes(line, noteLines) || lineCoveredByNotes(line, picked)) continue;
+    picked.push(line);
+  }
+  return picked;
 }
 
 export type RestoredSourceSection = {

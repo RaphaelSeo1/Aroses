@@ -24,6 +24,7 @@ import {
   lineTokenOverlap,
   normalizeLine,
   novelContentTokens,
+  numberTokens,
   placeIncomingNoteLines,
   tokenizeNoteText,
 } from "@/lib/live-notes/fold-note-markdown";
@@ -203,9 +204,10 @@ export function stripEditorialNavigationLines(markdown: string): string {
     const m = line.match(/^(\s*(?:(?:[-*]|\d+\.)\s+)?)(.*)$/);
     const prefix = m?.[1] ?? "";
     let body = (m?.[2] ?? line).trim();
-    // Leading clause: "As mentioned earlier, …" / "See above — …"
+    // Leading clause: "As mentioned earlier, …" / "See above — …" /
+    // "See above for the definition; …" (the "for …" names what is above).
     body = body.replace(
-      /^(?:\(?(?:as\s+(?:noted|mentioned|discussed|explained|described|covered|defined|stated|shown|we saw)\s+(?:above|below|earlier|previously|before)|see\s+(?:"[^"]*"\s+)?(?:above|below|earlier))\)?)[,:;—–-]?\s*/i,
+      /^(?:\(?(?:as\s+(?:noted|mentioned|discussed|explained|described|covered|defined|stated|shown|we saw)\s+(?:above|below|earlier|previously|before)|see\s+(?:"[^"]*"\s+)?(?:above|below|earlier)(?:\s+for\s+(?:the\s+|a\s+|an\s+|its\s+)?[a-z]+(?:\s+[a-z]+)?)?)\)?)[,:;—–-]?\s*/i,
       ""
     );
     // Trailing clause: "… — see "Topic" above; only new details here."
@@ -213,6 +215,8 @@ export function stripEditorialNavigationLines(markdown: string): string {
       /\s*[—–-]?\s*\(?(?:see\s+(?:"[^"]*"\s+)?(?:above|below|earlier)|as\s+(?:noted|mentioned|discussed|explained|described|covered|defined)\s+(?:above|earlier|previously))\)?[;,.]?\s*(?:only new details here\.?)?\s*$/i,
       ""
     );
+    // Editorial remark left over anywhere in the line.
+    body = body.replace(/\s*[;,.—–-]?\s*\(?only new details here\.?\)?/i, "");
     const remainder = normalizeLine(body);
     // Pure navigation (or a bare bold label left behind) carries no fact.
     if (remainder.length < MIN_LINE_CHARS) continue;
@@ -415,6 +419,13 @@ export function consolidateRepeatedExplanations(
       const owner = sections[match.i]!;
       const ownerLines = lines[match.i]!;
       const ownerLine = ownerLines[match.ei]!;
+      // A student-owned owner cannot adopt the nested details under this
+      // repeated parent, so removing the group would delete them. Keep it.
+      if (owner.studentEdited && group.length > 1) {
+        keep.push(...group);
+        li = next;
+        continue;
+      }
       if (!owner.studentEdited) {
         // Owner adopts the later wording only when that loses nothing: the
         // later line supersedes (contains) the owner line, or the two are
@@ -571,6 +582,7 @@ export function findSemanticTrimCandidates(
   const maxLines = opts?.maxLinesPerSection ?? 6;
   const byId = new Map(sections.map((s) => [s.sectionId, s] as const));
   const out: SemanticTrimCandidate[] = [];
+  const established = coverage.concepts.filter((c) => c.state !== "mentioned");
 
   for (const c of coverage.concepts) {
     if (c.state === "mentioned") continue;
@@ -582,6 +594,18 @@ export function findSemanticTrimCandidates(
       .slice(0, maxLines)
       .map((l) => l.trim());
     if (ownerLines.length === 0) continue;
+    // Other established concepts the owner lines never mention. A later line
+    // about one of those is a parallel fact about a different thing (same
+    // lead-in label, different object) — not the owner's to judge.
+    const foreignKeys = established
+      .map((o) => o.key)
+      .filter(
+        (k) =>
+          k !== c.key &&
+          !k.includes(c.key) &&
+          !c.key.includes(k) &&
+          !ownerLines.some((o) => lineMentionsConcept(o, k))
+      );
 
     const later: SemanticTrimCandidate["later"] = [];
     for (const sid of c.mentionedIn) {
@@ -599,6 +623,7 @@ export function findSemanticTrimCandidates(
         // line. Lines that merely mention the concept while stating their own
         // fact (numbers, steps, examples) are not the model's to judge.
         if (isNumberedStep(l)) continue;
+        if (foreignKeys.some((k) => lineMentionsConcept(l, k))) continue;
         const resembles = ownerLines.some(
           (o) => lineTokenOverlap(normalizeLine(o), normalizeLine(l)) >= 0.35
         );
@@ -641,7 +666,7 @@ export const REPEATED_EXPLANATIONS_JOB_RULES = `3) REPEATED EXPLANATIONS — Giv
 
 /** User-prompt instruction for the bounded semantic trim call. */
 export const SEMANTIC_TRIM_INSTRUCTION =
-  'Return the JSON now. Drop ONLY later line numbers whose removal loses effectively zero information — everything they say is already in the OWNER lines. Apply the job-3 checklist per line (unique fact? distinct example? different angle? mechanism? qualification/exception? number/name/stage/relationship/distinction? instructor context?): if any item is unique to the later line, keep that entire line. Same concept is not the same content. When uncertain, keep. Return { "trims": [] } when nothing is a pure repeat. Output the JSON object only — no reasoning, no prose.';
+  'Return the JSON now. Drop ONLY later line numbers whose removal loses effectively zero information — everything they say is already in the OWNER lines. Apply the job-3 checklist per line (unique fact? distinct example? different angle? mechanism? qualification/exception? number/name/stage/relationship/distinction? instructor context?): if any item is unique to the later line, keep that entire line. Same concept is not the same content. When uncertain, keep. Return { "trims": [] } when nothing is a pure repeat. "sectionId" is the exact id shown in square brackets after LATER (e.g. LATER [s-7] → "s-7"), and "dropLineNumbers" are the numbers in parentheses before each later line. Output the JSON object only — no reasoning, no prose.';
 
 export function formatSemanticTrimCandidates(
   candidates: SemanticTrimCandidate[]
@@ -754,8 +779,12 @@ export function semanticTrimClearlyLosesInformation(
   if (ownerLines.length === 0) return true;
   const ownerJoined = ownerLines.join(" ");
   const nb = normalizeLine(laterLine);
-  const ownerNums = new Set(normalizeLine(ownerJoined).match(/\d+(?:\.\d+)?/g) ?? []);
-  for (const n of nb.match(/\d+(?:\.\d+)?/g) ?? []) if (!ownerNums.has(n)) return true;
+  const ownerNums = new Set(numberTokens(normalizeLine(ownerJoined)));
+  for (const n of numberTokens(nb)) if (!ownerNums.has(n)) return true;
+  // A negated line is never a repeat of owner lines that carry no negation.
+  if (/\b(?:not|no|never|cannot|\w+n t)\b/.test(nb) && !/\b(?:not|no|never|cannot|\w+n t)\b/.test(normalizeLine(ownerJoined))) {
+    return true;
+  }
   const novel = novelContentTokens(ownerJoined, laterLine);
   if (novel.length === 0) return false;
   const novelSet = new Set(novel);

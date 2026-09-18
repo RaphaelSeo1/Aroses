@@ -118,6 +118,40 @@ test("restore copies unique source lines, never invents, and fills a skipped ran
   assert.deepEqual(findUnrepresentedSourceUnits(source, after).map((m) => m.id), []);
 });
 
+test("restore copies a sentence the source itself repeats only once", () => {
+  const source = units([
+    [
+      "1",
+      "Alpha gate",
+      "The alpha gate latches the granite token before release. The alpha gate latches the granite token before release. It times out after 40 ms.",
+    ],
+  ]);
+  const notes =
+    "## Other\n- Beta relay holds the velvet record until idle and confirms with the harbor checksum every cycle.";
+  const { sections } = restoreUnrepresentedSourceUnits(source, notes);
+  const lines = sections.flatMap((s) => s.markdown.split("\n")).filter((l) => l.startsWith("- "));
+  assert.equal(lines.length, 2, lines.join(" | "));
+  assert.equal(new Set(lines).size, 2);
+});
+
+test("multi-upload: file B repeats file A plus one correction — only the correction is restored", () => {
+  const A =
+    "Alpha gate coordinates the hand-off between the input stage and the processing stage. It latches the granite token before releasing. It times out after 40 ms unless the velvet flag is set.";
+  const B =
+    "Alpha gate coordinates the hand-off between the input stage and the processing stage. It latches the granite token before releasing. Correction: it times out after 45 ms unless the velvet flag is set.";
+  const source: SourceUnit[] = [
+    { id: "A:1", sourceId: "A", order: 0, label: "Alpha gate", text: A },
+    { id: "B:1", sourceId: "B", order: 1, label: "Alpha gate (errata)", text: B },
+  ];
+  const notes =
+    "## Alpha gate\n- **Alpha gate:** Coordinates the hand-off between the input stage and the processing stage.\n- Latches the granite token before releasing.\n- Times out after 40 ms unless the velvet flag is set.";
+  const { sections } = restoreUnrepresentedSourceUnits(source, notes);
+  const lines = sections.flatMap((s) => s.markdown.split("\n")).filter((l) => l.startsWith("- "));
+  assert.equal(lines.length, 1, lines.join(" | "));
+  assert.match(lines[0]!, /45 ms/);
+  assert.ok(`${A} ${B}`.includes(lines[0]!.replace(/^- /, "")), "restored text must be source wording");
+});
+
 test("multi-upload: unique facts from a second file are restored, shared concepts are not duplicated", () => {
   const source: SourceUnit[] = [
     {

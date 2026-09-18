@@ -236,21 +236,56 @@ function capitalizedTerms(raw: string): string[] {
 }
 
 /**
+ * Negation words the tokenizer drops (too short / stop-listed). A flipped
+ * polarity is a different fact, so it must be compared explicitly.
+ * Normalized text turns "isn't" into "isn t", hence the `\w+n t` form.
+ */
+const NEGATION_RE = /\b(?:not|no|never|cannot|\w+n t)\b/;
+
+/** Short words that may follow a number without being its unit. */
+const NOT_A_UNIT = new Set([
+  "of", "to", "in", "on", "at", "by", "is", "or", "as", "an", "it", "be", "if",
+  "so", "do", "up", "we", "he", "us", "my", "me", "am", "no", "per", "key",
+  "new", "old", "big", "top", "end", "all", "any", "out", "off", "one", "two",
+  "six", "ten",
+]);
+
+/**
+ * Numbers with their unit when one follows ("4 kb", "40 ms", "3 mg"). Units
+ * are usually 1–3 letters and would otherwise be dropped by the tokenizer, so
+ * "4 KB" vs "4 MB" or "3 mg" vs "3 g" would look identical.
+ */
+export function numberTokens(norm: string): string[] {
+  const out: string[] = [];
+  const re = /(\d+(?:\.\d+)?)(?: ([a-z]{1,3})(?= |$))?/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(norm))) {
+    const unit = m[2];
+    const isUnit =
+      unit && !STOP.has(unit) && !NOVELTY_FILLER.has(unit) && !NOT_A_UNIT.has(unit);
+    out.push(isUnit ? `${m[1]} ${unit}` : m[1]!);
+  }
+  return out;
+}
+
+/**
  * Does `later` carry information that `earlier` does not? True when `later`
- * has a number the earlier line lacks, a capitalized term (name / acronym /
- * label) the earlier line lacks, two or more novel content tokens, or one
- * novel token that SUBSTITUTES for an earlier token (a different object ⇒ a
- * different fact) or is a large share of a short line. A single ADDED word
- * on top of everything the earlier line said ("is the stage that…",
- * "(recap)") is rewording, not information. Callers that delete a line must
- * only do so when this returns false for (kept, removed).
+ * has a number (with its unit) the earlier line lacks, flips negation, has a
+ * capitalized term (name / acronym / label) the earlier line lacks, two or
+ * more novel content tokens, or one novel token that SUBSTITUTES for an
+ * earlier token (a different object ⇒ a different fact) or is a large share
+ * of a short line. A single ADDED word on top of everything the earlier line
+ * said ("is the stage that…", "(recap)") is rewording, not information.
+ * Callers that delete a line must only do so when this returns false for
+ * (kept, removed).
  */
 export function lineAddsNewInformation(earlier: string, later: string): boolean {
   const na = normalizeLine(earlier);
   const nb = normalizeLine(later);
   if (!nb || na === nb) return false;
-  const numsA = new Set(na.match(/\d+(?:\.\d+)?/g) ?? []);
-  for (const n of nb.match(/\d+(?:\.\d+)?/g) ?? []) {
+  if (NEGATION_RE.test(na) !== NEGATION_RE.test(nb)) return true;
+  const numsA = new Set(numberTokens(na));
+  for (const n of numberTokens(nb)) {
     if (!numsA.has(n)) return true;
   }
   const novel = novelContentTokens(na, nb);

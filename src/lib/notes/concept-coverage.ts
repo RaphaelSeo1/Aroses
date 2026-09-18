@@ -57,7 +57,7 @@ export type NoteSectionLike = { sectionId: string; markdown: string };
  * concepts and must never be tracked as "already explained" topics.
  */
 const STRUCTURAL_LABEL_RE =
-  /^(why it matters|open question|remember(?: this)?|takeaways?|summary|key terms?|key vocabulary|key ideas?|key points?|self[- ]check|examples?|worked example|notes?|definitions?|overview|recap|terms?|mechanisms?|purpose|stages?|steps?|exceptions?|evidence|results?|formulas?|applications?|contrasts?|connections?|contexts?|background|details?|caution|warning|tips?|importants?|significance)$/i;
+  /^(why it matters|open question|remember(?: this)?|takeaways?|key takeaways?|summary|key terms?|key vocabulary|key ideas?|key points?|self[- ]check|examples?|worked example|notes?|definitions?|overview|recap|terms?|mechanisms?|purpose|stages?|steps?|exceptions?|evidence|results?|formulas?|applications?|contrasts?|comparisons?|consequences?|implications?|limitations?|advantages?|disadvantages?|causes?|effects?|analog(?:y|ies)|intuition|caveats?|pitfalls?|misconceptions?|reminders?|bottom line|exam tips?|connections?|contexts?|background|details?|caution|warning|tips?|importants?|significance|(?:stage|step|phase|part|case|level|round|rule|law|type|point) \d+)$/i;
 
 const DEFINITION_CUE_RE =
   /\b(?:is|are|refers? to|means?|denotes?|defined as|describes?|consists? of|the process (?:by which|of)|the (?:set|sum|ratio|number|amount|rate|force|study|practice|act|state|ability|tendency|measure) (?:of|by|that|which))\b/i;
