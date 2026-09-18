@@ -100,10 +100,12 @@ const FILLER = new Set([
 
 /** Administrative / outline units: not teaching content unless a hard fact is on them. */
 const AGENDA_RE =
-  /\b(agenda|today we will|today's agenda|logistics|announcements?|attendance|welcome(?: to)?(?: the)?(?: course)?|questions from last time|looking ahead|learning objectives|objectives|outline|overview of (?:today|the lecture)|housekeeping|office hours|homework due|reading assignment)\b/i;
+  /\b(agenda|today we will|today's agenda|logistics|announcements?|attendance|welcome(?: to)?(?: the)?(?: course)?|questions from last time|looking ahead|learning objectives|objectives|learning goals|outline|overview of (?:today|the lecture)|housekeeping|office hours|homework due|reading assignment|roadmap|lecture plan)\b/i;
+/** A slide whose title is just "Today" / "Outline" / "Plan" is an agenda slide. */
+const AGENDA_LABEL_RE = /^(?:today|outline|plan|topics|contents|overview|goals|agenda|schedule)\s*:?\s*$/i;
 /** A hard fact that makes an agenda-looking unit worth covering anyway. */
 const HARD_FACT_CUE_RE =
-  /\b(define[ds]? as|definition|equation|formula|theorem|proof|\d+\s*(?:%|percent|mg|ml|kg|km|ms|nm|µm|hz|kb|mb))\b|=/i;
+  /\b(?:define[ds]? as|definition|equation|formula|theorem|lemma|proof|\d+\.\d+|\d{1,3}(?:,\d{3})+|\d+\s*(?:%|percent|(?!(?:of|in|on|at|to|is|or|as|by|an|we|it|be|if|so|do|up|no|am|us|my|me|he)\b)[a-zµ]{1,3}\b))|[=$€£¥]/i;
 const VISUAL_PLACEHOLDER_RE = /^\(?slide \d+ — little selectable text; mostly visual\.?\)?$/i;
 const NOISE_RE =
   /^(?:https?:\/\/\S+|www\.\S+|@\w+|questions\??|any questions\??|thank you\.?|thanks\.?|end|the end|fin|slide \d+|page \d+|\d+|[^a-z0-9]+)$/i;
@@ -114,14 +116,24 @@ const CITATION_NOISE_RE = /\bdoi:\S+|https?:\/\/\S+|www\.\S+|\b\d+:\d+[-–]\d+\
  * not teaching content.
  */
 const HEADER_LINE_RE =
-  /^(?:[A-Z]{2,6}\s?\d{1,4}[A-Z]?\s*(?:[—–:|-]\s*|(?:lecture|week|session)\b)[^.]{0,80}$|(?:lecture|week|session|module|chapter)\s+\d+\b[^.]{0,60}$|(?:dr|prof|professor|instructor|lecturer|ta|teaching assistant)\.?\s+\p{Lu}[^.]{0,40}$|(?:reading|readings|textbook|homework|assignment|due|office hours?|slides? by|prepared by|presented by)\b[^.]{0,60}$)/iu;
-const HEADER_VERB_RE = /\b(?:is|are|was|were|has|have|had|can|will|does|do|did|means|causes?|shows?)\b/i;
+  /^(?:[A-Z]{2,6}\s?\d{1,4}[A-Z]?(?:\s*\/\s*[A-Z]{2,6}\s?\d{1,4}[A-Z]?)*\s*(?:[—–:|-]\s*|(?:lecture|week|session)\b)[^.]{0,100}$|(?:lecture|week|session|module|chapter|unit|class)\s+\d+\b[^.]{0,60}$|(?:dr|prof|professor|instructor|lecturer|ta|teaching assistant)\.?:?\s+\p{Lu}[^.]{0,40}$|(?:reading|readings|textbook|homework|assignment|problem set|due|office hours?|slides? by|prepared by|presented by|next (?:week|time|lecture|class))\b.{0,60}$)/iu;
+/** Lowercase only: a title's "Causes, Course, and Consequences" is not a clause. */
+const HEADER_VERB_RE = /\b(?:is|are|was|were|has|have|had|can|will|does|do|did|means|causes?|shows?)\b/;
 /**
- * "Hirano and Mitchison, 1994", "Hassold & Hunt (2001)", "József Gelei, 1922",
- * "et al. Science 2018;359:…" — attribution, not a fact of its own.
+ * "Smith and Jones, 1994", "Lee & Park (2001)", "A. Author, 1922",
+ * "et al. J. Something 2018;359:…", "Univ. Press, 2005, pp. 12–30" —
+ * attribution, not a fact of its own. Matches the SHAPE of a reference
+ * (author list + year, "et al.", publication-structure words + year,
+ * year;volume:pages), never any particular journal or field.
  */
 const CITATION_RE =
-  /(?:\b\p{Lu}[\p{L}’'-]+(?:,? (?:and|&) \p{Lu}[\p{L}’'-]+)+,? \(?(?:19|20)\d{2}\)?|^\p{Lu}[\p{L}’'-]+(?: \p{Lu}[\p{L}’'-]+){0,3},? \(?(?:19|20)\d{2}\)?\.?$|\bet al\.?|\b(?:Nature|Science|Cell|Journal|Proc|Proceedings|Reviews|Genetics|Lancet|PNAS|eLife|Annu|Rev|vol\.?|pp\.?)\b.*\b(?:19|20)\d{2}\b|\b(?:19|20)\d{2}\b[;:]\d+)/u;
+  /(?:^\p{Lu}[\p{L}’'-]+(?:,? (?:and|&) \p{Lu}[\p{L}’'-]+)+,? \(?(?:19|20)\d{2}\)?\.?$|^\p{Lu}[\p{L}’'-]+(?: \p{Lu}\.)*(?: \p{Lu}[\p{L}’'-]+)?,? \(?(?:19|20)\d{2}\)?\.?$|\bet al\.?|\b(?:J\.|Journal|Proc\.?|Proceedings|Review|Reviews|Rev\.|Annu\.?|Annual|Trans\.?|Transactions|Bulletin|Quarterly|Press|Ed\.|Eds\.|vol\.?|no\.|pp\.?|ch\.|chap\.)\b.*\b(?:19|20)\d{2}\b|\b(?:19|20)\d{2}\b[;:]\d+)/u;
+/**
+ * A segment with a finite verb is a statement, not a reference — "The
+ * Journal of Commerce wrote in 1929 that prices fell 40%" is a fact.
+ */
+const STATEMENT_VERB_RE =
+  /\b(?:is|are|was|were|has|have|had|can|will|does|do|did|means|causes?|shows?|showed|wrote|reported|found|argued|said|stated|declared|began|ended|became|led|rose|fell|signed|passed|adopted|introduced|created|defined|proposed)\b/i;
 /** Exponent digit split from its unit by extraction ("cm 3" for cm³). */
 const EXPONENT_RE = /\b(cm|mm|km|nm|µm|um|m|ft|in|dm)\s+([23])\b/gi;
 const NUMBER_WORDS: Record<string, string> = {
@@ -186,7 +198,7 @@ function isNoiseSegment(seg: string): boolean {
   if (!t) return true;
   if (NOISE_RE.test(t)) return true;
   if (/^(?:see|source|from|credit|image|photo|courtesy)\s*:?\s*https?:/i.test(t)) return true;
-  if (HEADER_LINE_RE.test(t) && t.split(/\s+/).length <= 8 && !HEADER_VERB_RE.test(t)) return true;
+  if (HEADER_LINE_RE.test(t) && t.split(/\s+/).length <= 14 && !HEADER_VERB_RE.test(t)) return true;
   return false;
 }
 
@@ -194,7 +206,11 @@ function isNoiseSegment(seg: string): boolean {
 function isCitationSegment(seg: string): boolean {
   if (!CITATION_RE.test(seg)) return false;
   const words = seg.split(/\s+/).length;
-  return words <= 16;
+  if (words > 16) return false;
+  // "et al." and year;volume:pages are unambiguous; anything else that
+  // reads as a sentence (has a verb) is a dated fact, not a reference.
+  if (/\bet al\b/i.test(seg) || /\b(?:19|20)\d{2}\b[;:]\d+/.test(seg)) return true;
+  return !STATEMENT_VERB_RE.test(seg);
 }
 
 /**
@@ -241,7 +257,9 @@ function classifyContribution(
     const data =
       (numbers.length > 0 && tokens.length >= (tableRow ? 1 : 2)) ||
       (equation && tokens.length >= 2) ||
-      (tableRow && tokens.length >= 3);
+      // " | " rows only come from table detection, so a row that names
+      // anything at all is data ("Quicksort | Θ(n log n) | Θ(n²) | No").
+      (tableRow && tokens.length >= 1);
     if (!data) return { kind: "label", tokens, numbers, terms };
     return { kind: "sentence", tokens, numbers, terms };
   }
@@ -347,13 +365,15 @@ export function buildSourceCoverageLedger(units: SourceUnit[]): SourceCoverageLe
     }
 
     let kind: LedgerUnitKind = "substantive";
+    const agenda =
+      (AGENDA_RE.test(blob) || AGENDA_LABEL_RE.test(label)) && !HARD_FACT_CUE_RE.test(blob);
     if (contributions.length === 0) {
       const titleOnly =
         labels.length > 0 &&
         labels.length <= 2 &&
         labels.every((l) => l.split(/\s+/).length <= 6) &&
         (labels.length === 1 || normalizeLine(labels[0]!) === normalizeLine(label));
-      if (AGENDA_RE.test(blob) && !HARD_FACT_CUE_RE.test(blob)) {
+      if (agenda) {
         // Agenda / objectives / logistics made of short label lines.
         kind = "non-substantive";
       } else if (!visualPlaceholder && titleOnly) {
@@ -362,7 +382,7 @@ export function buildSourceCoverageLedger(units: SourceUnit[]): SourceCoverageLe
       } else {
         kind = visualPlaceholder || labels.length > 0 ? "visual-only" : "non-substantive";
       }
-    } else if (AGENDA_RE.test(blob) && !HARD_FACT_CUE_RE.test(blob)) {
+    } else if (agenda) {
       kind = "non-substantive";
     } else if (
       // Title / transition slide: one short line, nothing else on it.
@@ -645,7 +665,7 @@ const FRAGMENT_START_RE =
   /^(?:this|these|those|here|it|its|in|on|at|of|for|and|or|but|so|the|a|an|there|then|also|however|as|by|to|from|with|we|you|they|he|she)\b/i;
 /** Main verbs: the words before one form the subject noun phrase. */
 const VERB_SPLIT_RE =
-  /\s(?:is|are|was|were|has|have|had|causes?|caused|allows?|allowed|requires?|required|results?|resulted|leads?|led|undergo(?:es)?|underwent|depends?|depended|holds?|held|regulates?|regulated|induces?|induced|promotes?|promoted|maintains?|maintained|produces?|produced|occurs?|occurred|shows?|showed|reveals?|revealed|ensures?|ensured|provides?|provided|disrupts?|disrupted|means|involves?|involved|includes?|included|forms?|formed|creates?|created|enables?|enabled|prevents?|prevented|generates?|generated|releases?|released|separates?|separated|binds?|bound|contains?|contained|remains?|remained|relies|rely|rel(?:y|ies) on|can|may|will|must|should|does|do|did)\s/i;
+  /\s(?:is|are|was|were|has|have|had|causes?|caused|allows?|allowed|requires?|required|results?|resulted|leads?|led|undergo(?:es)?|underwent|depends?|depended|holds?|held|regulates?|regulated|induces?|induced|promotes?|promoted|maintains?|maintained|produces?|produced|occurs?|occurred|shows?|showed|reveals?|revealed|ensures?|ensured|provides?|provided|disrupts?|disrupted|means|involves?|involved|includes?|included|forms?|formed|creates?|created|enables?|enabled|prevents?|prevented|generates?|generated|releases?|released|separates?|separated|binds?|bound|contains?|contained|remains?|remained|relies|rely|rel(?:y|ies) on|computes?|computed|returns?|returned|runs?|ran|takes?|took|uses?|used|defines?|defined|denotes?|denoted|describes?|described|represents?|represented|equals?|equaled|implies|implied|follows?|followed|assumes?|assumed|predicts?|predicted|estimates?|estimated|measures?|measured|determines?|determined|affects?|affected|influences?|influenced|increases?|increased|decreases?|decreased|reduces?|reduced|raises?|raised|lowers?|lowered|controls?|controlled|governs?|governed|applies|applied|becomes?|became|begins?|began|ends?|ended|rises?|rose|falls?|fell|grows?|grew|argues?|argued|states?|stated|claims?|claimed|signed|declared|established|introduced|adopted|passed|founded|invaded|defeated|minimi[sz]es?|maximi[sz]es?|converges?|converged|sorts?|sorted|iterates?|iterated|stores?|stored|maps?|mapped|can|may|will|must|should|does|do|did)\s/i;
 
 function titleLike(text: string): boolean {
   const words = text.split(/\s+/).filter(Boolean);

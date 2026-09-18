@@ -20,7 +20,7 @@ const STANDALONE_BEFORE = new Set([
   "any", "one", "two", "no", "so", "if", "up", "do", "he", "she", "they",
   "you", "my", "our", "his", "her", "their", "these", "those", "new",
   "old", "big", "few", "own", "same", "next", "last", "first", "were",
-  "cells", "cell", "de", "la", "le", "el", "et", "al", "vs",
+  "de", "la", "le", "el", "et", "al", "vs",
 ]);
 
 /**
@@ -60,7 +60,7 @@ const GLUE_LEFT = "\u0001";
  */
 export function repairLigatureSplits(text: string): string {
   const marked = text.replace(
-    /(\S)\t(fi|fl|ff|ffi|ffl)(?= )/gi,
+    /(\S)\t(fi|fl|ff|ffi|ffl)(?= )/g,
     (_, before: string, lig: string) => `${before} ${GLUE_LEFT}${lig}`
   );
   const words = marked.replace(/\t/g, " ").split(/ +/);
@@ -70,7 +70,9 @@ export function repairLigatureSplits(text: string): string {
     const w = words[i]!;
     const forced = w.startsWith(GLUE_LEFT);
     const lig = forced ? w.slice(1) : w;
-    if (LIGATURES.has(lig.toLowerCase())) {
+    // Ligature glyphs are lowercase; "FI schedule", "FL", "FF" are
+    // abbreviations and must stay separate words.
+    if (LIGATURES.has(lig)) {
       const next = words[i + 1] ?? "";
       const prev = out.length > 0 ? out[out.length - 1]! : "";
       if (/^[a-z]/.test(next)) {
@@ -105,16 +107,17 @@ export function repairLigatureSplits(text: string): string {
  * onto a neighbouring sentence.
  */
 export function normalizeSourceText(text: string): string {
-  return text
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .flatMap((line) => {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const tableRow = markTableRows(lines);
+  return lines
+    .flatMap((line, i) => {
       const parts = splitTextBoxes(
         line
           // TAB glued to the previous token + ligature: extractor's glue signal.
-          .replace(/(\S)\t(fi|fl|ff|ffi|ffl)(?= )/gi, `$1 ${GLUE_LEFT}$2`)
+          .replace(/(\S)\t(fi|fl|ff|ffi|ffl)(?= )/g, `$1 ${GLUE_LEFT}$2`)
           // TAB before a word-initial ligature: plain space.
-          .replace(/\t(fi|fl|ff|ffi|ffl)(?= )/gi, " $1")
+          .replace(/\t(fi|fl|ff|ffi|ffl)(?= )/g, " $1"),
+        tableRow[i] === true
       )
         .map((part) =>
           repairLigatureSplits(part)
@@ -139,7 +142,26 @@ export function normalizeSourceText(text: string): string {
  * punctuation, or preceded by a connector/comma, continues the sentence;
  * any other TAB starts a new line.
  */
-function splitTextBoxes(line: string): string[] {
+/**
+ * Table detection at the slide level: two or more consecutive lines with the
+ * same number (≥ 3) of TAB-separated cells are the rows of one table, whatever
+ * the cells contain ("Merge sort | Θ(n log n) | Θ(n) | Yes"). A lone row of
+ * three short labels ("Lamina / INM / Nuclear envelope") is diagram text.
+ */
+function markTableRows(lines: string[]): boolean[] {
+  const counts = lines.map((l) => l.split("\t").map((c) => c.trim()).filter(Boolean).length);
+  const marks = lines.map(() => false);
+  for (let i = 0; i < lines.length; i++) {
+    if (counts[i]! < 3) continue;
+    const prev = i > 0 ? counts[i - 1]! : 0;
+    const next = i + 1 < lines.length ? counts[i + 1]! : 0;
+    if (Math.abs(prev - counts[i]!) <= 1 && prev >= 3) marks[i] = true;
+    if (Math.abs(next - counts[i]!) <= 1 && next >= 3) marks[i] = true;
+  }
+  return marks;
+}
+
+function splitTextBoxes(line: string, knownTableRow = false): string[] {
   if (!line.includes("\t")) return [line];
   const parts = line.split("\t");
   // Table row: three or more short cells on one visual row stay together
@@ -148,8 +170,8 @@ function splitTextBoxes(line: string): string[] {
   const cells = parts.map((p) => p.trim()).filter(Boolean);
   if (
     cells.length >= 3 &&
-    cells.every((c) => c.split(/\s+/).length <= 4) &&
-    cells.some((c) => /\d/.test(c))
+    cells.every((c) => c.split(/\s+/).length <= (knownTableRow ? 12 : 4)) &&
+    (knownTableRow || cells.some((c) => /\d/.test(c)))
   ) {
     return [cells.join(" | ")];
   }
@@ -203,6 +225,9 @@ function wordCount(s: string): number {
 
 function shouldJoin(bufferLines: string[], line: string): boolean {
   if (bufferLines.length === 0) return false;
+  // Table rows ("Merge sort | Θ(n log n) | Yes") stand alone: never the tail
+  // of the line above, never continued by the line below.
+  if (line.includes(" | ") || bufferLines[bufferLines.length - 1]!.includes(" | ")) return false;
   const buffer = bufferLines.join(" ");
   if (endsSentence(buffer)) return false;
   // A lone word is a label/heading, not a sentence start — never extend it.
@@ -269,7 +294,7 @@ export function segmentSourceText(text: string): string[] {
   for (const chunk of joined) {
     const parts = chunk
       .split(
-        /(?<=[.!?…]["”’)]?)(?<!\b(?:Dr|Drs|Prof|Mr|Mrs|Ms|Fig|Figs|Eq|No|St|vs|al|approx|ca|cf|ed|eds|vol|pp|Jr|Sr|Inc|Ltd|e\.g|i\.e|[A-Z])\.)\s+(?=[A-Z0-9“"(])/
+        /(?<=[.!?…]["”’)]?)(?<!\b(?:Dr|Drs|Prof|Mr|Mrs|Ms|Fig|Figs|Eq|Eqs|No|Nos|St|vs|al|approx|ca|cf|ed|eds|Ed|Eds|vol|vols|Vol|Vols|pp|p|Pp|P|ch|chap|Ch|Chap|sec|Sec|Jr|Sr|Inc|Ltd|Co|Corp|Univ|Dept|Gen|Col|Lt|Sgt|Rev|Hon|Mt|Ave|e\.g|i\.e|[A-Z])\.)\s+(?=[A-Z0-9“"(])/
       )
       .map((p) => p.trim())
       .filter(Boolean);

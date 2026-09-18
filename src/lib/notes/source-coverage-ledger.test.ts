@@ -9,6 +9,7 @@ import {
   type CoverageNoteSection,
 } from "@/lib/notes/source-coverage-ledger";
 import type { SourceUnit } from "@/lib/notes/source-coverage";
+import { consolidateNoteDocument } from "@/lib/notes/consolidate-notes";
 
 const unit = (id: string, text: string, label?: string, sourceId?: string): SourceUnit => ({
   id,
@@ -230,4 +231,121 @@ test("multi-source ledger: units from two files keep their source id and are aud
   assert.equal((doc.match(/Competitive inhibitors raise the apparent Km/g) ?? []).length, 1);
   // The shared definition from file B is not copied a second time.
   assert.equal((doc.match(/lower activation energy/g) ?? []).length, 1);
+});
+
+// ── Subject neutrality: humanities / CS headers, agendas, dated facts ─────
+
+test("cross-listed course title, 'Today' agenda, and 'Next week' slides are NON-SUBSTANTIVE in any subject", () => {
+  const ledger = buildSourceCoverageLedger([
+    unit("1", "HIST 240 / ECON 215 — The Great Depression: Causes, Course, and Consequences\nDr. Amara Sethi\nWeek 6"),
+    unit("2", "Today\n1. Thorndike and Skinner\n2. Reinforcement and punishment\n3. Schedules"),
+    unit("3", "CS 201 — Lecture 7: Sorting and Asymptotic Analysis\nInstructor: Dr. Wen Zhao\nHomework 3 due Friday"),
+    unit("4", "PSYC 210 — Lecture 9: Operant Conditioning\nProf. L. Marchetti\nReading: Ch. 6, pp. 188–214"),
+    unit("5", "Next week: World War II economies\nReading: Ch. 8"),
+  ]);
+  for (const u of ledger.units) {
+    assert.equal(u.kind, "non-substantive", `${u.unit.id}: ${u.contributions.map((c) => c.text).join(" / ")}`);
+  }
+});
+
+test("dated statements are facts, not citations; reference shapes still ride along with the previous fact", () => {
+  const ledger = buildSourceCoverageLedger([
+    unit(
+      "6",
+      "Timeline\nOctober 29, 1929 (\"Black Tuesday\"): the Dow fell 12% in one day.\nBritain leaves the gold standard, 1931.\nThe Journal of Commerce wrote in 1929 that prices fell 40%."
+    ),
+    unit(
+      "7",
+      "Evidence\nCountries that left gold earlier recovered sooner.\nEichengreen (1992)\nChimpanzees worked for poker chips exchangeable for grapes.\nWolfe, 1936"
+    ),
+  ]);
+  const six = ledger.units[0]!;
+  const texts6 = six.contributions.map((c) => c.text);
+  assert.ok(texts6.some((t) => /Black Tuesday/.test(t)));
+  assert.ok(texts6.some((t) => /gold standard, 1931/.test(t)), "dated event is a contribution");
+  assert.ok(texts6.some((t) => /Journal of Commerce wrote/.test(t)), "sentence with a verb is a fact");
+  const seven = ledger.units[1]!;
+  const texts7 = seven.contributions.map((c) => c.text);
+  assert.equal(texts7.length, 2, texts7.join(" / "));
+  assert.match(texts7[0]!, /\(Eichengreen \(1992\)\)\.$/);
+  assert.match(texts7[1]!, /\(Wolfe, 1936\)\.$/);
+});
+
+test("tables without digits (complexity classes) are audited row by row", () => {
+  const ledger = buildSourceCoverageLedger([
+    unit(
+      "16",
+      "Table 2. Comparison of sorting algorithms\nAlgorithm\tBest\tWorst\tStable?\nMerge sort\tΘ(n log n)\tΘ(n log n)\tYes\nQuicksort\tΘ(n log n)\tΘ(n²)\tNo\nCounting sort\tΘ(n + k)\tΘ(n + k)\tYes"
+    ),
+  ]);
+  const rows = ledger.units[0]!.contributions.map((c) => c.text);
+  assert.ok(rows.some((r) => r.startsWith("Quicksort |")), rows.join(" / "));
+  assert.ok(rows.some((r) => r.startsWith("Counting sort |")), rows.join(" / "));
+  const audit = auditSourceCoverage(ledger, [
+    sec("s1", "## Sorting\n- Merge sort: Θ(n log n) best and worst, stable.\n- Quicksort: Θ(n log n) best, Θ(n²) worst, not stable."),
+  ]);
+  const u = audit.units[0]!;
+  assert.equal(u.status, "missing");
+  assert.ok(u.missing.some((m) => /Counting sort/.test(m.text)), "the row the notes skipped is the missing delta");
+  assert.ok(!u.missing.some((m) => /^Quicksort/.test(m.text)));
+});
+
+// ── G. multi-file upload (library level: live sessions hold one deck) ─────
+
+test("G: two uploaded files — file B's repeated definitions are REDUNDANT, only B's unique facts are restored, ranges work with non-numeric ids", () => {
+  const inflDef = "Inflation is a sustained rise in the general price level, measured by the percentage change in a price index.";
+  const cpiDef = "The consumer price index (CPI) tracks the cost of a fixed basket of goods bought by a typical urban household.";
+  const A: SourceUnit[] = [
+    { id: "A-1", order: 0, sourceId: "A", label: "Inflation", text: inflDef },
+    { id: "A-2", order: 1, sourceId: "A", label: "CPI", text: cpiDef },
+    { id: "A-3", order: 2, sourceId: "A", label: "Fisher equation", text: "The Fisher equation: real interest rate ≈ nominal rate − expected inflation." },
+    { id: "A-4", order: 3, sourceId: "A", label: "Costs", text: "Menu costs are the costs of changing posted prices; shoe-leather costs are the time spent economizing on cash." },
+  ];
+  const B: SourceUnit[] = [
+    { id: "B-1", order: 4, sourceId: "B", label: "Recap", text: inflDef },
+    { id: "B-2", order: 5, sourceId: "B", label: "Recap", text: `${inflDef}\n${cpiDef}` },
+    { id: "B-3", order: 6, sourceId: "B", label: "Core inflation", text: "Core inflation excludes food and energy prices because they are volatile; in 2022 US headline CPI inflation peaked at 9.1% while core peaked at 6.6%." },
+    { id: "B-4", order: 7, sourceId: "B", label: "Hyperinflation", text: "Hyperinflation is conventionally defined as inflation above 50% per month (Cagan, 1956); Zimbabwe's monthly rate reached 79.6 billion percent in November 2008." },
+    { id: "B-5", order: 8, sourceId: "B", label: "Indexation", text: "Indexation links wages or benefits to a price index; US Social Security payments have been indexed to CPI-W since 1975." },
+  ];
+  const ledger = buildSourceCoverageLedger([...A, ...B]);
+  assert.deepEqual(
+    ledger.units.map((u) => [u.unit.id, u.unit.sourceId]),
+    [["A-1", "A"], ["A-2", "A"], ["A-3", "A"], ["A-4", "A"], ["B-1", "B"], ["B-2", "B"], ["B-3", "B"], ["B-4", "B"], ["B-5", "B"]]
+  );
+  // Notes cover file A completely and only a paraphrase of A's definitions from B.
+  const notes = [
+    sec("s-infl", `## Inflation\n\n${inflDef}\n- ${cpiDef}\n- **Fisher equation:** real interest rate ≈ nominal rate − expected inflation.`),
+    sec("s-costs", "## Costs of Inflation\n\n- **Menu costs** are the costs of changing posted prices.\n- **Shoe-leather costs** are the time spent economizing on cash."),
+    sec("s-recap", `## Recap\n\n${inflDef}\n- ${cpiDef}`),
+  ];
+  const before = auditSourceCoverage(ledger, notes);
+  const status = Object.fromEntries(before.units.map((u) => [u.unitId, u.status]));
+  assert.deepEqual(status, {
+    "A-1": "covered", "A-2": "covered", "A-3": "covered", "A-4": "covered",
+    "B-1": "redundant", "B-2": "redundant", "B-3": "missing", "B-4": "missing", "B-5": "missing",
+  });
+  // Contiguous gap B-3..B-5 detected by source ORDER, not by parsing digits out of ids.
+  assert.deepEqual(before.missingRanges.map((r) => r.ids), [["B-3", "B-4", "B-5"]]);
+  assert.match(formatSourceCoverageAudit(before), /missing ranges: B-3–B-5/);
+  const summary = summarizeSourceCoverageAudit(before);
+  assert.deepEqual(summary.missingRanges, [{ from: "B-3", to: "B-5" }]);
+  assert.deepEqual(summary.missingUnitIds, ["B-3", "B-4", "B-5"]);
+
+  // Full deterministic wrap-up: consolidate (drops the duplicated recap), then repair.
+  const c = consolidateNoteDocument(notes.map((s) => ({ sectionId: s.sectionId, markdown: s.markdown, studentEdited: s.studentEdited })));
+  let working = notes.map((s) => ({ ...s }));
+  for (const r of c.revisions) { const live = working.find((w) => w.sectionId === r.sectionId); if (live) live.markdown = r.markdown; }
+  working = working.filter((w) => !c.removeSectionIds.includes(w.sectionId));
+  const result = repairSourceCoverage(ledger, working);
+  assert.equal(result.after.counts.missing, 0, formatSourceCoverageAudit(result.after));
+  const doc = result.sections.map((s) => s.markdown).join("\n");
+  // Only B's unique facts were added, in source wording, once each.
+  for (const needle of ["Core inflation excludes food and energy", "9.1%", "6.6%", "above 50% per month", "79.6 billion percent", "indexed to CPI-W since 1975"]) {
+    assert.equal((doc.match(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length, 1, needle);
+  }
+  // A's definitions were NOT re-inserted from B: the whole document states each once.
+  assert.equal((doc.match(/sustained rise in the general price level/g) ?? []).length, 1);
+  assert.equal((doc.match(/cost of a fixed basket of goods/g) ?? []).length, 1);
+  assert.ok(result.repairs.every((r) => r.unitIds.every((id) => id.startsWith("B-"))), JSON.stringify(result.repairs.map((r) => r.unitIds)));
 });
