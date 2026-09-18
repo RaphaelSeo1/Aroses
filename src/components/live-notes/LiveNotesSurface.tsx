@@ -100,6 +100,25 @@ const REVISE_STATUS_LINES = [
   "Keeping the earlier notes and adding this point…",
 ];
 
+const REVISE_DONE_LINES = [
+  "Updated that section — still listening…",
+  "New detail is in — waiting for the next stretch…",
+  "Section updated — listening for more…",
+];
+
+const SEED_REVISE_DONE_LINES = [
+  "Folded those slides into existing sections — next pages…",
+  "Updated that topic from the slides — continuing through the deck…",
+];
+
+/**
+ * In-place revisions longer than this are applied instantly (with the
+ * revised-section flash) instead of re-typed character by character —
+ * re-typing a long section left the log sitting on "Updating…" for
+ * tens of seconds and looked frozen.
+ */
+const REVISION_TYPEWRITE_MAX_CHARS = 700;
+
 const REVISE_WITH_SCREEN_LINES = [
   "Matching a spelling/number to the slide — keeping the rest of the section…",
   "Folding what’s on screen into the existing notes…",
@@ -615,7 +634,9 @@ export function LiveNotesSurface({
           return;
         }
         // Mid-section placement or in-place patch: replace whole section.
-        if (next.patched) {
+        // Short sections re-type visibly; long ones swap instantly so the
+        // pump (and the activity log) never sits on one revise for long.
+        if (next.patched && finalMd.length <= REVISION_TYPEWRITE_MAX_CHARS) {
           const started = await writer.beginRevision(sectionId, {
             evenIfStudentEdited: true,
           });
@@ -848,6 +869,21 @@ export function LiveNotesSurface({
                 prev.includes(DECK_DRAFT_EXCERPT)
                   ? `${DECK_DRAFT_EXCERPT}\n${pending.slice(0, 2_800)}`
                   : pending.slice(0, 3_000)
+              );
+            }
+            // A revise-only call used to leave "Updating…" as the last log
+            // line with no follow-up, which read as frozen. Close it out.
+            if (revisedSectionId && !(appendSectionId && gotContent)) {
+              pushAiActivity(
+                "status",
+                gotContent
+                  ? pickStatusLine(
+                      seedFromDeck ? SEED_REVISE_DONE_LINES : REVISE_DONE_LINES,
+                      Date.now() + revisedSectionId.length
+                    )
+                  : seedFromDeck
+                    ? "Those slides were already covered — next pages…"
+                    : "That section already had this — still listening…"
               );
             }
           })

@@ -23,7 +23,7 @@ function kindLabel(kind: AiActivityEntry["kind"]): string {
     case "append":
       return "Writing";
     case "revise":
-      return "Correcting";
+      return "Updating";
     case "error":
       return "Issue";
     default:
