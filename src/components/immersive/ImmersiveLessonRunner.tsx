@@ -41,7 +41,6 @@ import {
   type CourseOutputLanguage,
 } from "@/lib/course-output-language";
 import { useMentoredVoice } from "@/lib/mentored/use-mentored-voice";
-import { buildConceptCoverageBlock } from "@/lib/notes/concept-coverage";
 import { applyWhiteboardActions } from "@/lib/mentored/whiteboard-utils";
 import { resolveChunkTableMarkdown } from "@/lib/lesson-content-layout";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
@@ -1072,17 +1071,6 @@ export function ImmersiveLessonRunner({
         .join("\n\n")
         .slice(-4_000);
 
-      // Concept state of what earlier chunks already wrote into the notebook,
-      // ranked by relevance to this chunk — so the model adds only new
-      // information rather than re-explaining established concepts.
-      const priorSections =
-        notesPanelRef.current.getStreamWriter()?.listSynthesisSections(200) ??
-        [];
-      const priorNotesCoverage = buildConceptCoverageBlock(priorSections, {
-        relevanceText: [chunk.concept, ...(chunk.keyPoints ?? [])].join(" "),
-        maxChars: 2_400,
-      });
-
       const began = notesPanelRef.current.beginStreamedNotes({
         chunkId: chunk.id,
         heading: chunk.concept,
@@ -1113,7 +1101,6 @@ export function ImmersiveLessonRunner({
                 roseSpoken: roseSpoken || undefined,
                 // Always a string — "" clears an instruction in-flight.
                 noteInstruction: noteInstructionRef.current,
-                priorNotesCoverage: priorNotesCoverage || undefined,
               }),
               signal: ac.signal,
             }

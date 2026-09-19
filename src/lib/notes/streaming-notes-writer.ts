@@ -24,7 +24,6 @@ import {
   type NoteNodeJson,
 } from "@/lib/notes/notes-markdown";
 import { addressExistingNoteNodes } from "@/lib/live-notes/existing-note-sections";
-import { consolidateNoteDocument } from "@/lib/notes/consolidate-notes";
 
 /**
  * StreamingNotesWriter — the ONE token-streaming renderer for AI notes,
@@ -836,74 +835,6 @@ export class StreamingNotesWriter {
       }
     });
     return true;
-  }
-
-  /**
-   * Shared post-generation consolidation over the whole document (same
-   * deterministic pipeline the live wrap-up uses): merge same-topic AI
-   * sections, remove explanations an earlier section already gives, fold
-   * unique details into the owner, strip navigation language. Only
-   * AI-owned sections are read or written; student-edited sections are
-   * neither modified nor used as merge targets. Deterministic — no model
-   * call. Returns true when the document changed. No-op while an op streams.
-   */
-  consolidateDocument(): boolean {
-    if (this.destroyed || this.editor.isDestroyed || this.op) return false;
-    const aiSections = this.listSynthesisSections(500).filter(
-      (s) => !s.studentEdited
-    );
-    if (aiSections.length < 2) return false;
-    const result = consolidateNoteDocument(aiSections);
-    if (!result.changed) return false;
-    let changed = false;
-    for (const id of result.removeSectionIds) {
-      if (this.deleteSection(id)) changed = true;
-    }
-    for (const rev of result.revisions) {
-      if (this.replaceSectionMarkdown(rev.sectionId, rev.markdown)) {
-        changed = true;
-      }
-    }
-    if (changed) this.collapseDividers();
-    return changed;
-  }
-
-  /** Doc-level attrs (RoseDocument metadata persisted with the notes JSON). */
-  getDocAttrs(): Record<string, unknown> {
-    if (this.editor.isDestroyed) return {};
-    return (this.editor.state.doc.attrs ?? {}) as Record<string, unknown>;
-  }
-
-  /** Merge doc-level attrs; saved with the next notes autosave. */
-  setDocAttrs(attrs: Record<string, unknown>): boolean {
-    if (this.destroyed || this.editor.isDestroyed) return false;
-    try {
-      return this.editor.commands.updateAttributes("doc", attrs);
-    } catch {
-      return false;
-    }
-  }
-
-  /** Remove doubled / trailing section dividers left behind by a removal. */
-  private collapseDividers(): void {
-    if (this.destroyed || this.editor.isDestroyed) return;
-    const doc = this.editor.state.doc;
-    const ranges = new Map<number, number>();
-    let prevWasHr = false;
-    doc.forEach((node, offset) => {
-      const isHr = node.type.name === "horizontalRule";
-      if (isHr && prevWasHr) ranges.set(offset, offset + node.nodeSize);
-      prevWasHr = isHr;
-    });
-    const last = doc.lastChild;
-    if (last && last.type.name === "horizontalRule") {
-      ranges.set(doc.content.size - last.nodeSize, doc.content.size);
-    }
-    if (ranges.size === 0) return;
-    const sorted = [...ranges.entries()].sort((a, b) => b[0] - a[0]);
-    this.dispatchDoc((tr) => {
-      for (const [from, to] of sorted) tr.delete(from, to);
-    });
   }
 
   /**

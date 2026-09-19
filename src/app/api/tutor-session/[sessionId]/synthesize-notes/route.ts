@@ -31,7 +31,6 @@ export async function POST(request: Request, ctx: Params) {
     roseReply?: unknown;
     studentUtterance?: unknown;
     noteInstruction?: unknown;
-    priorNotesCoverage?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -130,10 +129,6 @@ export async function POST(request: Request, ctx: Params) {
     sessionTopic,
     modeTag,
     noteInstruction: noteInstruction || undefined,
-    priorNotesCoverage:
-      typeof body.priorNotesCoverage === "string"
-        ? body.priorNotesCoverage.slice(0, 3_000)
-        : undefined,
   });
 
   if (!block) {

@@ -21,14 +21,6 @@ export const RoseDocument = Document.extend({
       roseLectureRecap: {
         default: "",
       },
-      /**
-       * Uploaded-deck page count whose slide-by-slide source-coverage audit
-       * (and repair) already completed for these notes. Lets a reload skip
-       * re-auditing — and respects lines the student deleted afterwards.
-       */
-      roseSourceCoverageCheckedPages: {
-        default: 0,
-      },
     };
   },
 });
@@ -38,7 +30,6 @@ export type RoseDocAttrs = {
   roseDocEmoji?: string;
   roseAppendedChunkIds?: string[];
   roseLectureRecap?: string;
-  roseSourceCoverageCheckedPages?: number;
 };
 
 export function readRoseDocAttrs(doc: unknown): RoseDocAttrs {

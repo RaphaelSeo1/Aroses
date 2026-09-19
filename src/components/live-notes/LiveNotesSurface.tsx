@@ -37,10 +37,8 @@ import {
   formatDeckDraftExcerpt,
 } from "@/lib/live-notes/fold-note-markdown";
 import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
-import { stripLinesAlreadyCovered } from "@/lib/notes/cross-section-dedupe";
-import type { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
 import { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
-import { DECK_DRAFT_EXCERPT, isDeckSeedComplete } from "@/lib/live-notes/slide-pages";
+import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 import {
   chooseTypewriterSchedule,
   chunkTypewriterText,
@@ -101,25 +99,6 @@ const REVISE_STATUS_LINES = [
   "Keeping the earlier notes and adding this point…",
 ];
 
-const REVISE_DONE_LINES = [
-  "Updated that section — still listening…",
-  "New detail is in — waiting for the next stretch…",
-  "Section updated — listening for more…",
-];
-
-const SEED_REVISE_DONE_LINES = [
-  "Folded those slides into existing sections — next pages…",
-  "Updated that topic from the slides — continuing through the deck…",
-];
-
-/**
- * In-place revisions longer than this are applied instantly (with the
- * revised-section flash) instead of re-typed character by character —
- * re-typing a long section left the log sitting on "Updating…" for
- * tens of seconds and looked frozen.
- */
-const REVISION_TYPEWRITE_MAX_CHARS = 700;
-
 const REVISE_WITH_SCREEN_LINES = [
   "Matching a spelling/number to the slide — keeping the rest of the section…",
   "Folding what’s on screen into the existing notes…",
@@ -141,98 +120,6 @@ function headingForSection(
   return s?.markdown.match(/^#{1,3}\s+(.+)$/m)?.[1]?.trim();
 }
 const SYNTH_CHECK_INTERVAL_MS = 3 * 1000;
-
-/** Slide-by-slide source-coverage audit summary returned once seeding ends. */
-type SeedCoverageSummary = {
-  total: number;
-  substantive: number;
-  covered: number;
-  redundant: number;
-  nonSubstantive: number;
-  visualOnly: number;
-  missing: number;
-  missingRanges?: Array<{ from: string; to: string }>;
-};
-
-/** Deterministic repair: source wording for lines the notes never captured. */
-type SeedCoverageRepair = {
-  kind: "extend" | "new";
-  sectionId: string;
-  markdown: string;
-  unitIds?: string[];
-};
-
-type SeedCoverageWriter = Pick<
-  StreamingNotesWriter,
-  | "extendSection"
-  | "appendMarkdown"
-  | "listSynthesisSections"
-  | "getDocAttrs"
-  | "setDocAttrs"
->;
-
-function coverageCheckedPages(writer: SeedCoverageWriter): number {
-  const raw = writer.getDocAttrs().roseSourceCoverageCheckedPages;
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
-}
-
-/**
- * Apply the server's coverage repairs to the live document. "extend" adds
- * lines to the end of an AI section (never a student-edited one — those fall
- * back to a new section); "new" appends a section. Returns lines added.
- */
-function applySeedCoverageRepairs(
-  writer: SeedCoverageWriter,
-  repairs: SeedCoverageRepair[]
-): number {
-  let added = 0;
-  for (const r of repairs) {
-    if (!r || typeof r.sectionId !== "string" || typeof r.markdown !== "string") {
-      continue;
-    }
-    const md = r.markdown.trim();
-    if (!md) continue;
-    const lineCount = md
-      .split("\n")
-      .filter((l) => l.trim() && !/^#{1,3}\s/.test(l)).length;
-    const hasContent = writer.listSynthesisSections(1).length > 0;
-    if (r.kind === "extend") {
-      if (writer.extendSection(r.sectionId, md)) {
-        added += lineCount;
-      } else if (
-        writer.appendMarkdown(`${r.sectionId}-cov`, `## More from the slides\n${md}`, {
-          dividerBefore: hasContent,
-        })
-      ) {
-        added += lineCount;
-      }
-    } else if (r.kind === "new") {
-      if (writer.appendMarkdown(r.sectionId, md, { dividerBefore: hasContent })) {
-        added += lineCount;
-      }
-    }
-  }
-  return added;
-}
-
-function describeSeedCoverage(
-  before: SeedCoverageSummary | undefined,
-  after: SeedCoverageSummary | undefined,
-  added: number
-): string | null {
-  if (!before) return null;
-  const checked = `Checked all ${before.total} slide${before.total === 1 ? "" : "s"} against the notes`;
-  if (before.missing === 0) return `${checked} — every substantive slide is covered.`;
-  const remaining = after?.missing ?? 0;
-  const restored = added > 0
-    ? `added ${added} missing detail${added === 1 ? "" : "s"} from ${before.missing} slide${before.missing === 1 ? "" : "s"} the draft had skipped`
-    : `${before.missing} slide${before.missing === 1 ? "" : "s"} had details the notes did not capture`;
-  const tail =
-    remaining > 0
-      ? `; ${remaining} slide${remaining === 1 ? "" : "s"} could not be matched (diagram-only or unclear text).`
-      : ".";
-  return `${checked} — ${restored}${tail}`;
-}
 
 /**
  * Visible typing pace for AI notes. Speeds up automatically when the pump
@@ -407,7 +294,6 @@ export function LiveNotesSurface({
   const [deckSeedRequested, setDeckSeedRequested] = useState(
     (session.slidesSeededThroughPage ?? 0) > 0
   );
-  const slidesPageCountRef = useRef(session.slidesPageCount ?? 0);
   const noteInstructionRef = useRef(noteInstruction);
   const handleNoteInstructionChange = useCallback((value: string) => {
     setNoteInstruction(value);
@@ -435,12 +321,6 @@ export function LiveNotesSurface({
   }, []);
 
   const notesRef = useRef<NotesPanelHandle | null>(null);
-  const notesReadyRef = useRef(false);
-  const [notesReady, setNotesReady] = useState(false);
-  const handleNotesReady = useCallback(() => {
-    notesReadyRef.current = true;
-    setNotesReady(true);
-  }, []);
   const railScrollRef = useRef<HTMLDivElement | null>(null);
   const railDragRef = useRef<{
     pointerId: number;
@@ -536,16 +416,8 @@ export function LiveNotesSurface({
   );
 
   const maybeSynthesize = useCallback(
-    async (
-      force: boolean,
-      opts?: { seedFromDeck?: boolean; coverageAudit?: boolean }
-    ) => {
+    async (force: boolean, opts?: { seedFromDeck?: boolean }) => {
       if (!autoGenerateRef.current && !opts?.seedFromDeck) return;
-      // Final slide-coverage audit compares the deck against the notes as
-      // they stand — wait for the typing pump to land the last batch first.
-      if (opts?.coverageAudit) {
-        await pumpTailRef.current.catch(() => {});
-      }
       if (synthInFlightRef.current) {
         if (opts?.seedFromDeck) pendingSeedRef.current = true;
         return;
@@ -562,14 +434,11 @@ export function LiveNotesSurface({
       if (!seedFromDeck && pending.length < threshold) return;
 
       const writer = notesRef.current?.getStreamWriter();
-      if (!writer || (seedFromDeck && !notesReadyRef.current)) {
+      if (!writer) {
         if (seedFromDeck && seedWriterRetryRef.current < 20) {
           seedWriterRetryRef.current += 1;
           window.setTimeout(() => {
-            void maybeSynthesize(false, {
-              seedFromDeck: true,
-              coverageAudit: opts?.coverageAudit,
-            });
+            void maybeSynthesize(false, { seedFromDeck: true });
           }, 300);
         }
         return;
@@ -581,11 +450,9 @@ export function LiveNotesSurface({
       setAiWriting(true);
       pushAiActivity(
         "status",
-        opts?.coverageAudit
-          ? "Checking every slide against the notes for missing details…"
-          : seedFromDeck
-            ? "Drafting notes from your uploaded slides…"
-            : "Reading the latest slice of the lecture…"
+        seedFromDeck
+          ? "Drafting notes from your uploaded slides…"
+          : "Reading the latest slice of the lecture…"
       );
       notesRef.current?.setStreamingIndicator(true);
       syncAiWritingUi();
@@ -626,13 +493,9 @@ export function LiveNotesSurface({
         .filter((h): h is string => Boolean(h));
 
       let appendSectionId: string | null = null;
-      /** The server-issued append id may only name one section per call. */
-      let appendIdTaken = false;
       let revisedSectionId: string | null = null;
       let gotContent = false;
       let seedAgain = false;
-      /** Last deck batch drafted → one more seed call runs the coverage audit. */
-      let seedAuditNext = false;
       let pendingAppend: {
         sectionId: string;
         dividerBefore: boolean;
@@ -709,24 +572,14 @@ export function LiveNotesSurface({
         sectionId: string,
         incoming: string
       ) => {
-        const sanitized = sanitizeNoteOutput(incoming, {
+        const cleaned = sanitizeNoteOutput(incoming, {
           dropTruncatedTrailing: streamAborted,
         });
-        if (!sanitized.trim()) return;
-        const allLive = writer.listSynthesisSections(200);
-        const live = allLive.find((s) => s.sectionId === sectionId);
-        if (!live) return;
-        // Cross-section guard (live speech only): drop restatements of facts
-        // another section already establishes. Skip during slide seed — the
-        // same concept often gains new mechanisms/examples across pages, and
-        // stripping those left multi-page decks as thin 1–2 page notes.
-        const cleaned = seedFromDeck
-          ? sanitized
-          : stripLinesAlreadyCovered(
-              sanitized,
-              allLive.filter((s) => s.sectionId !== sectionId)
-            );
         if (!cleaned.trim()) return;
+        const live = writer
+          .listSynthesisSections(200)
+          .find((s) => s.sectionId === sectionId);
+        if (!live) return;
         const next = applySurgicalNoteRevision(live.markdown, cleaned);
         const finalMd = dedupeSectionLines(next.markdown);
         if (finalMd.replace(/\s+$/, "") === live.markdown.replace(/\s+$/, "")) {
@@ -751,9 +604,7 @@ export function LiveNotesSurface({
           return;
         }
         // Mid-section placement or in-place patch: replace whole section.
-        // Short sections re-type visibly; long ones swap instantly so the
-        // pump (and the activity log) never sits on one revise for long.
-        if (next.patched && finalMd.length <= REVISION_TYPEWRITE_MAX_CHARS) {
+        if (next.patched) {
           const started = await writer.beginRevision(sectionId, {
             evenIfStudentEdited: true,
           });
@@ -801,31 +652,17 @@ export function LiveNotesSurface({
             await applyBufferedRevision(action.sectionId, action.markdown);
             continue;
           }
-          // New section: during live speech, drop pure restatements. During
-          // slide seed, keep the model's draft intact (seed prompt already
-          // handles revisiting vs. new facets).
-          const fresh = seedFromDeck
-            ? action.markdown
-            : stripLinesAlreadyCovered(action.markdown, liveSections);
-          const hasBody = fresh
-            .split("\n")
-            .some((l) => l.trim() && !/^#{1,3}\s/.test(l.trim()));
-          if (!hasBody) continue;
-          // The server's appendSectionId is spent on the first new section
-          // of the call; every further new section (later chunk, or a second
-          // @@append block) gets its own id so ids stay unique in the doc.
           const sectionId =
-            firstNew && appendMeta && !appendIdTaken
+            firstNew && appendMeta
               ? appendMeta.sectionId
               : `s-${crypto.randomUUID().slice(0, 8)}`;
-          appendIdTaken = true;
           firstNew = false;
           pendingAppend = {
             sectionId,
             dividerBefore: appendMeta?.dividerBefore ?? blockCountRef.current > 0,
           };
           ensureAppendStarted();
-          await typewrite(fresh);
+          await typewrite(action.markdown);
           writer.finishOp();
           appendSectionId = sectionId;
           gotContent = true;
@@ -867,11 +704,6 @@ export function LiveNotesSurface({
               applyBufferedDelete(deleteId, deleteBuf);
               deleteId = null;
               deleteBuf = "";
-            }
-            // A second @@append block in the same response: flush the first
-            // body before starting a new buffer, or its notes vanish.
-            if (bufferingAppend && foldBuf.trim()) {
-              await flushAppendBuffer(foldBuf, appendMeta);
             }
             // Buffer the whole append body, then classify per ## chunk.
             bufferingAppend = true;
@@ -997,21 +829,6 @@ export function LiveNotesSurface({
                   : pending.slice(0, 3_000)
               );
             }
-            // A revise-only call used to leave "Updating…" as the last log
-            // line with no follow-up, which read as frozen. Close it out.
-            if (revisedSectionId && !(appendSectionId && gotContent)) {
-              pushAiActivity(
-                "status",
-                gotContent
-                  ? pickStatusLine(
-                      seedFromDeck ? SEED_REVISE_DONE_LINES : REVISE_DONE_LINES,
-                      Date.now() + revisedSectionId.length
-                    )
-                  : seedFromDeck
-                    ? "Those slides were already covered — next pages…"
-                    : "That section already had this — still listening…"
-              );
-            }
           })
           .catch(() => {})
           .finally(() => {
@@ -1027,13 +844,6 @@ export function LiveNotesSurface({
           body: JSON.stringify({
             newSegmentText: seedFromDeck ? "" : pending,
             seedFromDeck: seedFromDeck || undefined,
-            coverageAudit: opts?.coverageAudit || undefined,
-            // The slide-by-slide audit already ran for this deck (persisted
-            // on the doc) — a reload must not re-add lines the student cut.
-            coverageChecked: seedFromDeck
-              ? coverageCheckedPages(writer) >= slidesPageCountRef.current &&
-                slidesPageCountRef.current > 0
-              : undefined,
             recentHeadings,
             existingHeadings,
             existingSections: allSections.map((s) => ({
@@ -1060,30 +870,9 @@ export function LiveNotesSurface({
             capped?: boolean;
             seedDone?: boolean;
             error?: string;
-            pageCount?: number;
-            coverage?: SeedCoverageSummary;
-            coverageAfterRepair?: SeedCoverageSummary;
-            repairs?: SeedCoverageRepair[];
           };
           if (seedFromDeck) {
-            if (data.seedDone) {
-              const applied = applySeedCoverageRepairs(writer, data.repairs ?? []);
-              if (typeof data.pageCount === "number" && data.pageCount > 0) {
-                writer.setDocAttrs({
-                  roseSourceCoverageCheckedPages: data.pageCount,
-                });
-              }
-              const line = describeSeedCoverage(
-                data.coverage,
-                data.coverageAfterRepair,
-                applied
-              );
-              if (line) pushAiActivity("status", line);
-              else if (opts?.coverageAudit) {
-                pushAiActivity("status", "Slides were already checked against these notes.");
-              }
-              return;
-            }
+            if (data.seedDone) return;
             if (typeof data.error === "string" && data.error.trim()) {
               pushAiActivity("error", data.error.trim());
             }
@@ -1154,9 +943,11 @@ export function LiveNotesSurface({
                 : "Synthesis failed."
             );
           } else if (event === "done") {
-            if (typeof parsed.seedRemaining === "number") {
-              if (parsed.seedRemaining > 0) seedAgain = true;
-              else if (seedFromDeck) seedAuditNext = true;
+            if (
+              typeof parsed.seedRemaining === "number" &&
+              parsed.seedRemaining > 0
+            ) {
+              seedAgain = true;
             }
             if (typeof parsed.seedPageFrom === "number") {
               seedPageFrom = parsed.seedPageFrom;
@@ -1206,16 +997,6 @@ export function LiveNotesSurface({
         if (seedAgain || pendingSeedRef.current) {
           pendingSeedRef.current = false;
           void maybeSynthesize(false, { seedFromDeck: true });
-        } else if (seedAuditNext) {
-          const alreadyChecked =
-            coverageCheckedPages(writer) >= slidesPageCountRef.current &&
-            slidesPageCountRef.current > 0;
-          if (!alreadyChecked) {
-            void maybeSynthesize(false, {
-              seedFromDeck: true,
-              coverageAudit: true,
-            });
-          }
         }
       }
     },
@@ -1231,11 +1012,6 @@ export function LiveNotesSurface({
     (next: { fileName: string | null; pageCount: number }) => {
       setSlidesFileName(next.fileName);
       setSlidesPageCount(next.pageCount);
-      slidesPageCountRef.current = next.pageCount;
-      // A new / removed deck invalidates the previous coverage audit.
-      notesRef.current
-        ?.getStreamWriter()
-        ?.setDocAttrs({ roseSourceCoverageCheckedPages: 0 });
       if (next.pageCount <= 0) {
         setDeckSeedRequested(false);
         return;
@@ -1258,23 +1034,18 @@ export function LiveNotesSurface({
   );
 
   // Resume in-progress deck seeding after reload — never auto-start if they
-  // uploaded and chose "not yet" (seededThroughPage stays 0), and never
-  // restart a finished seed (that re-checked slides and duplicated notes).
+  // uploaded and chose "not yet" (seededThroughPage stays 0).
   const initialDeckSeedRef = useRef(false);
   useEffect(() => {
     if (initialDeckSeedRef.current) return;
-    if (!notesReady) return;
     if ((session.slidesPageCount ?? 0) <= 0) return;
     initialDeckSeedRef.current = true;
-    const through = session.slidesSeededThroughPage ?? 0;
-    const pages = session.slidesPageCount ?? 0;
-    if (through <= 0) return;
-    if (isDeckSeedComplete(through, pages)) return;
-    setDeckSeedRequested(true);
-    void maybeSynthesize(false, { seedFromDeck: true });
+    if ((session.slidesSeededThroughPage ?? 0) > 0) {
+      setDeckSeedRequested(true);
+      void maybeSynthesize(false, { seedFromDeck: true });
+    }
   }, [
     maybeSynthesize,
-    notesReady,
     session.slidesPageCount,
     session.slidesSeededThroughPage,
   ]);
@@ -2141,7 +1912,6 @@ export function LiveNotesSurface({
             onNoteInstructionChange={handleNoteInstructionChange}
             onNoteInstructionSave={handleNoteInstructionSave}
             lectureRecapEndpoint={`/api/live-notes/${sessionId}/recap`}
-            onEditorReady={handleNotesReady}
             className="min-h-0 flex-1"
           />
           <LiveNotesAiActivity

@@ -3,21 +3,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { voiceRules } from "@/lib/ai/study-generation";
 import {
   DEFAULT_NOTES_OUTLINE_RULES,
-  SEED_THOROUGHNESS_RULES,
-  SOURCE_CONFIDENCE_RULES,
   TUTOR_NOTES_QUALITY_RULES,
-  UNIFIED_NOTES_RULES,
 } from "@/lib/ai/tutor-notes-quality";
-import { buildConceptCoverageBlock } from "@/lib/notes/concept-coverage";
-import {
-  applySemanticTrims,
-  consolidateRepeatedExplanations,
-  findSemanticTrimCandidates,
-  formatSemanticTrimCandidates,
-  parseSemanticTrimJson,
-  REPEATED_EXPLANATIONS_JOB_RULES,
-  SEMANTIC_TRIM_INSTRUCTION,
-} from "@/lib/notes/cross-section-dedupe";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
 import {
   createMarkerParser,
@@ -30,7 +17,6 @@ import {
   findDuplicateTopicGroups,
   mergeDuplicateGroup,
 } from "@/lib/live-notes/fold-note-markdown";
-import { isOverCutRevision, selectDeckExcerptFor } from "@/lib/live-notes/review-guards";
 import { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
 
 export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
@@ -70,14 +56,8 @@ const MODEL = process.env.ANTHROPIC_TUTOR_FAST_MODEL?.trim() || "claude-haiku-4-
 const RECAP_MODEL =
   process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
 
-/**
- * Hard cap on the rolling summary we store + send back to the model. The
- * summary carries concept STATE (defined / explained / mentioned), not just
- * topic names, so later slices can tell a mention from a re-explanation.
- */
-export const ROLLING_SUMMARY_MAX_CHARS = 2_000;
-/** Cap for the deterministic concept-coverage block in each prompt. */
-const MAX_CONCEPT_COVERAGE_CHARS = 2_200;
+/** Hard cap on the rolling summary we store + send back to the model. */
+export const ROLLING_SUMMARY_MAX_CHARS = 1_600;
 /** Max transcript slice per call (client triggers around ~700). */
 const MAX_SEGMENT_INPUT_CHARS = 12_000;
 /** Self-revision context caps (cost bound: ~10 focused sections/call). */
@@ -95,14 +75,10 @@ ${TUTOR_NOTES_QUALITY_RULES}
 
 ${DEFAULT_NOTES_OUTLINE_RULES}
 
-${UNIFIED_NOTES_RULES}
-
-${SOURCE_CONFIDENCE_RULES}
-
 - Start a "## " heading whenever the lecturer moves to a distinct topic or concept (3–8 words naming the idea; never repeat an EXISTING NOTE HEADING — fold into that section instead).
 - Every non-empty @@append MUST begin with a "## " topic heading. Under it, use the normal outline: a framing paragraph when supported, then grouped top-level bullets with **bold lead-ins** and "  - " nested supporting details. Use "### " only for a real subtopic such as a worked example or comparison—not generic boilerplate. Never emit an unheaded run of flat bullets.
 - Under each heading, write enough that a student who missed the verbal fluff still understands the point: crisp definitions, key numbers/units, named studies/people/dates, cause→effect, and the load-bearing supporting detail. Prefer coherent prose plus grouped/nested bullets over one bullet per utterance.
-- CONSOLIDATE as you go — condense wording, never information. New transcript arrives often; do NOT transcribe every utterance, and do fold related sentences about one point into one clear note. Skip filler, hedging, transitions, verbatim repetition, and administrative chatter. Never skip a fact, number, example, mechanism, qualification, or step to save space: each of those gets its own line or nested detail.
+- SUMMARIZE as you go. New transcript arrives often — do NOT dump every utterance. Fold related sentences into one clear note. Skip filler, hedging, transitions, anecdotes, repetition, and anything that wouldn't help someone study the material.
 - Bold key terms with **term** on first introduction only. State definitions cleanly even when the lecturer phrased them loosely — but only from what was said or shown.
 - When the lecturer works an example, capture it as a numbered list ("1. ", "2. ") with their actual numbers/steps — keep the steps that teach the method; drop purely verbal padding around them.
 - When the slide or lecture shows a comparison grid, drug/dose chart, criteria matrix, or other tabular data, capture it as a GFM pipe table (header row, then a "| --- | --- |" separator, then data rows). Keep cells faithful to what was shown/said — do not invent columns.
@@ -152,8 +128,7 @@ Before writing, check ALL EXISTING NOTE SECTIONS, not just recent live output. I
 
 Only @@append when the slice introduces a topic that has NO matching existing heading.
 
-- Leave @@append empty ONLY when every sentence of the slice restates something the notes already contain, with no new fact, number, example, exception, qualification, or step (still emit the marker). A slice that revisits a known concept but adds any such detail is NOT a repeat — capture the detail via @@revise. Do NOT @@revise just to rephrase.
-- CONCEPT COVERAGE is the document's memory of what is ESTABLISHED — it is not a list of finished topics and never a cap on how much may be written about a concept. When the lecturer returns to a concept listed as DEFINED/EXPLAINED, decide per sentence: same content already captured → nothing; any new fact/example/mechanism/stage/number/exception/qualification/emphasis → @@revise the OWNING section listed there with that line (every new detail, not a selection); only a topic with no owning section anywhere gets @@append. Never write a fresh definition of a covered concept inside another section — a short "recall that …" clause is the most you may add.
+- If the slice only REPEATS already-captured material → leave @@append empty (still emit the marker). Do NOT @@revise just to rephrase.
 - NEVER @@revise for grammar, punctuation, capitalization, filler words, or OCR/STT flicker.
 - Narrow factual fix only (lecturer said "not 3mg, 30mg"): @@revise with that one corrected bullet, not the rest of the section.
 - Slide DRAFTS (transcript excerpt is "${DECK_DRAFT_EXCERPT}"): speech about that topic MUST @@revise with the added spoken detail only. Additional information is additive. Do NOT treat "here's more on this" as "delete the draft."
@@ -171,7 +146,7 @@ NARRATION (@@thought — user-visible, optional but valuable):
 - Do not say "error", "mismatch", or "didn't hold up" unless the lecturer clearly retracted a fact. For extra detail, say you are adding it to that section.
 - Never emit more than one @@thought per call.
 
-WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, a verbatim repeat of material the notes already hold with no added detail): still emit @@append but put NOTHING after it. Never pad. A slice that revisits a known topic with even one new detail is not "no new teaching" — that detail goes into @@revise.
+WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the rolling summary): still emit @@append but put NOTHING after it. Never pad.
 
 OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
 @@thought <optional one short sentence — skip if unnecessary>
@@ -183,50 +158,33 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 @@append
 <markdown for genuinely new teaching and/or **Open question:** lines; leave the body empty when the slice was folded into @@revise or was a repeat>
 @@summary
-<updated rolling summary, max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown. It is a CONCEPT STATE record, not prose: "TOPICS: <topic names in order>. DEFINED: <concept — 3-6 word gist>; … EXPLAINED: <concept — gist>; … MENTIONED ONLY: <concepts named but not yet explained>. OPEN: <unresolved questions / things the lecturer said are coming later>." Merge the previous summary with this slice; re-compress this SUMMARY aggressively (this applies to the rolling summary only — never to the notes themselves, which must stay complete); never drop a concept from DEFINED/EXPLAINED once it is there.>`;
+<updated rolling summary: compressed record of EVERYTHING covered so far (previous summary + this slice), max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown — re-compress aggressively, keep topic names and key terms, drop detail>`;
 
-/**
- * Seed mode drafts study notes from an uploaded slide deck before any speech
- * exists. It gets its own compact prompt: the live-lecture rules about
- * transcripts, screen OCR, contradictions, and "fold / skip restatements"
- * are for continuing notes over speech and, applied to a first draft, thin a
- * 50-slide deck into a synopsis. The bar here is simply: the comprehensive,
- * readable notes a strong student would write from these slides.
- */
-export { SEED_THOROUGHNESS_RULES };
+const SEED_SYSTEM = `You are drafting study notes from a pre-uploaded lecture slide deck BEFORE any speech has been transcribed. There is no lecture audio yet.
 
-const SEED_STYLE_RULES = `You are turning a pre-uploaded lecture slide deck into comprehensive, readable STUDY NOTES — what a strong student would write from these slides so they could study without them. There is no lecture audio yet.
-
-${TUTOR_NOTES_QUALITY_RULES}
-
-${DEFAULT_NOTES_OUTLINE_RULES}
+${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
-WRITING FROM SLIDES:
-- Explain, don't dump. Turn slide fragments into complete sentences and connected explanations. Use a "## " heading per topic (3–8 words naming the idea), a 1–2 sentence framing paragraph, then grouped top-level bullets with **bold lead-ins** and "  - " nested details. Use "### " for a real subtopic such as a worked example or a comparison.
-- Reproduce tables as GFM pipe tables (header row, "| --- |" separator, data rows), formulas and equations as written on the slide, worked examples as numbered steps with the slide's own numbers, and diagram labels as the terms they name (in the relationship the diagram shows, when the slide makes it clear).
-- Be comprehensive. Every substantive point on every slide in this batch belongs in the notes: definitions, mechanisms, steps, numbers and units, names and dates, comparisons, exceptions, examples, evidence, quotes, and figure/table content. A 50-slide deck yields many pages of notes. Never compress unique content to keep a section short and never aim for a length; condense wording only.
-- Stay grounded in the slides. You may add a short clarifying phrase so a slide fragment reads as a full sentence, but do not invent facts, numbers, names, dates, studies, or mechanisms the slides do not state. If you add a definition or context the slides skip, put it on its own line formatted exactly as "> (AI) <one or two sentences>". Keep the slides' key terms and abbreviations as written.
-- Skip only what teaches nothing: title, agenda, and logistics slides, "Questions?", reading lists, and build-slide text already captured from the previous slide. A recap or summary slide still gets any line the notes do not have yet.`;
-
-const SEED_SYSTEM = `${SEED_STYLE_RULES}
-
-CONTINUING AN EARLIER BATCH:
-- You receive an OUTLINE of sections already drafted from earlier slides. When this batch continues one of those topics, @@revise that sectionId with ONLY the new material as a structured fragment (no "## " heading, never a rewrite of what is there). Do not re-define a term the outline already covers; one short "recall that …" clause is enough when readability needs it.
-- A distinct facet — a new mechanism, stage, experiment, comparison, application, worked example, or set of examples — gets its own "## " heading via @@append rather than growing one section past roughly a dozen top-level bullets. Never @@append a duplicate of an existing heading.
-- Slides with no extractable text: leave the @@append body empty. Never write sentences about the slides themselves, extraction, OCR, or future updates.
+SEED RULES (override live-lecture habits):
+- Source of truth is DECK SLIDES only. Cover teachable content on those pages. Do not invent explanations.
+- Do NOT use outside/textbook knowledge. If a slide is sparse, write a short heading + the bullets that are actually there.
+- You receive an OUTLINE of sections already drafted from earlier batches. If this batch continues or restates an already-drafted topic, @@revise that sectionId with ONLY the new lines — do not @@append a second copy.
+- @@append only for genuinely NEW topics that have no matching outline entry.
+- Recap / summary / review / "key concepts" / "reference only" / agenda / outline slides: NEVER create new sections. Fold any genuinely new line into the matching existing section via @@revise; otherwise leave @@append empty and emit no revise body.
+- Slides with no extractable text: emit nothing after the markers (empty @@append). Never write sentences about the slides, extraction, OCR, or future updates.
+- Structure with "## " headings per topic (not automatically one heading per slide). Include formulas, definitions, tables, and load-bearing labels from the slides.
 - @@thought: one short line that you are drafting from the uploaded slides (mention slide numbers if present).
-- @@summary: concept-state record of what has been drafted so far (previous summary + these slides).
+- @@summary: compressed record of topics drafted so far (previous summary + these slides).
 
 OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
 @@thought <one short sentence>
 @@revise <sectionId>
 <ONLY new lines for an already-drafted topic; omit the marker when unused; you MAY emit multiple @@revise blocks>
 @@append
-<markdown for NEW topics / distinct facets; leave the body empty only when every teachable line on these slides is already in the notes or the slides had nothing to draft>
+<markdown for NEW topics only; leave the body empty when everything folded into @@revise or the slides had nothing to draft>
 @@summary
-<updated rolling summary, max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown, in the same CONCEPT STATE format: "TOPICS: …. DEFINED: <concept — gist>; … EXPLAINED: …. MENTIONED ONLY: …. OPEN: …">`;
+<updated rolling summary, max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown>`;
 
 /**
  * Layer the student's per-session note request directly under the base style
@@ -241,8 +199,7 @@ function liveNotesSystem(
   const base = mode === "seed" ? SEED_SYSTEM : SYSTEM;
   const modifier = buildNoteInstructionModifier(noteInstruction);
   if (!modifier) return base;
-  const anchor = mode === "seed" ? SEED_STYLE_RULES : NOTE_STYLE_RULES;
-  return base.replace(anchor, `${anchor}${modifier}`);
+  return base.replace(NOTE_STYLE_RULES, `${NOTE_STYLE_RULES}${modifier}`);
 }
 
 export type RevisableSection = {
@@ -287,11 +244,6 @@ export async function* streamLiveLectureNotes(input: {
   noteInstruction?: string;
   /** Draft notes from the uploaded deck before any speech. */
   mode?: "live" | "seed";
-  /**
-   * Seed only: the deck pages are the ones the coverage audit found missing
-   * from the finished draft. Write them in the same style as the rest.
-   */
-  seedGapFill?: boolean;
 }): AsyncGenerator<LiveNotesStreamEvent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -375,26 +327,6 @@ export async function* streamLiveLectureNotes(input: {
       (s.transcriptExcerpt ?? "").includes(DECK_DRAFT_EXCERPT)
     );
 
-  // Deterministic concept state derived from the whole document (not just the
-  // focused sections): which concepts are already defined/explained, where,
-  // and the gist — ranked by relevance to this slice and char-capped.
-  // Live continuation only: the concept state stops speech from re-defining
-  // what the notes (often slide drafts) already establish. The first slide
-  // draft does not get it — the section OUTLINE already prevents duplicate
-  // headings, and a "what is established" list makes the model terse.
-  const coverageSource =
-    existingSections.length > 0 ? existingSections : revisable;
-  const coverageBlock =
-    mode === "seed"
-      ? ""
-      : buildConceptCoverageBlock(coverageSource, {
-          relevanceText: slice,
-          maxChars: MAX_CONCEPT_COVERAGE_CHARS,
-        });
-  const coveragePrompt = coverageBlock
-    ? `CONCEPT COVERAGE (what the notes ALREADY establish — do not write a second definition or second full explanation of the same content. It is NOT a list of finished topics: DO add every new fact, example, mechanism, stage, number, exception, qualification, or instructor emphasis about these concepts, and put them in the owning [sectionId] via @@revise when they belong there):\n${coverageBlock}`
-    : null;
-
   const userPrompt =
     mode === "seed"
       ? [
@@ -405,17 +337,14 @@ export async function* streamLiveLectureNotes(input: {
             ? `ROLLING SUMMARY OF TOPICS DRAFTED SO FAR:\n${summary}`
             : "ROLLING SUMMARY OF TOPICS DRAFTED SO FAR: (none yet)",
           outlineBlock
-            ? `ALREADY-DRAFTED SECTION OUTLINE (if this batch continues one of these topics, @@revise that id with only the NEW material from these slides; @@append a distinct facet when needed; never @@append a duplicate of the same heading):\n${outlineBlock}`
+            ? `ALREADY-DRAFTED SECTION OUTLINE (if this batch continues/restates one of these topics, @@revise that id with only new lines; never @@append a duplicate):\n${outlineBlock}`
             : null,
           sectionsBlock
             ? `FOCUSED SECTION BODIES (full markdown for revise targets):\n\n${sectionsBlock}`
             : null,
-          input.seedGapFill
-            ? `DECK SLIDES NOT YET IN THE NOTES (the finished draft skipped the content of these pages — write it now, in the same style as the rest of the notes):\n${deckText || "(no extractable text on these slides)"}`
-            : `DECK SLIDES (write comprehensive study notes from EVERY page below):\n${deckText || "(no extractable text on these slides)"}`,
-          input.seedGapFill
-            ? "\nEmit the protocol now. Where a page continues a section in the outline, @@revise that id with the page's material as a structured fragment; otherwise @@append it under its own heading. Cover every substantive point on these pages — they are missing from the notes."
-            : "\nEmit the protocol now. @@revise matched topics with the new material from these slides; @@append new topics and distinct facets under their own headings. Leave bodies empty ONLY when every teachable line on these pages is already drafted. Before @@summary, re-read every slide in this batch and add anything you skipped.",
+          `DECK SLIDES (draft study notes covering teachable content on these pages; no outside knowledge):\n${deckText || "(no extractable text on these slides)"}`,
+          "NO SPEECH YET. Draft from the slides only. Recap/outline/review slides: revise existing topics or emit empty bodies — never new duplicate sections. Empty slides: emit empty @@append.",
+          "\nEmit the protocol now. @@revise existing topics when matched; @@append ONLY for new topics. Leave bodies empty when there is nothing to add.",
         ]
           .filter(Boolean)
           .join("\n\n")
@@ -431,7 +360,6 @@ export async function* streamLiveLectureNotes(input: {
             : headings.length > 0
               ? `RECENT HEADINGS (do not spawn a near-duplicate H2 for the same topic — fold new detail into that section):\n${headings.map((h) => `- ${h}`).join("\n")}`
               : null,
-          coveragePrompt,
           sectionsBlock
             ? `MOST RELEVANT NOTE SECTIONS (full markdown + source excerpts when available):\n\n${sectionsBlock}`
             : null,
@@ -443,8 +371,8 @@ export async function* streamLiveLectureNotes(input: {
             : null,
           `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
           hasDraft
-            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise each matching id with ONLY the new structured fragment (keep nothing you would delete; no H2). You may emit multiple @@revise blocks. The client preserves every still-correct block. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Leave the @@append body empty when the slice was folded in via @@revise or restates existing notes with no new detail. Every new fact in this slice must land somewhere."
-            : "\nEmit the protocol now. If notes already exist for this topic, @@revise with ONLY a structured fragment of the new or corrected material (no H2; do not rewrite the whole section). Multiple @@revise blocks are allowed when several sections are touched. @@append ONLY for a genuinely new topic with no matching heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Leave the @@append body empty when the slice was folded in via @@revise or restates existing notes with no new detail. Every new fact in this slice must land somewhere. **Open question:** only for unclear contradictions in speech/screen.",
+            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise each matching id with ONLY the new structured fragment (keep nothing you would delete; no H2). You may emit multiple @@revise blocks. The client preserves every still-correct block. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Leave the @@append body empty when the slice was folded in or is a repeat."
+            : "\nEmit the protocol now. If notes already exist for this topic, @@revise with ONLY a structured fragment of the new or corrected material (no H2; do not rewrite the whole section). Multiple @@revise blocks are allowed when several sections are touched. @@append ONLY for a genuinely new topic with no matching heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Leave the @@append body empty when the slice was folded in or is a repeat. **Open question:** only for unclear contradictions in speech/screen.",
         ]
           .filter(Boolean)
           .join("\n\n");
@@ -452,9 +380,7 @@ export async function* streamLiveLectureNotes(input: {
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
   const stream = anthropic.messages.stream({
     model: MODEL,
-    // Seed batches cover up to ~6 dense slides — need enough room to draft
-    // them thoroughly. Live slices stay tighter.
-    max_tokens: mode === "seed" ? 12_000 : 4_000,
+    max_tokens: mode === "seed" ? 5_000 : 4_000,
     temperature: 0.35,
     system: liveNotesSystem(input.noteInstruction, mode),
     messages: [{ role: "user", content: userPrompt }],
@@ -502,16 +428,13 @@ const REVIEW_SYSTEM = `You are reviewing AI-generated live-lecture study notes a
 
 Priority for clear STT/spelling issues: current-frame screen text wins for spellings, symbols, proper names, and table cells. Pre-uploaded deck text may supply the same for the topic being discussed. Transcript wins for spoken explanation and emphasis.
 
-Do the job you are asked for:
+Do TWO jobs when asked:
 
 1) FACTUAL / SPELLING FIXES — Return a revision ONLY when a section has a clear, narrow error:
    - STT/spelling/symbol/proper-name mistake (prefer the slide token),
    - an unambiguous wrong number or inverted relationship the lecture clearly establishes,
-   - a line the sources positively CONTRADICT (outside "> (AI)" or "**Open question:**" lines).
-   When revising, keep the rest of the section verbatim — minimal token/bullet fixes only. A revision must contain every line of the original except the one(s) you fixed; a shorter section is not a fix.
-   The transcript, screen, and deck excerpts you receive may be PARTIAL (long decks are excerpted per batch, the lecturer may not have spoken about every slide, the recording may have started late). Absence from the excerpt is NEVER evidence that a line is wrong: never delete, shorten, or "tidy" a line because you cannot find it in the sources. Slide-drafted notes stand on the deck even when the transcript never mentions them.
-   CONSISTENCY (same call): if the batch names one concept two different ways, gives two different numbers for the same quantity, or orders the same sequence differently, fix it ONLY when transcript/screen/deck clearly supports one version (use the source's own term); otherwise add one **Open question:** line. Do not "fix" wording that merely varies.
-   UNCERTAIN TOKENS: a term/number that is garbled in speech and absent from screen/deck must not be normalized into a confident technical term — leave it as an **Open question:** line or drop the non-load-bearing detail.
+   - content that was never said/shown (outside "> (AI)" or "**Open question:**" lines).
+   When revising, keep the rest of the section verbatim — minimal token/bullet fixes only.
    SUBSTANTIVE CONTRADICTIONS (lecture said A earlier and B later, or speech vs slide disagree on meaning): do NOT pick a winner or delete either claim. Instead revise that section (or leave it and rely on an existing open question) so both sides remain visible as:
    - **Open question:** Notes had <A>; later said/shown <B>. Which is right?
    Never invent a resolved answer.
@@ -523,26 +446,17 @@ Do the job you are asked for:
    - If two sections are near-duplicates by meaning (reworded headings for the same topic), treat them as one group.
    Do NOT remove a section merely because it conflicts with another — flag with an open question instead unless it is a pure duplicate.
 
-${REPEATED_EXPLANATIONS_JOB_RULES}
-
 Do NOT invent facts. Do NOT rewrite purely for style when nothing is wrong and nothing needs merging. Student-owned sections are not in the input — ignore anything not listed.
 
 Replacement / merged sections use this markdown subset: "## " / "### " headings, "- " bullets ("  - " nested), "1. " numbered steps, "**bold**" key terms, GFM pipe tables ("| col |" + "| --- |" separator), "> (AI) " for AI-added context, and "- **Open question:** …" for unresolved conflicts. ${voiceRules()}
 
-Output ONLY valid JSON (no markdown fences). For jobs 1 and 2:
+Output ONLY valid JSON (no markdown fences):
 { "revisions": [ { "sectionId": string, "markdown": string } ], "removeSectionIds": [ string ] }
-Return { "revisions": [], "removeSectionIds": [] } when everything is grounded and already consolidated.
-For job 3:
-{ "trims": [ { "sectionId": string, "dropLineNumbers": number[] } ] }
-Return { "trims": [] } when every later line adds something new.`;
+Return { "revisions": [], "removeSectionIds": [] } when everything is grounded and already consolidated.`;
 
 const MAX_REVIEW_TRANSCRIPT_CHARS = 60_000;
 const MAX_REVIEW_SCREEN_CHARS = 20_000;
 const MAX_REVIEW_SECTIONS_PER_BATCH = 8;
-/** Below this much speech the factual pass has nothing to check notes against. */
-export const MIN_REVIEW_TRANSCRIPT_CHARS = 400;
-/** Sections longer than this are context-only in the factual pass (never truncated into a revision). */
-const MAX_REVIEW_SECTION_CHARS = 12_000;
 
 export type LiveNotesReviewResult = {
   revisions: Array<{ sectionId: string; markdown: string }>;
@@ -628,59 +542,6 @@ async function callReviewModel(input: {
   }
 }
 
-/**
- * ONE bounded Haiku call for meaning-level redundancy the deterministic pass
- * could not prove (same idea, different wording). Input is only the compact
- * candidate excerpts — never the whole document or transcript. Skipped when
- * there are no candidates or no API key. Returns validated trims only, and
- * `applySemanticTrims` still refuses any line that carries a number / named
- * term / mostly-new content the owner lines lack.
- */
-async function trimRepeatedExplanationsWithModel(input: {
-  sections: Array<{ sectionId: string; markdown: string; studentEdited?: boolean }>;
-  lectureTitle?: string;
-  userId?: string;
-}): Promise<{ sections: typeof input.sections; changed: boolean }> {
-  const candidates = findSemanticTrimCandidates(input.sections);
-  if (candidates.length === 0 || !process.env.ANTHROPIC_API_KEY) {
-    return { sections: input.sections, changed: false };
-  }
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  const anthropic = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 1 });
-  const userPrompt = [
-    input.lectureTitle ? `LECTURE: ${input.lectureTitle.slice(0, 200)}` : null,
-    `CANDIDATES (job 3 — REPEATED EXPLANATIONS):\n\n${formatSemanticTrimCandidates(candidates).slice(0, 14_000)}`,
-    `\n${SEMANTIC_TRIM_INSTRUCTION}`,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-  try {
-    const msg = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 1_200,
-      temperature: 0.1,
-      system: `${REVIEW_SYSTEM}\n\nThis call is job 3 (REPEATED EXPLANATIONS) only.`,
-      messages: [{ role: "user", content: userPrompt }],
-    });
-    recordAiUsage({
-      model: MODEL,
-      inputTokens: msg.usage?.input_tokens,
-      outputTokens: msg.usage?.output_tokens,
-      feature: "live-notes-review",
-      userId: input.userId ?? null,
-    });
-    const textBlock = msg.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      return { sections: input.sections, changed: false };
-    }
-    const trims = parseSemanticTrimJson(textBlock.text, candidates);
-    return applySemanticTrims(input.sections, trims, candidates);
-  } catch (e) {
-    console.error("[live-lecture-notes] repeated-explanation trim", e);
-    return { sections: input.sections, changed: false };
-  }
-}
-
 export async function reviewLiveLectureNotes(input: {
   sections: Array<{ sectionId: string; markdown: string }>;
   transcript: string;
@@ -755,12 +616,7 @@ export async function reviewLiveLectureNotes(input: {
         userId: input.userId,
       });
 
-      // The deterministic baseline is the union of the group's lines. A model
-      // merge that sheds a sizeable share of those lines lost information —
-      // fall back to the baseline rather than accept the shorter merge.
-      const kept = llm?.revisions.find((r) => r.sectionId === baseline.sectionId);
-      const overCut = kept ? isOverCutRevision(baseline.markdown, kept.markdown) : false;
-      if (llm && llm.revisions.length > 0 && !overCut) {
+      if (llm && llm.revisions.length > 0) {
         allRevisions.push(...llm.revisions);
         for (const id of llm.removeSectionIds) allRemoves.add(id);
         for (const id of baseline.removeSectionIds) allRemoves.add(id);
@@ -774,58 +630,13 @@ export async function reviewLiveLectureNotes(input: {
     }
   }
 
-  // Working copy after whole-section merges.
-  const applyWorking = () =>
-    input.sections
-      .filter((s) => !allRemoves.has(s.sectionId))
-      .map((s) => {
-        const rev = allRevisions.find((r) => r.sectionId === s.sectionId);
-        return rev ? { sectionId: s.sectionId, markdown: rev.markdown } : s;
-      });
-  const recordChanges = (
-    before: Array<{ sectionId: string; markdown: string }>,
-    after: Array<{ sectionId: string; markdown: string }>,
-    removed: string[] = []
-  ) => {
-    const prev = new Map(before.map((s) => [s.sectionId, s.markdown]));
-    for (const s of after) {
-      if (prev.get(s.sectionId) === s.markdown) continue;
-      const idx = allRevisions.findIndex((r) => r.sectionId === s.sectionId);
-      if (idx >= 0) allRevisions[idx] = { sectionId: s.sectionId, markdown: s.markdown };
-      else allRevisions.push({ sectionId: s.sectionId, markdown: s.markdown });
-    }
-    for (const id of removed) allRemoves.add(id);
-  };
-
-  // 1b) Cross-section repeated explanations — deterministic (no model call):
-  //     keep the owner's copy, fold unique details into it, trim the rest.
-  if (!input.factualOnly) {
-    const before = applyWorking();
-    const consolidated = consolidateRepeatedExplanations(before);
-    if (consolidated.changed) {
-      recordChanges(before, consolidated.sections, consolidated.removeSectionIds);
-    }
-
-    // 1c) Meaning-level leftovers → one bounded model call on compact excerpts.
-    const afterDeterministic = applyWorking();
-    const semantic = await trimRepeatedExplanationsWithModel({
-      sections: afterDeterministic,
-      lectureTitle: input.lectureTitle,
-      userId: input.userId,
-    });
-    if (semantic.changed) recordChanges(afterDeterministic, semantic.sections);
-  }
-
   // 2) Factual review in batches that fit the budget (requires API key).
-  //    Skipped for slides-only sessions (no speech, no screen): the notes
-  //    were drafted from the deck itself, so the only thing this pass could
-  //    do is misread "not in the transcript" as "wrong" and cut content.
-  const transcriptText = input.transcript.trim();
-  const screenText = (input.screenContent ?? "").trim();
-  const hasSpokenOrScreenEvidence =
-    transcriptText.length >= MIN_REVIEW_TRANSCRIPT_CHARS || screenText.length > 0;
-  if (process.env.ANTHROPIC_API_KEY && hasSpokenOrScreenEvidence) {
-    const forFactual = applyWorking();
+  if (process.env.ANTHROPIC_API_KEY) {
+    const remaining = input.sections.filter((s) => !allRemoves.has(s.sectionId));
+    const forFactual = remaining.map((s) => {
+      const rev = allRevisions.find((r) => r.sectionId === s.sectionId);
+      return rev ? { sectionId: s.sectionId, markdown: rev.markdown } : s;
+    });
 
     for (
       let i = 0;
@@ -833,37 +644,27 @@ export async function reviewLiveLectureNotes(input: {
       i += MAX_REVIEW_SECTIONS_PER_BATCH
     ) {
       const batch = forFactual.slice(i, i + MAX_REVIEW_SECTIONS_PER_BATCH);
-      // A section longer than the prompt slice can only come back truncated
-      // — it is shown for context but is never a revision/removal target.
-      const revisable = batch.filter(
-        (s) => s.markdown.length <= MAX_REVIEW_SECTION_CHARS
-      );
-      if (revisable.length === 0) continue;
-      const allowed = new Set(revisable.map((s) => s.sectionId));
+      const allowed = new Set(batch.map((s) => s.sectionId));
       const sectionsBlock = batch
-        .map((s) =>
-          allowed.has(s.sectionId)
-            ? `[SECTION ${s.sectionId}]\n${s.markdown}`
-            : `[SECTION ${s.sectionId} — context only, do not revise]\n${s.markdown.slice(0, MAX_SECTION_MARKDOWN_CHARS)}…`
+        .map(
+          (s) =>
+            `[SECTION ${s.sectionId}]\n${s.markdown.slice(0, MAX_SECTION_MARKDOWN_CHARS)}`
         )
         .join("\n\n");
-      const deck = selectDeckExcerptFor(
-        batch.map((s) => s.markdown).join("\n"),
-        (input.deckContent ?? "").trim(),
-        MAX_REVIEW_SCREEN_CHARS
-      );
+      const screen = (input.screenContent ?? "").trim();
+      const deck = (input.deckContent ?? "").trim();
       const userPrompt = [
         input.lectureTitle
           ? `LECTURE: ${input.lectureTitle.slice(0, 200)}`
           : null,
         `NOTE SECTIONS TO VERIFY (document order — earliest first):\n\n${sectionsBlock}`,
-        screenText
-          ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n${screenText.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
+        screen
+          ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
           : null,
         deck
-          ? `DECK SLIDES (excerpt of the pre-uploaded deck most relevant to these sections — other slides exist but are not shown; spellings/formulas/tables):\n${deck}`
+          ? `DECK SLIDES (pre-uploaded lecture deck — spellings/formulas/tables for topics that were discussed):\n${deck.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
           : null,
-        `LECTURE TRANSCRIPT (may be partial):\n${transcriptText.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
+        `FULL LECTURE TRANSCRIPT:\n${input.transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
         "\nReturn the JSON now. FACTUAL / SPELLING FIXES only for this batch — do not invent structural merges unless a clear pure duplicate remains.",
       ]
         .filter(Boolean)
@@ -874,27 +675,16 @@ export async function reviewLiveLectureNotes(input: {
           "This call is FACTUAL / SPELLING FIXES for the listed batch. Avoid structural merges unless a pure duplicate is obvious.",
         userPrompt,
         allowed,
-        maxRevisions: revisable.length,
+        maxRevisions: batch.length,
         userId: input.userId,
       });
       if (!llm) continue;
-      const originals = new Map(revisable.map((s) => [s.sectionId, s.markdown]));
       for (const rev of llm.revisions) {
-        // Deterministic over-cut guard: a narrow factual fix cannot shed a
-        // large share of the section's lines. Reject such revisions whole.
-        const original = originals.get(rev.sectionId);
-        if (original && isOverCutRevision(original, rev.markdown)) {
-          console.warn(
-            `[live-lecture-notes] review over-cut rejected for ${rev.sectionId} (${original.length} → ${rev.markdown.length} chars)`
-          );
-          continue;
-        }
         const idx = allRevisions.findIndex((r) => r.sectionId === rev.sectionId);
         if (idx >= 0) allRevisions[idx] = rev;
         else allRevisions.push(rev);
       }
-      // Factual review may not delete sections: "not in the sources" is not
-      // evidence. Whole-section removal is the consolidation step's job.
+      for (const id of llm.removeSectionIds) allRemoves.add(id);
     }
   }
 

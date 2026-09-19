@@ -70,21 +70,6 @@ export function collectAiNoteSections(
     .filter((s) => s.markdown.trim().length > 0);
 }
 
-/**
- * Markdown of everything that is NOT a fully-AI section: student-authored or
- * student-edited sections and blocks without a section id. Counts as present
- * for source-coverage checks, but is never a repair target.
- */
-export function collectNonAiNoteMarkdown(notesJson: unknown): string {
-  const aiIds = new Set(collectAiNoteSections(notesJson).map((s) => s.sectionId));
-  const nodes = topLevelNodes(notesJson).filter((node) => {
-    const sid = sectionIdOf(node);
-    if (sid === LECTURE_SUMMARY_SECTION_ID) return false;
-    return !sid || !aiIds.has(sid);
-  });
-  return nodes.length > 0 ? noteNodesToMarkdown(nodes).trim() : "";
-}
-
 /** Markdown for the Lecture summary / tutor-style recap, if present. */
 export function extractLectureSummaryMarkdown(
   notesJson: unknown
@@ -243,47 +228,8 @@ export function applyNoteRevisions(
         const sid = sectionIdOf(node);
         return !(sid && remove.has(sid));
       });
-      // A removed section leaves its divider behind — collapse doubled and
-      // trailing horizontal rules so the document reads cleanly.
-      content = content.filter((node, i, arr) => {
-        if (node.type !== "horizontalRule") return true;
-        const prev = arr[i - 1];
-        if (prev && prev.type === "horizontalRule") return false;
-        return i !== arr.length - 1;
-      });
     }
   }
 
   return { ...doc, content };
-}
-
-/**
- * Append fully-AI markdown sections at the end of the notes doc (coverage
- * restore). Does not touch existing sections. Empty markdown is skipped.
- */
-export function appendAiNoteSections(
-  notesJson: unknown,
-  sections: Array<{ sectionId: string; markdown: string }>
-): unknown {
-  const usable = sections.filter((s) => s.sectionId && s.markdown.trim());
-  if (usable.length === 0) return notesJson;
-  const doc = notesJson as PmDoc | null;
-  const existing = doc && Array.isArray(doc.content) ? [...doc.content] : [];
-  const content = [...existing];
-  for (const s of usable) {
-    const nodes = markdownToNoteNodes(s.markdown, {
-      sectionId: s.sectionId,
-      provenance: "ai",
-    });
-    if (nodes.length === 0) continue;
-    if (content.length > 0 && content[content.length - 1]?.type !== "horizontalRule") {
-      content.push({ type: "horizontalRule", attrs: { provenance: "ai" } });
-    }
-    content.push(...nodes);
-  }
-  return {
-    type: "doc",
-    ...(doc?.attrs ? { attrs: doc.attrs } : {}),
-    content,
-  };
 }

@@ -49,8 +49,6 @@ export function normalizeNoteHeading(heading: string): string {
 }
 
 function stemToken(t: string): string {
-  if (t.length > 5 && t.endsWith("ies")) return `${t.slice(0, -3)}y`;
-  if (t.length > 5 && /(?:sh|ch|x|ss)es$/.test(t)) return t.slice(0, -2);
   if (t.length > 4 && t.endsWith("s") && !t.endsWith("ss")) return t.slice(0, -1);
   return t;
 }
@@ -62,286 +60,6 @@ function tokenize(raw: string): string[] {
     .split(/\s+/)
     .filter((t) => t.length >= 3 && !STOP.has(t))
     .map(stemToken);
-}
-
-/** Content tokens (lowercased, stop-words dropped, light plural stemming). */
-export function tokenizeNoteText(raw: string): string[] {
-  return tokenize(raw);
-}
-
-// ── New-information check ───────────────────────────────────────────────────
-//
-// Every place that can REMOVE a note line must prove the removed line adds
-// nothing beyond the line that is kept. High token overlap is not that proof:
-// two parallel-structured lines about different things ("X is bypassed for
-// weekend runs" / "Y is bypassed for holiday runs") overlap heavily, and the
-// differing tokens ARE the fact. Subject-neutral: only function words and
-// hedges are ignored.
-
-/** Function-ish words / hedges that never carry a fact on their own. */
-const NOVELTY_FILLER = new Set([
-  "also",
-  "then",
-  "than",
-  "essentially",
-  "basically",
-  "simply",
-  "really",
-  "very",
-  "quite",
-  "often",
-  "usually",
-  "generally",
-  "typically",
-  "however",
-  "therefore",
-  "thus",
-  "hence",
-  "meaning",
-  "means",
-  "refers",
-  "called",
-  "known",
-  "defined",
-  "which",
-  "where",
-  "while",
-  "because",
-  "into",
-  "onto",
-  "each",
-  "every",
-  "both",
-  "either",
-  "well",
-  "way",
-  "like",
-  "such",
-  "other",
-  "another",
-  "same",
-  "recall",
-  "again",
-  "here",
-  "there",
-  "about",
-  "its",
-  "their",
-  "them",
-  "they",
-  "are",
-  "was",
-  "were",
-  "been",
-  "being",
-  "can",
-  "could",
-  "will",
-  "would",
-  "should",
-  "may",
-  "might",
-  "must",
-  "does",
-  "did",
-  "done",
-  "get",
-  "got",
-  "use",
-  "used",
-  "using",
-  "via",
-  "per",
-  "still",
-  "yet",
-  "already",
-  "only",
-  "even",
-  "much",
-  "many",
-  "most",
-  "less",
-  "few",
-  "thing",
-  "things",
-  "kind",
-  "sort",
-  "something",
-  "recap",
-  // Prepositions / conjunctions that survive the stop list. Relational words
-  // that can flip a meaning (before/after/until/unless/without) stay content.
-  "from",
-  "between",
-  "among",
-  "within",
-  "across",
-  "along",
-  "around",
-  "toward",
-  "towards",
-  "upon",
-  "whether",
-  "though",
-  "although",
-  "whereas",
-]);
-
-/** Light suffix strip for root comparison only (never used for display). */
-function wordRoot(t: string): string {
-  return t.length > 5 ? t.replace(/(?:ing|ed|es|ly|s|e)$/, "") : t;
-}
-
-/** "bind" / "binding", "coordinate" / "coordinating": same root, not new info. */
-function sharesWordRoot(a: string, b: string): boolean {
-  if (a === b) return true;
-  const ra = wordRoot(a);
-  const rb = wordRoot(b);
-  if (ra === rb) return true;
-  const [short, long] = ra.length <= rb.length ? [ra, rb] : [rb, ra];
-  return short.length >= 4 && long.startsWith(short) && long.length - short.length <= 4;
-}
-
-function contentTokens(text: string): string[] {
-  return tokenize(text).filter((t) => !NOVELTY_FILLER.has(t));
-}
-
-/** Content tokens of `later` (deduped) that have no root in `earlier`. */
-export function novelContentTokens(earlier: string, later: string): string[] {
-  const base = contentTokens(earlier);
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const t of contentTokens(later)) {
-    if (seen.has(t)) continue;
-    seen.add(t);
-    if (!base.some((e) => sharesWordRoot(e, t))) out.push(t);
-  }
-  return out;
-}
-
-/** Capitalized words after the first word of the body (names, acronyms, labels). */
-function capitalizedTerms(raw: string): string[] {
-  const body = raw
-    .trim()
-    .replace(/^#{1,3}\s+/, "")
-    .replace(/^\s*(?:[-*]|\d+\.)\s+/, "")
-    .replace(/\*\*/g, "")
-    .trim();
-  const words = body.split(/\s+/);
-  const out: string[] = [];
-  for (let i = 1; i < words.length; i++) {
-    const w = words[i]!.replace(/^[("'“‘]+|[)"'”’.,;:!?]+$/g, "");
-    if (/^[A-Z][A-Za-z0-9-]{2,}$/.test(w)) out.push(...tokenize(w));
-  }
-  return out;
-}
-
-/**
- * Negation words the tokenizer drops (too short / stop-listed). A flipped
- * polarity is a different fact, so it must be compared explicitly.
- * Normalized text turns "isn't" into "isn t", hence the `\w+n t` form.
- */
-const NEGATION_RE = /\b(?:not|no|never|cannot|\w+n t)\b/;
-
-/** Short words that may follow a number without being its unit. */
-const NOT_A_UNIT = new Set([
-  "of", "to", "in", "on", "at", "by", "is", "or", "as", "an", "it", "be", "if",
-  "so", "do", "up", "we", "he", "us", "my", "me", "am", "no", "per", "key",
-  "new", "old", "big", "top", "end", "all", "any", "out", "off", "one", "two",
-  "six", "ten",
-]);
-
-/**
- * Numbers with their unit when one follows ("4 kb", "40 ms", "3 mg"). Units
- * are usually 1–3 letters and would otherwise be dropped by the tokenizer, so
- * "4 KB" vs "4 MB" or "3 mg" vs "3 g" would look identical.
- */
-export function numberTokens(norm: string): string[] {
-  const out: string[] = [];
-  const re = /(\d+(?:\.\d+)?)(?: ([a-z]{1,3})(?= |$))?/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(norm))) {
-    const unit = m[2];
-    const isUnit =
-      unit && !STOP.has(unit) && !NOVELTY_FILLER.has(unit) && !NOT_A_UNIT.has(unit);
-    out.push(isUnit ? `${m[1]} ${unit}` : m[1]!);
-  }
-  return out;
-}
-
-/** A line that carries an equation / expression (LaTeX, "=", math operators). */
-const MATH_LINE_RE = /\$|\\[a-zA-Z]{2,}|[=≈≠≤≥→⇌∑∫√×÷±]|\^|_\{/;
-
-/**
- * Canonical form of a line's math: markdown emphasis, math delimiters, LaTeX
- * wrappers, braces, whitespace, and list markers removed; case-folded.
- */
-function mathSignature(line: string): string {
-  return line
-    .replace(/^\s*(?:[-*]|\d+\.)\s+/, "")
-    .replace(/\*\*|__|`/g, "")
-    .replace(/\$+/g, " ")
-    .replace(/\\(?:text|mathrm|mathbf|mathit|left|right|displaystyle)\b/g, "")
-    .replace(/[{}]/g, "")
-    .replace(/[.:;,]+$/g, "")
-    .replace(/\s+/g, "")
-    .toLowerCase();
-}
-
-/**
- * `later` states an equation / expression that none of `earlier` states.
- * Variables are single letters the tokenizer drops, so math must be
- * compared by its canonical signature, not by content tokens.
- */
-export function lineStatesNewMath(earlier: string[], later: string): boolean {
-  if (!MATH_LINE_RE.test(later)) return false;
-  const sig = mathSignature(later);
-  return !earlier.some((e) => MATH_LINE_RE.test(e) && mathSignature(e) === sig);
-}
-
-/**
- * Does `later` carry information that `earlier` does not? True when `later`
- * has a number (with its unit) the earlier line lacks, flips negation, has a
- * capitalized term (name / acronym / label) the earlier line lacks, two or
- * more novel content tokens, or one novel token that SUBSTITUTES for an
- * earlier token (a different object ⇒ a different fact) or is a large share
- * of a short line. A single ADDED word on top of everything the earlier line
- * said ("is the stage that…", "(recap)") is rewording, not information.
- * Callers that delete a line must only do so when this returns false for
- * (kept, removed).
- */
-export function lineAddsNewInformation(earlier: string, later: string): boolean {
-  const na = normalizeLine(earlier);
-  const nb = normalizeLine(later);
-  if (!nb || na === nb) return false;
-  // Formulas: variables are single letters the tokenizer drops, so
-  // "ΔG = ΔG° + RT ln Q" and "ΔG° = −RT ln K" look identical by tokens.
-  // Two math-bearing lines are the same fact only when their math matches.
-  if (
-    (MATH_LINE_RE.test(earlier) || MATH_LINE_RE.test(later)) &&
-    mathSignature(earlier) !== mathSignature(later)
-  ) {
-    return true;
-  }
-  if (NEGATION_RE.test(na) !== NEGATION_RE.test(nb)) return true;
-  const numsA = new Set(numberTokens(na));
-  for (const n of numberTokens(nb)) {
-    if (!numsA.has(n)) return true;
-  }
-  const novel = novelContentTokens(na, nb);
-  if (novel.length === 0) return false;
-  if (novel.length >= 2) return true;
-  const novelSet = new Set(novel);
-  if (capitalizedTerms(later).some((c) => novelSet.has(c))) return true;
-  // One novel token: substitution (earlier said something the later dropped)
-  // or a big share of a short line ⇒ new; a pure one-word addition ⇒ not.
-  if (novelContentTokens(nb, na).length > 0) return true;
-  const total = contentTokens(nb).length;
-  return novel.length / Math.max(total, 1) >= 0.2;
-}
-
-/** Neither line says anything the other does not (near-equivalent meaning). */
-export function linesAreEquivalent(a: string, b: string): boolean {
-  return !lineAddsNewInformation(a, b) && !lineAddsNewInformation(b, a);
 }
 
 export function extractBoldTerms(markdown: string): string[] {
@@ -416,7 +134,7 @@ export function pickNoteFoldTarget<
   return sections[sections.length - 1] ?? null;
 }
 
-export function lineTokenOverlap(a: string, b: string): number {
+function lineTokenOverlap(a: string, b: string): number {
   const ta = new Set(tokenize(a));
   const tb = tokenize(b);
   if (ta.size === 0 && tb.length === 0) return 1;
@@ -478,18 +196,14 @@ export function sectionBodySimilarity(a: string, b: string): number {
 export const BODY_SIMILARITY_MATCH_THRESHOLD = 0.42;
 
 /**
- * Match a chunk by heading first. A distinct `## ` heading that does not
- * name an existing topic becomes a new section — body similarity alone
- * must not fold two different topics together (parallel structure looks
- * alike even when every fact is unique). Unheaded fragments may still
- * attach by strong body overlap.
+ * Match a chunk by heading first, then by body similarity when the heading
+ * is missing or ambiguous.
  */
 export function matchChunkToSections<
   T extends { sectionId: string; markdown: string },
 >(chunk: string, sections: T[]): T | null {
   const byHeading = matchHeadingToSections(chunk, sections);
   if (byHeading) return byHeading;
-  if (extractNoteHeading(chunk)) return null;
   if (sections.length === 0) return null;
   let best: T | null = null;
   let bestScore = 0;
@@ -576,23 +290,6 @@ export function classifyAppendChunks<
           markdown: chunk,
         });
         lastFoldId = byHeading.sectionId;
-        continue;
-      }
-      // Recap/agenda titles must not spawn a second outline section — but
-      // unique facts on that slide (a number, exception, new example) still
-      // have to land somewhere. Fold uncovered lines into the last section;
-      // skip the chunk only when every body line is already represented.
-      const uncovered = findUncoveredLines(chunk, sections);
-      const target =
-        lastFoldId ??
-        (sections.length > 0 ? sections[sections.length - 1]!.sectionId : null);
-      if (uncovered.length > 0 && target) {
-        actions.push({
-          kind: "fold",
-          sectionId: target,
-          markdown: uncovered.join("\n"),
-        });
-        lastFoldId = target;
       }
       continue;
     }
@@ -609,10 +306,7 @@ export function classifyAppendChunks<
 
 /**
  * Incoming line is a precise correction of an existing line (same gist,
- * different number/token) — not a brand-new bullet. Replacing the existing
- * line must not lose a fact, so the existing line may carry at most ONE
- * content token the incoming line lacks (a single fixed token). Two
- * parallel-structured lines about different things are new bullets.
+ * different number/token) — not a brand-new bullet.
  */
 export function isCorrectedNoteLine(existing: string, incoming: string): boolean {
   const na = normalizeLine(existing);
@@ -624,17 +318,15 @@ export function isCorrectedNoteLine(existing: string, incoming: string): boolean
   const overlap = lineTokenOverlap(na, nb);
   const numsA = (na.match(/\d+(?:\.\d+)?/g) ?? []).join(",");
   const numsB = (nb.match(/\d+(?:\.\d+)?/g) ?? []).join(",");
-  const lostTokens = novelContentTokens(nb, na).length;
   if (numsA !== numsB) {
     const restA = na.replace(/\d+(?:\.\d+)?/g, " ").replace(/\s+/g, " ").trim();
     const restB = nb.replace(/\d+(?:\.\d+)?/g, " ").replace(/\s+/g, " ").trim();
     const restOverlap = lineTokenOverlap(restA, restB);
-    if ((restOverlap >= 0.75 || restA === restB) && lostTokens <= 1) return true;
+    if (restOverlap >= 0.75 || restA === restB) return true;
     return false;
   }
   return (
     overlap >= 0.68 &&
-    lostTokens <= 1 &&
     Math.abs(na.length - nb.length) < Math.max(na.length, nb.length) * 0.45
   );
 }
@@ -854,33 +546,11 @@ export function uniqueIncomingNoteLines(
       .map(normalizeLine)
       .filter((n) => n.length >= 8)
   );
-  const existingTableRows = new Set(
-    existingMd
-      .split("\n")
-      .filter((l) => isTableLine(l))
-      .map((l) => l.trim())
-  );
   const extra: string[] = [];
-  const incomingLines = incomingMd.split("\n");
-  for (let li = 0; li < incomingLines.length; li++) {
-    const line = incomingLines[li]!;
+  for (const line of incomingMd.split("\n")) {
     // Drop a repeated document/section heading, but preserve H3 subtopics
     // that organize an enrichment inside the existing H2 section.
     if (/^#{1,2}\s/.test(line)) continue;
-    // Tables travel as whole blocks: keep the block unless every data row is
-    // already present verbatim (the "| --- |" separator alone proves nothing
-    // and must never be dropped from a table that is kept).
-    if (isTableLine(line)) {
-      let end = li;
-      while (end + 1 < incomingLines.length && isTableLine(incomingLines[end + 1]!)) end += 1;
-      const block = incomingLines.slice(li, end + 1);
-      const dataRows = block.filter((r) => !/^\s*\|(?:\s*:?-{2,}:?\s*\|)+\s*$/.test(r));
-      const allPresent =
-        dataRows.length > 0 && dataRows.every((r) => existingTableRows.has(r.trim()));
-      if (!allPresent) extra.push(...block);
-      li = end;
-      continue;
-    }
     const n = normalizeLine(line);
     if (!n) {
       if (extra.length > 0 && extra[extra.length - 1] !== "") extra.push("");
@@ -891,15 +561,9 @@ export function uniqueIncomingNoteLines(
       continue;
     }
     if (existingNorm.has(n)) continue;
-    // Restatement only when the incoming line adds nothing beyond an existing
-    // line. A longer incoming line that CONTAINS an existing one carries new
-    // content and is kept (intra-section dedupe later keeps the richer copy).
     let dup = false;
     for (const e of existingNorm) {
-      if (
-        (e.includes(n) || n.includes(e) || lineTokenOverlap(e, n) >= 0.75) &&
-        !lineAddsNewInformation(e, n)
-      ) {
+      if (e.includes(n) || n.includes(e) || lineTokenOverlap(e, n) >= 0.75) {
         dup = true;
         break;
       }
@@ -915,9 +579,7 @@ const LINE_DEDUPE_SIMILARITY = 0.78;
 
 /**
  * Normalize-and-dedupe lines inside a section. Keeps the richer line
- * (longer / more bold terms) — but only collapses two lines when the one
- * that is dropped adds no information beyond the survivor (see
- * `lineAddsNewInformation`). Callers must only run this on AI-owned
+ * (longer / more bold terms). Callers must only run this on AI-owned
  * sections — student provenance is never passed in.
  */
 export function dedupeSectionLines(markdown: string): string {
@@ -938,7 +600,6 @@ export function dedupeSectionLines(markdown: string): string {
       continue;
     }
     let dupIdx = -1;
-    let keepIncoming = false;
     for (let i = 0; i < keptNorm.length; i++) {
       const prev = keptNorm[i]!;
       if (!prev || prev.length < 8) continue;
@@ -948,12 +609,7 @@ export function dedupeSectionLines(markdown: string): string {
         n.includes(prev) ||
         lineTokenOverlap(prev, n) >= LINE_DEDUPE_SIMILARITY
       ) {
-        const richerIncoming = lineRichness(line) > lineRichness(kept[i]!);
-        const survivor = richerIncoming ? line : kept[i]!;
-        const dropped = richerIncoming ? kept[i]! : line;
-        if (lineAddsNewInformation(survivor, dropped)) continue; // different facts
         dupIdx = i;
-        keepIncoming = richerIncoming;
         break;
       }
     }
@@ -963,7 +619,7 @@ export function dedupeSectionLines(markdown: string): string {
       continue;
     }
     // Keep the richer line.
-    if (keepIncoming) {
+    if (lineRichness(line) > lineRichness(kept[dupIdx]!)) {
       kept[dupIdx] = line;
       keptNorm[dupIdx] = n;
     }
@@ -1133,102 +789,8 @@ export function sectionsOverlappingDeckPages<
 
 export type NoteSectionRef = { sectionId: string; markdown: string };
 
-function isBodyLine(line: string): boolean {
-  return Boolean(line.trim()) && !/^#{1,6}\s/.test(line.trim());
-}
-
-/**
- * Body lines of `section` that say something no line in `others` says
- * (per `lineAddsNewInformation`). Tables / blockquotes only count as covered
- * by an exact normalized match. Empty ⇒ the section is fully redundant.
- */
-export function findUncoveredLines(
-  sectionMd: string,
-  others: Array<{ markdown: string }>
-): string[] {
-  const pool = others.flatMap((o) => o.markdown.split("\n")).filter(isBodyLine);
-  const poolNorm = new Set(pool.map(normalizeLine));
-  const out: string[] = [];
-  for (const line of sectionMd.split("\n")) {
-    if (!isBodyLine(line)) continue;
-    const n = normalizeLine(line);
-    if (n.length < 8 || poolNorm.has(n)) continue;
-    if (isTableLine(line) || /^\s*>/.test(line)) {
-      out.push(line);
-      continue;
-    }
-    const covered = pool.some(
-      (p) =>
-        !isTableLine(p) &&
-        !/^\s*>/.test(p) &&
-        lineTokenOverlap(normalizeLine(p), n) >= 0.5 &&
-        !lineAddsNewInformation(p, line)
-    );
-    if (!covered) out.push(line);
-  }
-  return out;
-}
-
-/** Fraction of `other`'s body lines already said by `keeper` (1 when `other` has no body). */
-export function sectionCoveredRatio(keeperMd: string, otherMd: string): number {
-  const body = otherMd.split("\n").filter(isBodyLine);
-  if (body.length === 0) return 1;
-  const uncovered = findUncoveredLines(otherMd, [{ markdown: keeperMd }]);
-  return 1 - uncovered.length / body.length;
-}
-
-/** A section may be absorbed on body alone only when essentially all of it is already said. */
-export const SECTION_COVERED_MERGE_RATIO = 0.9;
-
-/** Heading words that do not name a facet ("Overview", "Part 2", "cont."). */
-const GENERIC_HEADING_TOKENS = new Set([
-  "overview", "introduction", "intro", "summary", "recap", "review", "continued",
-  "cont", "part", "section", "notes", "key", "concepts", "concept", "basics",
-  "background", "general", "more", "further", "additional", "details", "detail",
-  "topic", "topics", "lecture", "slide", "slides", "i", "ii", "iii", "iv",
-]);
-const HEADING_FUNCTION_WORDS = new Set([
-  "of", "the", "and", "or", "for", "to", "in", "on", "with", "an", "its", "vs",
-]);
-
-/**
- * Two headings are the same TITLE (not merely the same broad topic): equal
- * after normalization, or they differ only by generic words. "Price
- * Elasticity of Demand" vs "Determinants of Price Elasticity" share the
- * topic but "Determinants" names a distinct facet — that is organization,
- * not duplication, so the sections are never merged on the heading alone.
- */
-export function headingsAreSameTitle(a: string, b: string): boolean {
-  const na = normalizeNoteHeading(a);
-  const nb = normalizeNoteHeading(b);
-  if (!na || !nb) return false;
-  if (na === nb) return true;
-  const facet = (h: string) =>
-    h
-      .split(/\s+/)
-      .filter(Boolean)
-      .filter(
-        (t) =>
-          !GENERIC_HEADING_TOKENS.has(t) &&
-          !HEADING_FUNCTION_WORDS.has(t) &&
-          !/^\d+$/.test(t)
-      );
-  const ta = facet(na);
-  const tb = facet(nb);
-  if (ta.length === 0 || tb.length === 0) return false;
-  const sa = new Set(ta);
-  const sb = new Set(tb);
-  return ta.every((t) => sb.has(t)) && tb.every((t) => sa.has(t));
-}
-
 /**
  * Deterministic duplicate topic groups (document order). Earliest id is kept.
- * A section joins a group when its heading names the same topic, or when
- * essentially ALL of its body is already said by the keeper — never on
- * loose body similarity (parallel-structured sections about different
- * things look alike token-wise). Facet sections ("Topic: mechanism") merge
- * INTO the topic but keep their heading as a sub-heading (see
- * `mergeDuplicateGroup`) — organization is merged, information is not.
  */
 export function findDuplicateTopicGroups(
   sections: NoteSectionRef[]
@@ -1247,9 +809,8 @@ export function findDuplicateTopicGroups(
       const hb = extractNoteHeading(b.markdown);
       if (!hb) continue;
       const headingMatch = headingsReferToSameTopic(ha, hb);
-      const covered =
-        sectionCoveredRatio(a.markdown, b.markdown) >= SECTION_COVERED_MERGE_RATIO;
-      if (headingMatch || covered) {
+      const bodyScore = sectionBodySimilarity(a.markdown, b.markdown);
+      if (headingMatch || bodyScore >= BODY_SIMILARITY_MATCH_THRESHOLD) {
         absorb.push(b);
         used.add(b.sectionId);
       }
@@ -1262,52 +823,18 @@ export function findDuplicateTopicGroups(
   return groups;
 }
 
-/**
- * Union unique lines into the earliest section; drop absorbed ids.
- * Guarantee: every absorbed body line that says something the merged
- * section does not is appended, so a merge never loses information.
- */
+/** Union unique lines into the earliest section; drop absorbed ids. */
 export function mergeDuplicateGroup(group: {
   keep: NoteSectionRef;
   absorb: NoteSectionRef[];
 }): { sectionId: string; markdown: string; removeSectionIds: string[] } {
   let md = group.keep.markdown;
-  const keepHeading = extractNoteHeading(md);
   for (const other of group.absorb) {
-    const otherHeading = extractNoteHeading(other.markdown);
-    const facet =
-      keepHeading && otherHeading && !headingsAreSameTitle(keepHeading, otherHeading)
-        ? otherHeading
-        : null;
-    if (!facet) {
-      md = placeIncomingNoteLines(md, other.markdown);
-      continue;
-    }
-    // A facet of the topic ("Determinants of …", "… examples"): its unique
-    // lines stay grouped under their own sub-heading instead of being
-    // interleaved into the parent — the reader keeps the structure.
-    const body = other.markdown
-      .split("\n")
-      .filter((l, i) => !(i === 0 && /^#{1,3}\s/.test(l.trim())))
-      .join("\n");
-    const unique = uniqueIncomingNoteLines(md, body);
-    if (unique.trim()) {
-      md = `${md.replace(/\s+$/, "")}\n\n### ${facet}\n${unique.replace(/^\n+/, "")}`;
-    }
-  }
-  md = dedupeSectionLines(md);
-  const missing: string[] = [];
-  for (const other of group.absorb) {
-    for (const line of findUncoveredLines(other.markdown, [{ markdown: md }])) {
-      if (!missing.includes(line)) missing.push(line);
-    }
-  }
-  if (missing.length > 0) {
-    md = `${md.replace(/\s+$/, "")}\n${missing.join("\n")}`;
+    md = placeIncomingNoteLines(md, other.markdown);
   }
   return {
     sectionId: group.keep.sectionId,
-    markdown: md,
+    markdown: dedupeSectionLines(md),
     removeSectionIds: group.absorb.map((s) => s.sectionId),
   };
 }

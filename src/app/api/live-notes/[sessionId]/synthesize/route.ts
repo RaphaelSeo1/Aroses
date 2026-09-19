@@ -6,26 +6,13 @@ import {
   type RevisableSection,
 } from "@/lib/ai/live-lecture-notes";
 import { clampNoteInstruction } from "@/lib/ai/note-instruction";
-import { pickRelevantSlidePages, pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-pages";
+import { pickRelevantSlidePages } from "@/lib/live-notes/pick-relevant-slide-pages";
 import {
-  isDeckSeedComplete,
   isSlideDeckSchemaError,
   loadSessionDeckPages,
   takeDeckSeedBatch,
 } from "@/lib/live-notes/slide-pages";
 import { sectionsOverlappingDeckPages } from "@/lib/live-notes/fold-note-markdown";
-import { deckPagesToSourceUnits } from "@/lib/notes/source-coverage";
-import {
-  applyCoverageRepairs,
-  auditSourceCoverage,
-  buildSourceCoverageLedger,
-  formatSourceCoverageAudit,
-  repairSourceCoverage,
-  summarizeSourceCoverageAudit,
-  type CoverageNoteSection,
-  type CoverageRepair,
-} from "@/lib/notes/source-coverage-ledger";
-import { fillSeedCoverageGaps } from "@/lib/live-notes/seed-gap-fill";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -41,8 +28,6 @@ const MAX_SECTION_CHARS = 8_000;
 const MAX_EXCERPT_CHARS = 3_000;
 const MAX_EXISTING_SECTIONS = 200;
 const MAX_EXISTING_NOTES_CHARS = 100_000;
-/** Per-section cap for the coverage audit only (no model sees this text). */
-const MAX_AUDIT_SECTION_CHARS = 60_000;
 /**
  * Hard per-session cap on Haiku note calls (runaway guard). The client
  * fires roughly every ~45–60s of continuous speech (5s heartbeat gated on
@@ -105,17 +90,8 @@ export async function POST(request: Request, ctx: Params) {
     screenContext?: unknown;
     noteInstruction?: unknown;
     seedFromDeck?: unknown;
-    coverageChecked?: unknown;
-    coverageAudit?: unknown;
   };
   const seedFromDeck = b.seedFromDeck === true;
-  /** Deck already audited + repaired earlier (persisted on the notes doc); skip re-auditing on reload. */
-  const coverageChecked = b.coverageChecked === true;
-  /**
-   * One-shot end-of-seed coverage pass from the same page session. Reload
-   * resume must NOT send this — otherwise every refresh re-inserts slides.
-   */
-  const coverageAudit = b.coverageAudit === true;
   if (
     !seedFromDeck &&
     (typeof b.newSegmentText !== "string" || !b.newSegmentText.trim())
@@ -150,11 +126,6 @@ export async function POST(request: Request, ctx: Params) {
         }))
     : [];
   let existingChars = 0;
-  /**
-   * Untruncated copy for the slide-coverage audit: a section cut at
-   * MAX_SECTION_CHARS would hide its own tail and get that tail re-copied in.
-   */
-  const fullSections: Array<{ sectionId: string; markdown: string; studentEdited: boolean }> = [];
   const existingSections = Array.isArray(b.existingSections)
     ? b.existingSections
         .filter(
@@ -173,11 +144,6 @@ export async function POST(request: Request, ctx: Params) {
         )
         .slice(0, MAX_EXISTING_SECTIONS)
         .flatMap((s) => {
-          fullSections.push({
-            sectionId: s.sectionId,
-            markdown: s.markdown.slice(0, MAX_AUDIT_SECTION_CHARS),
-            studentEdited: s.studentEdited === true,
-          });
           const remaining = MAX_EXISTING_NOTES_CHARS - existingChars;
           if (remaining <= 0) return [];
           const markdown = s.markdown.slice(0, Math.min(MAX_SECTION_CHARS, remaining));
@@ -224,7 +190,7 @@ export async function POST(request: Request, ctx: Params) {
     : [];
 
   const sessionSelect =
-    "id, title, status, rolling_summary, synthesize_calls, slides_seeded_through_page, slides_page_count";
+    "id, title, status, rolling_summary, synthesize_calls, slides_seeded_through_page";
   let { data: session, error: sessLoadErr } = await supabase
     .from("live_lecture_sessions")
     .select(sessionSelect)
@@ -263,99 +229,8 @@ export async function POST(request: Request, ctx: Params) {
   const seedBatch = seedFromDeck
     ? takeDeckSeedBatch(deckPages, seededThrough)
     : null;
-  const deckPageCount =
-    typeof (session as { slides_page_count?: unknown }).slides_page_count ===
-      "number" &&
-    (session as { slides_page_count: number }).slides_page_count > 0
-      ? (session as { slides_page_count: number }).slides_page_count
-      : deckPages.length > 0
-        ? deckPages[deckPages.length - 1]!.pageNum
-        : seededThrough;
-  const markSeedFinished = async () => {
-    if (isDeckSeedComplete(seededThrough, deckPageCount)) return;
-    await supabase
-      .from("live_lecture_sessions")
-      .update({
-        slides_seeded_through_page: deckPageCount,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", sessionId)
-      .eq("user_id", user.id);
-  };
   if (seedFromDeck && (!seedBatch || seedBatch.pages.length === 0)) {
-    // Every extractable page is drafted. Reload must not re-run the coverage
-    // audit — that was inserting the same slides again on every refresh.
-    // Only the same-session follow-up after the last seed batch (coverageAudit)
-    // may fill gaps, and never against an empty editor (notes not hydrated).
-    if (
-      !coverageAudit ||
-      coverageChecked ||
-      deckPages.length === 0 ||
-      (fullSections.length === 0 && seededThrough > 0)
-    ) {
-      await markSeedFinished();
-      return NextResponse.json({ seedDone: true, pageCount: deckPageCount });
-    }
-    const ledger = buildSourceCoverageLedger(deckPagesToSourceUnits(deckPages));
-    const before = auditSourceCoverage(ledger, fullSections);
-    let working: CoverageNoteSection[] = fullSections;
-    const repairs: CoverageRepair[] = [];
-    let gapPages: number[] = [];
-    if (before.counts.missing > 0) {
-      try {
-        const gap = await fillSeedCoverageGaps({
-          deckPages,
-          audit: before,
-          sections: fullSections,
-          rollingSummary:
-            typeof session.rolling_summary === "string" ? session.rolling_summary : "",
-          lectureTitle: typeof session.title === "string" ? session.title : undefined,
-          noteInstruction: clampNoteInstruction(
-            typeof b.noteInstruction === "string"
-              ? b.noteInstruction
-              : await loadNoteInstruction(supabase, "live_lecture_sessions", {
-                  id: sessionId,
-                  user_id: user.id,
-                })
-          ),
-          userId: user.id,
-        });
-        gapPages = gap.pageNums;
-        if (gap.repairs.length > 0) {
-          repairs.push(...gap.repairs);
-          working = applyCoverageRepairs(working, gap.repairs);
-        }
-      } catch (e) {
-        console.error("[live-notes seed] gap fill", e);
-        void report("live-notes.seed_gap_fill_failed", e, {
-          userId: user.id,
-          detail: { sessionId },
-        });
-      }
-    }
-    const result = repairSourceCoverage(ledger, working);
-    repairs.push(...result.repairs);
-    console.info(
-      `[live-notes seed] source coverage for ${sessionId}: ${formatSourceCoverageAudit(before)}` +
-        (gapPages.length > 0 ? ` → model gap fill over page(s) ${gapPages.join(",")}` : "") +
-        (result.repairs.length > 0
-          ? ` → verbatim safety net (${result.repairs.length} op(s))`
-          : "") +
-        (repairs.length > 0 ? ` → ${formatSourceCoverageAudit(result.after)}` : "")
-    );
-    await markSeedFinished();
-    return NextResponse.json({
-      seedDone: true,
-      pageCount: deckPages.length,
-      coverage: summarizeSourceCoverageAudit(before),
-      coverageAfterRepair: summarizeSourceCoverageAudit(result.after),
-      repairs: repairs.map((r) => ({
-        kind: r.kind,
-        sectionId: r.sectionId,
-        markdown: r.markdown,
-        unitIds: r.unitIds,
-      })),
-    });
+    return NextResponse.json({ seedDone: true });
   }
 
   const calls =
@@ -410,31 +285,6 @@ export async function POST(request: Request, ctx: Params) {
   const deckContext = seedFromDeck
     ? seedBatch!.text
     : liveDeckPick?.text || undefined;
-
-  // Seed: re-rank focused sections by overlap with THIS batch's slide text.
-  // The client previously sent only the first N sections in document order,
-  // so later pages could not @@revise the matching drafted topics.
-  let seedRevisable = revisable;
-  if (seedFromDeck && seedBatch && existingSections.length > 0) {
-    const ranked = pickRevisableByTranscript(
-      existingSections,
-      seedBatch.text,
-      MAX_REVISABLE_SECTIONS
-    );
-    const excerptById = new Map<string, string>();
-    for (const s of existingSections) {
-      if (s.transcriptExcerpt) excerptById.set(s.sectionId, s.transcriptExcerpt);
-    }
-    for (const s of revisable) {
-      if (s.transcriptExcerpt) excerptById.set(s.sectionId, s.transcriptExcerpt);
-    }
-    seedRevisable = ranked.map((s) => ({
-      sectionId: s.sectionId,
-      markdown: s.markdown,
-      studentEdited: s.studentEdited,
-      transcriptExcerpt: excerptById.get(s.sectionId),
-    }));
-  }
 
   // Pull sections seeded from the matched deck pages into the focused set.
   if (liveDeckPick && liveDeckPick.pageNums.length > 0) {
@@ -498,8 +348,8 @@ export async function POST(request: Request, ctx: Params) {
           recentHeadings,
           existingHeadings,
           existingSections,
-          // Seed: use slide-overlap ranking so later batches revise the right topics.
-          revisable: seedFromDeck ? seedRevisable : revisable,
+          // Seed batches may @@revise prior drafts; do not force empty.
+          revisable,
           appendSectionId,
           lectureTitle,
           userId: user.id,
@@ -558,9 +408,6 @@ export async function POST(request: Request, ctx: Params) {
           appendSectionId,
           ...(seedFromDeck && seedBatch
             ? {
-                // The client keeps calling with seedFromDeck while pages
-                // remain; the final call (no pages left) returns the JSON
-                // coverage audit + deterministic repairs instead of a stream.
                 seedRemaining: seedBatch.remaining,
                 seededThrough: seedBatch.throughPage,
                 seedPageFrom,

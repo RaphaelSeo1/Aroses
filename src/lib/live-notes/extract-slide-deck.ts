@@ -6,24 +6,19 @@ import {
   titleFromSlideText,
   type DeckPage,
 } from "@/lib/live-notes/slide-pages";
-import { normalizeSourceText } from "@/lib/notes/source-text";
 
 const MAX_PAGE_TEXT = 8_000;
 
 /**
  * Keep every slide, including title cards and diagram-only pages. Dropping
  * short text used to make a 60-slide deck show up as ~48.
- *
- * Text is typographically normalized (PDF ligature splits such as
- * "identi fi ed", TAB-glued emphasis runs) so the model reads clean words
- * and the source-coverage audit can match slide sentences to note lines.
  */
 export function deckPageFromExtract(
   pageNum: number,
   text: string,
   titleHint?: string
 ): DeckPage {
-  const trimmed = normalizeSourceText(text).trim();
+  const trimmed = text.trim();
   const extractedText = trimmed
     ? trimmed.slice(0, MAX_PAGE_TEXT)
     : `(Slide ${pageNum} — little selectable text; mostly visual.)`;

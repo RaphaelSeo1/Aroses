@@ -1,9 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
-import {
-  MAX_PRIOR_NOTES_COVERAGE_CHARS,
-  streamMentoredNotes,
-} from "@/lib/ai/generate-mentored-notes";
+import { streamMentoredNotes } from "@/lib/ai/generate-mentored-notes";
 import { clampNoteInstruction } from "@/lib/ai/note-instruction";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import type { KeyTerm } from "@/types/course";
@@ -64,7 +61,6 @@ export async function POST(request: Request, ctx: Params) {
     courseKeyTerms?: unknown;
     roseSpoken?: unknown;
     noteInstruction?: unknown;
-    priorNotesCoverage?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -110,12 +106,6 @@ export async function POST(request: Request, ctx: Params) {
   const courseKeyTerms = Array.isArray(body.courseKeyTerms)
     ? (body.courseKeyTerms as KeyTerm[])
     : undefined;
-  // What earlier chunks already put in the notebook (compact concept state),
-  // so this chunk adds only new information instead of re-explaining.
-  const priorNotesCoverage =
-    typeof body.priorNotesCoverage === "string"
-      ? body.priorNotesCoverage.slice(0, MAX_PRIOR_NOTES_COVERAGE_CHARS)
-      : undefined;
 
   // Per-course note style request — the caller's onboarding row is the source
   // of truth, a body string is an in-flight override (clamped either way).
@@ -156,7 +146,6 @@ export async function POST(request: Request, ctx: Params) {
           courseKeyTerms,
           roseSpoken,
           noteInstruction: noteInstruction || undefined,
-          priorNotesCoverage,
         })) {
           if (evt.type === "text") {
             send("text", { delta: evt.delta });
