@@ -56,9 +56,29 @@ function resolvePdfWorkerSrc(): string {
 
 let pdfjsReady: Promise<PdfJsModule> | null = null;
 
+type CanvasDomGlobals = {
+  DOMMatrix?: typeof globalThis.DOMMatrix;
+  ImageData?: typeof globalThis.ImageData;
+  Path2D?: typeof globalThis.Path2D;
+};
+
+/**
+ * pdfjs-dist 5 evaluates `new DOMMatrix()` at import time. Browsers have that
+ * API; Vercel Node does not. The library tries to load @napi-rs/canvas itself,
+ * but that require fails once pdfjs is bundled into a serverless function.
+ */
+async function ensurePdfJsDomPolyfills() {
+  const canvas = (await import("@napi-rs/canvas")) as unknown as CanvasDomGlobals;
+  const g = globalThis as typeof globalThis & CanvasDomGlobals;
+  if (!g.DOMMatrix && canvas.DOMMatrix) g.DOMMatrix = canvas.DOMMatrix;
+  if (!g.ImageData && canvas.ImageData) g.ImageData = canvas.ImageData;
+  if (!g.Path2D && canvas.Path2D) g.Path2D = canvas.Path2D;
+}
+
 async function getPdfJs(): Promise<PdfJsModule> {
   if (!pdfjsReady) {
     pdfjsReady = (async () => {
+      await ensurePdfJsDomPolyfills();
       const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
       // Without this, getDocument waits forever for a worker Turbopack
       // cannot resolve (same hang as "Reading slides…" never finishing).
