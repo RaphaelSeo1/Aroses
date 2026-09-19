@@ -1,4 +1,4 @@
-import { extractPdfPagesForIngest } from "@/lib/pdf-text-head-tail";
+import { extractPdfPages } from "@/lib/pdf-text/extract";
 import { extractPptxSlides } from "@/lib/study-ingest/pptx";
 import { detectIngestFormat, extensionOfFileName } from "@/lib/study-ingest/formats";
 import {
@@ -47,7 +47,7 @@ export async function extractSlideDeckFromBuffer(input: {
   }
 
   if (kind === "pdf" || ext === "pdf") {
-    const { pages } = await extractPdfPagesForIngest(input.buffer, {
+    const { pages } = await extractPdfPages(input.buffer, {
       maxPages: MAX_DECK_PAGES,
     });
     return pages

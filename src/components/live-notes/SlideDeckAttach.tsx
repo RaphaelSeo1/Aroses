@@ -28,7 +28,9 @@ export function SlideDeckAttach({
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<"uploading" | "removing" | null>(null);
+  const [busy, setBusy] = useState<"uploading" | "reading" | "removing" | null>(
+    null
+  );
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -47,7 +49,7 @@ export function SlideDeckAttach({
   };
 
   const closeModal = () => {
-    if (busy === "uploading") return;
+    if (busy === "uploading" || busy === "reading") return;
     setOpen(false);
     setDragOver(false);
     dragDepth.current = 0;
@@ -58,7 +60,7 @@ export function SlideDeckAttach({
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && busy !== "uploading") {
+      if (e.key === "Escape" && busy !== "uploading" && busy !== "reading") {
         setOpen(false);
         setDragOver(false);
         dragDepth.current = 0;
@@ -124,6 +126,7 @@ export function SlideDeckAttach({
         return;
       }
 
+      setBusy("reading");
       const res = await fetch(`/api/live-notes/${sessionId}/slides`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -269,18 +272,24 @@ export function SlideDeckAttach({
               }`}
             >
               <span className="pointer-events-none text-sm font-semibold text-zinc-800 dark:text-zinc-100">
-                {busy === "uploading"
+                {busy === "reading"
                   ? "Reading slides…"
-                  : dragOver
-                    ? "Drop to upload"
-                    : "Drag & drop your slides here"}
+                  : busy === "uploading"
+                    ? "Uploading…"
+                    : dragOver
+                      ? "Drop to upload"
+                      : "Drag & drop your slides here"}
               </span>
               <span className="pointer-events-none mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                 PDF or .pptx · up to{" "}
                 {Math.round(MAX_INGEST_DOCUMENT_BYTES / (1024 * 1024))}MB
               </span>
               <span className="pointer-events-none mt-4 rounded-full bg-white px-4 py-1.5 text-xs font-semibold text-zinc-800 ring-1 ring-zinc-200 dark:bg-zinc-950 dark:text-zinc-100 dark:ring-zinc-700">
-                {busy === "uploading" ? "Uploading…" : "Choose a file"}
+                {busy === "reading"
+                  ? "Reading…"
+                  : busy === "uploading"
+                    ? "Uploading…"
+                    : "Choose a file"}
               </span>
             </button>
             {error ? (
@@ -294,10 +303,14 @@ export function SlideDeckAttach({
             <button
               type="button"
               onClick={closeModal}
-              disabled={busy === "uploading"}
+              disabled={busy === "uploading" || busy === "reading"}
               className="rounded-full px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-900"
             >
-              {busy === "uploading" ? "Uploading…" : "Cancel"}
+              {busy === "reading"
+                ? "Reading…"
+                : busy === "uploading"
+                  ? "Uploading…"
+                  : "Cancel"}
             </button>
           </div>
         </div>
@@ -321,11 +334,13 @@ export function SlideDeckAttach({
           }
           className="max-w-[11rem] truncate rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
-          {busy === "uploading"
+          {busy === "reading"
             ? "Reading slides…"
-            : ready
-              ? `${pageCount} slide${pageCount === 1 ? "" : "s"}`
-              : "Add slides"}
+            : busy === "uploading"
+              ? "Uploading…"
+              : ready
+                ? `${pageCount} slide${pageCount === 1 ? "" : "s"}`
+                : "Add slides"}
         </button>
         {error && !open ? (
           <p
@@ -369,11 +384,13 @@ export function SlideDeckAttach({
           disabled={disabled || busy !== null}
           className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 ring-1 ring-zinc-200 hover:bg-zinc-50 disabled:opacity-60 dark:bg-zinc-950 dark:text-zinc-100 dark:ring-zinc-700"
         >
-          {busy === "uploading"
-            ? "Uploading…"
-            : ready
-              ? "Replace slides"
-              : "Upload slides"}
+          {busy === "reading"
+            ? "Reading slides…"
+            : busy === "uploading"
+              ? "Uploading…"
+              : ready
+                ? "Replace slides"
+                : "Upload slides"}
         </button>
         {ready ? (
           <>
