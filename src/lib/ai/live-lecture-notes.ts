@@ -360,9 +360,12 @@ export async function* streamLiveLectureNotes(input: {
           .filter(Boolean)
           .join("\n\n");
 
+  // Slide seeding stays on Haiku. Live speech has to decide add-vs-skip
+  // against notes already on the page; Haiku misses that and duplicates.
+  const model = mode === "seed" ? MODEL : RECAP_MODEL;
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
   const stream = anthropic.messages.stream({
-    model: MODEL,
+    model,
     max_tokens: mode === "seed" ? 5_000 : 4_000,
     temperature: 0.35,
     system: liveNotesSystem(input.noteInstruction, mode),
@@ -390,7 +393,7 @@ export async function* streamLiveLectureNotes(input: {
   try {
     const final = await stream.finalMessage();
     recordAiUsage({
-      model: MODEL,
+      model,
       inputTokens: final.usage?.input_tokens,
       outputTokens: final.usage?.output_tokens,
       feature: "live-notes",
