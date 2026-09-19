@@ -26,6 +26,9 @@
  *     URL plumbing required on the server.
  */
 
+import path from "path";
+import { pathToFileURL } from "url";
+
 const MAX_PAGES = 200;
 const MAX_CHARS = 200_000;
 
@@ -33,13 +36,40 @@ type TextItem = { str?: string; hasEOL?: boolean };
 
 export type PdfPageText = { pageNum: number; text: string };
 
+type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+
+function resolvePdfWorkerSrc(): string {
+  return pathToFileURL(
+    path.join(
+      process.cwd(),
+      "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+    )
+  ).href;
+}
+
+let pdfjsReady: Promise<PdfJsModule> | null = null;
+
+async function getPdfJs(): Promise<PdfJsModule> {
+  if (!pdfjsReady) {
+    pdfjsReady = (async () => {
+      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      // Without this, getDocument waits forever for a worker Turbopack
+      // cannot resolve (same hang as "Reading slides…" never finishing).
+      pdfjsLib.GlobalWorkerOptions.workerSrc = resolvePdfWorkerSrc();
+      return pdfjsLib;
+    })();
+  }
+  return pdfjsReady;
+}
+
 async function loadPdf(buffer: Buffer) {
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfjsLib = await getPdfJs();
   const data = new Uint8Array(Buffer.from(buffer));
   const loadingTask = pdfjsLib.getDocument({
     data,
     disableFontFace: true,
     useSystemFonts: false,
+    isEvalSupported: false,
   });
   const timer = setTimeout(() => {
     try {
@@ -47,7 +77,7 @@ async function loadPdf(buffer: Buffer) {
     } catch {
       /* ignore */
     }
-  }, 40_000);
+  }, 20_000);
   try {
     return await Promise.race([
       loadingTask.promise,
@@ -56,10 +86,10 @@ async function loadPdf(buffer: Buffer) {
           () =>
             reject(
               new Error(
-                "That PDF is taking too long to open. Try a smaller file or a .pptx."
+                "That PDF is taking too long to open. Try exporting it again, or upload a .pptx."
               )
             ),
-          40_000
+          20_000
         );
       }),
     ]);
@@ -106,12 +136,13 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
     // Dynamic import so pdfjs-dist isn't pulled into builds that
     // never call this (e.g. course routes that already have their
     // own ingest pipeline).
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdfjsLib = await getPdfJs();
     const data = new Uint8Array(Buffer.from(buffer));
     const loadingTask = pdfjsLib.getDocument({
       data,
       disableFontFace: true,
       useSystemFonts: false,
+      isEvalSupported: false,
     });
     const pdf = await loadingTask.promise;
 

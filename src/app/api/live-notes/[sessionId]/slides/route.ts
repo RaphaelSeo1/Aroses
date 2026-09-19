@@ -122,7 +122,18 @@ export async function POST(request: Request, ctx: Params) {
 
   let pages;
   try {
-    pages = await extractSlideDeckFromBuffer({ buffer, fileName });
+    pages = await Promise.race([
+      extractSlideDeckFromBuffer({ buffer, fileName }),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(
+            new Error(
+              "Reading those slides timed out. Try a .pptx, or a smaller PDF."
+            )
+          );
+        }, 50_000);
+      }),
+    ]);
   } catch (e) {
     return NextResponse.json(
       {

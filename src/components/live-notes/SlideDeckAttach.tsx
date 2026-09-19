@@ -127,14 +127,22 @@ export function SlideDeckAttach({
       }
 
       setBusy("reading");
-      const res = await fetch(`/api/live-notes/${sessionId}/slides`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          storagePath: pathInfo.storagePath,
-          fileName: file.name,
-        }),
-      });
+      const ac = new AbortController();
+      const kill = window.setTimeout(() => ac.abort(), 60_000);
+      let res: Response;
+      try {
+        res = await fetch(`/api/live-notes/${sessionId}/slides`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storagePath: pathInfo.storagePath,
+            fileName: file.name,
+          }),
+          signal: ac.signal,
+        });
+      } finally {
+        window.clearTimeout(kill);
+      }
       const body = (await res.json().catch(() => ({}))) as {
         error?: string;
         fileName?: string;
@@ -155,8 +163,14 @@ export function SlideDeckAttach({
         fileName: body.fileName ?? file.name,
         pageCount: typeof body.pageCount === "number" ? body.pageCount : 0,
       });
-    } catch {
-      setError("Could not upload the slides. Check your connection and retry.");
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        setError(
+          "Reading those slides timed out. Try a .pptx, or a smaller PDF."
+        );
+      } else {
+        setError("Could not upload the slides. Check your connection and retry.");
+      }
     } finally {
       setBusy(null);
       if (inputRef.current) inputRef.current.value = "";
