@@ -1,5 +1,6 @@
 import "server-only";
 import {
+  MIN_REVIEW_TRANSCRIPT_CHARS,
   reviewLiveLectureNotes,
   summarizeLiveLecture,
 } from "@/lib/ai/live-lecture-notes";
@@ -86,9 +87,26 @@ export async function runLiveNotesWrapUp(input: {
 }): Promise<unknown> {
   let notesJson = input.notesJson;
 
+  // Slides-only session (no speech, no screen): the draft came from one
+  // generator working off its own outline, so the redundancy passes below
+  // (duplicate-topic merge, repeated-explanation trim, semantic trim) have
+  // nothing legitimate to remove and can only thin a comprehensive first
+  // draft. They exist for live continuation over already-drafted notes.
+  const seedOnly =
+    input.transcript.trim().length < MIN_REVIEW_TRANSCRIPT_CHARS &&
+    !(input.screenContent ?? "").trim();
+
   try {
     const sections = collectAiNoteSections(notesJson);
-    if (sections.length > 0) {
+    if (seedOnly && sections.length > 0) {
+      const tidy = sections
+        .map((s) => ({
+          sectionId: s.sectionId,
+          markdown: dedupeSectionLines(sanitizeNoteOutput(s.markdown)),
+        }))
+        .filter((r, i) => r.markdown.replace(/\s+$/, "") !== sections[i]!.markdown.replace(/\s+$/, ""));
+      if (tidy.length > 0) notesJson = applyNoteRevisions(notesJson, tidy);
+    } else if (sections.length > 0) {
       const revisions = await reviewLiveLectureNotes({
         sections,
         transcript: input.transcript,

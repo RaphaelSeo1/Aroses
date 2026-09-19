@@ -225,7 +225,7 @@ function describeSeedCoverage(
   if (before.missing === 0) return `${checked} — every substantive slide is covered.`;
   const remaining = after?.missing ?? 0;
   const restored = added > 0
-    ? `restored ${added} missing detail${added === 1 ? "" : "s"} from ${before.missing} slide${before.missing === 1 ? "" : "s"} in the slides' own words`
+    ? `added ${added} missing detail${added === 1 ? "" : "s"} from ${before.missing} slide${before.missing === 1 ? "" : "s"} the draft had skipped`
     : `${before.missing} slide${before.missing === 1 ? "" : "s"} had details the notes did not capture`;
   const tail =
     remaining > 0

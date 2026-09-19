@@ -15,11 +15,16 @@ import {
 import { sectionsOverlappingDeckPages } from "@/lib/live-notes/fold-note-markdown";
 import { deckPagesToSourceUnits } from "@/lib/notes/source-coverage";
 import {
+  applyCoverageRepairs,
+  auditSourceCoverage,
   buildSourceCoverageLedger,
   formatSourceCoverageAudit,
   repairSourceCoverage,
   summarizeSourceCoverageAudit,
+  type CoverageNoteSection,
+  type CoverageRepair,
 } from "@/lib/notes/source-coverage-ledger";
+import { fillSeedCoverageGaps } from "@/lib/live-notes/seed-gap-fill";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
@@ -252,29 +257,66 @@ export async function POST(request: Request, ctx: Params) {
     ? takeDeckSeedBatch(deckPages, seededThrough)
     : null;
   if (seedFromDeck && (!seedBatch || seedBatch.pages.length === 0)) {
-    // Every page is drafted. Audit the deck sentence-by-sentence against the
-    // client's current sections and hand back deterministic repairs (source
-    // wording copied into the best AI section, or a new section). No model
-    // call: a model "repair" pass was measured to paraphrase away the slide's
-    // terms, duplicate lines the notes already had, and add outside
-    // knowledge — the opposite of source fidelity.
+    // Every page is drafted. Audit the deck against the client's current
+    // sections. Pages the draft skipped get ONE seed-style model pass so the
+    // additions read like the rest of the notes; whatever that still leaves
+    // missing is copied back deterministically as a rarely-firing safety net.
     if (coverageChecked || deckPages.length === 0) {
       return NextResponse.json({ seedDone: true });
     }
     const ledger = buildSourceCoverageLedger(deckPagesToSourceUnits(deckPages));
-    const result = repairSourceCoverage(ledger, fullSections);
+    const before = auditSourceCoverage(ledger, fullSections);
+    let working: CoverageNoteSection[] = fullSections;
+    const repairs: CoverageRepair[] = [];
+    let gapPages: number[] = [];
+    if (before.counts.missing > 0) {
+      try {
+        const gap = await fillSeedCoverageGaps({
+          deckPages,
+          audit: before,
+          sections: fullSections,
+          rollingSummary:
+            typeof session.rolling_summary === "string" ? session.rolling_summary : "",
+          lectureTitle: typeof session.title === "string" ? session.title : undefined,
+          noteInstruction: clampNoteInstruction(
+            typeof b.noteInstruction === "string"
+              ? b.noteInstruction
+              : await loadNoteInstruction(supabase, "live_lecture_sessions", {
+                  id: sessionId,
+                  user_id: user.id,
+                })
+          ),
+          userId: user.id,
+        });
+        gapPages = gap.pageNums;
+        if (gap.repairs.length > 0) {
+          repairs.push(...gap.repairs);
+          working = applyCoverageRepairs(working, gap.repairs);
+        }
+      } catch (e) {
+        console.error("[live-notes seed] gap fill", e);
+        void report("live-notes.seed_gap_fill_failed", e, {
+          userId: user.id,
+          detail: { sessionId },
+        });
+      }
+    }
+    const result = repairSourceCoverage(ledger, working);
+    repairs.push(...result.repairs);
     console.info(
-      `[live-notes seed] source coverage for ${sessionId}: ${formatSourceCoverageAudit(result.before)}` +
+      `[live-notes seed] source coverage for ${sessionId}: ${formatSourceCoverageAudit(before)}` +
+        (gapPages.length > 0 ? ` → model gap fill over page(s) ${gapPages.join(",")}` : "") +
         (result.repairs.length > 0
-          ? ` → repaired (${result.repairs.length} op(s), ${result.passes} pass(es)): ${formatSourceCoverageAudit(result.after)}`
-          : "")
+          ? ` → verbatim safety net (${result.repairs.length} op(s))`
+          : "") +
+        (repairs.length > 0 ? ` → ${formatSourceCoverageAudit(result.after)}` : "")
     );
     return NextResponse.json({
       seedDone: true,
       pageCount: deckPages.length,
-      coverage: summarizeSourceCoverageAudit(result.before),
+      coverage: summarizeSourceCoverageAudit(before),
       coverageAfterRepair: summarizeSourceCoverageAudit(result.after),
-      repairs: result.repairs.map((r) => ({
+      repairs: repairs.map((r) => ({
         kind: r.kind,
         sectionId: r.sectionId,
         markdown: r.markdown,

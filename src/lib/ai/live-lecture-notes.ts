@@ -186,29 +186,36 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 <updated rolling summary, max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown. It is a CONCEPT STATE record, not prose: "TOPICS: <topic names in order>. DEFINED: <concept — 3-6 word gist>; … EXPLAINED: <concept — gist>; … MENTIONED ONLY: <concepts named but not yet explained>. OPEN: <unresolved questions / things the lecturer said are coming later>." Merge the previous summary with this slice; re-compress this SUMMARY aggressively (this applies to the rolling summary only — never to the notes themselves, which must stay complete); never drop a concept from DEFINED/EXPLAINED once it is there.>`;
 
 /**
- * Seed-mode overrides: slide decks must stay thorough. Live redundancy rules
- * (fold / skip restatements) otherwise turn a multi-page deck into a thin
- * synopsis once early batches populate CONCEPT COVERAGE.
+ * Seed mode drafts study notes from an uploaded slide deck before any speech
+ * exists. It gets its own compact prompt: the live-lecture rules about
+ * transcripts, screen OCR, contradictions, and "fold / skip restatements"
+ * are for continuing notes over speech and, applied to a first draft, thin a
+ * 50-slide deck into a synopsis. The bar here is simply: the comprehensive,
+ * readable notes a strong student would write from these slides.
  */
 export { SEED_THOROUGHNESS_RULES };
 
-const SEED_SYSTEM = `You are drafting study notes from a pre-uploaded lecture slide deck BEFORE any speech has been transcribed. There is no lecture audio yet.
+const SEED_STYLE_RULES = `You are turning a pre-uploaded lecture slide deck into comprehensive, readable STUDY NOTES — what a strong student would write from these slides so they could study without them. There is no lecture audio yet.
 
-${NOTE_STYLE_RULES}
+${TUTOR_NOTES_QUALITY_RULES}
+
+${DEFAULT_NOTES_OUTLINE_RULES}
 
 ${voiceRules()}
 
-${SEED_THOROUGHNESS_RULES}
+WRITING FROM SLIDES:
+- Explain, don't dump. Turn slide fragments into complete sentences and connected explanations. Use a "## " heading per topic (3–8 words naming the idea), a 1–2 sentence framing paragraph, then grouped top-level bullets with **bold lead-ins** and "  - " nested details. Use "### " for a real subtopic such as a worked example or a comparison.
+- Reproduce tables as GFM pipe tables (header row, "| --- |" separator, data rows), formulas and equations as written on the slide, worked examples as numbered steps with the slide's own numbers, and diagram labels as the terms they name (in the relationship the diagram shows, when the slide makes it clear).
+- Be comprehensive. Every substantive point on every slide in this batch belongs in the notes: definitions, mechanisms, steps, numbers and units, names and dates, comparisons, exceptions, examples, evidence, quotes, and figure/table content. A 50-slide deck yields many pages of notes. Never compress unique content to keep a section short and never aim for a length; condense wording only.
+- Stay grounded in the slides. You may add a short clarifying phrase so a slide fragment reads as a full sentence, but do not invent facts, numbers, names, dates, studies, or mechanisms the slides do not state. If you add a definition or context the slides skip, put it on its own line formatted exactly as "> (AI) <one or two sentences>". Keep the slides' key terms and abbreviations as written.
+- Skip only what teaches nothing: title, agenda, and logistics slides, "Questions?", reading lists, and build-slide text already captured from the previous slide. A recap or summary slide still gets any line the notes do not have yet.`;
 
-SEED RULES (override live-lecture habits):
-- Source of truth is DECK SLIDES only. Cover teachable content on those pages. Do not invent explanations.
-- Do NOT use outside/textbook knowledge. If a slide is sparse, write a short heading + the bullets that are actually there.
-- SOURCE FIDELITY: every note line must be traceable to a line on these slides. A bare term or figure label on a slide becomes a bare (bolded) term in the notes — never an explanation the slide does not give. Do not add background, definitions, consequences, comparisons, or examples the slides do not state, even when you know them; a scientifically correct line that is not on the slides misrepresents this lecture. Keep the slides' own key terms and abbreviations exactly as written.
-- You receive an OUTLINE of sections already drafted from earlier batches. Continue those topics via @@revise with new lines; do not @@append a second copy of the same topic heading.
-- @@append for genuinely NEW topics or distinct facets that have no matching outline entry.
-- Slides with no extractable text: emit nothing after the markers (empty @@append). Never write sentences about the slides, extraction, OCR, or future updates.
-- Structure with "## " headings per topic — not automatically one heading per slide, but never one heading for the whole deck either. When a batch opens a distinct facet (a new mechanism, stage, experiment, comparison, application, or set of examples), give it its own "## " heading instead of growing one section past roughly a dozen top-level bullets. Include formulas, definitions, tables, and load-bearing labels from the slides.
-- COVERAGE CONTRACT: every sentence, number, name, comparison, exception, and mechanism on these slides must land in a @@revise or @@append line. Compress wording, never drop content; the notes are audited slide-by-slide afterwards and anything skipped is copied back in verbatim.
+const SEED_SYSTEM = `${SEED_STYLE_RULES}
+
+CONTINUING AN EARLIER BATCH:
+- You receive an OUTLINE of sections already drafted from earlier slides. When this batch continues one of those topics, @@revise that sectionId with ONLY the new material as a structured fragment (no "## " heading, never a rewrite of what is there). Do not re-define a term the outline already covers; one short "recall that …" clause is enough when readability needs it.
+- A distinct facet — a new mechanism, stage, experiment, comparison, application, worked example, or set of examples — gets its own "## " heading via @@append rather than growing one section past roughly a dozen top-level bullets. Never @@append a duplicate of an existing heading.
+- Slides with no extractable text: leave the @@append body empty. Never write sentences about the slides themselves, extraction, OCR, or future updates.
 - @@thought: one short line that you are drafting from the uploaded slides (mention slide numbers if present).
 - @@summary: concept-state record of what has been drafted so far (previous summary + these slides).
 
@@ -234,7 +241,8 @@ function liveNotesSystem(
   const base = mode === "seed" ? SEED_SYSTEM : SYSTEM;
   const modifier = buildNoteInstructionModifier(noteInstruction);
   if (!modifier) return base;
-  return base.replace(NOTE_STYLE_RULES, `${NOTE_STYLE_RULES}${modifier}`);
+  const anchor = mode === "seed" ? SEED_STYLE_RULES : NOTE_STYLE_RULES;
+  return base.replace(anchor, `${anchor}${modifier}`);
 }
 
 export type RevisableSection = {
@@ -279,6 +287,11 @@ export async function* streamLiveLectureNotes(input: {
   noteInstruction?: string;
   /** Draft notes from the uploaded deck before any speech. */
   mode?: "live" | "seed";
+  /**
+   * Seed only: the deck pages are the ones the coverage audit found missing
+   * from the finished draft. Write them in the same style as the rest.
+   */
+  seedGapFill?: boolean;
 }): AsyncGenerator<LiveNotesStreamEvent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -365,16 +378,21 @@ export async function* streamLiveLectureNotes(input: {
   // Deterministic concept state derived from the whole document (not just the
   // focused sections): which concepts are already defined/explained, where,
   // and the gist — ranked by relevance to this slice and char-capped.
+  // Live continuation only: the concept state stops speech from re-defining
+  // what the notes (often slide drafts) already establish. The first slide
+  // draft does not get it — the section OUTLINE already prevents duplicate
+  // headings, and a "what is established" list makes the model terse.
   const coverageSource =
     existingSections.length > 0 ? existingSections : revisable;
-  const coverageBlock = buildConceptCoverageBlock(coverageSource, {
-    relevanceText: mode === "seed" ? deckText : slice,
-    maxChars: MAX_CONCEPT_COVERAGE_CHARS,
-  });
+  const coverageBlock =
+    mode === "seed"
+      ? ""
+      : buildConceptCoverageBlock(coverageSource, {
+          relevanceText: slice,
+          maxChars: MAX_CONCEPT_COVERAGE_CHARS,
+        });
   const coveragePrompt = coverageBlock
-    ? mode === "seed"
-      ? `CONCEPT COVERAGE (what earlier batches already ESTABLISH — this is background you must not re-define verbatim; it is NOT a list of finished topics and never a cap on how much to write. Capture EVERY new fact, formula, example, step, number, unit, distinction, exception, table cell, or mechanism from THESE slides about these concepts via @@revise into the owning [sectionId], or @@append a distinct facet heading when substantial):\n${coverageBlock}`
-      : `CONCEPT COVERAGE (what the notes ALREADY establish — do not write a second definition or second full explanation of the same content. It is NOT a list of finished topics: DO add every new fact, example, mechanism, stage, number, exception, qualification, or instructor emphasis about these concepts, and put them in the owning [sectionId] via @@revise when they belong there):\n${coverageBlock}`
+    ? `CONCEPT COVERAGE (what the notes ALREADY establish — do not write a second definition or second full explanation of the same content. It is NOT a list of finished topics: DO add every new fact, example, mechanism, stage, number, exception, qualification, or instructor emphasis about these concepts, and put them in the owning [sectionId] via @@revise when they belong there):\n${coverageBlock}`
     : null;
 
   const userPrompt =
@@ -387,15 +405,17 @@ export async function* streamLiveLectureNotes(input: {
             ? `ROLLING SUMMARY OF TOPICS DRAFTED SO FAR:\n${summary}`
             : "ROLLING SUMMARY OF TOPICS DRAFTED SO FAR: (none yet)",
           outlineBlock
-            ? `ALREADY-DRAFTED SECTION OUTLINE (if this batch continues one of these topics, @@revise that id with only the NEW lines from these slides; @@append a distinct facet when needed; never @@append a duplicate of the same heading):\n${outlineBlock}`
+            ? `ALREADY-DRAFTED SECTION OUTLINE (if this batch continues one of these topics, @@revise that id with only the NEW material from these slides; @@append a distinct facet when needed; never @@append a duplicate of the same heading):\n${outlineBlock}`
             : null,
-          coveragePrompt,
           sectionsBlock
             ? `FOCUSED SECTION BODIES (full markdown for revise targets):\n\n${sectionsBlock}`
             : null,
-          `DECK SLIDES (draft thorough study notes covering teachable content on EVERY page below; no outside knowledge):\n${deckText || "(no extractable text on these slides)"}`,
-          "NO SPEECH YET. Draft from the slides only. Empty / logistics-only slides: empty @@append. Review/key-concept slides: capture uncovered teachable lines. Do not thin a multi-page deck into a short synopsis.",
-          "\nEmit the protocol now. @@revise matched topics with every new teachable line from these slides; @@append for new topics/facets. Leave bodies empty ONLY when every teachable line on these pages is already drafted. Before @@summary, re-read every slide in this batch: any sentence, number, name, comparison, or mechanism that has not landed in a @@revise or @@append must be added now.",
+          input.seedGapFill
+            ? `DECK SLIDES NOT YET IN THE NOTES (the finished draft skipped the content of these pages — write it now, in the same style as the rest of the notes):\n${deckText || "(no extractable text on these slides)"}`
+            : `DECK SLIDES (write comprehensive study notes from EVERY page below):\n${deckText || "(no extractable text on these slides)"}`,
+          input.seedGapFill
+            ? "\nEmit the protocol now. Where a page continues a section in the outline, @@revise that id with the page's material as a structured fragment; otherwise @@append it under its own heading. Cover every substantive point on these pages — they are missing from the notes."
+            : "\nEmit the protocol now. @@revise matched topics with the new material from these slides; @@append new topics and distinct facets under their own headings. Leave bodies empty ONLY when every teachable line on these pages is already drafted. Before @@summary, re-read every slide in this batch and add anything you skipped.",
         ]
           .filter(Boolean)
           .join("\n\n")
@@ -434,7 +454,7 @@ export async function* streamLiveLectureNotes(input: {
     model: MODEL,
     // Seed batches cover up to ~6 dense slides — need enough room to draft
     // them thoroughly. Live slices stay tighter.
-    max_tokens: mode === "seed" ? 8_000 : 4_000,
+    max_tokens: mode === "seed" ? 12_000 : 4_000,
     temperature: 0.35,
     system: liveNotesSystem(input.noteInstruction, mode),
     messages: [{ role: "user", content: userPrompt }],
@@ -520,7 +540,7 @@ const MAX_REVIEW_TRANSCRIPT_CHARS = 60_000;
 const MAX_REVIEW_SCREEN_CHARS = 20_000;
 const MAX_REVIEW_SECTIONS_PER_BATCH = 8;
 /** Below this much speech the factual pass has nothing to check notes against. */
-const MIN_REVIEW_TRANSCRIPT_CHARS = 400;
+export const MIN_REVIEW_TRANSCRIPT_CHARS = 400;
 /** Sections longer than this are context-only in the factual pass (never truncated into a revision). */
 const MAX_REVIEW_SECTION_CHARS = 12_000;
 
