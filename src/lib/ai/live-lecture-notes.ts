@@ -127,7 +127,7 @@ Only @@append when the slice introduces a topic that has NO matching existing he
 - Slide DRAFTS (transcript excerpt is "${DECK_DRAFT_EXCERPT}"): speech about that topic MUST @@revise with the added spoken detail only. Additional information is additive. Do NOT treat "here's more on this" as "delete the draft."
 - Other substantive contradictions: resolve only when the supplied source priority or an explicit correction establishes the answer; otherwise @@revise the matching section with an **Open question:** line. Never append a duplicate contradictory section.
 
-Any listed sectionId may be revised. For a section marked PRESERVE EXISTING WORDING, emit only the exact new or corrected lines; never rewrite or remove the rest. At most one @@revise per call.
+Any listed sectionId may be revised. For a section marked PRESERVE EXISTING WORDING, emit only the exact new or corrected lines; never rewrite or remove the rest. If this slice touches several existing sections, emit one @@revise per sectionId — do not leave the extra topics for @@append.
 
 NARRATION (@@thought — user-visible, optional but valuable):
 - You MAY emit zero or one short @@thought line before @@revise/@@append. This is Rose speaking to the student in the activity log — not notes.
@@ -143,7 +143,7 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 @@thought <optional one short sentence — skip if unnecessary>
 @@revise <sectionId>
 <ONLY a structured fragment of new/corrected material; no H2 and never a wipe/full restatement>
-(at most one @@revise, after @@thought; omit the marker when unused)
+(zero or more @@revise blocks, one per matching section; omit when unused)
 @@append
 <markdown for genuinely new teaching and/or **Open question:** lines, or nothing when the slice was folded into @@revise or was a repeat>
 @@summary
@@ -420,8 +420,8 @@ export async function* streamLiveLectureNotes(input: {
             : null,
           `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
           hasDraft
-            ? "\nEmit the protocol now. If this speech covers a slide-drafted section, @@revise with ONLY the new structured fragment (keep nothing you would delete; no H2). The client preserves every still-correct block. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Empty @@append when the slice was folded in or is a repeat."
-            : "\nEmit the protocol now. If notes already exist for this topic, @@revise with ONLY a structured fragment of the new or corrected material (no H2; do not rewrite the whole section). @@append ONLY for a genuinely new topic with no matching heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Empty @@append when the slice was folded in or is a repeat. **Open question:** only for unclear contradictions in speech/screen.",
+            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise each matching id with ONLY the new structured fragment (keep nothing you would delete; no H2). You may emit multiple @@revise blocks, one per section. The client preserves every still-correct block. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Empty @@append when the slice was folded in or is a repeat."
+            : "\nEmit the protocol now. If notes already exist for the topics in this slice, @@revise each matching section with ONLY a structured fragment of the new or corrected material (no H2; do not rewrite the whole section). Multiple @@revise blocks are allowed when several sections are touched. @@append ONLY for a genuinely new topic with no matching heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Empty @@append when the slice was folded in or is a repeat. **Open question:** only for unclear contradictions in speech/screen.",
         ]
           .filter(Boolean)
           .join("\n\n");
