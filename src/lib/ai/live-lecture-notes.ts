@@ -12,15 +12,8 @@ import {
 } from "@/lib/live-notes/marker-protocol";
 import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
-import {
-  buildSectionsOutline,
-  findDuplicateTopicGroups,
-  mergeDuplicateGroup,
-} from "@/lib/live-notes/fold-note-markdown";
-import { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
 
 export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
-export { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
 
 /**
  * Live Notes synthesis — streaming, grounded, with bounded self-revision.
@@ -34,9 +27,8 @@ export { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
  *
  *   @@thought <text>       zero or more, FIRST — short user-visible narration
  *                          (specific to this slice; may call out on-screen finds)
- *   @@revise <sectionId>   zero or more — new/corrected bullets per section
+ *   @@revise <sectionId>   new or corrected bullets for an existing section
  *                          (client keeps prior bullets; never a wipe)
- *   @@delete <sectionId>   zero or more — exact lines to remove (duplicates/wrong)
  *   @@append               exactly once — genuinely NEW topics only
  *                          (empty when the slice was folded into @@revise)
  *   @@summary              exactly once, LAST — updated rolling summary
@@ -60,11 +52,10 @@ const RECAP_MODEL =
 export const ROLLING_SUMMARY_MAX_CHARS = 1_600;
 /** Max transcript slice per call (client triggers around ~700). */
 const MAX_SEGMENT_INPUT_CHARS = 12_000;
-/** Self-revision context caps (cost bound: ~10 focused sections/call). */
+/** Self-revision context caps (cost bound: ~6 sections/call). */
+export const MAX_REVISABLE_SECTIONS = 6;
 const MAX_EXISTING_HEADINGS = 200;
 const MAX_SECTION_MARKDOWN_CHARS = 4_000;
-/** Cap total full-markdown chars across focused revisable sections. */
-const MAX_REVISABLE_TOTAL_CHARS = 28_000;
 const MAX_SECTION_EXCERPT_CHARS = 2_400;
 const MAX_DECK_LIVE_CHARS = 2_400;
 const MAX_DECK_SEED_CHARS = 7_000;
@@ -134,9 +125,7 @@ Only @@append when the slice introduces a topic that has NO matching existing he
 - Slide DRAFTS (transcript excerpt is "${DECK_DRAFT_EXCERPT}"): speech about that topic MUST @@revise with the added spoken detail only. Additional information is additive. Do NOT treat "here's more on this" as "delete the draft."
 - Other substantive contradictions: resolve only when the supplied source priority or an explicit correction establishes the answer; otherwise @@revise the matching section with an **Open question:** line. Never append a duplicate contradictory section.
 
-Any listed sectionId may be revised or targeted by @@delete. For a section marked PRESERVE EXISTING WORDING, emit only the exact new or corrected lines under @@revise; never rewrite or remove the rest; ignore @@delete for those sections (the client will too). You MAY emit multiple @@revise blocks in one call when the slice touches several existing sections — one block per sectionId, each followed by its own fragment.
-
-@@delete <sectionId>: use ONLY to remove exact duplicate or clearly wrong lines (body = those exact lines, one per line). Prefer a one-line "not covered / skipped" bullet under @@revise when the lecturer skips a slide. Do not @@delete whole sections.
+Any listed sectionId may be revised. For a section marked PRESERVE EXISTING WORDING, emit only the exact new or corrected lines; never rewrite or remove the rest. At most one @@revise per call.
 
 NARRATION (@@thought — user-visible, optional but valuable):
 - You MAY emit zero or one short @@thought line before @@revise/@@append. This is Rose speaking to the student in the activity log — not notes.
@@ -152,11 +141,9 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 @@thought <optional one short sentence — skip if unnecessary>
 @@revise <sectionId>
 <ONLY a structured fragment of new/corrected material; no H2 and never a wipe/full restatement>
-(zero or more @@revise blocks; omit when unused)
-@@delete <sectionId>
-<exact lines to remove; omit the marker when unused>
+(at most one @@revise, after @@thought; omit the marker when unused)
 @@append
-<markdown for genuinely new teaching and/or **Open question:** lines; leave the body empty when the slice was folded into @@revise or was a repeat>
+<markdown for genuinely new teaching and/or **Open question:** lines, or nothing when the slice was folded into @@revise or was a repeat>
 @@summary
 <updated rolling summary: compressed record of EVERYTHING covered so far (previous summary + this slice), max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown — re-compress aggressively, keep topic names and key terms, drop detail>`;
 
@@ -167,22 +154,18 @@ ${NOTE_STYLE_RULES}
 ${voiceRules()}
 
 SEED RULES (override live-lecture habits):
-- Source of truth is DECK SLIDES only. Cover teachable content on those pages. Do not invent explanations.
-- Do NOT use outside/textbook knowledge. If a slide is sparse, write a short heading + the bullets that are actually there.
-- You receive an OUTLINE of sections already drafted from earlier batches. If this batch continues or restates an already-drafted topic, @@revise that sectionId with ONLY the new lines — do not @@append a second copy.
-- @@append only for genuinely NEW topics that have no matching outline entry.
-- Recap / summary / review / "key concepts" / "reference only" / agenda / outline slides: NEVER create new sections. Fold any genuinely new line into the matching existing section via @@revise; otherwise leave @@append empty and emit no revise body.
-- Slides with no extractable text: emit nothing after the markers (empty @@append). Never write sentences about the slides, extraction, OCR, or future updates.
+- Source of truth is DECK SLIDES only. Cover every slide in that block. Do not skip a slide because it looks like an agenda or recap — capture the teachable content.
+- Do NOT use outside/textbook knowledge. If a slide is sparse, write a short heading + the bullets that are actually there; do not invent explanations.
+- Do NOT emit @@revise. Always @@append (notes for this batch of slides).
 - Structure with "## " headings per topic (not automatically one heading per slide). Include formulas, definitions, tables, and load-bearing labels from the slides.
+- If RECENT HEADINGS already cover a topic from an earlier seed batch, do not repeat that H2 — continue under a more specific facet heading only when this batch adds a distinct idea.
 - @@thought: one short line that you are drafting from the uploaded slides (mention slide numbers if present).
 - @@summary: compressed record of topics drafted so far (previous summary + these slides).
 
 OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
 @@thought <one short sentence>
-@@revise <sectionId>
-<ONLY new lines for an already-drafted topic; omit the marker when unused; you MAY emit multiple @@revise blocks>
 @@append
-<markdown for NEW topics only; leave the body empty when everything folded into @@revise or the slides had nothing to draft>
+<markdown study notes for these slides>
 @@summary
 <updated rolling summary, max ${ROLLING_SUMMARY_MAX_CHARS} characters, plain text, no markdown>`;
 
@@ -277,9 +260,10 @@ export async function* streamLiveLectureNotes(input: {
         h.heading.trim()
     )
     .slice(0, MAX_EXISTING_HEADINGS);
-  // Seed may revise already-drafted sections; live focuses top-N by relevance.
-  const revisable = input.revisable.slice(0, MAX_REVISABLE_SECTIONS);
-  const existingSections = input.existingSections ?? [];
+  const revisable =
+    mode === "seed" ? [] : input.revisable.slice(0, MAX_REVISABLE_SECTIONS);
+  const existingSections =
+    mode === "seed" ? [] : (input.existingSections ?? []);
   // Keep screen context tight — large dumps encourage unnecessary rewrites.
   const screenContext =
     mode === "seed" ? "" : (input.screenContext ?? "").trim().slice(0, 1_800);
@@ -287,30 +271,11 @@ export async function* streamLiveLectureNotes(input: {
   const deckCap = mode === "seed" ? MAX_DECK_SEED_CHARS : MAX_DECK_LIVE_CHARS;
   const deckText = deckRaw.slice(0, deckCap);
 
-  // Bound full-markdown dump: outline of ALL sections + full text only for
-  // the focused revisable set (char-capped).
-  const outlineBlock =
-    existingSections.length > 0
-      ? buildSectionsOutline(existingSections)
-      : existingHeadings.length > 0
-        ? existingHeadings
-            .map((h) => `[${h.sectionId}] ${h.heading}`)
-            .join("\n")
-        : "";
-
-  let revisableChars = 0;
   const sectionsBlock = revisable
-    .flatMap((s) => {
-      const room = MAX_REVISABLE_TOTAL_CHARS - revisableChars;
-      if (room < 80) return [];
-      const md = s.markdown.slice(
-        0,
-        Math.min(MAX_SECTION_MARKDOWN_CHARS, room)
-      );
-      revisableChars += md.length;
+    .map((s) => {
       const parts = [
         `[SECTION ${s.sectionId}${s.studentEdited ? " — PRESERVE EXISTING WORDING; surgical additions/corrections only" : ""}]`,
-        md,
+        s.markdown.slice(0, MAX_SECTION_MARKDOWN_CHARS),
       ];
       if (s.transcriptExcerpt?.trim()) {
         parts.push(
@@ -318,8 +283,16 @@ export async function* streamLiveLectureNotes(input: {
           s.transcriptExcerpt.trim().slice(0, MAX_SECTION_EXCERPT_CHARS)
         );
       }
-      return [parts.join("\n")];
+      return parts.join("\n");
     })
+    .join("\n\n");
+  const recentIds = new Set(revisable.map((section) => section.sectionId));
+  const existingSectionsBlock = existingSections
+    .filter((section) => !recentIds.has(section.sectionId))
+    .map(
+      (section) =>
+        `[SECTION ${section.sectionId}${section.studentEdited ? " — PRESERVE EXISTING WORDING; surgical additions/corrections only" : ""}]\n${section.markdown}`
+    )
     .join("\n\n");
 
   const hasDraft =
@@ -336,15 +309,12 @@ export async function* streamLiveLectureNotes(input: {
           summary
             ? `ROLLING SUMMARY OF TOPICS DRAFTED SO FAR:\n${summary}`
             : "ROLLING SUMMARY OF TOPICS DRAFTED SO FAR: (none yet)",
-          outlineBlock
-            ? `ALREADY-DRAFTED SECTION OUTLINE (if this batch continues/restates one of these topics, @@revise that id with only new lines; never @@append a duplicate):\n${outlineBlock}`
+          headings.length > 0
+            ? `RECENT HEADINGS already drafted (do not repeat these H2s):\n${headings.map((h) => `- ${h}`).join("\n")}`
             : null,
-          sectionsBlock
-            ? `FOCUSED SECTION BODIES (full markdown for revise targets):\n\n${sectionsBlock}`
-            : null,
-          `DECK SLIDES (draft study notes covering teachable content on these pages; no outside knowledge):\n${deckText || "(no extractable text on these slides)"}`,
-          "NO SPEECH YET. Draft from the slides only. Recap/outline/review slides: revise existing topics or emit empty bodies — never new duplicate sections. Empty slides: emit empty @@append.",
-          "\nEmit the protocol now. @@revise existing topics when matched; @@append ONLY for new topics. Leave bodies empty when there is nothing to add.",
+          `DECK SLIDES (draft study notes covering ALL of these pages; no outside knowledge):\n${deckText}`,
+          "NO SPEECH YET. Draft from the slides only.",
+          "\nEmit the protocol now. @@append notes for this batch. Do not @@revise.",
         ]
           .filter(Boolean)
           .join("\n\n")
@@ -355,13 +325,16 @@ export async function* streamLiveLectureNotes(input: {
           summary
             ? `ROLLING SUMMARY OF THE LECTURE SO FAR:\n${summary}`
             : "ROLLING SUMMARY OF THE LECTURE SO FAR: (lecture just started)",
-          outlineBlock
-            ? `ALL EXISTING NOTE SECTIONS (outline — compare this slice against ALL of them; @@revise the matching id instead of duplicating):\n${outlineBlock}`
+          existingHeadings.length > 0
+            ? `EXISTING NOTE HEADINGS (already written — if this slice is the same topic, @@revise that id when it is in YOUR RECENT NOTE SECTIONS; never @@append a second copy at the bottom):\n${existingHeadings.map((h) => `- [${h.sectionId}] ${h.heading}`).join("\n")}`
             : headings.length > 0
               ? `RECENT HEADINGS (do not spawn a near-duplicate H2 for the same topic — fold new detail into that section):\n${headings.map((h) => `- ${h}`).join("\n")}`
               : null,
           sectionsBlock
-            ? `MOST RELEVANT NOTE SECTIONS (full markdown + source excerpts when available):\n\n${sectionsBlock}`
+            ? `MOST RELEVANT NOTE SECTIONS (with source excerpts when available):\n\n${sectionsBlock}`
+            : null,
+          existingSectionsBlock
+            ? `ALL OTHER EXISTING NOTE SECTIONS (material-generated, imported, and older live notes; compare the new slice against all of them and @@revise the matching id instead of duplicating it):\n\n${existingSectionsBlock}`
             : null,
           screenContext
             ? `ON-SCREEN CONTENT (authoritative for spellings/symbols/numbers/tables — use for grounding; do NOT revise prior notes merely because the screen changed):\n${screenContext}`
@@ -371,8 +344,8 @@ export async function* streamLiveLectureNotes(input: {
             : null,
           `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
           hasDraft
-            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise each matching id with ONLY the new structured fragment (keep nothing you would delete; no H2). You may emit multiple @@revise blocks. The client preserves every still-correct block. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Leave the @@append body empty when the slice was folded in or is a repeat."
-            : "\nEmit the protocol now. If notes already exist for this topic, @@revise with ONLY a structured fragment of the new or corrected material (no H2; do not rewrite the whole section). Multiple @@revise blocks are allowed when several sections are touched. @@append ONLY for a genuinely new topic with no matching heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Leave the @@append body empty when the slice was folded in or is a repeat. **Open question:** only for unclear contradictions in speech/screen.",
+            ? "\nEmit the protocol now. If this speech covers a slide-drafted section, @@revise with ONLY the new structured fragment (keep nothing you would delete; no H2). The client preserves every still-correct block. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Empty @@append when the slice was folded in or is a repeat."
+            : "\nEmit the protocol now. If notes already exist for this topic, @@revise with ONLY a structured fragment of the new or corrected material (no H2; do not rewrite the whole section). @@append ONLY for a genuinely new topic with no matching heading, and every non-empty append must use the default heading + framing prose + grouped/nested points outline. Empty @@append when the slice was folded in or is a repeat. **Open question:** only for unclear contradictions in speech/screen.",
         ]
           .filter(Boolean)
           .join("\n\n");
@@ -386,11 +359,13 @@ export async function* streamLiveLectureNotes(input: {
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  const allowedIds = new Set([
-    ...revisable.map((s) => s.sectionId),
-    ...existingSections.map((s) => s.sectionId),
-  ]);
-  const parser = createMarkerParser(allowedIds, input.appendSectionId);
+  const parser = createMarkerParser(
+    new Set([
+      ...revisable.map((s) => s.sectionId),
+      ...existingSections.map((s) => s.sectionId),
+    ]),
+    input.appendSectionId
+  );
 
   for await (const event of stream) {
     if (
@@ -428,7 +403,7 @@ const REVIEW_SYSTEM = `You are reviewing AI-generated live-lecture study notes a
 
 Priority for clear STT/spelling issues: current-frame screen text wins for spellings, symbols, proper names, and table cells. Pre-uploaded deck text may supply the same for the topic being discussed. Transcript wins for spoken explanation and emphasis.
 
-Do TWO jobs when asked:
+Do TWO jobs:
 
 1) FACTUAL / SPELLING FIXES — Return a revision ONLY when a section has a clear, narrow error:
    - STT/spelling/symbol/proper-name mistake (prefer the slide token),
@@ -439,7 +414,7 @@ Do TWO jobs when asked:
    - **Open question:** Notes had <A>; later said/shown <B>. Which is right?
    Never invent a resolved answer.
 
-2) STRUCTURAL CONSOLIDATION — When given a candidate duplicate group, merge into ONE canonical section:
+2) STRUCTURAL CONSOLIDATION — Detect duplicate or fragmented AI sections that cover the same topic, the same worked example, or pieces of one interrupted enumeration/list split across sections. Merge each group into ONE canonical section:
    - Keep the EARLIEST section's sectionId (first in document order among the group).
    - Fold unique grounded content from the absorbed sections into that kept section's markdown (no redundancy, no invented facts). Preserve any **Open question:** lines.
    - List every absorbed sectionId in removeSectionIds (never list the kept id).
@@ -456,91 +431,11 @@ Return { "revisions": [], "removeSectionIds": [] } when everything is grounded a
 
 const MAX_REVIEW_TRANSCRIPT_CHARS = 60_000;
 const MAX_REVIEW_SCREEN_CHARS = 20_000;
-const MAX_REVIEW_SECTIONS_PER_BATCH = 8;
 
 export type LiveNotesReviewResult = {
   revisions: Array<{ sectionId: string; markdown: string }>;
   removeSectionIds: string[];
 };
-
-function parseReviewJson(
-  rawText: string,
-  allowed: Set<string>,
-  maxRevisions: number
-): LiveNotesReviewResult {
-  const raw = rawText
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-  const parsed = JSON.parse(raw) as {
-    revisions?: unknown;
-    removeSectionIds?: unknown;
-  };
-
-  const revisions = Array.isArray(parsed.revisions)
-    ? parsed.revisions
-        .filter(
-          (r): r is { sectionId: string; markdown: string } =>
-            !!r &&
-            typeof r === "object" &&
-            typeof (r as { sectionId?: unknown }).sectionId === "string" &&
-            allowed.has((r as { sectionId: string }).sectionId) &&
-            typeof (r as { markdown?: unknown }).markdown === "string" &&
-            ((r as { markdown: string }).markdown.trim().length > 0)
-        )
-        .slice(0, maxRevisions)
-    : [];
-
-  const removeSectionIds = Array.isArray(parsed.removeSectionIds)
-    ? [
-        ...new Set(
-          parsed.removeSectionIds.filter(
-            (id): id is string =>
-              typeof id === "string" &&
-              allowed.has(id) &&
-              !revisions.some((r) => r.sectionId === id)
-          )
-        ),
-      ].slice(0, maxRevisions)
-    : [];
-
-  return { revisions, removeSectionIds };
-}
-
-async function callReviewModel(input: {
-  systemExtra: string;
-  userPrompt: string;
-  allowed: Set<string>;
-  maxRevisions: number;
-  userId?: string;
-}): Promise<LiveNotesReviewResult | null> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
-  const anthropic = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 1 });
-  try {
-    const msg = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 3_500,
-      temperature: 0.2,
-      system: `${REVIEW_SYSTEM}\n\n${input.systemExtra}`,
-      messages: [{ role: "user", content: input.userPrompt }],
-    });
-    recordAiUsage({
-      model: MODEL,
-      inputTokens: msg.usage?.input_tokens,
-      outputTokens: msg.usage?.output_tokens,
-      feature: "live-notes-review",
-      userId: input.userId ?? null,
-    });
-    const textBlock = msg.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") return null;
-    return parseReviewJson(textBlock.text, input.allowed, input.maxRevisions);
-  } catch (e) {
-    console.error("[live-lecture-notes] wrap-up review", e);
-    return null;
-  }
-}
 
 export async function reviewLiveLectureNotes(input: {
   sections: Array<{ sectionId: string; markdown: string }>;
@@ -551,151 +446,96 @@ export async function reviewLiveLectureNotes(input: {
   deckContent?: string;
   lectureTitle?: string;
   userId?: string;
-  /**
-   * When set, skip deterministic pre-merge and only run factual review on
-   * the provided sections (used for chunked factual passes).
-   */
-  factualOnly?: boolean;
 }): Promise<LiveNotesReviewResult | null> {
-  if (input.sections.length === 0) return null;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || input.sections.length === 0) return null;
 
-  const allRevisions: Array<{ sectionId: string; markdown: string }> = [];
-  const allRemoves = new Set<string>();
+  const allowed = new Set(input.sections.map((s) => s.sectionId));
+  const sectionsBlock = input.sections
+    .map(
+      (s) =>
+        `[SECTION ${s.sectionId}]\n${s.markdown.slice(0, MAX_SECTION_MARKDOWN_CHARS)}`
+    )
+    .join("\n\n");
 
-  // 1) Deterministic duplicate groups → merge (baseline), optionally refine
-  //    with a small LLM batch per group.
-  if (!input.factualOnly) {
-    const groups = findDuplicateTopicGroups(input.sections);
-    for (const group of groups) {
-      const baseline = mergeDuplicateGroup(group);
-      const neighborIds = new Set([
-        baseline.sectionId,
-        ...baseline.removeSectionIds,
-      ]);
-      const idx = input.sections.findIndex(
-        (s) => s.sectionId === group.keep.sectionId
-      );
-      const neighborSections = input.sections.filter((s, i) => {
-        if (neighborIds.has(s.sectionId)) return true;
-        return idx >= 0 && Math.abs(i - idx) === 1;
-      });
+  const screen = (input.screenContent ?? "").trim();
+  const deck = (input.deckContent ?? "").trim();
+  const userPrompt = [
+    input.lectureTitle ? `LECTURE: ${input.lectureTitle.slice(0, 200)}` : null,
+    `NOTE SECTIONS TO VERIFY (document order — earliest first):\n\n${sectionsBlock}`,
+    screen
+      ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
+      : null,
+    deck
+      ? `DECK SLIDES (pre-uploaded lecture deck — spellings/formulas/tables for topics that were discussed):\n${deck.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
+      : null,
+    `FULL LECTURE TRANSCRIPT:\n${input.transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
+    "\nReturn the JSON now. When merging, keep the earliest sectionId and list absorbed ids in removeSectionIds.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
-      const allowed = new Set(neighborSections.map((s) => s.sectionId));
-      const sectionsBlock = neighborSections
-        .map(
-          (s) =>
-            `[SECTION ${s.sectionId}]\n${s.markdown.slice(0, MAX_SECTION_MARKDOWN_CHARS)}`
-        )
-        .join("\n\n");
-
-      const screen = (input.screenContent ?? "").trim();
-      const deck = (input.deckContent ?? "").trim();
-      const userPrompt = [
-        input.lectureTitle
-          ? `LECTURE: ${input.lectureTitle.slice(0, 200)}`
-          : null,
-        `CANDIDATE DUPLICATE GROUP (keep earliest ${baseline.sectionId}; absorb ${baseline.removeSectionIds.join(", ") || "(none)"}):\n\n${sectionsBlock}`,
-        screen
-          ? `ON-SCREEN CONTENT:\n${screen.slice(0, Math.min(8_000, MAX_REVIEW_SCREEN_CHARS))}`
-          : null,
-        deck
-          ? `DECK SLIDES:\n${deck.slice(0, Math.min(8_000, MAX_REVIEW_SCREEN_CHARS))}`
-          : null,
-        `TRANSCRIPT EXCERPT:\n${input.transcript.slice(0, 12_000)}`,
-        "\nMerge this group only. Return JSON with the kept section revision and removeSectionIds for absorbed ids.",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-
-      const llm = await callReviewModel({
-        systemExtra:
-          "This call is STRUCTURAL CONSOLIDATION only for the candidate group. Prefer merging; do not invent facts.",
-        userPrompt,
-        allowed,
-        maxRevisions: neighborSections.length,
-        userId: input.userId,
-      });
-
-      if (llm && llm.revisions.length > 0) {
-        allRevisions.push(...llm.revisions);
-        for (const id of llm.removeSectionIds) allRemoves.add(id);
-        for (const id of baseline.removeSectionIds) allRemoves.add(id);
-      } else {
-        allRevisions.push({
-          sectionId: baseline.sectionId,
-          markdown: baseline.markdown,
-        });
-        for (const id of baseline.removeSectionIds) allRemoves.add(id);
-      }
-    }
-  }
-
-  // 2) Factual review in batches that fit the budget (requires API key).
-  if (process.env.ANTHROPIC_API_KEY) {
-    const remaining = input.sections.filter((s) => !allRemoves.has(s.sectionId));
-    const forFactual = remaining.map((s) => {
-      const rev = allRevisions.find((r) => r.sectionId === s.sectionId);
-      return rev ? { sectionId: s.sectionId, markdown: rev.markdown } : s;
+  const anthropic = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 1 });
+  try {
+    const msg = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 3_500,
+      temperature: 0.2,
+      system: REVIEW_SYSTEM,
+      messages: [{ role: "user", content: userPrompt }],
+    });
+    recordAiUsage({
+      model: MODEL,
+      inputTokens: msg.usage?.input_tokens,
+      outputTokens: msg.usage?.output_tokens,
+      feature: "live-notes-review",
+      userId: input.userId ?? null,
     });
 
-    for (
-      let i = 0;
-      i < forFactual.length;
-      i += MAX_REVIEW_SECTIONS_PER_BATCH
-    ) {
-      const batch = forFactual.slice(i, i + MAX_REVIEW_SECTIONS_PER_BATCH);
-      const allowed = new Set(batch.map((s) => s.sectionId));
-      const sectionsBlock = batch
-        .map(
-          (s) =>
-            `[SECTION ${s.sectionId}]\n${s.markdown.slice(0, MAX_SECTION_MARKDOWN_CHARS)}`
-        )
-        .join("\n\n");
-      const screen = (input.screenContent ?? "").trim();
-      const deck = (input.deckContent ?? "").trim();
-      const userPrompt = [
-        input.lectureTitle
-          ? `LECTURE: ${input.lectureTitle.slice(0, 200)}`
-          : null,
-        `NOTE SECTIONS TO VERIFY (document order — earliest first):\n\n${sectionsBlock}`,
-        screen
-          ? `ON-SCREEN CONTENT (authoritative for spellings/numbers/tables):\n${screen.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
-          : null,
-        deck
-          ? `DECK SLIDES (pre-uploaded lecture deck — spellings/formulas/tables for topics that were discussed):\n${deck.slice(0, MAX_REVIEW_SCREEN_CHARS)}`
-          : null,
-        `FULL LECTURE TRANSCRIPT:\n${input.transcript.slice(0, MAX_REVIEW_TRANSCRIPT_CHARS)}`,
-        "\nReturn the JSON now. FACTUAL / SPELLING FIXES only for this batch — do not invent structural merges unless a clear pure duplicate remains.",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
+    const textBlock = msg.content.find((b) => b.type === "text");
+    if (!textBlock || textBlock.type !== "text") return null;
+    const raw = textBlock.text
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    const parsed = JSON.parse(raw) as {
+      revisions?: unknown;
+      removeSectionIds?: unknown;
+    };
 
-      const llm = await callReviewModel({
-        systemExtra:
-          "This call is FACTUAL / SPELLING FIXES for the listed batch. Avoid structural merges unless a pure duplicate is obvious.",
-        userPrompt,
-        allowed,
-        maxRevisions: batch.length,
-        userId: input.userId,
-      });
-      if (!llm) continue;
-      for (const rev of llm.revisions) {
-        const idx = allRevisions.findIndex((r) => r.sectionId === rev.sectionId);
-        if (idx >= 0) allRevisions[idx] = rev;
-        else allRevisions.push(rev);
-      }
-      for (const id of llm.removeSectionIds) allRemoves.add(id);
-    }
+    const revisions = Array.isArray(parsed.revisions)
+      ? parsed.revisions
+          .filter(
+            (r): r is { sectionId: string; markdown: string } =>
+              !!r &&
+              typeof r === "object" &&
+              typeof (r as { sectionId?: unknown }).sectionId === "string" &&
+              allowed.has((r as { sectionId: string }).sectionId) &&
+              typeof (r as { markdown?: unknown }).markdown === "string" &&
+              ((r as { markdown: string }).markdown.trim().length > 0)
+          )
+          .slice(0, input.sections.length)
+      : [];
+
+    const removeSectionIds = Array.isArray(parsed.removeSectionIds)
+      ? [
+          ...new Set(
+            parsed.removeSectionIds.filter(
+              (id): id is string =>
+                typeof id === "string" &&
+                allowed.has(id) &&
+                !revisions.some((r) => r.sectionId === id)
+            )
+          ),
+        ].slice(0, input.sections.length)
+      : [];
+
+    return { revisions, removeSectionIds };
+  } catch (e) {
+    console.error("[live-lecture-notes] wrap-up review", e);
+    return null;
   }
-
-  if (allRevisions.length === 0 && allRemoves.size === 0) {
-    return { revisions: [], removeSectionIds: [] };
-  }
-
-  return {
-    revisions: allRevisions,
-    removeSectionIds: [...allRemoves],
-  };
 }
 
 // ── End-of-lecture recap (once, on Finish) — same shape as tutor-session recaps ─

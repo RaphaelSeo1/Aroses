@@ -135,10 +135,7 @@ export function takeDeckSeedBatch(
   maxPages = DECK_SEED_PAGES_PER_CALL,
   maxChars = MAX_DECK_SEED_CHARS
 ): { pages: DeckPage[]; text: string; throughPage: number; remaining: number } {
-  // Skip empty / whitespace-only slides — they must not become note sections.
-  const rest = pages.filter(
-    (p) => p.pageNum > afterPage && p.extractedText.trim().length > 0
-  );
+  const rest = pages.filter((p) => p.pageNum > afterPage);
   const chosen: DeckPage[] = [];
   let used = 0;
   for (const p of rest) {
