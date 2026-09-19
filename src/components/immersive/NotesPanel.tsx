@@ -1477,12 +1477,17 @@ export function NotesPanel({
     editor.commands.updateAttributes("doc", {
       roseDocTitle: docTitle.trim(),
       roseDocEmoji: docEmoji,
-      // Explicitly keep recap / chunk tracking — some TipTap paths drop
-      // unspecified custom attrs when only title/emoji are patched.
+      // Explicitly keep recap / chunk tracking / coverage marker — some
+      // TipTap paths drop unspecified custom attrs when only title/emoji
+      // are patched.
       roseLectureRecap: prevAttrs.roseLectureRecap ?? "",
       roseAppendedChunkIds: Array.isArray(prevAttrs.roseAppendedChunkIds)
         ? prevAttrs.roseAppendedChunkIds
         : [],
+      roseSourceCoverageCheckedPages:
+        typeof prevAttrs.roseSourceCoverageCheckedPages === "number"
+          ? prevAttrs.roseSourceCoverageCheckedPages
+          : 0,
     });
     const contentJson = editor.getJSON();
     return {

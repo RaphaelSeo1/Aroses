@@ -8,6 +8,7 @@ import {
 import { clampNoteInstruction } from "@/lib/ai/note-instruction";
 import { pickRelevantSlidePages, pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-pages";
 import {
+  isDeckSeedComplete,
   isSlideDeckSchemaError,
   loadSessionDeckPages,
   takeDeckSeedBatch,
@@ -105,10 +106,16 @@ export async function POST(request: Request, ctx: Params) {
     noteInstruction?: unknown;
     seedFromDeck?: unknown;
     coverageChecked?: unknown;
+    coverageAudit?: unknown;
   };
   const seedFromDeck = b.seedFromDeck === true;
   /** Deck already audited + repaired earlier (persisted on the notes doc); skip re-auditing on reload. */
   const coverageChecked = b.coverageChecked === true;
+  /**
+   * One-shot end-of-seed coverage pass from the same page session. Reload
+   * resume must NOT send this — otherwise every refresh re-inserts slides.
+   */
+  const coverageAudit = b.coverageAudit === true;
   if (
     !seedFromDeck &&
     (typeof b.newSegmentText !== "string" || !b.newSegmentText.trim())
@@ -217,7 +224,7 @@ export async function POST(request: Request, ctx: Params) {
     : [];
 
   const sessionSelect =
-    "id, title, status, rolling_summary, synthesize_calls, slides_seeded_through_page";
+    "id, title, status, rolling_summary, synthesize_calls, slides_seeded_through_page, slides_page_count";
   let { data: session, error: sessLoadErr } = await supabase
     .from("live_lecture_sessions")
     .select(sessionSelect)
@@ -256,13 +263,38 @@ export async function POST(request: Request, ctx: Params) {
   const seedBatch = seedFromDeck
     ? takeDeckSeedBatch(deckPages, seededThrough)
     : null;
+  const deckPageCount =
+    typeof (session as { slides_page_count?: unknown }).slides_page_count ===
+      "number" &&
+    (session as { slides_page_count: number }).slides_page_count > 0
+      ? (session as { slides_page_count: number }).slides_page_count
+      : deckPages.length > 0
+        ? deckPages[deckPages.length - 1]!.pageNum
+        : seededThrough;
+  const markSeedFinished = async () => {
+    if (isDeckSeedComplete(seededThrough, deckPageCount)) return;
+    await supabase
+      .from("live_lecture_sessions")
+      .update({
+        slides_seeded_through_page: deckPageCount,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", sessionId)
+      .eq("user_id", user.id);
+  };
   if (seedFromDeck && (!seedBatch || seedBatch.pages.length === 0)) {
-    // Every page is drafted. Audit the deck against the client's current
-    // sections. Pages the draft skipped get ONE seed-style model pass so the
-    // additions read like the rest of the notes; whatever that still leaves
-    // missing is copied back deterministically as a rarely-firing safety net.
-    if (coverageChecked || deckPages.length === 0) {
-      return NextResponse.json({ seedDone: true });
+    // Every extractable page is drafted. Reload must not re-run the coverage
+    // audit — that was inserting the same slides again on every refresh.
+    // Only the same-session follow-up after the last seed batch (coverageAudit)
+    // may fill gaps, and never against an empty editor (notes not hydrated).
+    if (
+      !coverageAudit ||
+      coverageChecked ||
+      deckPages.length === 0 ||
+      (fullSections.length === 0 && seededThrough > 0)
+    ) {
+      await markSeedFinished();
+      return NextResponse.json({ seedDone: true, pageCount: deckPageCount });
     }
     const ledger = buildSourceCoverageLedger(deckPagesToSourceUnits(deckPages));
     const before = auditSourceCoverage(ledger, fullSections);
@@ -311,6 +343,7 @@ export async function POST(request: Request, ctx: Params) {
           : "") +
         (repairs.length > 0 ? ` → ${formatSourceCoverageAudit(result.after)}` : "")
     );
+    await markSeedFinished();
     return NextResponse.json({
       seedDone: true,
       pageCount: deckPages.length,

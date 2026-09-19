@@ -40,7 +40,7 @@ import { sanitizeNoteOutput } from "@/lib/live-notes/sanitize-note-output";
 import { stripLinesAlreadyCovered } from "@/lib/notes/cross-section-dedupe";
 import type { StreamingNotesWriter } from "@/lib/notes/streaming-notes-writer";
 import { MAX_REVISABLE_SECTIONS } from "@/lib/live-notes/revisable-limits";
-import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
+import { DECK_DRAFT_EXCERPT, isDeckSeedComplete } from "@/lib/live-notes/slide-pages";
 import {
   chooseTypewriterSchedule,
   chunkTypewriterText,
@@ -435,6 +435,12 @@ export function LiveNotesSurface({
   }, []);
 
   const notesRef = useRef<NotesPanelHandle | null>(null);
+  const notesReadyRef = useRef(false);
+  const [notesReady, setNotesReady] = useState(false);
+  const handleNotesReady = useCallback(() => {
+    notesReadyRef.current = true;
+    setNotesReady(true);
+  }, []);
   const railScrollRef = useRef<HTMLDivElement | null>(null);
   const railDragRef = useRef<{
     pointerId: number;
@@ -556,11 +562,14 @@ export function LiveNotesSurface({
       if (!seedFromDeck && pending.length < threshold) return;
 
       const writer = notesRef.current?.getStreamWriter();
-      if (!writer) {
+      if (!writer || (seedFromDeck && !notesReadyRef.current)) {
         if (seedFromDeck && seedWriterRetryRef.current < 20) {
           seedWriterRetryRef.current += 1;
           window.setTimeout(() => {
-            void maybeSynthesize(false, { seedFromDeck: true });
+            void maybeSynthesize(false, {
+              seedFromDeck: true,
+              coverageAudit: opts?.coverageAudit,
+            });
           }, 300);
         }
         return;
@@ -1018,6 +1027,7 @@ export function LiveNotesSurface({
           body: JSON.stringify({
             newSegmentText: seedFromDeck ? "" : pending,
             seedFromDeck: seedFromDeck || undefined,
+            coverageAudit: opts?.coverageAudit || undefined,
             // The slide-by-slide audit already ran for this deck (persisted
             // on the doc) — a reload must not re-add lines the student cut.
             coverageChecked: seedFromDeck
@@ -1197,9 +1207,15 @@ export function LiveNotesSurface({
           pendingSeedRef.current = false;
           void maybeSynthesize(false, { seedFromDeck: true });
         } else if (seedAuditNext) {
-          // Server has no pages left → returns the slide-by-slide coverage
-          // audit + deterministic repairs as JSON (no model call).
-          void maybeSynthesize(false, { seedFromDeck: true, coverageAudit: true });
+          const alreadyChecked =
+            coverageCheckedPages(writer) >= slidesPageCountRef.current &&
+            slidesPageCountRef.current > 0;
+          if (!alreadyChecked) {
+            void maybeSynthesize(false, {
+              seedFromDeck: true,
+              coverageAudit: true,
+            });
+          }
         }
       }
     },
@@ -1242,18 +1258,23 @@ export function LiveNotesSurface({
   );
 
   // Resume in-progress deck seeding after reload — never auto-start if they
-  // uploaded and chose "not yet" (seededThroughPage stays 0).
+  // uploaded and chose "not yet" (seededThroughPage stays 0), and never
+  // restart a finished seed (that re-checked slides and duplicated notes).
   const initialDeckSeedRef = useRef(false);
   useEffect(() => {
     if (initialDeckSeedRef.current) return;
+    if (!notesReady) return;
     if ((session.slidesPageCount ?? 0) <= 0) return;
     initialDeckSeedRef.current = true;
-    if ((session.slidesSeededThroughPage ?? 0) > 0) {
-      setDeckSeedRequested(true);
-      void maybeSynthesize(false, { seedFromDeck: true });
-    }
+    const through = session.slidesSeededThroughPage ?? 0;
+    const pages = session.slidesPageCount ?? 0;
+    if (through <= 0) return;
+    if (isDeckSeedComplete(through, pages)) return;
+    setDeckSeedRequested(true);
+    void maybeSynthesize(false, { seedFromDeck: true });
   }, [
     maybeSynthesize,
+    notesReady,
     session.slidesPageCount,
     session.slidesSeededThroughPage,
   ]);
@@ -2120,6 +2141,7 @@ export function LiveNotesSurface({
             onNoteInstructionChange={handleNoteInstructionChange}
             onNoteInstructionSave={handleNoteInstructionSave}
             lectureRecapEndpoint={`/api/live-notes/${sessionId}/recap`}
+            onEditorReady={handleNotesReady}
             className="min-h-0 flex-1"
           />
           <LiveNotesAiActivity

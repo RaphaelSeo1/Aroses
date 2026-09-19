@@ -128,6 +128,11 @@ export function formatDeckPages(pages: DeckPage[], maxChars: number): string {
   return parts.join("\n\n");
 }
 
+/** True when every page has been through the seed loop (reload must not resume). */
+export function isDeckSeedComplete(seededThrough: number, pageCount: number): boolean {
+  return pageCount > 0 && seededThrough >= pageCount;
+}
+
 /** Next unseeded batch of slides for draft-from-deck note generation. */
 export function takeDeckSeedBatch(
   pages: DeckPage[],
