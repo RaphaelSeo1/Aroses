@@ -158,7 +158,8 @@ SEED RULES (override live-lecture habits):
 - Do NOT use outside/textbook knowledge. If a slide is sparse, write a short heading + the bullets that are actually there; do not invent explanations.
 - Do NOT emit @@revise. Always @@append (notes for this batch of slides).
 - Structure with "## " headings per topic (not automatically one heading per slide). Include formulas, definitions, tables, and load-bearing labels from the slides.
-- If RECENT HEADINGS already cover a topic from an earlier seed batch, do not repeat that H2 — continue under a more specific facet heading only when this batch adds a distinct idea.
+- NOTES ALREADY IN THE EDITOR (when present) are the permanent memory of what earlier batches wrote. Never restate a fact, definition, formula, table, or example that is already there. Only append genuinely NEW teachable content from THIS batch of slides.
+- If an existing heading already covers a topic from an earlier batch, do not repeat that H2 — continue under a more specific facet heading only when this batch adds a distinct idea that is not already written.
 - @@thought: one short line that you are drafting from the uploaded slides (mention slide numbers if present).
 - @@summary: compressed record of topics drafted so far (previous summary + these slides).
 
@@ -262,8 +263,9 @@ export async function* streamLiveLectureNotes(input: {
     .slice(0, MAX_EXISTING_HEADINGS);
   const revisable =
     mode === "seed" ? [] : input.revisable.slice(0, MAX_REVISABLE_SECTIONS);
-  const existingSections =
-    mode === "seed" ? [] : (input.existingSections ?? []);
+  // Seed used to drop existing notes and only send a short summary — that is
+  // why later slide batches restated earlier ones. Pass the editor contents.
+  const existingSections = input.existingSections ?? [];
   // Keep screen context tight — large dumps encourage unnecessary rewrites.
   const screenContext =
     mode === "seed" ? "" : (input.screenContext ?? "").trim().slice(0, 1_800);
@@ -300,6 +302,11 @@ export async function* streamLiveLectureNotes(input: {
       (s.transcriptExcerpt ?? "").includes(DECK_DRAFT_EXCERPT)
     );
 
+  const seedHeadingLines =
+    existingHeadings.length > 0
+      ? existingHeadings.map((h) => `- [${h.sectionId}] ${h.heading}`)
+      : headings.map((h) => `- ${h}`);
+
   const userPrompt =
     mode === "seed"
       ? [
@@ -309,12 +316,15 @@ export async function* streamLiveLectureNotes(input: {
           summary
             ? `ROLLING SUMMARY OF TOPICS DRAFTED SO FAR:\n${summary}`
             : "ROLLING SUMMARY OF TOPICS DRAFTED SO FAR: (none yet)",
-          headings.length > 0
-            ? `RECENT HEADINGS already drafted (do not repeat these H2s):\n${headings.map((h) => `- ${h}`).join("\n")}`
+          seedHeadingLines.length > 0
+            ? `HEADINGS ALREADY IN THE EDITOR (do not repeat these H2s; only a more specific facet when this batch adds a distinct new idea):\n${seedHeadingLines.join("\n")}`
+            : null,
+          existingSectionsBlock
+            ? `NOTES ALREADY IN THE EDITOR (permanent memory — do not restate any fact already written here):\n\n${existingSectionsBlock}`
             : null,
           `DECK SLIDES (draft study notes covering ALL of these pages; no outside knowledge):\n${deckText}`,
-          "NO SPEECH YET. Draft from the slides only.",
-          "\nEmit the protocol now. @@append notes for this batch. Do not @@revise.",
+          "NO SPEECH YET. Draft from the slides only. Skip anything already covered in NOTES ALREADY IN THE EDITOR.",
+          "\nEmit the protocol now. @@append ONLY genuinely new notes for this batch. Do not @@revise. Leave @@append empty when every teachable line on these slides is already in the editor.",
         ]
           .filter(Boolean)
           .join("\n\n")

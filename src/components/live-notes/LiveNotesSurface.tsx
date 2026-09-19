@@ -480,7 +480,9 @@ export function LiveNotesSurface({
         })
         .filter((h): h is { sectionId: string; heading: string } => Boolean(h))
         .slice(0, 200);
-      const recentHeadings = revisable
+      // Seed batches need every heading already in the editor, not just the
+      // empty revisable list — otherwise later slide batches restate earlier ones.
+      const recentHeadings = (seedFromDeck ? allSections : revisable)
         .map((s) => extractNoteHeading(s.markdown))
         .filter((h): h is string => Boolean(h));
 
@@ -885,9 +887,13 @@ export function LiveNotesSurface({
         synthInFlightRef.current = false;
         syncAiWritingUi();
         schedulePump();
+        // Wait until this batch has finished typing into the editor before the
+        // next seed call, so that call can see the notes already written.
         if (seedAgain || pendingSeedRef.current) {
           pendingSeedRef.current = false;
-          void maybeSynthesize(false, { seedFromDeck: true });
+          void pumpTailRef.current.finally(() => {
+            void maybeSynthesize(false, { seedFromDeck: true });
+          });
         }
       }
     },
