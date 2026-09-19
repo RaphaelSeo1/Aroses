@@ -61,29 +61,36 @@ const MAX_SECTION_EXCERPT_CHARS = 2_400;
 const MAX_DECK_LIVE_CHARS = 2_400;
 const MAX_DECK_SEED_CHARS = 7_000;
 
-const NOTE_STYLE_RULES = `You write structured STUDY NOTES — useful to reread later, not a transcript and not a re-narration of the lecture. Aim for the old thorough default, cleaned up: keep the substance, drop the noise.
+const NOTE_STYLE_RULES = `You write structured STUDY NOTES — useful to reread later, not a transcript. Keep the substance. Drop spoken filler, not teachable points.
 
 ${TUTOR_NOTES_QUALITY_RULES}
 
 ${DEFAULT_NOTES_OUTLINE_RULES}
 
+COMPLETENESS (overrides the 2–6 bullet cap above):
+Write the notes a student would get by pasting this source into ChatGPT and asking for study notes.
+- Keep every distinct teachable point: definitions, list items, examples, numbers, names, dates, contrasts, caveats, and steps. Group related points under a **bold** parent when they belong together. Do not drop a point because the section already has several bullets, or because it feels secondary.
+- Rewrite into clear study language. Do not paste raw slide or speech fragments, and do not compress a multi-point slide or explanation into a short summary.
+- A 1–2 sentence framing paragraph is good when the source supports one. Do not add facts, mechanisms, or examples that are not in the slides, transcript, or screen.
+- Skip only filler, logistics, and a fact already written in the existing notes. A related heading is not a reason to omit new points. If a STUDENT NOTE STYLE asks for shorter notes, that request still wins.
+
 - Start a "## " heading whenever the lecturer moves to a distinct topic or concept (3–8 words naming the idea; never repeat an EXISTING NOTE HEADING — fold into that section instead).
 - Every non-empty @@append MUST begin with a "## " topic heading. Under it, use the normal outline: a framing paragraph when supported, then grouped top-level bullets with **bold lead-ins** and "  - " nested supporting details. Use "### " only for a real subtopic such as a worked example or comparison—not generic boilerplate. Never emit an unheaded run of flat bullets.
-- Under each heading, write enough that a student who missed the verbal fluff still understands the point: crisp definitions, key numbers/units, named studies/people/dates, cause→effect, and the load-bearing supporting detail. Prefer coherent prose plus grouped/nested bullets over one bullet per utterance.
-- SUMMARIZE as you go. New transcript arrives often — do NOT dump every utterance. Fold related sentences into one clear note. Skip filler, hedging, transitions, anecdotes, repetition, and anything that wouldn't help someone study the material.
+- Under each heading, write enough that a student who missed the lecture still understands the point: definitions, key numbers/units, named studies/people/dates, cause→effect, examples, and the supporting detail that was actually taught. Prefer coherent prose plus grouped/nested bullets over one bullet per utterance.
+- Fold spoken filler into the note; do not transcribe it. Skip hedging, transitions, logistics, and a repeat of a fact already written. Do not fold away a distinct definition, example, number, name, list item, or step.
 - Bold key terms with **term** on first introduction only. State definitions cleanly even when the lecturer phrased them loosely — but only from what was said or shown.
 - When the lecturer works an example, capture it as a numbered list ("1. ", "2. ") with their actual numbers/steps — keep the steps that teach the method; drop purely verbal padding around them.
 - When the slide or lecture shows a comparison grid, drug/dose chart, criteria matrix, or other tabular data, capture it as a GFM pipe table (header row, then a "| --- | --- |" separator, then data rows). Keep cells faithful to what was shown/said — do not invent columns.
 - When the lecturer signals importance ("this will be on the exam", "this is the key idea"), add one line: "**Why it matters:** ...". Don't sprinkle it on every section.
 - Administrative chatter (attendance, logistics, "can everyone see the screen") is NOT teaching content — skip it.
-- Bullets ("- ", one "  - " nesting level for sub-points) for lists of points; short prose when a definition or relationship needs a full sentence. Group related details beneath a parent bullet instead of extending one long flat list. Concise and readable — in-depth where the idea needs it, never padded.
+- Bullets ("- ", one "  - " nesting level for sub-points) for lists of points; short prose when a definition or relationship needs a full sentence. Group related details beneath a parent bullet instead of extending one long flat list. Readable, not padded, and not shortened by dropping points.
 
-DO NOT under-write by default: if a definition, number, named study/person, result, or worked step was taught, it must appear. Condensing means clearer prose and fewer redundant bullets — not omitting teachable content. If a STUDENT NOTE STYLE is present and asks for shorter, sparser, or less detailed notes, keep only the load-bearing facts they still need and follow that request.
+DO NOT under-write: if a definition, number, named study/person, result, list item, example, or worked step was taught or shown, it must appear. Clearer prose is not a reason to omit it. If a STUDENT NOTE STYLE is present and asks for shorter, sparser, or less detailed notes, keep only the load-bearing facts they still need and follow that request.
 
 GROUNDING (critical — overrides everything else on conflict):
 - You may receive THREE sources: NEW TRANSCRIPT SLICE (speech-to-text), ON-SCREEN CONTENT (OCR/vision from the shared lecture display), and DECK SLIDES (pre-uploaded lecture deck pages matched to this slice).
 - Screen text is AUTHORITATIVE for: spellings, symbols, drug/chemical names, numbers, units, table cells, equation symbols, and slide titles — when the conflict is clearly an STT mishear / typo AND the extract is from the current frame.
-- DECK SLIDES (matched pages only): use as the lecture's written reference for this topic. Include definitions, formulas, tables, labels, and load-bearing bullets that are on those pages even if the lecturer only gestured at them or the STT garbled them. Do NOT copy slides that are not in DECK SLIDES. Do NOT add textbook knowledge that is not on the matched pages or in the transcript/screen.
+- DECK SLIDES (matched pages only): use as the lecture's written reference for this topic. Include definitions, formulas, tables, labels, and every distinct point on those pages even if the lecturer only gestured at them or the STT garbled them. Do NOT copy slides that are not in DECK SLIDES. Do NOT add textbook knowledge that is not on the matched pages or in the transcript/screen.
 - Transcript is AUTHORITATIVE for: spoken explanation, emphasis, worked examples walked verbally, and asides not visible on screen or deck.
 - CONTRADICTIONS: First apply the source priorities above. If current screen/deck clearly resolves an STT error, or the lecturer explicitly corrects/retracts the prior claim, @@revise the matching section with only the corrected line. If the available sources do not establish a winner, do NOT invent one: @@revise the matching section with:
   - **Open question:** Notes had <prior claim>; just said/shown <new claim>. Which is right?
@@ -113,7 +120,7 @@ SELF-REVISION / CONTINUATION (notes from uploaded material, slides, or earlier s
 Before writing, check ALL EXISTING NOTE SECTIONS, not just recent live output. If the NEW TRANSCRIPT SLICE continues, completes, repeats, or is about the same topic as a section that is already written (same concept, same worked example, remaining items of an enumeration — match by meaning, not only exact heading text):
 
 - You MUST @@revise that sectionId. Under @@revise emit ONLY a structured Markdown fragment containing the new or corrected material—never repeat the "## " heading or the whole section. The client surgically folds your fragment into the existing section.
-- Preserve the section's organization. A single related fact can be one bullet; multiple supporting details should use a bold parent bullet with nested "  - " children, a short paragraph, or a meaningful "### " subtopic. Do not grow a long flat list one utterance at a time.
+- Preserve the section's organization. A single related fact can be one bullet; multiple supporting details should use a bold parent bullet with nested "  - " children, a short paragraph, or a meaningful "### " subtopic. Grouping is not a reason to drop points. Do not grow a long flat list one utterance at a time.
 - Do not emit generic "Key vocabulary" / "Self-check" subsections during a continuation unless the incoming lecture material itself makes them useful.
 - Do NOT @@append a new section that restates or continues that topic. A second copy at the bottom is always wrong when the notes already exist.
 - If you are unsure whether it is the same topic, @@revise the closest matching listed section rather than appending.
@@ -160,12 +167,12 @@ ${NOTE_STYLE_RULES}
 ${voiceRules()}
 
 SEED RULES (override live-lecture habits):
-- Source of truth is DECK SLIDES only. Cover every slide in that block. Do not skip a slide because it looks like an agenda or recap — capture the teachable content.
-- Do NOT use outside/textbook knowledge. If a slide is sparse, write a short heading + the bullets that are actually there; do not invent explanations.
+- Source of truth is DECK SLIDES only. Cover every teachable line on every slide in this block, including supporting bullets, examples, and lists. Do not skip a slide because it looks like an agenda or recap. Do not shrink a dense slide into a few summary bullets.
+- Rephrase slide lines into clear study sentences. Do not invent facts, numbers, mechanisms, or examples that are not on the slides. A sparse slide stays short; a dense slide stays dense.
 - Do NOT emit @@revise. Always @@append (notes for this batch of slides).
-- Structure with "## " headings per topic (not automatically one heading per slide). Include formulas, definitions, tables, and load-bearing labels from the slides.
-- NOTES ALREADY IN THE EDITOR (when present) are the permanent memory of what earlier batches wrote. Never restate a fact, definition, formula, table, or example that is already there. Only append genuinely NEW teachable content from THIS batch of slides.
-- If an existing heading already covers a topic from an earlier batch, do not repeat that H2 — continue under a more specific facet heading only when this batch adds a distinct idea that is not already written.
+- Structure with "## " headings per topic (not automatically one heading per slide). Include formulas, definitions, tables, labels, and every distinct point from the slides.
+- NOTES ALREADY IN THE EDITOR (when present) are what earlier batches wrote. Do not copy a fact that is already written there. A similar heading is not coverage: if this batch still has points that are not in those notes, write those points.
+- Do not repeat an existing H2. Put the new points under a heading that names what this batch adds. Leave @@append empty only when every teachable line in this batch is already written, point for point.
 - @@thought: one short line that you are drafting from the uploaded slides (mention slide numbers if present).
 - @@summary: compressed record of topics drafted so far (previous summary + these slides).
 
@@ -387,14 +394,14 @@ export async function* streamLiveLectureNotes(input: {
             ? `ROLLING SUMMARY OF TOPICS DRAFTED SO FAR:\n${summary}`
             : "ROLLING SUMMARY OF TOPICS DRAFTED SO FAR: (none yet)",
           seedHeadingLines.length > 0
-            ? `HEADINGS ALREADY IN THE EDITOR (do not repeat these H2s; only a more specific facet when this batch adds a distinct new idea):\n${seedHeadingLines.join("\n")}`
+            ? `HEADINGS ALREADY IN THE EDITOR (do not repeat these H2s; still write every point from this batch that is not already in the notes):\n${seedHeadingLines.join("\n")}`
             : null,
           existingSectionsBlock
-            ? `NOTES ALREADY IN THE EDITOR (permanent memory — do not restate any fact already written here):\n\n${existingSectionsBlock}`
+            ? `NOTES ALREADY IN THE EDITOR (do not copy a fact already written here; still write every other point from this batch):\n\n${existingSectionsBlock}`
             : null,
-          `DECK SLIDES (draft study notes covering ALL of these pages; no outside knowledge):\n${deckText}`,
-          "NO SPEECH YET. Draft from the slides only. Skip anything already covered in NOTES ALREADY IN THE EDITOR.",
-          "\nEmit the protocol now. @@append ONLY genuinely new notes for this batch. Do not @@revise. Leave @@append empty when every teachable line on these slides is already in the editor.",
+          `DECK SLIDES (draft complete study notes for ALL of these pages; no outside knowledge):\n${deckText}`,
+          "NO SPEECH YET. Draft study notes from these slides the way ChatGPT would: complete, organized, and faithful to the slides. Do not copy a fact already written in NOTES ALREADY IN THE EDITOR. Do not summarize a slide down to a few bullets.",
+          "\nEmit the protocol now. @@append the study notes for every teachable line in this batch that is not already in the editor. Do not @@revise. Leave @@append empty only when this entire batch is already written point for point.",
         ]
           .filter(Boolean)
           .join("\n\n")
@@ -420,12 +427,12 @@ export async function* streamLiveLectureNotes(input: {
             ? `ON-SCREEN CONTENT (authoritative for spellings/symbols/numbers/tables — use for grounding; do NOT revise prior notes merely because the screen changed):\n${screenContext}`
             : null,
           deckText
-            ? `DECK SLIDES (pre-uploaded pages matched to this slice — fill in formulas, definitions, tables, and labels from THESE pages even if only half-said; do not copy other slides; no outside knowledge):\n${deckText}`
+            ? `DECK SLIDES (pre-uploaded pages matched to this slice — include every distinct point, formula, definition, table, and label from THESE pages even if only half-said; do not copy other slides; no outside knowledge):\n${deckText}`
             : null,
           `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
           hasDraft
-            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise each matching id with ONLY the new structured fragment (no H2). You may emit multiple @@revise and @@delete blocks, one per section. @@delete ONLY a line the lecturer clearly retracted or that both the slides and the transcript show is factually wrong. If the slides and the transcript disagree and nothing was retracted, do NOT delete: @@revise a **Discrepancy:** line and @@thought that they don't match. The client preserves every still-correct block. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading. Empty @@append when the slice was folded in or is a repeat."
-            : "\nEmit the protocol now. If notes already exist for the topics in this slice, @@revise each matching section with ONLY a structured fragment of the new or corrected material (no H2). Multiple @@revise and @@delete blocks are allowed. @@delete ONLY a line the lecturer clearly retracted or that is factually wrong with slides and speech in agreement. If slides and speech disagree without a retraction, @@revise a **Discrepancy:** line and say so in @@thought — do not delete either claim. @@append ONLY for a genuinely new topic with no matching heading. Empty @@append when the slice was folded in or is a repeat.",
+            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise each matching id with the new study-note fragment (no H2). Include every new teachable point from this slice, not a one-line summary. You may emit multiple @@revise and @@delete blocks, one per section. @@delete ONLY a line the lecturer clearly retracted or that both the slides and the transcript show is factually wrong. If the slides and the transcript disagree and nothing was retracted, do NOT delete: @@revise a **Discrepancy:** line and @@thought that they don't match. The client preserves every still-correct block. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading. Empty @@append when the slice was folded in or is a repeat."
+            : "\nEmit the protocol now. If notes already exist for the topics in this slice, @@revise each matching section with the new or corrected study-note fragment (no H2). Include every new teachable point, not a one-line summary. Multiple @@revise and @@delete blocks are allowed. @@delete ONLY a line the lecturer clearly retracted or that is factually wrong with slides and speech in agreement. If slides and speech disagree without a retraction, @@revise a **Discrepancy:** line and say so in @@thought — do not delete either claim. @@append ONLY for a genuinely new topic with no matching heading. Empty @@append when the slice was folded in or is a repeat.",
         ]
           .filter(Boolean)
           .join("\n\n");
@@ -447,7 +454,7 @@ export async function* streamLiveLectureNotes(input: {
     apiKey: openaiKey,
     system: liveNotesSystem(input.noteInstruction, mode),
     user: userPrompt,
-    maxTokens: mode === "seed" ? 5_000 : 4_000,
+    maxTokens: mode === "seed" ? 8_000 : 4_000,
     usage,
   })) {
     for (const ev of parser.push(delta)) yield ev;
