@@ -9,10 +9,11 @@
  *
  * Public API:
  *   - `extractPdfText(buffer)` → Promise<string>
+ *   - `extractPdfPages(buffer)` → Promise<{ pages, numpages }>
  *
  * Behavior:
  *   - Returns concatenated text with \n\n between pages.
- *   - On any error returns "" so callers can degrade gracefully
+ *   - On any error extractPdfText returns "" so callers can degrade
  *     (they record the upload with a "couldn't extract" summary).
  *   - Hard caps:
  *       - 200 pages processed
@@ -20,10 +21,9 @@
  *     to keep token costs sane when someone drops a 1000-page
  *     textbook in.
  *
- * NOT public:
- *   - We use the legacy entry (`pdfjs-dist/legacy/build/pdf.mjs`)
- *     because it ships a self-contained worker — no separate worker
- *     URL plumbing required on the server.
+ * Slide notes need layout (x/y), not `hasEOL` concatenation. Lecture PDFs
+ * often omit EOL flags, so joining item.str produces one unreadable blob
+ * and Rose omits it as garbled.
  */
 
 import path from "path";
@@ -31,8 +31,15 @@ import { pathToFileURL } from "url";
 
 const MAX_PAGES = 200;
 const MAX_CHARS = 200_000;
+const RENDER_BATCH_SIZE = 8;
+const OPEN_TIMEOUT_MS = 40_000;
 
-type TextItem = { str?: string; hasEOL?: boolean };
+export type PdfTextItem = {
+  str?: string;
+  hasEOL?: boolean;
+  transform?: number[];
+  width?: number;
+};
 
 export type PdfPageText = { pageNum: number; text: string };
 
@@ -62,6 +69,57 @@ async function getPdfJs(): Promise<PdfJsModule> {
   return pdfjsReady;
 }
 
+/**
+ * Rebuild slide/page text from PDF.js items using position, not hasEOL.
+ * Words on one line get spaces; column gaps become tabs; y jumps become newlines.
+ */
+export function pdfItemsToText(items: PdfTextItem[]): string {
+  let lastY: number | undefined;
+  let lastEndX: number | undefined;
+  let text = "";
+
+  for (const item of items) {
+    const str = item.str;
+    if (!str) continue;
+    const transform = item.transform;
+    const x = Array.isArray(transform) ? Number(transform[4]) : NaN;
+    const y = Array.isArray(transform) ? Number(transform[5]) : NaN;
+    const width =
+      typeof item.width === "number" && item.width > 0
+        ? item.width
+        : str.length * 4.5;
+
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      if (text.length > 0 && !text.endsWith("\n") && !text.endsWith(" ")) {
+        text += " ";
+      }
+      text += str;
+      if (item.hasEOL) text += "\n";
+      continue;
+    }
+
+    if (lastY === undefined) {
+      text += str;
+    } else if (Math.abs(y - lastY) > 2) {
+      text += `\n${str}`;
+    } else {
+      const gap = lastEndX === undefined ? 0 : x - lastEndX;
+      if (gap > 18) text += `\t${str}`;
+      else if (gap > 1.5) text += ` ${str}`;
+      else text += str;
+    }
+    if (item.hasEOL && !text.endsWith("\n")) text += "\n";
+    lastY = y;
+    lastEndX = x + width;
+  }
+
+  return text
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/ {2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function loadPdf(buffer: Buffer) {
   const pdfjsLib = await getPdfJs();
   const data = new Uint8Array(Buffer.from(buffer));
@@ -77,7 +135,7 @@ async function loadPdf(buffer: Buffer) {
     } catch {
       /* ignore */
     }
-  }, 20_000);
+  }, OPEN_TIMEOUT_MS);
   try {
     return await Promise.race([
       loadingTask.promise,
@@ -89,7 +147,7 @@ async function loadPdf(buffer: Buffer) {
                 "That PDF is taking too long to open. Try exporting it again, or upload a .pptx."
               )
             ),
-          20_000
+          OPEN_TIMEOUT_MS
         );
       }),
     ]);
@@ -108,22 +166,28 @@ export async function extractPdfPages(
     const numpages = pdf.numPages;
     const cap = Math.min(numpages, options?.maxPages ?? MAX_PAGES, MAX_PAGES);
     const pages: PdfPageText[] = [];
-    for (let i = 1; i <= cap; i += 1) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const items = (content.items as TextItem[]) ?? [];
-      const lines: string[] = [];
-      let current = "";
-      for (const item of items) {
-        if (typeof item.str === "string") current += item.str;
-        if (item.hasEOL) {
-          if (current.trim().length > 0) lines.push(current.trim());
-          current = "";
-        }
-      }
-      if (current.trim().length > 0) lines.push(current.trim());
-      pages.push({ pageNum: i, text: lines.join("\n") });
-      page.cleanup();
+    for (let start = 1; start <= cap; start += RENDER_BATCH_SIZE) {
+      const end = Math.min(cap, start + RENDER_BATCH_SIZE - 1);
+      const batch = await Promise.all(
+        Array.from({ length: end - start + 1 }, (_, i) => {
+          const pageNum = start + i;
+          return (async () => {
+            const page = await pdf.getPage(pageNum);
+            try {
+              const content = await page.getTextContent({
+                disableNormalization: true,
+              });
+              return {
+                pageNum,
+                text: pdfItemsToText(content.items as PdfTextItem[]),
+              };
+            } finally {
+              page.cleanup();
+            }
+          })();
+        })
+      );
+      pages.push(...batch);
     }
     return { pages, numpages };
   } finally {
@@ -133,50 +197,15 @@ export async function extractPdfPages(
 
 export async function extractPdfText(buffer: Buffer): Promise<string> {
   try {
-    // Dynamic import so pdfjs-dist isn't pulled into builds that
-    // never call this (e.g. course routes that already have their
-    // own ingest pipeline).
-    const pdfjsLib = await getPdfJs();
-    const data = new Uint8Array(Buffer.from(buffer));
-    const loadingTask = pdfjsLib.getDocument({
-      data,
-      disableFontFace: true,
-      useSystemFonts: false,
-      isEvalSupported: false,
-    });
-    const pdf = await loadingTask.promise;
-
-    const pages: string[] = [];
-    const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+    const { pages } = await extractPdfPages(buffer);
+    const chunks: string[] = [];
     let totalChars = 0;
-
-    for (let i = 1; i <= pageCount; i += 1) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const items = (content.items as TextItem[]) ?? [];
-      const lines: string[] = [];
-      let current = "";
-      for (const item of items) {
-        if (typeof item.str === "string") current += item.str;
-        if (item.hasEOL) {
-          if (current.trim().length > 0) lines.push(current.trim());
-          current = "";
-        }
-      }
-      if (current.trim().length > 0) lines.push(current.trim());
-      const pageText = lines.join("\n");
-      pages.push(pageText);
-      totalChars += pageText.length;
-      // Best-effort cleanup of the page-level rendering state.
-      page.cleanup();
+    for (const page of pages) {
+      chunks.push(page.text);
+      totalChars += page.text.length;
       if (totalChars >= MAX_CHARS) break;
     }
-
-    await pdf.destroy().catch(() => {
-      /* destroy is best-effort — don't fail extraction if cleanup blows up */
-    });
-
-    return pages
+    return chunks
       .join("\n\n")
       .replace(/[ \t]+\n/g, "\n")
       .replace(/\n{3,}/g, "\n\n")

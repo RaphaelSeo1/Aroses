@@ -131,7 +131,7 @@ export async function POST(request: Request, ctx: Params) {
               "Reading those slides timed out. Try a .pptx, or a smaller PDF."
             )
           );
-        }, 50_000);
+        }, 100_000);
       }),
     ]);
   } catch (e) {
