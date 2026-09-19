@@ -28,9 +28,7 @@ export function SlideDeckAttach({
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<"uploading" | "reading" | "removing" | null>(
-    null
-  );
+  const [busy, setBusy] = useState<"uploading" | "removing" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -49,7 +47,7 @@ export function SlideDeckAttach({
   };
 
   const closeModal = () => {
-    if (busy === "uploading" || busy === "reading") return;
+    if (busy === "uploading") return;
     setOpen(false);
     setDragOver(false);
     dragDepth.current = 0;
@@ -60,7 +58,7 @@ export function SlideDeckAttach({
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && busy !== "uploading" && busy !== "reading") {
+      if (e.key === "Escape" && busy !== "uploading") {
         setOpen(false);
         setDragOver(false);
         dragDepth.current = 0;
@@ -126,23 +124,14 @@ export function SlideDeckAttach({
         return;
       }
 
-      setBusy("reading");
-      const ac = new AbortController();
-      const kill = window.setTimeout(() => ac.abort(), 60_000);
-      let res: Response;
-      try {
-        res = await fetch(`/api/live-notes/${sessionId}/slides`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            storagePath: pathInfo.storagePath,
-            fileName: file.name,
-          }),
-          signal: ac.signal,
-        });
-      } finally {
-        window.clearTimeout(kill);
-      }
+      const res = await fetch(`/api/live-notes/${sessionId}/slides`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storagePath: pathInfo.storagePath,
+          fileName: file.name,
+        }),
+      });
       const body = (await res.json().catch(() => ({}))) as {
         error?: string;
         fileName?: string;
@@ -163,14 +152,8 @@ export function SlideDeckAttach({
         fileName: body.fileName ?? file.name,
         pageCount: typeof body.pageCount === "number" ? body.pageCount : 0,
       });
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") {
-        setError(
-          "Reading those slides timed out. Try a .pptx, or a smaller PDF."
-        );
-      } else {
-        setError("Could not upload the slides. Check your connection and retry.");
-      }
+    } catch {
+      setError("Could not upload the slides. Check your connection and retry.");
     } finally {
       setBusy(null);
       if (inputRef.current) inputRef.current.value = "";
@@ -286,24 +269,18 @@ export function SlideDeckAttach({
               }`}
             >
               <span className="pointer-events-none text-sm font-semibold text-zinc-800 dark:text-zinc-100">
-                {busy === "reading"
+                {busy === "uploading"
                   ? "Reading slides…"
-                  : busy === "uploading"
-                    ? "Uploading…"
-                    : dragOver
-                      ? "Drop to upload"
-                      : "Drag & drop your slides here"}
+                  : dragOver
+                    ? "Drop to upload"
+                    : "Drag & drop your slides here"}
               </span>
               <span className="pointer-events-none mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                 PDF or .pptx · up to{" "}
                 {Math.round(MAX_INGEST_DOCUMENT_BYTES / (1024 * 1024))}MB
               </span>
               <span className="pointer-events-none mt-4 rounded-full bg-white px-4 py-1.5 text-xs font-semibold text-zinc-800 ring-1 ring-zinc-200 dark:bg-zinc-950 dark:text-zinc-100 dark:ring-zinc-700">
-                {busy === "reading"
-                  ? "Reading…"
-                  : busy === "uploading"
-                    ? "Uploading…"
-                    : "Choose a file"}
+                {busy === "uploading" ? "Uploading…" : "Choose a file"}
               </span>
             </button>
             {error ? (
@@ -317,14 +294,10 @@ export function SlideDeckAttach({
             <button
               type="button"
               onClick={closeModal}
-              disabled={busy === "uploading" || busy === "reading"}
+              disabled={busy === "uploading"}
               className="rounded-full px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-900"
             >
-              {busy === "reading"
-                ? "Reading…"
-                : busy === "uploading"
-                  ? "Uploading…"
-                  : "Cancel"}
+              {busy === "uploading" ? "Uploading…" : "Cancel"}
             </button>
           </div>
         </div>
@@ -348,13 +321,11 @@ export function SlideDeckAttach({
           }
           className="max-w-[11rem] truncate rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
-          {busy === "reading"
+          {busy === "uploading"
             ? "Reading slides…"
-            : busy === "uploading"
-              ? "Uploading…"
-              : ready
-                ? `${pageCount} slide${pageCount === 1 ? "" : "s"}`
-                : "Add slides"}
+            : ready
+              ? `${pageCount} slide${pageCount === 1 ? "" : "s"}`
+              : "Add slides"}
         </button>
         {error && !open ? (
           <p
@@ -398,13 +369,11 @@ export function SlideDeckAttach({
           disabled={disabled || busy !== null}
           className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 ring-1 ring-zinc-200 hover:bg-zinc-50 disabled:opacity-60 dark:bg-zinc-950 dark:text-zinc-100 dark:ring-zinc-700"
         >
-          {busy === "reading"
-            ? "Reading slides…"
-            : busy === "uploading"
-              ? "Uploading…"
-              : ready
-                ? "Replace slides"
-                : "Upload slides"}
+          {busy === "uploading"
+            ? "Uploading…"
+            : ready
+              ? "Replace slides"
+              : "Upload slides"}
         </button>
         {ready ? (
           <>
