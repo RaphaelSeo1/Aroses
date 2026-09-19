@@ -361,13 +361,16 @@ export async function* streamLiveLectureNotes(input: {
           .join("\n\n");
 
   // Slide seeding stays on Haiku. Live speech has to decide add-vs-skip
-  // against notes already on the page; Haiku misses that and duplicates.
-  const model = mode === "seed" ? MODEL : RECAP_MODEL;
+  // against notes already on the page. Sonnet 5 rejects a non-default
+  // temperature and thinks by default, which would stall each slice.
+  const model = mode === "seed" ? MODEL : "claude-sonnet-5";
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
   const stream = anthropic.messages.stream({
     model,
     max_tokens: mode === "seed" ? 5_000 : 4_000,
-    temperature: 0.35,
+    ...(mode === "seed"
+      ? { temperature: 0.35 }
+      : { thinking: { type: "disabled" as const } }),
     system: liveNotesSystem(input.noteInstruction, mode),
     messages: [{ role: "user", content: userPrompt }],
   });
