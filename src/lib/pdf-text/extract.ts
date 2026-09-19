@@ -127,7 +127,6 @@ async function loadPdf(buffer: Buffer) {
     data,
     disableFontFace: true,
     useSystemFonts: false,
-    isEvalSupported: false,
   });
   const timer = setTimeout(() => {
     try {
