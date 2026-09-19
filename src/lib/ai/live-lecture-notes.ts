@@ -47,6 +47,8 @@ const MODEL = process.env.ANTHROPIC_TUTOR_FAST_MODEL?.trim() || "claude-haiku-4-
 /** Same model as tutor-session recaps — lecture Finish recap should match that quality. */
 const RECAP_MODEL =
   process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
+/** Slide drafts and live speech both use this. Reasoning off so each call stays a note update. */
+const LIVE_NOTES_MODEL = "gpt-5.6-sol";
 
 /** Hard cap on the rolling summary we store + send back to the model. */
 export const ROLLING_SUMMARY_MAX_CHARS = 1_600;
@@ -202,6 +204,76 @@ export type ExistingLiveNoteSection = {
   studentEdited?: boolean;
 };
 
+type OpenAiUsage = { inputTokens?: number; outputTokens?: number };
+
+/** Stream GPT-5.6 Sol text for the live add-or-skip call. Reasoning is off. */
+async function* streamGptSolText(input: {
+  apiKey: string;
+  system: string;
+  user: string;
+  maxTokens: number;
+  usage: OpenAiUsage;
+}): AsyncGenerator<string> {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: LIVE_NOTES_MODEL,
+      stream: true,
+      stream_options: { include_usage: true },
+      max_completion_tokens: input.maxTokens,
+      reasoning_effort: "none",
+      messages: [
+        { role: "system", content: input.system },
+        { role: "user", content: input.user },
+      ],
+    }),
+  });
+  if (!res.ok || !res.body) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      `Live notes model failed (${res.status}). ${detail.slice(0, 240)}`
+    );
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl = buf.indexOf("\n");
+    while (nl >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      nl = buf.indexOf("\n");
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      let parsed: {
+        choices?: Array<{ delta?: { content?: string | null } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      try {
+        parsed = JSON.parse(data) as typeof parsed;
+      } catch {
+        continue;
+      }
+      const content = parsed.choices?.[0]?.delta?.content;
+      if (typeof content === "string" && content) yield content;
+      if (typeof parsed.usage?.prompt_tokens === "number") {
+        input.usage.inputTokens = parsed.usage.prompt_tokens;
+      }
+      if (typeof parsed.usage?.completion_tokens === "number") {
+        input.usage.outputTokens = parsed.usage.completion_tokens;
+      }
+    }
+  }
+}
+
 /**
  * Stream one synthesis call. Yields `op` / `text` events for the client and
  * a final `summary` event for the route to persist. Throws on transport
@@ -229,12 +301,6 @@ export async function* streamLiveLectureNotes(input: {
   /** Draft notes from the uploaded deck before any speech. */
   mode?: "live" | "seed";
 }): AsyncGenerator<LiveNotesStreamEvent> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    yield { type: "summary", summary: input.rollingSummary };
-    return;
-  }
-
   const mode = input.mode === "seed" ? "seed" : "live";
   const slice = input.newSegmentText.trim().slice(0, MAX_SEGMENT_INPUT_CHARS);
   // Seed drafts from slides with no speech. Live calls still need a real slice.
@@ -360,21 +426,6 @@ export async function* streamLiveLectureNotes(input: {
           .filter(Boolean)
           .join("\n\n");
 
-  // Slide seeding stays on Haiku. Live speech has to decide add-vs-skip
-  // against notes already on the page. Sonnet 5 rejects a non-default
-  // temperature and thinks by default, which would stall each slice.
-  const model = mode === "seed" ? MODEL : "claude-sonnet-5";
-  const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
-  const stream = anthropic.messages.stream({
-    model,
-    max_tokens: mode === "seed" ? 5_000 : 4_000,
-    ...(mode === "seed"
-      ? { temperature: 0.35 }
-      : { thinking: { type: "disabled" as const } }),
-    system: liveNotesSystem(input.noteInstruction, mode),
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
   const parser = createMarkerParser(
     new Set([
       ...revisable.map((s) => s.sectionId),
@@ -383,28 +434,28 @@ export async function* streamLiveLectureNotes(input: {
     input.appendSectionId
   );
 
-  for await (const event of stream) {
-    if (
-      event.type === "content_block_delta" &&
-      event.delta.type === "text_delta"
-    ) {
-      for (const ev of parser.push(event.delta.text)) yield ev;
-    }
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!openaiKey) {
+    throw new Error("Notes need OPENAI_API_KEY.");
+  }
+  const usage: OpenAiUsage = {};
+  for await (const delta of streamGptSolText({
+    apiKey: openaiKey,
+    system: liveNotesSystem(input.noteInstruction, mode),
+    user: userPrompt,
+    maxTokens: mode === "seed" ? 5_000 : 4_000,
+    usage,
+  })) {
+    for (const ev of parser.push(delta)) yield ev;
   }
   for (const ev of parser.flush()) yield ev;
-
-  try {
-    const final = await stream.finalMessage();
-    recordAiUsage({
-      model,
-      inputTokens: final.usage?.input_tokens,
-      outputTokens: final.usage?.output_tokens,
-      feature: "live-notes",
-      userId: input.userId ?? null,
-    });
-  } catch {
-    /* usage telemetry only */
-  }
+  recordAiUsage({
+    model: LIVE_NOTES_MODEL,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    feature: mode === "seed" ? "live-notes-seed" : "live-notes",
+    userId: input.userId ?? null,
+  });
 
   const updated = parser.summaryText();
   yield {
