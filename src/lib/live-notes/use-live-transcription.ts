@@ -772,7 +772,19 @@ export function useLiveLectureTranscription(options: {
 
   const start = useCallback(
     async (source: LiveCaptureSource): Promise<boolean> => {
-      if (statusRef.current !== "idle" && statusRef.current !== "error") {
+      const liveAudio = streamRef.current
+        ?.getAudioTracks()
+        .some((track) => track.readyState === "live");
+      // Stop sharing pauses the session and drops the stream. Capture again
+      // must still open the screen/mic picker — idle/error-only used to
+      // return here and the browser prompt never appeared.
+      const restartingReleased =
+        statusRef.current === "paused" && !liveAudio;
+      if (
+        statusRef.current !== "idle" &&
+        statusRef.current !== "error" &&
+        !restartingReleased
+      ) {
         return false;
       }
       intentionalCloseRef.current = false;
@@ -794,7 +806,7 @@ export function useLiveLectureTranscription(options: {
         captureHasVideo = capture.hasVideo;
         captureSurface = capture.surface;
       } catch (e) {
-        setStatusBoth("idle");
+        setStatusBoth(restartingReleased ? "paused" : "idle");
         onErrorRef.current?.(
           e instanceof LectureCaptureError || (e instanceof Error && e.message)
             ? (e as Error).message
@@ -811,7 +823,9 @@ export function useLiveLectureTranscription(options: {
       setActiveSource(source);
 
       try {
-        // 2. Socket (uses prefetched token when available).
+        // 2. Socket (uses prefetched token when available). Drop the paused
+        // keepalive socket first so a second Capture doesn't leave two open.
+        closeSocket();
         const ws = await connectSocket();
         socketRef.current = ws;
 
@@ -822,29 +836,33 @@ export function useLiveLectureTranscription(options: {
         runningSinceRef.current = Date.now();
         ensureElapsedTimer();
         setElapsedMs(currentElapsedMs());
-        flushTimerRef.current = window.setInterval(() => {
-          const stale =
-            utteranceBufferRef.current.trim().length >= 80 &&
-            Date.now() - lastTranscriptAtRef.current > STALE_UTTERANCE_MS;
-          if (stale) {
-            commitUtteranceRef.current();
-          }
-          void flushSegments();
-        }, FLUSH_INTERVAL_MS) as unknown as number;
-        keepAliveTimerRef.current = window.setInterval(() => {
-          const s = socketRef.current;
-          if (
-            statusRef.current === "paused" &&
-            s &&
-            s.readyState === WebSocket.OPEN
-          ) {
-            try {
-              s.send(JSON.stringify({ type: "KeepAlive" }));
-            } catch {
-              /* ignore */
+        if (flushTimerRef.current == null) {
+          flushTimerRef.current = window.setInterval(() => {
+            const stale =
+              utteranceBufferRef.current.trim().length >= 80 &&
+              Date.now() - lastTranscriptAtRef.current > STALE_UTTERANCE_MS;
+            if (stale) {
+              commitUtteranceRef.current();
             }
-          }
-        }, KEEPALIVE_INTERVAL_MS) as unknown as number;
+            void flushSegments();
+          }, FLUSH_INTERVAL_MS) as unknown as number;
+        }
+        if (keepAliveTimerRef.current == null) {
+          keepAliveTimerRef.current = window.setInterval(() => {
+            const s = socketRef.current;
+            if (
+              statusRef.current === "paused" &&
+              s &&
+              s.readyState === WebSocket.OPEN
+            ) {
+              try {
+                s.send(JSON.stringify({ type: "KeepAlive" }));
+              } catch {
+                /* ignore */
+              }
+            }
+          }, KEEPALIVE_INTERVAL_MS) as unknown as number;
+        }
 
         setStatusBoth("recording");
         return true;
@@ -865,6 +883,7 @@ export function useLiveLectureTranscription(options: {
       setStatusBoth,
       prefetchToken,
       watchTrackEnded,
+      closeSocket,
       connectSocket,
       startAudioForSocket,
       currentElapsedMs,
