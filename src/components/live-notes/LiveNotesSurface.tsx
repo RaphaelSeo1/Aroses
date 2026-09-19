@@ -33,6 +33,7 @@ import {
   matchHeadingToSections,
   uniqueIncomingNoteLines,
   applySurgicalNoteRevision,
+  deleteExactNoteLines,
 } from "@/lib/live-notes/fold-note-markdown";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 import {
@@ -131,6 +132,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 type PumpItem =
   | { kind: "append"; sectionId: string; dividerBefore: boolean }
   | { kind: "revise"; sectionId: string }
+  | { kind: "delete"; sectionId: string }
   | { kind: "text"; text: string };
 
 export type LiveNotesInitialSession = {
@@ -586,6 +588,19 @@ export function LiveNotesSurface({
         writer.finishOp();
         revisedSectionId = sectionId;
       };
+      const applyBufferedDelete = (sectionId: string, body: string) => {
+        const live = writer
+          .listSynthesisSections(200)
+          .find((s) => s.sectionId === sectionId);
+        if (!live || live.studentEdited) return;
+        const next = deleteExactNoteLines(live.markdown, body);
+        if (!next.trim() || next.replace(/\s+$/, "") === live.markdown.replace(/\s+$/, "")) {
+          return;
+        }
+        writer.replaceSectionMarkdown(sectionId, next);
+        revisedSectionId = sectionId;
+        gotContent = true;
+      };
       const runPump = async () => {
         let opValid = false;
         let foldIntoId: string | null = null;
@@ -593,6 +608,14 @@ export function LiveNotesSurface({
         let classifyingAppend = false;
         let surgicalReviseId: string | null = null;
         let surgicalBuf = "";
+        let deleteId: string | null = null;
+        let deleteBuf = "";
+        const flushDelete = () => {
+          if (!deleteId) return;
+          applyBufferedDelete(deleteId, deleteBuf);
+          deleteId = null;
+          deleteBuf = "";
+        };
         while (true) {
           const item = queue.shift();
           if (!item) {
@@ -607,6 +630,7 @@ export function LiveNotesSurface({
               surgicalReviseId = null;
               surgicalBuf = "";
             }
+            flushDelete();
             // Defer beginAppend until the first text chunk — empty appends
             // (merge-only calls) must leave the document untouched.
             pendingAppend = {
@@ -625,6 +649,7 @@ export function LiveNotesSurface({
             foldBuf = "";
             pendingAppend = null;
             writer.finishOp();
+            flushDelete();
             // Buffer enough to classify a surgical correction versus an
             // additive enrichment. Both paths use the existing writer's
             // character-by-character rendering; corrections also use its
@@ -636,11 +661,34 @@ export function LiveNotesSurface({
             surgicalBuf = "";
             revisedSectionId = item.sectionId;
             opValid = Boolean(item.sectionId);
+          } else if (item.kind === "delete") {
+            classifyingAppend = false;
+            foldIntoId = null;
+            foldBuf = "";
+            pendingAppend = null;
+            if (surgicalReviseId) {
+              await applyBufferedRevision(surgicalReviseId, surgicalBuf);
+              surgicalReviseId = null;
+              surgicalBuf = "";
+            }
+            flushDelete();
+            writer.finishOp();
+            deleteId = item.sectionId;
+            deleteBuf = "";
+            opValid = Boolean(item.sectionId);
+            pushAiActivity("revise", "Removing a line the lecture corrected…", {
+              sectionId: item.sectionId,
+              sectionLabel: headingForSection(writer, item.sectionId),
+            });
           } else if (item.kind === "text" && !opValid) {
             // Orphan text with no active op — ignore (stale revise body).
           } else if (opValid && item.text) {
             if (surgicalReviseId) {
               surgicalBuf += item.text;
+              continue;
+            }
+            if (deleteId) {
+              deleteBuf += item.text;
               continue;
             }
             if (classifyingAppend) {
@@ -681,6 +729,7 @@ export function LiveNotesSurface({
           surgicalReviseId = null;
           surgicalBuf = "";
         }
+        flushDelete();
         if (classifyingAppend && foldBuf.trim()) {
           classifyingAppend = false;
           ensureAppendStarted();
@@ -825,6 +874,8 @@ export function LiveNotesSurface({
                 }
               );
               queue.push({ kind: "revise", sectionId });
+            } else if (parsed.op === "delete" && sectionId) {
+              queue.push({ kind: "delete", sectionId });
             }
           } else if (event === "text") {
             if (typeof parsed.delta === "string" && parsed.delta) {

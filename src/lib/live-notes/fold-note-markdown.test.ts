@@ -7,6 +7,7 @@ import {
   pickNoteFoldTarget,
   uniqueIncomingNoteLines,
   applySurgicalNoteRevision,
+  deleteExactNoteLines,
 } from "./fold-note-markdown";
 
 test("extractNoteHeading reads the first ATX heading", () => {
@@ -136,5 +137,17 @@ test("live enrichment preserves the section outline and nested structure", () =>
   assert.match(next.markdown, /^### Active transport/m);
   assert.match(next.markdown, /^  - ATP can power/m);
   assert.equal((next.markdown.match(/^## /gm) ?? []).length, 1);
+});
+
+test("deleteExactNoteLines removes a corrected fact and keeps the heading", () => {
+  const existing = [
+    "## Dose",
+    "- The dose is 3 mg.",
+    "- Take it with food.",
+  ].join("\n");
+  const next = deleteExactNoteLines(existing, "- The dose is 3 mg.");
+  assert.match(next, /^## Dose/m);
+  assert.doesNotMatch(next, /3 mg/);
+  assert.match(next, /with food/);
 });
 

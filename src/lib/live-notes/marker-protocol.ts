@@ -3,7 +3,8 @@
  * and the client (see `src/lib/ai/live-lecture-notes.ts` for the prompt):
  *
  *   @@thought <text>       zero or more, FIRST — short user-visible narration
- *   @@revise <sectionId>   zero or more — replacement body follows
+ *   @@revise <sectionId>   zero or more — new or corrected bullets
+ *   @@delete <sectionId>   zero or more — exact lines to remove
  *   @@append               exactly once — new-notes body follows
  *   @@summary              exactly once, LAST — rolling summary follows
  *                          (accumulated here, never forwarded)
@@ -16,7 +17,7 @@
 
 export type LiveNotesStreamEvent =
   | { type: "thought"; message: string }
-  | { type: "op"; op: "append" | "revise"; sectionId: string }
+  | { type: "op"; op: "append" | "revise" | "delete"; sectionId: string }
   | { type: "text"; delta: string }
   | { type: "summary"; summary: string };
 
@@ -33,14 +34,14 @@ export function createMarkerParser(
   allowedReviseIds: Set<string>,
   appendSectionId: string
 ): MarkerParser {
-  type Mode = "preamble" | "append" | "revise" | "summary" | "skip";
+  type Mode = "preamble" | "append" | "revise" | "delete" | "summary" | "skip";
   let mode: Mode = "preamble";
   let line = "";
   /** How many chars of the current partial line were already forwarded. */
   let forwarded = 0;
   const summaryParts: string[] = [];
 
-  const isBody = () => mode === "append" || mode === "revise";
+  const isBody = () => mode === "append" || mode === "revise" || mode === "delete";
 
   const completeLine = (out: LiveNotesStreamEvent[]) => {
     if (forwarded === 0 && line.startsWith("@@")) {
@@ -54,7 +55,15 @@ export function createMarkerParser(
           mode = "revise";
           out.push({ type: "op", op: "revise", sectionId: id });
         } else {
-          // Unknown / student-edited target — swallow its body entirely.
+          // Unknown target — swallow its body entirely.
+          mode = "skip";
+        }
+      } else if (trimmed.startsWith("@@delete")) {
+        const id = trimmed.slice("@@delete".length).trim();
+        if (id && allowedReviseIds.has(id)) {
+          mode = "delete";
+          out.push({ type: "op", op: "delete", sectionId: id });
+        } else {
           mode = "skip";
         }
       } else if (trimmed === "@@summary") {

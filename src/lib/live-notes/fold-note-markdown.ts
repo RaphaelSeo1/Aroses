@@ -222,6 +222,27 @@ export function applySurgicalNoteRevision(
   return { markdown, patched, extraMarkdown };
 }
 
+/** Remove body lines whose normalized text exactly matches the delete body. Headings stay. */
+export function deleteExactNoteLines(
+  existingMd: string,
+  deleteBody: string
+): string {
+  const targets = new Set(
+    deleteBody
+      .split("\n")
+      .map(normalizeLine)
+      .filter((n) => n.length >= 6)
+  );
+  if (targets.size === 0) return existingMd;
+  const kept = existingMd.split("\n").filter((line) => {
+    if (/^#{1,3}\s/.test(line)) return true;
+    const n = normalizeLine(line);
+    if (!n) return true;
+    return !targets.has(n);
+  });
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
 function normalizeLine(line: string): string {
   return line
     .replace(/^#{1,3}\s+/, "")
