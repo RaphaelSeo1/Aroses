@@ -7,11 +7,18 @@ import {
   parseNotesFocusBucketNoteId,
 } from "@/lib/notes/notes-focus-bucket";
 
+export type NotesHubKind = "custom" | "live" | "tutor" | "standalone";
+
 export type NotesFocusBucketMeta = {
   fileName: string;
   courseId: string | null;
   courseTitle: string | null;
   noteDeleted: boolean;
+  /** Custom notes-hub folder (`user_note_sections`), if any. */
+  sectionId?: string | null;
+  sectionTitle?: string | null;
+  /** How this note appears in the notes hub when it is not course-linked. */
+  hubKind?: NotesHubKind | null;
 };
 
 /** Load note + course titles for per-note Review buckets. */
@@ -33,6 +40,7 @@ export async function hydrateNotesFocusBucketMeta(
     title?: string | null;
     course_id?: string | null;
     deleted_at?: string | null;
+    section_id?: string | null;
     courses?:
       | { id: string; title: string | null }
       | { id: string; title: string | null }[]
@@ -43,11 +51,22 @@ export async function hydrateNotesFocusBucketMeta(
   let error: { message?: string } | null = null;
   const first = await supabase
     .from("user_notes")
-    .select("id, title, course_id, deleted_at, courses ( id, title )")
+    .select(
+      "id, title, course_id, deleted_at, section_id, courses ( id, title )"
+    )
     .eq("user_id", userId)
     .in("id", [...noteIds]);
   notes = (first.data as NoteRow[] | null) ?? null;
   error = first.error;
+  if (error && isMissingDbColumnError(error, "section_id")) {
+    const fallback = await supabase
+      .from("user_notes")
+      .select("id, title, course_id, deleted_at, courses ( id, title )")
+      .eq("user_id", userId)
+      .in("id", [...noteIds]);
+    notes = (fallback.data as NoteRow[] | null) ?? null;
+    error = fallback.error;
+  }
   if (error && isMissingDbColumnError(error, "deleted_at", "course_id")) {
     const fallback = await supabase
       .from("user_notes")
@@ -95,8 +114,40 @@ export async function hydrateNotesFocusBucketMeta(
     }
   }
 
+  const sectionTitleById = new Map<string, string>();
+  const sectionIds = [
+    ...new Set(
+      (notes ?? [])
+        .map((row) =>
+          typeof row.section_id === "string" && row.section_id.trim()
+            ? row.section_id
+            : null
+        )
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  if (sectionIds.length > 0) {
+    const { data: sectionRows, error: sectionErr } = await supabase
+      .from("user_note_sections")
+      .select("id, title")
+      .eq("user_id", userId)
+      .in("id", sectionIds);
+    if (sectionErr) {
+      console.error("[hydrateNotesFocusBucketMeta sections]", sectionErr);
+    }
+    for (const row of sectionRows ?? []) {
+      if (typeof row.id !== "string" || !row.id) continue;
+      const title =
+        typeof row.title === "string" && row.title.trim()
+          ? row.title.trim()
+          : "New section";
+      sectionTitleById.set(row.id, title);
+    }
+  }
+
   const sessionCourseByNoteId = new Map<string, string>();
   const sessionTitleByNoteId = new Map<string, string>();
+  const liveNoteIds = new Set<string>();
   if (noteIds.size > 0) {
     const sessionQuery = await supabase
       .from("live_lecture_sessions")
@@ -111,6 +162,7 @@ export async function hydrateNotesFocusBucketMeta(
         const noteId =
           typeof row.user_note_id === "string" ? row.user_note_id : null;
         if (!noteId) continue;
+        liveNoteIds.add(noteId);
         if (typeof row.course_id === "string" && row.course_id) {
           sessionCourseByNoteId.set(noteId, row.course_id);
           if (!courseTitleById.has(row.course_id)) {
@@ -162,6 +214,19 @@ export async function hydrateNotesFocusBucketMeta(
       sessionTitle ||
       noteTitle ||
       "Notes";
+    const sectionId =
+      typeof raw.section_id === "string" && raw.section_id.trim()
+        ? raw.section_id
+        : null;
+    const sectionTitle = sectionId
+      ? (sectionTitleById.get(sectionId) ?? "New section")
+      : null;
+    let hubKind: NotesHubKind | null = null;
+    if (!courseId) {
+      if (sectionId) hubKind = "custom";
+      else if (liveNoteIds.has(id)) hubKind = "live";
+      else hubKind = "standalone";
+    }
     out.set(bucketId, {
       fileName: title,
       courseId,
@@ -170,6 +235,9 @@ export async function hydrateNotesFocusBucketMeta(
         courseRow?.title ??
         null,
       noteDeleted: Boolean((raw as { deleted_at?: unknown }).deleted_at),
+      sectionId,
+      sectionTitle,
+      hubKind,
     });
   }
 

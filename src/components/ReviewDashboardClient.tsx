@@ -30,7 +30,7 @@ import { REVIEW_DUE_COUNTS_CLIENT_TIMEOUT_MS } from "@/lib/widget-json-fetch";
  *   │  ┌─────────────────────────┐                        │
  *   │  │  Review All  (primary)  │                        │
  *   │  └─────────────────────────┘                        │
- *   │  Or choose specific courses                         │
+ *   │  Or choose specific courses and note sections       │
  *   │   [✓] Biology 101    Mod 8 / Focus 3 / Total 11     │
  *   │   [ ] Anatomy        Mod 4 / Focus 12 / Total 16    │
  *   │   ...                                                │

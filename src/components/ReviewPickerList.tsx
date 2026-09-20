@@ -32,6 +32,9 @@ export function ReviewPickerList({
     focusQuestions: t.review.focusQuestions,
     courseFallback: t.review.untitledCourse,
     courseContent: t.review.courseContent,
+    myNotes: t.review.myNotesSection,
+    liveLectures: t.review.liveLecturesSection,
+    tutorSessions: t.review.tutorSessionsSection,
   };
 
   return (
@@ -103,6 +106,13 @@ export function ReviewPickerList({
                   </p>
                   {hasChildren ? (
                     <p className="truncate text-xs text-zinc-500 dark:text-zinc-500">
+                      {group.hubKind
+                        ? t.review.noteSectionHint
+                        : ""}
+                      {group.hubKind &&
+                      group.children.some((c) => c.kind === "note")
+                        ? " · "
+                        : ""}
                       {group.children
                         .filter((c) => c.kind === "note")
                         .map((c) => c.fileName)

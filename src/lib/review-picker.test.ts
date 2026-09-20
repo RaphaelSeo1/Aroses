@@ -121,28 +121,163 @@ test("folds notes-only buckets into an existing course material parent", () => {
   assert.equal(groups[0]!.children.some((c) => c.id === `note:${NOTE_A}`), true);
 });
 
-test("standalone note without a course is a single row labeled with the note title", () => {
+test("standalone notes without a course group under My notes", () => {
   const groups = groupReviewPickerRows([
     {
       materialId: `note:${NOTE_A}`,
       fileName: "Chem recap",
       courseId: null,
       courseTitle: null,
+      hubKind: "standalone",
       module: 0,
       personal: 3,
       total: 3,
     },
   ]);
   assert.equal(groups.length, 1);
-  assert.equal(groups[0]!.children.length, 0);
-  assert.equal(groups[0]!.id, `note:${NOTE_A}`);
+  assert.equal(groups[0]!.hubKind, "standalone");
+  assert.equal(groups[0]!.children.length, 1);
+  assert.equal(groups[0]!.children[0]!.fileName, "Chem recap");
+  assert.equal(
+    pickerParentLabel(groups[0]!, {
+      focusQuestions: "Focus questions",
+      courseFallback: "Course",
+      myNotes: "My notes",
+    }),
+    "My notes"
+  );
+});
+
+test("notes from any hub folder group under that folder's current title", () => {
+  const sectionId = "55555555-5555-4555-8555-555555555555";
+  const groups = groupReviewPickerRows([
+    {
+      materialId: `note:${NOTE_A}`,
+      fileName: "Lecture 10",
+      courseId: null,
+      courseTitle: null,
+      sectionId,
+      sectionTitle: "Any folder name",
+      hubKind: "custom",
+      module: 0,
+      personal: 4,
+      total: 4,
+    },
+    {
+      materialId: `note:${NOTE_B}`,
+      fileName: "Lecture 11",
+      courseId: null,
+      courseTitle: null,
+      sectionId,
+      sectionTitle: "Any folder name",
+      hubKind: "custom",
+      module: 0,
+      personal: 2,
+      total: 2,
+    },
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]!.hubKind, "custom");
+  assert.equal(groups[0]!.id, `section:${sectionId}`);
   assert.equal(
     pickerParentLabel(groups[0]!, {
       focusQuestions: "Focus questions",
       courseFallback: "Course",
     }),
-    "Chem recap"
+    "Any folder name"
   );
+  assert.deepEqual(
+    groups[0]!.children.map((c) => c.fileName).sort(),
+    ["Lecture 10", "Lecture 11"]
+  );
+});
+
+test("a later-created hub folder is its own parent using its own title", () => {
+  const first = "66666666-6666-4666-8666-666666666666";
+  const second = "77777777-7777-4777-8777-777777777777";
+  const groups = groupReviewPickerRows([
+    {
+      materialId: `note:${NOTE_A}`,
+      fileName: "Note A",
+      courseId: null,
+      courseTitle: null,
+      sectionId: first,
+      sectionTitle: "Folder one",
+      hubKind: "custom",
+      module: 0,
+      personal: 1,
+      total: 1,
+    },
+    {
+      materialId: `note:${NOTE_B}`,
+      fileName: "Note B",
+      courseId: null,
+      courseTitle: null,
+      sectionId: second,
+      sectionTitle: "Folder two",
+      hubKind: "custom",
+      module: 0,
+      personal: 2,
+      total: 2,
+    },
+  ]);
+  assert.equal(groups.length, 2);
+  const titles = groups
+    .map((g) =>
+      pickerParentLabel(g, {
+        focusQuestions: "Focus questions",
+        courseFallback: "Course",
+      })
+    )
+    .sort();
+  assert.deepEqual(titles, ["Folder one", "Folder two"]);
+});
+
+test("course-linked notes stay under the course even when they also have a hub folder", () => {
+  const groups = groupReviewPickerRows([
+    {
+      materialId: `note:${NOTE_A}`,
+      fileName: "Lecture 2",
+      courseId: COURSE,
+      courseTitle: "Biology 101",
+      sectionId: "55555555-5555-4555-8555-555555555555",
+      sectionTitle: "Any folder name",
+      hubKind: "custom",
+      module: 0,
+      personal: 3,
+      total: 3,
+    },
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]!.courseTitle, "Biology 101");
+  assert.equal(groups[0]!.hubKind == null || groups[0]!.hubKind === null, true);
+  assert.equal(groups[0]!.children[0]!.fileName, "Lecture 2");
+});
+
+test("live lecture notes without a course group under Live lectures", () => {
+  const groups = groupReviewPickerRows([
+    {
+      materialId: `note:${NOTE_A}`,
+      fileName: "Office hours",
+      courseId: null,
+      courseTitle: null,
+      hubKind: "live",
+      module: 0,
+      personal: 2,
+      total: 2,
+    },
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]!.hubKind, "live");
+  assert.equal(
+    pickerParentLabel(groups[0]!, {
+      focusQuestions: "Focus questions",
+      courseFallback: "Course",
+      liveLectures: "Live lectures",
+    }),
+    "Live lectures"
+  );
+  assert.equal(groups[0]!.children[0]!.fileName, "Office hours");
 });
 
 test("legacy notes bucket without a note id is Focus questions", () => {
@@ -241,6 +376,43 @@ test("selecting one note child passes that note bucket and noteIds", () => {
   );
   assert.deepEqual(params.materialIds, [`note:${NOTE_A}`]);
   assert.deepEqual(params.noteIds, [NOTE_A]);
+});
+
+test("selecting a hub folder sends every note in that folder", () => {
+  const sectionId = "55555555-5555-4555-8555-555555555555";
+  const groups = groupReviewPickerRows([
+    {
+      materialId: `note:${NOTE_A}`,
+      fileName: "Note A",
+      courseId: null,
+      courseTitle: null,
+      sectionId,
+      sectionTitle: "Folder one",
+      hubKind: "custom",
+      module: 0,
+      personal: 2,
+      total: 2,
+    },
+    {
+      materialId: `note:${NOTE_B}`,
+      fileName: "Note B",
+      courseId: null,
+      courseTitle: null,
+      sectionId,
+      sectionTitle: "Folder one",
+      hubKind: "custom",
+      module: 0,
+      personal: 1,
+      total: 1,
+    },
+  ]);
+  const selected = new Set(allPickerLeafIds(groups));
+  const params = pickerSelectionToSessionParams(groups, selected);
+  assert.deepEqual(
+    new Set(params.materialIds),
+    new Set([`note:${NOTE_A}`, `note:${NOTE_B}`])
+  );
+  assert.equal("noteIds" in params, false);
 });
 
 test("module child only sends empty noteIds so sibling notes are excluded", () => {

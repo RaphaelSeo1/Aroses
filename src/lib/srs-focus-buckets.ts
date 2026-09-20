@@ -32,7 +32,13 @@ export function ensureNotesBucket(
   byMaterial: Map<string, SrsDueByMaterial>,
   bucketId: string,
   label: string | null,
-  meta?: { courseId: string | null; courseTitle: string | null }
+  meta?: {
+    courseId: string | null;
+    courseTitle: string | null;
+    sectionId?: string | null;
+    sectionTitle?: string | null;
+    hubKind?: NotesFocusBucketMeta["hubKind"];
+  }
 ): SrsDueByMaterial {
   let bucket = byMaterial.get(bucketId);
   if (!bucket) {
@@ -44,6 +50,9 @@ export function ensureNotesBucket(
       module: 0,
       personal: 0,
       total: 0,
+      sectionId: meta?.sectionId ?? null,
+      sectionTitle: meta?.sectionTitle ?? null,
+      hubKind: meta?.hubKind ?? null,
     };
     byMaterial.set(bucketId, bucket);
   } else {
@@ -56,6 +65,16 @@ export function ensureNotesBucket(
     }
     if (meta?.courseId && !bucket.courseId) {
       bucket.courseId = meta.courseId;
+    }
+    if (meta?.sectionId && !bucket.sectionId) {
+      bucket.sectionId = meta.sectionId;
+      bucket.sectionTitle = meta.sectionTitle ?? bucket.sectionTitle;
+    }
+    if (meta?.sectionTitle && !bucket.sectionTitle) {
+      bucket.sectionTitle = meta.sectionTitle;
+    }
+    if (meta?.hubKind && !bucket.hubKind) {
+      bucket.hubKind = meta.hubKind;
     }
   }
   return bucket;
@@ -93,6 +112,9 @@ export function addPersonalFocusCount(
     const bucket = ensureNotesBucket(byMaterial, noteBucketId, label, {
       courseId: meta?.courseId ?? null,
       courseTitle: meta?.courseTitle ?? null,
+      sectionId: meta?.sectionId ?? null,
+      sectionTitle: meta?.sectionTitle ?? null,
+      hubKind: meta?.hubKind ?? null,
     });
     bucket.personal += 1;
     return true;
@@ -110,6 +132,9 @@ export function addPersonalFocusCount(
   const bucket = ensureNotesBucket(byMaterial, noteBucketId, label, {
     courseId: meta?.courseId ?? null,
     courseTitle: meta?.courseTitle ?? null,
+    sectionId: meta?.sectionId ?? null,
+    sectionTitle: meta?.sectionTitle ?? null,
+    hubKind: meta?.hubKind ?? null,
   });
   bucket.personal += 1;
   return true;

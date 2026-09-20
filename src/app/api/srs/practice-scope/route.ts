@@ -264,6 +264,9 @@ export async function GET() {
       personalQuestions: m.personal,
       total: m.total,
       notes: m.notes,
+      sectionId: m.sectionId,
+      sectionTitle: m.sectionTitle,
+      hubKind: m.hubKind,
     }));
 
   const totals = out.reduce(

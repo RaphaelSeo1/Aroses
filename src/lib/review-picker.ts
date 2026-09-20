@@ -1,3 +1,4 @@
+import type { NotesHubKind } from "./notes/hydrate-notes-focus-buckets.ts";
 import {
   isGenericFocusTitle,
   isNotesFocusBucketId,
@@ -5,6 +6,14 @@ import {
   parseNotesFocusBucketNoteId,
 } from "./notes/notes-focus-bucket.ts";
 import type { SrsDueByMaterial, SrsDueNoteChild } from "./srs-due.ts";
+
+export const HUB_STANDALONE_GROUP_ID = "hub:standalone";
+export const HUB_LIVE_GROUP_ID = "hub:live";
+export const HUB_TUTOR_GROUP_ID = "hub:tutor";
+
+export function notesSectionGroupId(sectionId: string): string {
+  return `section:${normId(sectionId)}`;
+}
 
 export type ReviewPickerSource = {
   materialId: string;
@@ -15,6 +24,9 @@ export type ReviewPickerSource = {
   personal: number;
   total: number;
   notes?: SrsDueNoteChild[];
+  sectionId?: string | null;
+  sectionTitle?: string | null;
+  hubKind?: NotesHubKind | null;
 };
 
 export type ReviewPickerChild = {
@@ -29,7 +41,7 @@ export type ReviewPickerChild = {
 };
 
 export type ReviewPickerGroup = {
-  /** `course:{id}`, `material:{id}`, or a notes-focus bucket id. */
+  /** `course:{id}`, `section:{id}`, `hub:*`, `material:{id}`, or a notes-focus bucket id. */
   id: string;
   courseId: string | null;
   courseTitle: string | null;
@@ -39,6 +51,8 @@ export type ReviewPickerGroup = {
   total: number;
   children: ReviewPickerChild[];
   leafIds: string[];
+  sectionId?: string | null;
+  hubKind?: NotesHubKind | null;
 };
 
 function normId(id: string | null | undefined): string {
@@ -63,7 +77,28 @@ type Acc = {
   fileName: string;
   materials: ReviewPickerSource[];
   notes: Map<string, ReviewPickerChild>;
+  sectionId?: string | null;
+  hubKind?: NotesHubKind | null;
 };
+
+function notesHubGroupId(item: ReviewPickerSource): string | null {
+  if (!isNotesFocusBucketId(item.materialId)) return null;
+  if (item.courseId) return null;
+  if (!parseNotesFocusBucketNoteId(item.materialId)) return null;
+  const sectionId = item.sectionId?.trim();
+  if (sectionId) return notesSectionGroupId(sectionId);
+  if (item.hubKind === "live") return HUB_LIVE_GROUP_ID;
+  if (item.hubKind === "tutor") return HUB_TUTOR_GROUP_ID;
+  return HUB_STANDALONE_GROUP_ID;
+}
+
+function notesHubGroupTitle(item: ReviewPickerSource): string {
+  const sectionTitle = (item.sectionTitle ?? "").trim();
+  if (sectionTitle) return sectionTitle;
+  if (item.hubKind === "live") return "Live lectures";
+  if (item.hubKind === "tutor") return "Tutor sessions";
+  return "My notes";
+}
 
 function upsertNote(acc: Acc, child: ReviewPickerChild): void {
   const key = child.id;
@@ -93,6 +128,8 @@ function ensureAcc(
     courseId: string | null;
     courseTitle: string | null;
     fileName: string;
+    sectionId?: string | null;
+    hubKind?: NotesHubKind | null;
   }
 ): Acc {
   let acc = map.get(key);
@@ -104,6 +141,8 @@ function ensureAcc(
       fileName: seed.fileName,
       materials: [],
       notes: new Map(),
+      sectionId: seed.sectionId ?? null,
+      hubKind: seed.hubKind ?? null,
     };
     map.set(key, acc);
     return acc;
@@ -111,6 +150,11 @@ function ensureAcc(
   const title = meaningfulCourseTitle(seed.courseTitle);
   if (!acc.courseTitle && title) acc.courseTitle = title;
   if (!acc.courseId && seed.courseId) acc.courseId = seed.courseId;
+  if (!acc.sectionId && seed.sectionId) acc.sectionId = seed.sectionId;
+  if (!acc.hubKind && seed.hubKind) acc.hubKind = seed.hubKind;
+  if (seed.fileName && isGenericFocusTitle(acc.fileName) && !isGenericFocusTitle(seed.fileName)) {
+    acc.fileName = seed.fileName;
+  }
   return acc;
 }
 
@@ -169,6 +213,8 @@ function finalize(acc: Acc): ReviewPickerGroup {
     total: module + personal,
     children,
     leafIds,
+    sectionId: acc.sectionId ?? null,
+    hubKind: acc.hubKind ?? null,
   };
 }
 
@@ -194,17 +240,35 @@ export function groupReviewPickerRows(
         });
         upsertNote(acc, noteChildFromSource(item, courseId));
       } else {
-        standalone.push({
-          id: item.materialId,
-          courseId: null,
-          courseTitle: null,
-          fileName: item.fileName || "Focus questions",
-          module: 0,
-          personal: item.personal,
-          total: item.personal,
-          children: [],
-          leafIds: [item.materialId],
-        });
+        const hubKey = notesHubGroupId(item);
+        if (hubKey) {
+          const hubKind: NotesHubKind =
+            item.sectionId?.trim()
+              ? "custom"
+              : item.hubKind === "live" || item.hubKind === "tutor"
+                ? item.hubKind
+                : "standalone";
+          const acc = ensureAcc(byKey, hubKey, {
+            courseId: null,
+            courseTitle: null,
+            fileName: notesHubGroupTitle(item),
+            sectionId: item.sectionId ?? null,
+            hubKind,
+          });
+          upsertNote(acc, noteChildFromSource(item, null));
+        } else {
+          standalone.push({
+            id: item.materialId,
+            courseId: null,
+            courseTitle: null,
+            fileName: item.fileName || "Focus questions",
+            module: 0,
+            personal: item.personal,
+            total: item.personal,
+            children: [],
+            leafIds: [item.materialId],
+          });
+        }
       }
       continue;
     }
@@ -238,8 +302,27 @@ export function allPickerLeafIds(groups: ReviewPickerGroup[]): string[] {
 
 export function pickerParentLabel(
   group: ReviewPickerGroup,
-  fallbacks: { focusQuestions: string; courseFallback: string }
+  fallbacks: {
+    focusQuestions: string;
+    courseFallback: string;
+    myNotes?: string;
+    liveLectures?: string;
+    tutorSessions?: string;
+  }
 ): string {
+  if (group.hubKind === "live") {
+    return fallbacks.liveLectures || group.fileName || "Live lectures";
+  }
+  if (group.hubKind === "tutor") {
+    return fallbacks.tutorSessions || group.fileName || "Tutor sessions";
+  }
+  if (group.hubKind === "standalone") {
+    return fallbacks.myNotes || group.fileName || "My notes";
+  }
+  if (group.hubKind === "custom") {
+    const sectionName = (group.fileName || "").trim();
+    if (sectionName) return sectionName;
+  }
   if (group.courseTitle) return group.courseTitle;
   if (group.courseId) return fallbacks.courseFallback;
   const name = (group.fileName || "").trim();
@@ -400,6 +483,9 @@ export function practiceScopeToPickerSource(row: {
   personalQuestions: number;
   total: number;
   notes?: SrsDueNoteChild[];
+  sectionId?: string | null;
+  sectionTitle?: string | null;
+  hubKind?: NotesHubKind | null;
 }): ReviewPickerSource {
   return {
     materialId: row.materialId,
@@ -410,6 +496,9 @@ export function practiceScopeToPickerSource(row: {
     personal: row.personalQuestions,
     total: row.total,
     notes: row.notes,
+    sectionId: row.sectionId,
+    sectionTitle: row.sectionTitle,
+    hubKind: row.hubKind,
   };
 }
 

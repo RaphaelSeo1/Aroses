@@ -98,6 +98,41 @@ test("notes-origin cards with a course stay on the note, not the PDF", () => {
   );
 });
 
+test("notes-only cards keep the hub folder they belong to", () => {
+  const byMaterial = new Map<string, SrsDueByMaterial>();
+  const sectionId = "55555555-5555-4555-8555-555555555555";
+  const notesMeta = new Map<string, NotesFocusBucketMeta>([
+    [
+      notesFocusBucketId(NOTE_A),
+      {
+        fileName: "Chem recap",
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "Any folder name",
+        hubKind: "custom",
+      },
+    ],
+  ]);
+  addPersonalFocusCount(
+    byMaterial,
+    { materialId: null, sourceNoteId: NOTE_A, sourceLabel: "Chem recap" },
+    notesMeta
+  );
+  finalizeFocusBuckets(byMaterial);
+  const bucket = byMaterial.get(notesFocusBucketId(NOTE_A))!;
+  assert.equal(bucket.sectionId, sectionId);
+  assert.equal(bucket.sectionTitle, "Any folder name");
+  assert.equal(bucket.hubKind, "custom");
+  const groups = groupReviewPickerRows([...byMaterial.values()]);
+  assert.equal(groups[0]!.hubKind, "custom");
+  assert.equal(
+    pickerParentLabel(groups[0]!, fallbacks),
+    "Any folder name"
+  );
+});
+
 test("notes-only cards stay in per-note buckets with course metadata", () => {
   const byMaterial = new Map<string, SrsDueByMaterial>();
   const notesMeta = new Map<string, NotesFocusBucketMeta>([

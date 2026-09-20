@@ -26,6 +26,9 @@ type ScopeMaterial = {
   personalQuestions: number;
   total: number;
   notes?: SrsDueNoteChild[];
+  sectionId?: string | null;
+  sectionTitle?: string | null;
+  hubKind?: "custom" | "live" | "tutor" | "standalone" | null;
 };
 
 type ScopeResponse = {
