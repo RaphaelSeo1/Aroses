@@ -36,12 +36,12 @@ import type {
  *   2. Insert empty session row (`active`, empty transcript).
  *   3. For each uploaded file:
  *        - Upload to `tutor-session-uploads/{userId}/{sessionId}/{name}`
- *        - PDF: extract text with pdf-parse, summarize via Haiku.
+ *        - PDF: extract text with pdf-parse, summarize via tutor chat model.
  *        - Image: base64 → Claude vision summary.
  *        - Insert `tutor_session_uploads` row.
  *   4. Concatenate per-file summaries → `reference_summary` on the
  *      session row.
- *   5. Generate a short session `title` via Haiku.
+ *   5. Generate a short session `title` via tutor chat model.
  *   6. Return the session record (with uploads) to the client.
  *
  * The whole pipeline runs in-line — typically 1-5s depending on
@@ -300,7 +300,7 @@ export async function POST(request: Request) {
   //    blob. Cap at ~6k chars to keep system prompts reasonable.
   const referenceSummary = uploadSummaries.join("\n\n").slice(0, 6000);
 
-  // 4. Generate the canonical title (cheap Haiku call). If the topic
+  // 4. Generate the canonical title. If the topic
   //    is empty and there's nothing to summarize, the helper returns
   //    a sensible fallback.
   const title = await generateSessionTitle({

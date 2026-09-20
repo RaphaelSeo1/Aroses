@@ -12,8 +12,7 @@ import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
  *
  * Generates the short spoken greeting the AI tutor plays at the start of
  * every Mentored Learning session. The endpoint is intentionally
- * lightweight and uses the fast Haiku model so the audio can start
- * within ~1-2s of the page loading.
+ * lightweight so the audio can start within ~1-2s of the page loading.
  *
  *   Body shape:
  *     {

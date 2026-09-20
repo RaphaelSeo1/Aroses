@@ -25,8 +25,8 @@ import type {
  *     BEFORE we start streaming so the row is durable even if the
  *     stream gets cut.
  *   - Rose's full reply is appended AFTER the stream completes.
- *   - Every 6 turns we refresh `discussion_summary` (cheap Haiku
- *     call) so the next prompt doesn't carry the whole history.
+ *   - Every 6 turns we refresh `discussion_summary` so the next
+ *     prompt doesn't carry the whole history.
  */
 
 const UUID_RE =

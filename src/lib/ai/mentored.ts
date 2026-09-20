@@ -1105,8 +1105,7 @@ CRITICAL — match the SCENARIO exactly. The phrasing rule is non-negotiable:
 
 /**
  * Generates the spoken greeting the AI tutor plays the moment the
- * student opens Mentored Learning. Uses the fast Haiku model so it's
- * ready within ~1s of session load.
+ * student opens Mentored Learning.
  */
 export async function generateSessionGreeting(
   input: SessionGreetingInput
@@ -1323,8 +1322,8 @@ export type PersonalizationInput = {
  * should treat as "no personalization yet" and fall back to the
  * quiz-derived knowledge level).
  *
- * Uses the fast Haiku model — extraction needs to run in ~1s on
- * first turn so it doesn't add latency to Rose's first reply.
+ * Extraction runs on first turn so it doesn't add latency to Rose's
+ * first reply.
  */
 export async function extractPersonalization(
   input: PersonalizationInput

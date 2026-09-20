@@ -494,7 +494,7 @@ export async function generateSessionTitle(input: {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Running discussion-summary refresh (cheap Haiku call)
+// 5. Running discussion-summary refresh
 // ---------------------------------------------------------------------------
 
 export async function refreshDiscussionSummary(input: {
