@@ -232,7 +232,6 @@ export function LiveNotesChat({
   noteInstruction,
   notesRef,
   enqueueWriterJob,
-  onReconcileSources,
   onActivity,
   active = true,
   voiceCapped = false,
@@ -244,9 +243,6 @@ export function LiveNotesChat({
   noteInstruction: string;
   notesRef: RefObject<NotesPanelHandle | null>;
   enqueueWriterJob: (job: () => Promise<void>) => void;
-  onReconcileSources: (
-    attachedFiles?: Array<{ name: string; text: string }>
-  ) => Promise<boolean>;
   onActivity: (
     kind: "thought" | "status" | "error",
     message: string,
@@ -869,16 +865,10 @@ export function LiveNotesChat({
       if (!lease.isCurrent()) return null;
       let spoken = visibleSource().trim();
 
-      let reconciledAttachment = false;
-      if (pdf && looksLikeNoteEditRequest(message)) {
-        onActivity(
-          "status",
-          "Rebuilding the notes with the newly attached source…"
-        );
-        reconciledAttachment = await onReconcileSources();
-      }
-
-      if (noteOps.length > 0 && !reconciledAttachment) {
+      // Attached files are stored as durable sources. The whole-document
+      // rebuild runs at Stop recording / Finish; mid-session chat still
+      // applies surgical note ops only.
+      if (noteOps.length > 0) {
         onActivity(
           "status",
           noteOpCount === 1
@@ -928,7 +918,6 @@ export function LiveNotesChat({
       confirmQueued,
       notesRef,
       onActivity,
-      onReconcileSources,
       pendingRef,
       queuedRef,
       recentTranscript,

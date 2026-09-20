@@ -1027,8 +1027,10 @@ export function LiveNotesSurface({
 
   const startDeckSeed = useCallback(() => {
     setDeckSeedRequested(true);
-    void reconcileAllSources();
-  }, [reconcileAllSources]);
+    // Progressive slide draft in page batches. The whole-document rebuild
+    // runs later at Stop recording / Finish once every source is available.
+    void maybeSynthesize(false, { seedFromDeck: true });
+  }, [maybeSynthesize]);
 
   const handleSlidesChange = useCallback(
     (next: { fileName: string | null; pageCount: number }) => {
@@ -1062,16 +1064,12 @@ export function LiveNotesSurface({
     if (initialDeckSeedRef.current) return;
     if ((session.slidesPageCount ?? 0) <= 0) return;
     initialDeckSeedRef.current = true;
-    const seededThrough = session.slidesSeededThroughPage ?? 0;
-    if (
-      seededThrough > 0 &&
-      seededThrough < (session.slidesPageCount ?? 0)
-    ) {
+    if ((session.slidesSeededThroughPage ?? 0) > 0) {
       setDeckSeedRequested(true);
-      void reconcileAllSources();
+      void maybeSynthesize(false, { seedFromDeck: true });
     }
   }, [
-    reconcileAllSources,
+    maybeSynthesize,
     session.slidesPageCount,
     session.slidesSeededThroughPage,
   ]);
@@ -1333,17 +1331,7 @@ export function LiveNotesSurface({
     await pause();
     // Ending tracks dismisses Chrome's "Sharing … to this tab" bar as well.
     releaseCapture();
-    await flushNow();
-    await maybeSynthesize(true);
-    await reconcileAllSources();
-    await notesRef.current?.flushSave();
-  }, [
-    pause,
-    releaseCapture,
-    flushNow,
-    maybeSynthesize,
-    reconcileAllSources,
-  ]);
+  }, [pause, releaseCapture]);
 
   const sourceOptions: Array<{ id: LiveCaptureSource; label: string }> = [
     { id: "tab", label: "Tab" },
@@ -2180,7 +2168,6 @@ export function LiveNotesSurface({
                 noteInstruction={noteInstruction}
                 notesRef={notesRef}
                 enqueueWriterJob={enqueueWriterJob}
-                onReconcileSources={reconcileAllSources}
                 onActivity={(kind, message, loc) =>
                   pushAiActivity(kind, message, loc)
                 }
