@@ -262,6 +262,9 @@ export function LiveNotesSurface({
     readWriteOnlySkip(session.id);
   const [started, setStarted] = useState(returningSession);
   const [aiWriting, setAiWriting] = useState(false);
+  const [captureFinalizeStatus, setCaptureFinalizeStatus] = useState<
+    "idle" | "running" | "done"
+  >("idle");
   const [aiLogOpen, setAiLogOpen] = useState(false);
   const [aiActivity, setAiActivity] = useState<AiActivityEntry[]>([]);
   const [previewCollapsed, setPreviewCollapsed] = useState(false);
@@ -354,6 +357,7 @@ export function LiveNotesSurface({
   const synthInFlightRef = useRef(false);
   const reconcileInFlightRef = useRef(false);
   const reconcilePromiseRef = useRef<Promise<boolean> | null>(null);
+  const captureFinalizeLockRef = useRef<Promise<void> | null>(null);
   const blockCountRef = useRef(0);
   const seedWriterRetryRef = useRef(0);
   const pendingSeedRef = useRef(false);
@@ -1106,6 +1110,7 @@ export function LiveNotesSurface({
     transcriptSaveStatus,
     transcriptLastSavedAt,
     transcriptPendingCount,
+    captureEndedCount,
   } = useLiveLectureTranscription({
     sessionId,
     initialNextSeq: session.lastSegmentSeq + 1,
@@ -1326,12 +1331,64 @@ export function LiveNotesSurface({
     prefetchToken,
   ]);
 
+  const finalizeStoppedCapture = useCallback(
+    async (alreadyPaused = false) => {
+      if (finishing) return;
+      if (captureFinalizeLockRef.current) {
+        await captureFinalizeLockRef.current;
+        return;
+      }
+      const task = (async () => {
+        setCaptureFinalizeStatus("running");
+        setError(null);
+        try {
+          if (!alreadyPaused) await pause();
+          // Ending tracks dismisses Chrome's "Sharing … to this tab" bar.
+          releaseCapture();
+          // Reconciliation reads the persisted sources, so the final transcript
+          // batch must reach the server before the canonical rebuild starts.
+          await flushNow();
+          const rebuilt = await reconcileAllSources();
+          if (!rebuilt) {
+            throw new Error("The source-grounded rebuild did not complete.");
+          }
+          const saved = await notesRef.current?.flushSave();
+          if (saved !== true) {
+            throw new Error("The rebuilt notes could not be saved.");
+          }
+          await fetch(`/api/live-notes/${sessionId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              status: "paused",
+              durationSeconds: Math.round(elapsedMsRef.current / 1000),
+            }),
+          });
+          setCaptureFinalizeStatus("done");
+        } catch (cause) {
+          captureFinalizeLockRef.current = null;
+          setCaptureFinalizeStatus("idle");
+          setError(
+            cause instanceof Error
+              ? `Capture stopped, but the final notes rebuild failed: ${cause.message}`
+              : "Capture stopped, but the final notes rebuild failed. Try Stop recording again."
+          );
+        }
+      })();
+      captureFinalizeLockRef.current = task;
+      await task;
+    },
+    [finishing, pause, releaseCapture, flushNow, reconcileAllSources, sessionId]
+  );
+
   const handleStopSharing = useCallback(async () => {
-    setError(null);
-    await pause();
-    // Ending tracks dismisses Chrome's "Sharing … to this tab" bar as well.
-    releaseCapture();
-  }, [pause, releaseCapture]);
+    await finalizeStoppedCapture(false);
+  }, [finalizeStoppedCapture]);
+
+  useEffect(() => {
+    if (captureEndedCount === 0) return;
+    void finalizeStoppedCapture(true);
+  }, [captureEndedCount, finalizeStoppedCapture]);
 
   const sourceOptions: Array<{ id: LiveCaptureSource; label: string }> = [
     { id: "tab", label: "Tab" },
@@ -1361,7 +1418,9 @@ export function LiveNotesSurface({
         await pause();
       }
       await flushNow();
-      await reconcileAllSources();
+      if (captureFinalizeStatus !== "done") {
+        await reconcileAllSources();
+      }
       const saved = await notesRef.current?.flushSave();
       if (saved !== true) {
         throw new Error("Could not save the latest note edits.");
@@ -1386,6 +1445,7 @@ export function LiveNotesSurface({
     pause,
     flushNow,
     reconcileAllSources,
+    captureFinalizeStatus,
     sessionId,
     status,
   ]);
@@ -1553,6 +1613,15 @@ export function LiveNotesSurface({
     !isLive &&
     canResumeOrRecapture &&
     (status === "paused" || status === "error");
+  const rebuildingNotes =
+    captureFinalizeStatus === "running" ||
+    (aiWriting && !isLive && (showCaptureEndedBanner || finishing));
+
+  useEffect(() => {
+    if (!isLive) return;
+    captureFinalizeLockRef.current = null;
+    if (captureFinalizeStatus !== "idle") setCaptureFinalizeStatus("idle");
+  }, [isLive, captureFinalizeStatus]);
   const showSourceControls =
     started &&
     (isLive ||
@@ -1630,6 +1699,14 @@ export function LiveNotesSurface({
                   : autoGenerate
                     ? "AI is listening"
                     : "Recording"}
+            </span>
+          ) : rebuildingNotes ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-800 dark:border-violet-900/50 dark:bg-violet-950/40 dark:text-violet-200">
+              Rebuilding notes…
+            </span>
+          ) : captureFinalizeStatus === "done" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-200">
+              Notes rebuilt
             </span>
           ) : status === "paused" || canResumeOrRecapture ? (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
@@ -1881,14 +1958,33 @@ export function LiveNotesSurface({
           <button
             type="button"
             onClick={() => void handleStopSharing()}
-            className="shrink-0 rounded-full bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+            disabled={rebuildingNotes || finishing}
+            className="shrink-0 rounded-full bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
           >
-            Stop sharing
+            {rebuildingNotes ? "Rebuilding notes…" : "Stop sharing"}
           </button>
         </div>
       ) : null}
 
-      {showCaptureEndedBanner ? (
+      {rebuildingNotes ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-violet-200/90 bg-violet-50/95 px-4 py-2.5 dark:border-violet-900/40 dark:bg-violet-950/50 sm:px-6">
+          <p className="text-sm font-medium text-violet-950 dark:text-violet-100">
+            Rebuilding the full notes from the lecture, slides, and other
+            sources. This can take a minute — the notes will visibly change
+            when it finishes.
+          </p>
+        </div>
+      ) : captureFinalizeStatus === "done" && showCaptureEndedBanner ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-200/90 bg-emerald-50/95 px-4 py-2.5 dark:border-emerald-900/40 dark:bg-emerald-950/50 sm:px-6">
+          <p className="text-sm font-medium text-emerald-950 dark:text-emerald-100">
+            Notes rebuilt from the lecture and slides. Resume capture if the
+            lecture is still going, or stay here — a refresh will keep this
+            version.
+          </p>
+        </div>
+      ) : null}
+
+      {showCaptureEndedBanner && !rebuildingNotes ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-200/90 bg-amber-50/95 px-4 py-2.5 dark:border-amber-900/40 dark:bg-amber-950/50 sm:px-6">
           <p className="text-sm font-medium text-amber-950 dark:text-amber-100">
             {t.liveNotes.captureStoppedHint}

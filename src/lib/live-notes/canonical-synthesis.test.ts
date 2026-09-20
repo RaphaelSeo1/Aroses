@@ -40,7 +40,10 @@ test("combined source prompt is independent of arrival order", () => {
     sources: { deck: "written structure", transcript: "spoken explanation" },
   });
   assert.equal(first, second);
-  assert.match(CANONICAL_NOTES_SYSTEM, /does not need to appear in every source/);
+  assert.match(CANONICAL_NOTES_SYSTEM, /does not need to be spoken word-for-word/);
+  assert.match(CANONICAL_NOTES_SYSTEM, /never taught should not remain extensive/);
+  assert.match(CANONICAL_NOTES_SYSTEM, /background, overview-only, optional/);
+  assert.match(CANONICAL_NOTES_SYSTEM, /visual prominence in the deck does not override/);
 });
 
 test("existing notes are labeled as draft rather than evidence", () => {

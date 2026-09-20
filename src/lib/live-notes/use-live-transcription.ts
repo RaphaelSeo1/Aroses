@@ -137,6 +137,8 @@ export function useLiveLectureTranscription(options: {
   >(null);
   /** Segments committed locally but not yet confirmed by the server. */
   const [transcriptPendingCount, setTranscriptPendingCount] = useState(0);
+  /** Increments when the browser's native sharing UI ends the audio track. */
+  const [captureEndedCount, setCaptureEndedCount] = useState(0);
   /** Source currently feeding audio (null until the first start). */
   const [activeSource, setActiveSource] = useState<LiveCaptureSource | null>(
     null
@@ -182,6 +184,8 @@ export function useLiveLectureTranscription(options: {
   const lastSourceRef = useRef<LiveCaptureSource>("tab");
   /** True while we are tearing down deliberately (stop). */
   const intentionalCloseRef = useRef(false);
+  /** True while pause()/stop() is releasing tracks so "ended" is not treated as Chrome's Stop sharing. */
+  const suppressingTrackEndRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const keepAliveTimerRef = useRef<number | null>(null);
@@ -437,14 +441,11 @@ export function useLiveLectureTranscription(options: {
       audio.addEventListener("ended", () => {
         if (streamRef.current !== stream) return; // superseded stream
         if (statusRef.current === "idle") return;
-        onErrorRef.current?.(
-          lastSourceRef.current === "mic"
-            ? "The microphone stopped. Press Resume to reconnect it, or Finish to build the course."
-            : "Audio sharing ended. Pick Tab, System, or Mic below to continue, or Finish to build the course with what was captured."
-        );
+        if (suppressingTrackEndRef.current) return;
         void (async () => {
           await pauseRef.current?.();
           releaseCaptureRef.current?.();
+          setCaptureEndedCount((count) => count + 1);
         })();
       });
     }
@@ -788,6 +789,7 @@ export function useLiveLectureTranscription(options: {
         return false;
       }
       intentionalCloseRef.current = false;
+      suppressingTrackEndRef.current = false;
       reconnectAttemptRef.current = 0;
       lastSourceRef.current = source;
       setStatusBoth("connecting");
@@ -1009,6 +1011,7 @@ export function useLiveLectureTranscription(options: {
     if (statusRef.current !== "recording" && statusRef.current !== "reconnecting") {
       return;
     }
+    suppressingTrackEndRef.current = true;
     stopPcmTap();
     const recorder = recorderRef.current;
     if (recorder && recorder.state === "recording") {
@@ -1085,6 +1088,7 @@ export function useLiveLectureTranscription(options: {
 
   const resume = useCallback(async () => {
     if (statusRef.current !== "paused" && statusRef.current !== "error") return;
+    suppressingTrackEndRef.current = false;
 
     const markRecording = () => {
       if (runningSinceRef.current == null) {
@@ -1189,6 +1193,7 @@ export function useLiveLectureTranscription(options: {
    */
   const stop = useCallback(async () => {
     intentionalCloseRef.current = true;
+    suppressingTrackEndRef.current = true;
     clearTimers();
     if (runningSinceRef.current != null) {
       bankedMsRef.current += Date.now() - runningSinceRef.current;
@@ -1258,6 +1263,8 @@ export function useLiveLectureTranscription(options: {
     transcriptSaveStatus,
     transcriptLastSavedAt,
     transcriptPendingCount,
+    /** Lets the surface finalize notes after Chrome's native Stop sharing action. */
+    captureEndedCount,
     /** Source currently feeding audio (null before the first start). */
     activeSource,
     /** Full MediaStream for preview + vision (same capture as Deepgram). */
