@@ -38,7 +38,7 @@ export type SlideExtract = {
 };
 
 export async function extractPptxSlides(
-  buffer: Buffer
+  buffer: Buffer | Uint8Array
 ): Promise<{ slides: SlideExtract[]; plainText: string }> {
   const zip = await JSZip.loadAsync(buffer);
   const slideNames = Object.keys(zip.files)
@@ -55,29 +55,35 @@ export async function extractPptxSlides(
     );
   }
 
-  const slides: SlideExtract[] = [];
+  const slides: SlideExtract[] = await Promise.all(
+    slideNames.map(async (name, i) => {
+      const xml = await zip.file(name)?.async("string");
+      if (!xml) {
+        return {
+          index: i + 1,
+          title: `Slide ${i + 1}`,
+          body: "",
+          notes: "",
+        };
+      }
+      const parsed = parser.parse(xml);
+      const texts: string[] = [];
+      collectText(parsed, texts);
+      const body = texts.join(" ").replace(/\s+/g, " ").trim();
+      const title = texts[0]?.slice(0, 120) ?? `Slide ${i + 1}`;
 
-  for (let i = 0; i < slideNames.length; i++) {
-    const name = slideNames[i];
-    const xml = await zip.file(name)?.async("string");
-    if (!xml) continue;
-    const parsed = parser.parse(xml);
-    const texts: string[] = [];
-    collectText(parsed, texts);
-    const body = texts.join(" ").replace(/\s+/g, " ").trim();
-    const title = texts[0]?.slice(0, 120) ?? `Slide ${i + 1}`;
+      let notes = "";
+      const notesPath = `ppt/notesSlides/notesSlide${i + 1}.xml`;
+      const notesXml = await zip.file(notesPath)?.async("string");
+      if (notesXml) {
+        const noteTexts: string[] = [];
+        collectText(parser.parse(notesXml), noteTexts);
+        notes = noteTexts.join(" ").replace(/\s+/g, " ").trim();
+      }
 
-    let notes = "";
-    const notesPath = `ppt/notesSlides/notesSlide${i + 1}.xml`;
-    const notesXml = await zip.file(notesPath)?.async("string");
-    if (notesXml) {
-      const noteTexts: string[] = [];
-      collectText(parser.parse(notesXml), noteTexts);
-      notes = noteTexts.join(" ").replace(/\s+/g, " ").trim();
-    }
-
-    slides.push({ index: i + 1, title, body, notes });
-  }
+      return { index: i + 1, title, body, notes };
+    })
+  );
 
   const plainText = slides
     .map((s) => {

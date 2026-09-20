@@ -35,6 +35,50 @@ export function titleFromSlideText(text: string, fallback: string): string {
   return (line || fallback).slice(0, 120);
 }
 
+const MAX_PAGE_TEXT = 8_000;
+
+/**
+ * Keep every slide, including title cards and diagram-only pages. Dropping
+ * short text used to make a 60-slide deck show up as ~48.
+ */
+export function deckPageFromExtract(
+  pageNum: number,
+  text: string,
+  titleHint?: string
+): DeckPage {
+  const trimmed = text.trim();
+  const extractedText = trimmed
+    ? trimmed.slice(0, MAX_PAGE_TEXT)
+    : `(Slide ${pageNum} — little selectable text; mostly visual.)`;
+  const title = (
+    titleHint?.trim() || titleFromSlideText(extractedText, `Slide ${pageNum}`)
+  ).slice(0, 120);
+  return { pageNum, title, extractedText };
+}
+
+/** Accept client-extracted pages so the server can skip a second PDF download. */
+export function sanitizeDeckPages(raw: unknown): DeckPage[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const pages: DeckPage[] = [];
+  const seen = new Set<number>();
+  for (const item of raw.slice(0, MAX_DECK_PAGES)) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as {
+      pageNum?: unknown;
+      extractedText?: unknown;
+      title?: unknown;
+    };
+    const pageNum = Number(rec.pageNum);
+    if (!Number.isInteger(pageNum) || pageNum < 1 || seen.has(pageNum)) continue;
+    seen.add(pageNum);
+    const text = typeof rec.extractedText === "string" ? rec.extractedText : "";
+    const title = typeof rec.title === "string" ? rec.title : undefined;
+    pages.push(deckPageFromExtract(pageNum, text, title));
+  }
+  pages.sort((a, b) => a.pageNum - b.pageNum);
+  return pages.length > 0 ? pages : null;
+}
+
 /** Load all extracted pages for a session. Missing table ⇒ empty list. */
 export async function loadSessionDeckPages(
   supabase: SupabaseClient,

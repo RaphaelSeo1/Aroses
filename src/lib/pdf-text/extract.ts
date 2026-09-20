@@ -28,63 +28,86 @@
 
 const MAX_PAGES = 200;
 const MAX_CHARS = 200_000;
+const PAGE_BATCH = 12;
 
 type TextItem = { str?: string; hasEOL?: boolean };
 
+function copyPdfBytes(buffer: Buffer | Uint8Array): Uint8Array {
+  return Uint8Array.from(buffer);
+}
+
+function pageTextFromItems(items: TextItem[]): string {
+  const lines: string[] = [];
+  let current = "";
+  for (const item of items) {
+    if (typeof item.str === "string") current += item.str;
+    if (item.hasEOL) {
+      if (current.trim().length > 0) lines.push(current.trim());
+      current = "";
+    }
+  }
+  if (current.trim().length > 0) lines.push(current.trim());
+  return lines.join("\n");
+}
+
+/**
+ * Per-page PDF text using current pdfjs-dist. Parallel batches beat the
+ * pdf-parse v1.10 engine, which blocked for a long time on lecture decks.
+ */
+export async function extractPdfPages(
+  buffer: Buffer | Uint8Array,
+  options?: { maxPages?: number }
+): Promise<{ pageNum: number; text: string }[]> {
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const loadingTask = pdfjsLib.getDocument({
+    data: copyPdfBytes(buffer),
+    disableFontFace: true,
+    useSystemFonts: false,
+  });
+  const pdf = await loadingTask.promise;
+  const pageCount = Math.min(
+    pdf.numPages,
+    options?.maxPages != null && options.maxPages >= 1
+      ? Math.floor(options.maxPages)
+      : MAX_PAGES
+  );
+  const pages: { pageNum: number; text: string }[] = [];
+  try {
+    for (let start = 1; start <= pageCount; start += PAGE_BATCH) {
+      const end = Math.min(start + PAGE_BATCH - 1, pageCount);
+      const batch = await Promise.all(
+        Array.from({ length: end - start + 1 }, (_, i) => start + i).map(
+          async (pageNum) => {
+            const page = await pdf.getPage(pageNum);
+            try {
+              const content = await page.getTextContent();
+              const items = (content.items as TextItem[]) ?? [];
+              return { pageNum, text: pageTextFromItems(items).trim() };
+            } finally {
+              page.cleanup();
+            }
+          }
+        )
+      );
+      pages.push(...batch);
+    }
+  } finally {
+    await pdf.destroy().catch(() => {});
+  }
+  return pages;
+}
+
 export async function extractPdfText(buffer: Buffer): Promise<string> {
   try {
-    // Dynamic import so pdfjs-dist isn't pulled into builds that
-    // never call this (e.g. course routes that already have their
-    // own ingest pipeline).
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-
-    // Disable worker — we're already in a Node server route. Using a
-    // worker here would just spin up an unnecessary process.
-    const data = new Uint8Array(
-      buffer.buffer,
-      buffer.byteOffset,
-      buffer.byteLength
-    );
-    const loadingTask = pdfjsLib.getDocument({
-      data,
-      // Reduce warning noise from PDFs with non-standard font specs —
-      // we don't render, we only read text.
-      disableFontFace: true,
-      useSystemFonts: false,
-    });
-    const pdf = await loadingTask.promise;
-
-    const pages: string[] = [];
-    const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+    const pages = await extractPdfPages(buffer, { maxPages: MAX_PAGES });
     let totalChars = 0;
-
-    for (let i = 1; i <= pageCount; i += 1) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const items = (content.items as TextItem[]) ?? [];
-      const lines: string[] = [];
-      let current = "";
-      for (const item of items) {
-        if (typeof item.str === "string") current += item.str;
-        if (item.hasEOL) {
-          if (current.trim().length > 0) lines.push(current.trim());
-          current = "";
-        }
-      }
-      if (current.trim().length > 0) lines.push(current.trim());
-      const pageText = lines.join("\n");
-      pages.push(pageText);
-      totalChars += pageText.length;
-      // Best-effort cleanup of the page-level rendering state.
-      page.cleanup();
+    const kept: string[] = [];
+    for (const page of pages) {
+      kept.push(page.text);
+      totalChars += page.text.length;
       if (totalChars >= MAX_CHARS) break;
     }
-
-    await pdf.destroy().catch(() => {
-      /* destroy is best-effort — don't fail extraction if cleanup blows up */
-    });
-
-    return pages
+    return kept
       .join("\n\n")
       .replace(/[ \t]+\n/g, "\n")
       .replace(/\n{3,}/g, "\n\n")

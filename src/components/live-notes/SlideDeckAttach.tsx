@@ -7,6 +7,7 @@ import { ingestStoragePathForFile } from "@/lib/study-ingest/client-upload";
 import { detectIngestFormat, MAX_INGEST_DOCUMENT_BYTES } from "@/lib/study-ingest/formats";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { describePdfIngestUploadFailure } from "@/lib/storage-upload-errors";
+import { extractSlideDeckInBrowser } from "@/lib/live-notes/client-extract-slide-deck";
 
 const ACCEPT =
   ".pdf,.pptx,.key,.odp,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation";
@@ -108,17 +109,24 @@ export function SlideDeckAttach({
         );
         return;
       }
-      const { error: upErr } = await supabase.storage
-        .from(STUDY_PDF_INGEST_BUCKET)
-        .upload(pathInfo.storagePath, file, {
-          contentType: pathInfo.contentType,
-          cacheControl: "3600",
-          upsert: false,
-        });
-      if (upErr) {
+      const [pages, upload] = await Promise.all([
+        extractSlideDeckInBrowser(file),
+        supabase.storage.from(STUDY_PDF_INGEST_BUCKET).upload(
+          pathInfo.storagePath,
+          file,
+          {
+            contentType: pathInfo.contentType,
+            cacheControl: "3600",
+            upsert: false,
+          }
+        ),
+      ]);
+      if (upload.error) {
         setError(
           describePdfIngestUploadFailure(
-            typeof upErr.message === "string" ? upErr.message : String(upErr)
+            typeof upload.error.message === "string"
+              ? upload.error.message
+              : String(upload.error)
           )
         );
         return;
@@ -130,6 +138,7 @@ export function SlideDeckAttach({
         body: JSON.stringify({
           storagePath: pathInfo.storagePath,
           fileName: file.name,
+          pages: pages ?? undefined,
         }),
       });
       const body = (await res.json().catch(() => ({}))) as {
@@ -280,7 +289,7 @@ export function SlideDeckAttach({
                 {Math.round(MAX_INGEST_DOCUMENT_BYTES / (1024 * 1024))}MB
               </span>
               <span className="pointer-events-none mt-4 rounded-full bg-white px-4 py-1.5 text-xs font-semibold text-zinc-800 ring-1 ring-zinc-200 dark:bg-zinc-950 dark:text-zinc-100 dark:ring-zinc-700">
-                {busy === "uploading" ? "Uploading…" : "Choose a file"}
+                {busy === "uploading" ? "Reading slides…" : "Choose a file"}
               </span>
             </button>
             {error ? (

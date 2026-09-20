@@ -1,32 +1,13 @@
-import { extractPdfPagesForIngest } from "@/lib/pdf-text-head-tail";
+import { extractPdfPages } from "@/lib/pdf-text/extract";
 import { extractPptxSlides } from "@/lib/study-ingest/pptx";
 import { detectIngestFormat, extensionOfFileName } from "@/lib/study-ingest/formats";
 import {
   MAX_DECK_PAGES,
-  titleFromSlideText,
+  deckPageFromExtract,
   type DeckPage,
 } from "@/lib/live-notes/slide-pages";
 
-const MAX_PAGE_TEXT = 8_000;
-
-/**
- * Keep every slide, including title cards and diagram-only pages. Dropping
- * short text used to make a 60-slide deck show up as ~48.
- */
-export function deckPageFromExtract(
-  pageNum: number,
-  text: string,
-  titleHint?: string
-): DeckPage {
-  const trimmed = text.trim();
-  const extractedText = trimmed
-    ? trimmed.slice(0, MAX_PAGE_TEXT)
-    : `(Slide ${pageNum} — little selectable text; mostly visual.)`;
-  const title = (
-    titleHint?.trim() || titleFromSlideText(extractedText, `Slide ${pageNum}`)
-  ).slice(0, 120);
-  return { pageNum, title, extractedText };
-}
+export { deckPageFromExtract } from "@/lib/live-notes/slide-pages";
 
 /**
  * Extract per-page/slide text from an uploaded lecture deck. PDF and PPTX
@@ -47,7 +28,7 @@ export async function extractSlideDeckFromBuffer(input: {
   }
 
   if (kind === "pdf" || ext === "pdf") {
-    const { pages } = await extractPdfPagesForIngest(input.buffer, {
+    const pages = await extractPdfPages(input.buffer, {
       maxPages: MAX_DECK_PAGES,
     });
     return pages

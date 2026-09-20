@@ -3,6 +3,7 @@ import { extractSlideDeckFromBuffer } from "@/lib/live-notes/extract-slide-deck"
 import {
   isSlideDeckSchemaError,
   MAX_DECK_PAGES,
+  sanitizeDeckPages,
 } from "@/lib/live-notes/slide-pages";
 import { detectIngestFormat, MAX_INGEST_DOCUMENT_BYTES } from "@/lib/study-ingest/formats";
 import { isValidIngestStoragePath } from "@/lib/study-ingest/path";
@@ -18,9 +19,10 @@ type Params = { params: Promise<{ sessionId: string }> };
 
 /**
  * POST /api/live-notes/[sessionId]/slides
- *   Body: { storagePath: string, fileName?: string }
- *   Client already uploaded the file to study-pdf-ingest. Extract per-page
- *   text and replace any previous deck on this session.
+ *   Body: { storagePath: string, fileName?: string, pages?: DeckPage[] }
+ *   Client already uploaded the file to study-pdf-ingest. Prefer client-
+ *   extracted pages so we skip a second storage download; otherwise extract
+ *   on the server.
  *
  * DELETE /api/live-notes/[sessionId]/slides
  *   Detach the deck (pages + session columns). Storage object is best-effort
@@ -70,7 +72,11 @@ export async function POST(request: Request, ctx: Params) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-  const b = body as { storagePath?: unknown; fileName?: unknown };
+  const b = body as {
+    storagePath?: unknown;
+    fileName?: unknown;
+    pages?: unknown;
+  };
   if (typeof b.storagePath !== "string" || !b.storagePath.trim()) {
     return NextResponse.json({ error: "storagePath required" }, { status: 400 });
   }
@@ -90,49 +96,54 @@ export async function POST(request: Request, ctx: Params) {
     );
   }
 
-  const admin = createAdminClient();
-  if (!admin) {
-    return NextResponse.json(
-      {
-        error:
-          "Server is not configured for storage. Set SUPABASE_SERVICE_ROLE_KEY on the host, then redeploy.",
-      },
-      { status: 500 }
-    );
-  }
+  let pages = sanitizeDeckPages(b.pages);
+  if (!pages) {
+    const admin = createAdminClient();
+    if (!admin) {
+      return NextResponse.json(
+        {
+          error:
+            "Server is not configured for storage. Set SUPABASE_SERVICE_ROLE_KEY on the host, then redeploy.",
+        },
+        { status: 500 }
+      );
+    }
 
-  const { data: blob, error: dlErr } = await admin.storage
-    .from(STUDY_PDF_INGEST_BUCKET)
-    .download(storagePath);
-  if (dlErr || !blob) {
-    return NextResponse.json(
-      { error: "Could not read the uploaded file. Try uploading again." },
-      { status: 400 }
-    );
-  }
-  const buffer = Buffer.from(await blob.arrayBuffer());
-  if (buffer.length > MAX_INGEST_DOCUMENT_BYTES) {
-    await admin.storage.from(STUDY_PDF_INGEST_BUCKET).remove([storagePath]).catch(() => {});
-    const maxMb = Math.round(MAX_INGEST_DOCUMENT_BYTES / (1024 * 1024));
-    return NextResponse.json(
-      { error: `That file is too large. Maximum is ${maxMb}MB.` },
-      { status: 400 }
-    );
-  }
+    const { data: blob, error: dlErr } = await admin.storage
+      .from(STUDY_PDF_INGEST_BUCKET)
+      .download(storagePath);
+    if (dlErr || !blob) {
+      return NextResponse.json(
+        { error: "Could not read the uploaded file. Try uploading again." },
+        { status: 400 }
+      );
+    }
+    const buffer = Buffer.from(await blob.arrayBuffer());
+    if (buffer.length > MAX_INGEST_DOCUMENT_BYTES) {
+      await admin.storage
+        .from(STUDY_PDF_INGEST_BUCKET)
+        .remove([storagePath])
+        .catch(() => {});
+      const maxMb = Math.round(MAX_INGEST_DOCUMENT_BYTES / (1024 * 1024));
+      return NextResponse.json(
+        { error: `That file is too large. Maximum is ${maxMb}MB.` },
+        { status: 400 }
+      );
+    }
 
-  let pages;
-  try {
-    pages = await extractSlideDeckFromBuffer({ buffer, fileName });
-  } catch (e) {
-    return NextResponse.json(
-      {
-        error:
-          e instanceof Error && e.message
-            ? e.message
-            : "Could not read slides from that file.",
-      },
-      { status: 400 }
-    );
+    try {
+      pages = await extractSlideDeckFromBuffer({ buffer, fileName });
+    } catch (e) {
+      return NextResponse.json(
+        {
+          error:
+            e instanceof Error && e.message
+              ? e.message
+              : "Could not read slides from that file.",
+        },
+        { status: 400 }
+      );
+    }
   }
   if (pages.length === 0) {
     return NextResponse.json(
@@ -176,24 +187,28 @@ export async function POST(request: Request, ctx: Params) {
     title: p.title,
     extracted_text: p.extractedText,
   }));
-  const { error: insErr } = await supabase
-    .from("live_lecture_slide_pages")
-    .insert(rows);
-  if (insErr) {
-    console.error("[live-notes/slides] insert pages", insErr);
-    if (isSlideDeckSchemaError(insErr.message)) {
+  const INSERT_CHUNK = 40;
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+    const chunk = rows.slice(i, i + INSERT_CHUNK);
+    const { error: insErr } = await supabase
+      .from("live_lecture_slide_pages")
+      .insert(chunk);
+    if (insErr) {
+      console.error("[live-notes/slides] insert pages", insErr);
+      if (isSlideDeckSchemaError(insErr.message)) {
+        return NextResponse.json(
+          {
+            error:
+              "Slide upload needs a database update. Apply migration 102_live_lecture_slide_pages.sql in Supabase, then try again.",
+          },
+          { status: 503 }
+        );
+      }
       return NextResponse.json(
-        {
-          error:
-            "Slide upload needs a database update. Apply migration 102_live_lecture_slide_pages.sql in Supabase, then try again.",
-        },
-        { status: 503 }
+        { error: "Could not save the extracted slides." },
+        { status: 500 }
       );
     }
-    return NextResponse.json(
-      { error: "Could not save the extracted slides." },
-      { status: 500 }
-    );
   }
 
   const { error: sessErr } = await supabase
@@ -221,10 +236,13 @@ export async function POST(request: Request, ctx: Params) {
   }
 
   if (previousPath && previousPath !== storagePath) {
-    await admin.storage
-      .from(STUDY_PDF_INGEST_BUCKET)
-      .remove([previousPath])
-      .catch(() => {});
+    const admin = createAdminClient();
+    if (admin) {
+      void admin.storage
+        .from(STUDY_PDF_INGEST_BUCKET)
+        .remove([previousPath])
+        .catch(() => {});
+    }
   }
 
   return NextResponse.json({
