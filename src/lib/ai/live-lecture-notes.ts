@@ -19,7 +19,7 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
  * Live Notes synthesis — streaming, grounded, with bounded self-revision.
  *
  * Every ~450 chars of fresh transcript (~30s of speech; the client runs a
- * 5s cadence heartbeat), one Haiku call receives: the new slice, the
+ * 5s cadence heartbeat), one Sol call receives: the new slice, the
  * rolling summary, and the last-N AI note sections WITH the raw transcript
  * excerpts they were written from. The model streams a tiny
  * line-marker protocol (parsed incrementally — no waiting for the full
@@ -116,10 +116,13 @@ ${NOTE_STYLE_RULES}
 
 ${voiceRules()}
 
-SELF-REVISION / CONTINUATION (notes from uploaded material, slides, or earlier slices already exist — do not wipe them):
+SELF-REVISION / CONTINUATION:
+Existing AI-generated notes are an editable draft, not an authoritative source. The actual transcript, deck, and screen content are evidence. Do not keep, repeat, or privilege a statement merely because it is already in the draft.
+
 Before writing, check ALL EXISTING NOTE SECTIONS, not just recent live output. If the NEW TRANSCRIPT SLICE continues, completes, repeats, or is about the same topic as a section that is already written (same concept, same worked example, remaining items of an enumeration — match by meaning, not only exact heading text):
 
 - You MUST @@revise that sectionId. Under @@revise emit ONLY a structured Markdown fragment containing the new or corrected material—never repeat the "## " heading or the whole section. The client surgically folds your fragment into the existing section.
+- A new slice omitting an older point is NOT evidence that the point is unimportant or unsupported. Never replace or remove a whole section during an incremental slice; use additive @@revise. The later all-source reconciliation pass performs global rewrites, merges, condensation, and deletions safely.
 - Preserve the section's organization. A single related fact can be one bullet; multiple supporting details should use a bold parent bullet with nested "  - " children, a short paragraph, or a meaningful "### " subtopic. Grouping is not a reason to drop points. Do not grow a long flat list one utterance at a time.
 - Do not emit generic "Key vocabulary" / "Self-check" subsections during a continuation unless the incoming lecture material itself makes them useful.
 - Do NOT @@append a new section that restates or continues that topic. A second copy at the bottom is always wrong when the notes already exist.
@@ -136,7 +139,7 @@ Only @@append when the slice introduces a topic that has NO matching existing he
 - Slide DRAFTS (transcript excerpt is "${DECK_DRAFT_EXCERPT}"): speech that ADDS detail MUST @@revise with the added spoken detail only. Additional information is not an error and is not a discrepancy. Do NOT treat "here's more on this" as "delete the draft."
 - Other substantive contradictions: resolve only when the supplied source priority or an explicit correction establishes the answer; otherwise @@revise the matching section with an **Open question:** line. Never append a duplicate contradictory section.
 
-Any listed sectionId may be revised. For a section marked PRESERVE EXISTING WORDING, emit only the exact new or corrected lines; never rewrite or remove the rest. If this slice touches several existing sections, emit one @@revise per sectionId — do not leave the extra topics for @@append.
+Any listed sectionId may be revised. For a section marked PRESERVE EXISTING WORDING, emit only the exact new or corrected lines; never rewrite or remove the rest. If this slice touches several existing sections, update each relevant section — do not leave the extra topics for @@append. Before finishing, check the whole provided note document for a duplicate explanation introduced by this slice.
 
 NARRATION (@@thought — user-visible, optional but valuable):
 - You MAY emit zero or one short @@thought line before @@revise/@@append. This is Rose speaking to the student in the activity log — not notes.
@@ -154,7 +157,7 @@ OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code 
 <ONLY a structured fragment of new/corrected material; no H2 and never a wipe/full restatement>
 @@delete <sectionId>
 <exact existing lines to remove, one per line; omit the marker unless a line is genuinely wrong>
-(zero or more @@revise and @@delete blocks, one sectionId each; omit when unused)
+(zero or more edit blocks, one sectionId each; omit when unused)
 @@append
 <markdown for genuinely new teaching and/or **Open question:** lines, or nothing when the slice was folded into @@revise or was a repeat>
 @@summary
@@ -431,8 +434,8 @@ export async function* streamLiveLectureNotes(input: {
             : null,
           `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
           hasDraft
-            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise each matching id with the new study-note fragment (no H2). Include every new teachable point from this slice, not a one-line summary. You may emit multiple @@revise and @@delete blocks, one per section. @@delete ONLY a line the lecturer clearly retracted or that both the slides and the transcript show is factually wrong. If the slides and the transcript disagree and nothing was retracted, do NOT delete: @@revise a **Discrepancy:** line and @@thought that they don't match. The client preserves every still-correct block. Additional information is not an error. @@append ONLY for a topic that has no matching existing heading. Empty @@append when the slice was folded in or is a repeat."
-            : "\nEmit the protocol now. If notes already exist for the topics in this slice, @@revise each matching section with the new or corrected study-note fragment (no H2). Include every new teachable point, not a one-line summary. Multiple @@revise and @@delete blocks are allowed. @@delete ONLY a line the lecturer clearly retracted or that is factually wrong with slides and speech in agreement. If slides and speech disagree without a retraction, @@revise a **Discrepancy:** line and say so in @@thought — do not delete either claim. @@append ONLY for a genuinely new topic with no matching heading. Empty @@append when the slice was folded in or is a repeat.",
+            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise every matching id with additive source-grounded material. Never replace or remove a whole section in this incremental call. Include every new teachable point from this slice, not a one-line summary. @@delete ONLY a line the lecturer clearly retracted or that both slides and transcript show is wrong. If slides and transcript disagree without a retraction, keep both and add a **Discrepancy:** line. @@append ONLY for a topic with no matching heading. Empty @@append when the slice was folded in or is a repeat."
+            : "\nEmit the protocol now. If notes already exist for the topics in this slice, @@revise every matching section with additive source-grounded material. Never replace or remove a whole section in this incremental call. Include every new teachable point. @@delete ONLY a line the lecturer clearly retracted or that is wrong with slides and speech in agreement. If slides and speech disagree without a retraction, keep both and add a **Discrepancy:** line. @@append ONLY for a genuinely new topic with no matching heading. Empty @@append when the slice was folded in or is a repeat.",
         ]
           .filter(Boolean)
           .join("\n\n");

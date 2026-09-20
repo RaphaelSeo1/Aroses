@@ -17,7 +17,11 @@
 
 export type LiveNotesStreamEvent =
   | { type: "thought"; message: string }
-  | { type: "op"; op: "append" | "revise" | "delete"; sectionId: string }
+  | {
+      type: "op";
+      op: "append" | "revise" | "delete";
+      sectionId: string;
+    }
   | { type: "text"; delta: string }
   | { type: "summary"; summary: string };
 
@@ -34,14 +38,23 @@ export function createMarkerParser(
   allowedReviseIds: Set<string>,
   appendSectionId: string
 ): MarkerParser {
-  type Mode = "preamble" | "append" | "revise" | "delete" | "summary" | "skip";
+  type Mode =
+    | "preamble"
+    | "append"
+    | "revise"
+    | "delete"
+    | "summary"
+    | "skip";
   let mode: Mode = "preamble";
   let line = "";
   /** How many chars of the current partial line were already forwarded. */
   let forwarded = 0;
   const summaryParts: string[] = [];
 
-  const isBody = () => mode === "append" || mode === "revise" || mode === "delete";
+  const isBody = () =>
+    mode === "append" ||
+    mode === "revise" ||
+    mode === "delete";
 
   const completeLine = (out: LiveNotesStreamEvent[]) => {
     if (forwarded === 0 && line.startsWith("@@")) {
@@ -71,6 +84,8 @@ export function createMarkerParser(
       } else if (trimmed.startsWith("@@thought")) {
         const message = trimmed.slice("@@thought".length).trim();
         if (message) out.push({ type: "thought", message });
+      } else {
+        mode = "skip";
       }
       // Any other @@ line is protocol noise — drop it.
     } else if (isBody()) {

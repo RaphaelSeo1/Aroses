@@ -3,14 +3,17 @@ import {
   noteNodesToMarkdown,
   type NoteNodeJson,
 } from "@/lib/notes/notes-markdown";
+import {
+  splitCanonicalMarkdown,
+  type CanonicalDraftSection,
+} from "@/lib/live-notes/canonical-synthesis";
 
 /**
  * Wrap-up consistency review plumbing (server-side, pure JSON).
  *
- * On Finish — once, before course generation — every fully-AI note section
- * is checked against the full transcript by one Haiku call
- * (`reviewLiveLectureNotes`). These helpers extract the reviewable sections
- * from the stored TipTap doc and splice accepted revisions back in.
+ * On Finish — once, before course generation — the editable AI draft is
+ * rebuilt from the complete source bundle. These helpers extract ownership,
+ * preserve student blocks, and replace or revise AI sections in TipTap JSON.
  *
  * Student-owned content is untouchable: any section containing a block with
  * provenance `ai-edited` or null is excluded from review entirely.
@@ -70,6 +73,123 @@ export function collectAiNoteSections(
     .filter((s) => s.markdown.trim().length > 0);
 }
 
+/** Every addressable section, with ownership retained for canonical synthesis. */
+export function collectNoteDraftSections(
+  notesJson: unknown
+): CanonicalDraftSection[] {
+  const order: string[] = [];
+  const groups = new Map<string, NoteNodeJson[]>();
+  const studentEdited = new Set<string>();
+  let unaddressedId: string | null = null;
+  topLevelNodes(notesJson).forEach((node, index) => {
+    const storedId = sectionIdOf(node);
+    if (storedId === LECTURE_SUMMARY_SECTION_ID) return;
+    if (node.type === "horizontalRule") {
+      unaddressedId = null;
+      return;
+    }
+    if (
+      storedId ||
+      node.type === "heading" ||
+      unaddressedId == null
+    ) {
+      unaddressedId = storedId ?? `unaddressed:${index.toString(36)}`;
+    }
+    const sectionId = storedId ?? unaddressedId;
+    if (!groups.has(sectionId)) {
+      groups.set(sectionId, []);
+      order.push(sectionId);
+    }
+    groups.get(sectionId)!.push(node);
+    if (!isAiOwned(node)) studentEdited.add(sectionId);
+  });
+  return order
+    .map((sectionId) => ({
+      sectionId,
+      markdown: noteNodesToMarkdown(groups.get(sectionId)!),
+      studentEdited: studentEdited.has(sectionId),
+    }))
+    .filter((section) => section.markdown.trim().length > 0);
+}
+
+function canonicalSectionId(markdown: string, index: number): string {
+  const heading = markdown.match(/^##\s+(.+)$/m)?.[1]?.trim() ?? markdown;
+  const seed = `${index}:${heading.toLowerCase()}`;
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `canonical:${index.toString(36)}-${(hash >>> 0).toString(36)}`;
+}
+
+/**
+ * Replace the editable AI draft with one canonical document while leaving
+ * student-owned sections untouched. Existing AI notes are discarded as a
+ * representation; their source-backed content must be regenerated from the
+ * authoritative source bundle by the caller.
+ */
+export function replaceAiNoteDraft(
+  notesJson: unknown,
+  canonicalMarkdown: string
+): unknown {
+  const doc = notesJson as PmDoc | null;
+  if (!doc || !Array.isArray(doc.content)) return notesJson;
+  const sections = splitCanonicalMarkdown(canonicalMarkdown);
+  if (sections.length === 0) return notesJson;
+
+  const ownership = new Map<string, { aiOnly: boolean }>();
+  for (const node of doc.content) {
+    const sectionId = sectionIdOf(node);
+    if (!sectionId || sectionId === LECTURE_SUMMARY_SECTION_ID) continue;
+    const current = ownership.get(sectionId) ?? { aiOnly: true };
+    if (!isAiOwned(node)) current.aiOnly = false;
+    ownership.set(sectionId, current);
+  }
+  const replaceableIds = new Set(
+    [...ownership.entries()]
+      .filter(([, owner]) => owner.aiOnly)
+      .map(([sectionId]) => sectionId)
+  );
+
+  const shouldRemove = (node: NoteNodeJson): boolean => {
+    const sectionId = sectionIdOf(node);
+    if (sectionId && replaceableIds.has(sectionId)) return true;
+    if (!sectionId && isAiOwned(node) && node.type !== "horizontalRule") {
+      return true;
+    }
+    return (
+      node.type === "horizontalRule" &&
+      node.attrs?.provenance === "ai"
+    );
+  };
+  const firstRemoved = doc.content.findIndex(shouldRemove);
+  const kept = doc.content.filter((node) => !shouldRemove(node));
+  const insertAt =
+    firstRemoved >= 0 ? Math.min(firstRemoved, kept.length) : kept.length;
+
+  const replacement: NoteNodeJson[] = [];
+  sections.forEach((markdown, index) => {
+    if (index > 0) {
+      replacement.push({
+        type: "horizontalRule",
+        attrs: { provenance: "ai" },
+      });
+    }
+    replacement.push(
+      ...markdownToNoteNodes(markdown, {
+        sectionId: canonicalSectionId(markdown, index),
+        provenance: "ai",
+      })
+    );
+  });
+  if (replacement.length === 0) return notesJson;
+
+  const content = [...kept];
+  content.splice(insertAt, 0, ...replacement);
+  return { ...doc, content };
+}
+
 /** Markdown for the Lecture summary / tutor-style recap, if present. */
 export function extractLectureSummaryMarkdown(
   notesJson: unknown
@@ -96,6 +216,26 @@ export function liveNotesToSourceMarkdown(notesJson: unknown): string {
   const recap = extractLectureSummaryMarkdown(notesJson);
   const body = noteNodesToMarkdown(topLevelNodes(notesJson)).trim();
   return [recap, body].filter(Boolean).join("\n\n").trim();
+}
+
+function noteNodePlainText(node: NoteNodeJson): string {
+  if (typeof node.text === "string") return node.text;
+  const children = (node.content ?? []).map((child) =>
+    noteNodePlainText(child as NoteNodeJson)
+  );
+  if (node.type === "tableRow") return children.join("\t");
+  return children.filter(Boolean).join("\n");
+}
+
+/** Search/preview mirror for a stored TipTap live-notes document. */
+export function liveNotesToPlainText(notesJson: unknown): string {
+  return topLevelNodes(notesJson)
+    .map(noteNodePlainText)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   type RevisionDecoMeta,
 } from "@/components/immersive/notes/Provenance";
 import { trailingEmptyParagraphRange } from "@/lib/notes/empty-paragraph";
+import { splitCanonicalMarkdown } from "@/lib/live-notes/canonical-synthesis";
 import {
   classifyNoteLine,
   isGfmTableLine,
@@ -613,6 +614,106 @@ export class StreamingNotesWriter {
       });
     }
     return this.listAllSections(limit);
+  }
+
+  /**
+   * Replace the editable AI-authored draft with a canonical full-document
+   * synthesis. Student-owned sections remain byte-for-byte in the document.
+   */
+  replaceAiDraft(markdown: string): boolean {
+    if (this.destroyed || this.editor.isDestroyed) return false;
+    const sections = splitCanonicalMarkdown(markdown);
+    if (sections.length === 0) return false;
+    this.finishOp();
+
+    const topLevel: Array<{ node: PmNode; pos: number }> = [];
+    this.editor.state.doc.forEach((node, pos) => topLevel.push({ node, pos }));
+    const ownership = new Map<string, { aiOnly: boolean }>();
+    for (const { node } of topLevel) {
+      const sectionId = node.attrs?.sectionId;
+      if (typeof sectionId !== "string" || !sectionId) continue;
+      const current = ownership.get(sectionId) ?? { aiOnly: true };
+      if (
+        node.attrs?.provenance !== "ai" &&
+        node.attrs?.provenance !== "ai-context"
+      ) {
+        current.aiOnly = false;
+      }
+      ownership.set(sectionId, current);
+    }
+    const replaceable = new Set(
+      [...ownership.entries()]
+        .filter(([, owner]) => owner.aiOnly)
+        .map(([sectionId]) => sectionId)
+    );
+    const removeIndexes = new Set<number>();
+    topLevel.forEach(({ node }, index) => {
+      const sectionId = node.attrs?.sectionId;
+      if (typeof sectionId === "string" && replaceable.has(sectionId)) {
+        removeIndexes.add(index);
+        return;
+      }
+      if (
+        node.type.name === "horizontalRule" &&
+        node.attrs?.provenance === "ai"
+      ) {
+        const before = topLevel[index - 1]?.node.attrs?.sectionId;
+        const after = topLevel[index + 1]?.node.attrs?.sectionId;
+        if (
+          (typeof before === "string" && replaceable.has(before)) ||
+          (typeof after === "string" && replaceable.has(after))
+        ) {
+          removeIndexes.add(index);
+        }
+      }
+    });
+
+    const newNodes: PmNode[] = [];
+    sections.forEach((section, index) => {
+      if (index > 0) {
+        const divider = this.editor.schema.nodes.horizontalRule?.create({
+          provenance: "ai",
+        });
+        if (divider) newNodes.push(divider);
+      }
+      newNodes.push(
+        ...this.pmNodesFromMarkdown(
+          section,
+          `s-${crypto.randomUUID().slice(0, 8)}`
+        )
+      );
+    });
+    if (newNodes.length === 0) return false;
+
+    const firstRemovedIndex = Math.min(
+      ...[...removeIndexes],
+      Number.POSITIVE_INFINITY
+    );
+    const originalInsertPos = Number.isFinite(firstRemovedIndex)
+      ? topLevel[firstRemovedIndex]?.pos
+      : undefined;
+    this.dispatchDoc((tr) => {
+      const removals = [...removeIndexes]
+        .map((index) => topLevel[index])
+        .filter((entry): entry is { node: PmNode; pos: number } => Boolean(entry))
+        .sort((a, b) => b.pos - a.pos);
+      for (const entry of removals) {
+        tr.delete(entry.pos, entry.pos + entry.node.nodeSize);
+      }
+      let insertPos =
+        originalInsertPos == null
+          ? tr.doc.content.size
+          : Math.min(tr.mapping.map(originalInsertPos), tr.doc.content.size);
+      if (originalInsertPos == null) {
+        const trailing = trailingEmptyParagraphRange(tr.doc);
+        if (trailing) {
+          tr.delete(trailing.from, trailing.to);
+          insertPos = trailing.from;
+        }
+      }
+      tr.insert(insertPos, Fragment.from(newNodes));
+    });
+    return true;
   }
 
   /**

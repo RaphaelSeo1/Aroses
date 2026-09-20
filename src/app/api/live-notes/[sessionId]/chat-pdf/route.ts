@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { extractChatAttachmentFromStorage } from "@/lib/live-notes/extract-chat-pdf";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
@@ -58,6 +59,57 @@ export async function POST(request: Request, ctx: Params) {
   });
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
+  }
+  if (result.sourceTruncated) {
+    return NextResponse.json(
+      {
+        error:
+          "This file has too much extracted text for a lossless note rebuild. Split it into smaller files and attach them separately.",
+      },
+      { status: 400 }
+    );
+  }
+
+  // Keep the extracted source with the session. Reconciliation may happen
+  // after more audio or another deck arrives, so browser sessionStorage is
+  // not a durable source of truth. Older databases continue without this.
+  const sourceHash = createHash("sha256")
+    .update(`${result.fileName}\0${result.sourceText}`)
+    .digest("hex");
+  try {
+    const { error } = await supabase.from("live_lecture_note_sources").upsert(
+      {
+        session_id: sessionId,
+        user_id: user.id,
+        source_kind: result.kind,
+        name: result.fileName,
+        source_hash: sourceHash,
+        extracted_text: result.sourceText,
+      },
+      { onConflict: "session_id,source_hash", ignoreDuplicates: true }
+    );
+    if (error && /schema cache|does not exist/i.test(error.message)) {
+      return NextResponse.json(
+        {
+          error:
+            "File-backed notes need database migration 111 before attachments can be used safely.",
+        },
+        { status: 503 }
+      );
+    }
+    if (error) {
+      console.error("[live-notes/chat-pdf] persist source", error);
+      return NextResponse.json(
+        { error: "Could not save this file as a durable note source." },
+        { status: 500 }
+      );
+    }
+  } catch (error) {
+    console.error("[live-notes/chat-pdf] persist source", error);
+    return NextResponse.json(
+      { error: "Could not save this file as a durable note source." },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json({

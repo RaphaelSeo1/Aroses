@@ -232,6 +232,7 @@ export function LiveNotesChat({
   noteInstruction,
   notesRef,
   enqueueWriterJob,
+  onReconcileSources,
   onActivity,
   active = true,
   voiceCapped = false,
@@ -243,6 +244,9 @@ export function LiveNotesChat({
   noteInstruction: string;
   notesRef: RefObject<NotesPanelHandle | null>;
   enqueueWriterJob: (job: () => Promise<void>) => void;
+  onReconcileSources: (
+    attachedFiles?: Array<{ name: string; text: string }>
+  ) => Promise<boolean>;
   onActivity: (
     kind: "thought" | "status" | "error",
     message: string,
@@ -266,6 +270,7 @@ export function LiveNotesChat({
   const attach = useChatAttachments({
     disabled: busy,
     initialPending: loadPendingPdf(sessionId),
+    extractUrl: `/api/live-notes/${sessionId}/chat-pdf`,
   });
   const {
     queued,
@@ -864,7 +869,16 @@ export function LiveNotesChat({
       if (!lease.isCurrent()) return null;
       let spoken = visibleSource().trim();
 
-      if (noteOps.length > 0) {
+      let reconciledAttachment = false;
+      if (pdf && looksLikeNoteEditRequest(message)) {
+        onActivity(
+          "status",
+          "Rebuilding the notes with the newly attached source…"
+        );
+        reconciledAttachment = await onReconcileSources();
+      }
+
+      if (noteOps.length > 0 && !reconciledAttachment) {
         onActivity(
           "status",
           noteOpCount === 1
@@ -914,6 +928,7 @@ export function LiveNotesChat({
       confirmQueued,
       notesRef,
       onActivity,
+      onReconcileSources,
       pendingRef,
       queuedRef,
       recentTranscript,

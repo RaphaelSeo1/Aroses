@@ -25,7 +25,7 @@ import {
 import { LecturePreviewPanel } from "@/components/live-notes/LecturePreviewPanel";
 import { ShareGuideModal } from "@/components/live-notes/ShareGuideModal";
 import { SlideDeckAttach } from "@/components/live-notes/SlideDeckAttach";
-import { LiveNotesChat, readLiveNotesChatPdf } from "@/components/live-notes/LiveNotesChat";
+import { LiveNotesChat } from "@/components/live-notes/LiveNotesChat";
 import { useScreenVision } from "@/lib/live-notes/use-screen-vision";
 import { pickRevisableByTranscript } from "@/lib/live-notes/pick-relevant-slide-pages";
 import {
@@ -352,6 +352,8 @@ export function LiveNotesSurface({
   // ── Synthesis buffering ────────────────────────────────────────────────
   const unsynthesizedRef = useRef("");
   const synthInFlightRef = useRef(false);
+  const reconcileInFlightRef = useRef(false);
+  const reconcilePromiseRef = useRef<Promise<boolean> | null>(null);
   const blockCountRef = useRef(0);
   const seedWriterRetryRef = useRef(0);
   const pendingSeedRef = useRef(false);
@@ -368,7 +370,10 @@ export function LiveNotesSurface({
   const screenContextRef = useRef("");
 
   const syncAiWritingUi = useCallback(() => {
-    const busy = synthInFlightRef.current || pumpJobsRef.current > 0;
+    const busy =
+      synthInFlightRef.current ||
+      reconcileInFlightRef.current ||
+      pumpJobsRef.current > 0;
     setAiWriting(busy);
     notesRef.current?.setStreamingIndicator(busy);
   }, []);
@@ -412,9 +417,78 @@ export function LiveNotesSurface({
     []
   );
 
+  const reconcileAllSources = useCallback(
+    async (
+      attachedFiles?: Array<{ name: string; text: string }>
+    ): Promise<boolean> => {
+      if (reconcilePromiseRef.current) {
+        return reconcilePromiseRef.current;
+      }
+      reconcileInFlightRef.current = true;
+      syncAiWritingUi();
+      const task = (async (): Promise<boolean> => {
+        while (synthInFlightRef.current) {
+          await sleep(50);
+        }
+        await pumpTailRef.current;
+        const writer = notesRef.current?.getStreamWriter();
+        if (!writer) return false;
+
+        pushAiActivity(
+          "status",
+          "Rebuilding the notes from all available source material…"
+        );
+        const existingSections = writer.listSynthesisSections(200);
+        const res = await fetch(`/api/live-notes/${sessionId}/reconcile`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            existingSections,
+            noteInstruction: noteInstructionRef.current,
+            attachedFiles,
+          }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          markdown?: string;
+          error?: string;
+        };
+        if (!res.ok || !data.markdown?.trim()) {
+          throw new Error(data.error || "Could not reconcile notes.");
+        }
+        const replaced = writer.replaceAiDraft(data.markdown);
+        if (!replaced) throw new Error("Could not update the notes editor.");
+        blockCountRef.current = writer.listAllSections(200).length;
+        sectionExcerptsRef.current.clear();
+        pushAiActivity(
+          "status",
+          "Notes rebuilt — overlapping sections were merged and reorganized."
+        );
+        return true;
+      })();
+      reconcilePromiseRef.current = task;
+      try {
+        return await task;
+      } catch (cause) {
+        pushAiActivity(
+          "error",
+          cause instanceof Error
+            ? cause.message
+            : "Could not rebuild the notes from all sources."
+        );
+        return false;
+      } finally {
+        reconcilePromiseRef.current = null;
+        reconcileInFlightRef.current = false;
+        syncAiWritingUi();
+      }
+    },
+    [sessionId, pushAiActivity, syncAiWritingUi]
+  );
+
   const maybeSynthesize = useCallback(
     async (force: boolean, opts?: { seedFromDeck?: boolean }) => {
       if (!autoGenerateRef.current && !opts?.seedFromDeck) return;
+      if (reconcileInFlightRef.current) return;
       if (synthInFlightRef.current) {
         if (opts?.seedFromDeck) pendingSeedRef.current = true;
         return;
@@ -953,8 +1027,8 @@ export function LiveNotesSurface({
 
   const startDeckSeed = useCallback(() => {
     setDeckSeedRequested(true);
-    void maybeSynthesize(false, { seedFromDeck: true });
-  }, [maybeSynthesize]);
+    void reconcileAllSources();
+  }, [reconcileAllSources]);
 
   const handleSlidesChange = useCallback(
     (next: { fileName: string | null; pageCount: number }) => {
@@ -988,12 +1062,16 @@ export function LiveNotesSurface({
     if (initialDeckSeedRef.current) return;
     if ((session.slidesPageCount ?? 0) <= 0) return;
     initialDeckSeedRef.current = true;
-    if ((session.slidesSeededThroughPage ?? 0) > 0) {
+    const seededThrough = session.slidesSeededThroughPage ?? 0;
+    if (
+      seededThrough > 0 &&
+      seededThrough < (session.slidesPageCount ?? 0)
+    ) {
       setDeckSeedRequested(true);
-      void maybeSynthesize(false, { seedFromDeck: true });
+      void reconcileAllSources();
     }
   }, [
-    maybeSynthesize,
+    reconcileAllSources,
     session.slidesPageCount,
     session.slidesSeededThroughPage,
   ]);
@@ -1255,7 +1333,17 @@ export function LiveNotesSurface({
     await pause();
     // Ending tracks dismisses Chrome's "Sharing … to this tab" bar as well.
     releaseCapture();
-  }, [pause, releaseCapture]);
+    await flushNow();
+    await maybeSynthesize(true);
+    await reconcileAllSources();
+    await notesRef.current?.flushSave();
+  }, [
+    pause,
+    releaseCapture,
+    flushNow,
+    maybeSynthesize,
+    reconcileAllSources,
+  ]);
 
   const sourceOptions: Array<{ id: LiveCaptureSource; label: string }> = [
     { id: "tab", label: "Tab" },
@@ -1276,12 +1364,20 @@ export function LiveNotesSurface({
     setFinishing(true);
     setError(null);
     try {
+      if (reconcilePromiseRef.current) {
+        await reconcilePromiseRef.current;
+      }
       await maybeSynthesize(true);
       const st = status;
       if (st === "recording" || st === "reconnecting" || st === "paused") {
         await pause();
       }
       await flushNow();
+      await reconcileAllSources();
+      const saved = await notesRef.current?.flushSave();
+      if (saved !== true) {
+        throw new Error("Could not save the latest note edits.");
+      }
       await fetch(`/api/live-notes/${sessionId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -1296,7 +1392,15 @@ export function LiveNotesSurface({
     } finally {
       setFinishing(false);
     }
-  }, [finishing, maybeSynthesize, pause, flushNow, sessionId, status]);
+  }, [
+    finishing,
+    maybeSynthesize,
+    pause,
+    flushNow,
+    reconcileAllSources,
+    sessionId,
+    status,
+  ]);
 
   const handleFinish = useCallback(async () => {
     if (finishing) return;
@@ -1308,19 +1412,22 @@ export function LiveNotesSurface({
     setFinishing(true);
     setError(null);
     try {
+      if (reconcilePromiseRef.current) {
+        await reconcilePromiseRef.current;
+      }
       await maybeSynthesize(true);
       await stop();
       await flushNow();
+      await pumpTailRef.current;
+      const saved = await notesRef.current?.flushSave();
+      if (saved !== true) {
+        throw new Error("Could not save the latest note edits.");
+      }
 
-      const chatPdf = readLiveNotesChatPdf(sessionId);
       const res = await fetch(`/api/live-notes/${sessionId}/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          chatPdf
-            ? { attachedPdfText: chatPdf.text, attachedPdfName: chatPdf.fileName }
-            : {}
-        ),
+        body: "{}",
       });
       const data = (await res.json().catch(() => ({}))) as {
         redirect?: string;
@@ -2073,6 +2180,7 @@ export function LiveNotesSurface({
                 noteInstruction={noteInstruction}
                 notesRef={notesRef}
                 enqueueWriterJob={enqueueWriterJob}
+                onReconcileSources={reconcileAllSources}
                 onActivity={(kind, message, loc) =>
                   pushAiActivity(kind, message, loc)
                 }

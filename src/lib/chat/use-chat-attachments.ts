@@ -19,6 +19,7 @@ export function useChatAttachments(
   opts: {
     disabled?: boolean;
     initialPending?: PendingChatAttachment | null;
+    extractUrl?: string;
   } = {}
 ) {
   const disabled = Boolean(opts.disabled);
@@ -67,7 +68,10 @@ export function useChatAttachments(
     setAttachError(null);
     setAttaching(true);
     try {
-      const result = await extractQueuedChatFiles({ files: current });
+      const result = await extractQueuedChatFiles({
+        files: current,
+        extractUrl: opts.extractUrl,
+      });
       if (!result.ok) {
         setAttachError(result.error);
         return null;
@@ -89,7 +93,7 @@ export function useChatAttachments(
       setAttaching(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  }, [attaching, disabled]);
+  }, [attaching, disabled, opts.extractUrl]);
 
   const takePendingForSend = useCallback(async (): Promise<PendingChatAttachment | null> => {
     if (disabled || attaching) return null;

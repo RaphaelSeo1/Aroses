@@ -1,16 +1,19 @@
 import { NextResponse } from "next/server";
 import { runLiveNotesWrapUp } from "@/lib/live-notes/run-notes-wrap-up";
+import { liveNotesToPlainText } from "@/lib/live-notes/notes-review";
+import { loadCanonicalLiveNoteSources } from "@/lib/live-notes/source-bundle";
 import { syncLiveSessionToStandaloneNote } from "@/lib/live-notes/sync-standalone-note";
 import {
   formatDeckForWrapUp,
   loadSessionDeckPages,
 } from "@/lib/live-notes/slide-pages";
 import { report } from "@/lib/report-error";
+import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 type Params = { params: Promise<{ sessionId: string }> };
 
@@ -117,14 +120,27 @@ export async function POST(_request: Request, ctx: Params) {
   const deckContent = formatDeckForWrapUp(
     await loadSessionDeckPages(supabase, sessionId)
   );
+  const canonicalSources = await loadCanonicalLiveNoteSources(
+    supabase,
+    sessionId
+  );
+  const noteInstruction = await loadNoteInstruction(
+    supabase,
+    "live_lecture_sessions",
+    { id: sessionId, user_id: user.id }
+  );
 
   try {
     const next = await runLiveNotesWrapUp({
       notesJson: session.notes_json,
-      transcript: transcriptOnly,
-      screenContent: screenContent || undefined,
-      deckContent: deckContent || undefined,
+      transcript: canonicalSources.transcript || transcriptOnly,
+      screenContent: canonicalSources.screen || screenContent || undefined,
+      deckContent: canonicalSources.deck || deckContent || undefined,
+      materials: canonicalSources.materials,
+      sourcesComplete: canonicalSources.complete,
+      sourceIncompleteReasons: canonicalSources.incompleteReasons,
       lectureTitle: title,
+      noteInstruction: noteInstruction || undefined,
       durationSeconds:
         typeof session.duration_seconds === "number"
           ? session.duration_seconds
@@ -138,6 +154,7 @@ export async function POST(_request: Request, ctx: Params) {
         .from("live_lecture_sessions")
         .update({
           notes_json: next,
+          notes_text: liveNotesToPlainText(next),
           updated_at: new Date().toISOString(),
         })
         .eq("id", sessionId)

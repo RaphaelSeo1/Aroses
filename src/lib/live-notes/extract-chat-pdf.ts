@@ -18,9 +18,17 @@ import { createAdminClient } from "@/lib/supabase/admin";
 /** @deprecated Use MAX_CHAT_ATTACHMENT_CHARS — kept so existing chat routes typecheck. */
 export const MAX_CHAT_PDF_CHARS = MAX_CHAT_ATTACHMENT_CHARS;
 export const MAX_CHAT_PDF_BYTES = MAX_INGEST_DOCUMENT_BYTES;
+export const MAX_DURABLE_NOTE_SOURCE_CHARS = 80_000;
 
 export type ChatPdfExtractResult =
-  | { ok: true; text: string; fileName: string; kind: ChatAttachmentKind }
+  | {
+      ok: true;
+      text: string;
+      sourceText: string;
+      sourceTruncated: boolean;
+      fileName: string;
+      kind: ChatAttachmentKind;
+    }
   | { ok: false; status: number; error: string };
 
 function emptyFileError(kind: ChatAttachmentKind): string {
@@ -148,6 +156,8 @@ export async function extractChatAttachmentFromStorage(input: {
     fileName,
     kind,
     text: raw.slice(0, MAX_CHAT_ATTACHMENT_CHARS),
+    sourceText: raw.slice(0, MAX_DURABLE_NOTE_SOURCE_CHARS),
+    sourceTruncated: raw.length > MAX_DURABLE_NOTE_SOURCE_CHARS,
   };
 }
 

@@ -169,6 +169,8 @@ export type NotesPanelHandle = {
   revealSection: (sectionId: string) => boolean;
   /** True when the editor has any saved note content. */
   hasContent: () => boolean;
+  /** Persist the current editor snapshot and wait for the server response. */
+  flushSave: () => Promise<boolean>;
   /** True when this chunk was already auto-appended (in doc metadata or heading). */
   isChunkAppended: (chunkId: string, heading?: string) => boolean;
 };
@@ -424,6 +426,18 @@ export function NotesPanel({
 
   const saveTimerRef = useRef<number | null>(null);
   const titleSaveTimerRef = useRef<number | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const enqueueSave = useCallback(
+    (run: () => Promise<boolean>): Promise<boolean> => {
+      const task = saveQueueRef.current.catch(() => {}).then(run);
+      saveQueueRef.current = task.then(
+        () => undefined,
+        () => undefined
+      );
+      return task;
+    },
+    []
+  );
   const initialDocRef = useRef<unknown | null>(initialContentJson ?? null);
   const notesHydratedRef = useRef(Boolean(initialContentJson));
   const [notesHydrated, setNotesHydrated] = useState(
@@ -1214,6 +1228,37 @@ export function NotesPanel({
         if (!editor || editor.isDestroyed) return false;
         return docToPlainText(editor.getJSON()).trim().length > 0;
       },
+      flushSave: async () => {
+        if (!editor || editor.isDestroyed) return false;
+        streamWriterRef.current?.finishOp();
+        if (saveTimerRef.current != null) {
+          window.clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
+        const contentJson = editor.getJSON();
+        return enqueueSave(async () => {
+          try {
+            const isStandaloneNote = endpoint.includes("/api/notes/");
+            const response = await fetch(endpoint, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contentJson,
+                contentText: docToPlainText(contentJson),
+                ...(isStandaloneNote && docTitle.trim()
+                  ? { title: docTitle.trim().slice(0, 200) }
+                  : {}),
+              }),
+            });
+            if (!response.ok) return false;
+            editorDirtyRef.current = false;
+            docChromeDirtyRef.current = false;
+            return true;
+          } catch {
+            return false;
+          }
+        });
+      },
     };
     editorRef.current = handle;
     autoGenLog("editor imperative handle wired");
@@ -1223,7 +1268,7 @@ export function NotesPanel({
         autoGenLog("editor imperative handle cleared (this instance unmounted)");
       }
     };
-  }, [editor, editorRef]);
+  }, [docTitle, editor, editorRef, endpoint, enqueueSave]);
 
   const addSelectionToFocus = useCallback(async () => {
     if (!editor || editor.isDestroyed || focusBusy) return;
@@ -1490,11 +1535,14 @@ export function NotesPanel({
         return false;
       }
     };
-    let ok = await attempt();
-    if (!ok) {
-      await new Promise((r) => setTimeout(r, 1200));
-      ok = await attempt();
-    }
+    const ok = await enqueueSave(async () => {
+      let saved = await attempt();
+      if (!saved) {
+        await new Promise((r) => setTimeout(r, 1200));
+        saved = await attempt();
+      }
+      return saved;
+    });
     if (ok) {
       docChromeDirtyRef.current = false;
       editorDirtyRef.current = false;
@@ -1507,7 +1555,7 @@ export function NotesPanel({
     } else {
       setSaving("error");
     }
-  }, [buildSavePayload, endpoint, docTitle]);
+  }, [buildSavePayload, endpoint, docTitle, enqueueSave]);
 
   const flushPendingSaveKeepalive = useCallback(() => {
     if (saveTimerRef.current != null) {

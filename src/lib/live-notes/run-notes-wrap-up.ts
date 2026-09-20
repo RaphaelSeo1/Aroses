@@ -1,4 +1,5 @@
 import "server-only";
+import { synthesizeCanonicalLiveNotes } from "@/lib/ai/canonical-live-notes";
 import {
   reviewLiveLectureNotes,
   summarizeLiveLecture,
@@ -6,6 +7,8 @@ import {
 import {
   applyNoteRevisions,
   collectAiNoteSections,
+  collectNoteDraftSections,
+  replaceAiNoteDraft,
   setLectureRecapMarkdown,
 } from "@/lib/live-notes/notes-review";
 
@@ -19,37 +22,72 @@ export async function runLiveNotesWrapUp(input: {
   transcript: string;
   screenContent?: string;
   deckContent?: string;
+  materials?: Array<{ name: string; text: string }>;
+  sourcesComplete?: boolean;
+  sourceIncompleteReasons?: string[];
   lectureTitle?: string;
+  noteInstruction?: string;
   durationSeconds?: number | null;
   startedAt?: string | null;
   userId?: string;
 }): Promise<unknown> {
   let notesJson = input.notesJson;
+  let canonicalized = false;
 
-  try {
-    const sections = collectAiNoteSections(notesJson);
-    if (sections.length > 0) {
-      const revisions = await reviewLiveLectureNotes({
-        sections,
-        transcript: input.transcript,
-        screenContent: input.screenContent,
-        deckContent: input.deckContent,
-        lectureTitle: input.lectureTitle,
+  if (input.sourcesComplete !== false) {
+    try {
+      const markdown = await synthesizeCanonicalLiveNotes({
+        title: input.lectureTitle,
+        sources: {
+          transcript: input.transcript,
+          screen: input.screenContent,
+          deck: input.deckContent,
+          materials: input.materials,
+          complete: input.sourcesComplete,
+          incompleteReasons: input.sourceIncompleteReasons,
+        },
+        existingSections: collectNoteDraftSections(notesJson),
+        noteInstruction: input.noteInstruction,
         userId: input.userId,
       });
-      if (
-        revisions &&
-        (revisions.revisions.length > 0 || revisions.removeSectionIds.length > 0)
-      ) {
-        notesJson = applyNoteRevisions(
-          notesJson,
-          revisions.revisions,
-          revisions.removeSectionIds
-        );
+      if (markdown) {
+        notesJson = replaceAiNoteDraft(notesJson, markdown);
+        canonicalized = true;
       }
+    } catch (e) {
+      console.error("[live-notes wrap-up] canonical synthesis", e);
     }
-  } catch (e) {
-    console.error("[live-notes wrap-up] review", e);
+  }
+
+  // Keep the narrow legacy review as a best-effort fallback when canonical
+  // synthesis is unavailable. Never run it after the source-grounded rebuild.
+  if (!canonicalized && input.sourcesComplete !== false) {
+    try {
+      const sections = collectAiNoteSections(notesJson);
+      if (sections.length > 0) {
+        const revisions = await reviewLiveLectureNotes({
+          sections,
+          transcript: input.transcript,
+          screenContent: input.screenContent,
+          deckContent: input.deckContent,
+          lectureTitle: input.lectureTitle,
+          userId: input.userId,
+        });
+        if (
+          revisions &&
+          (revisions.revisions.length > 0 ||
+            revisions.removeSectionIds.length > 0)
+        ) {
+          notesJson = applyNoteRevisions(
+            notesJson,
+            revisions.revisions,
+            revisions.removeSectionIds
+          );
+        }
+      }
+    } catch (e) {
+      console.error("[live-notes wrap-up] review", e);
+    }
   }
 
   try {

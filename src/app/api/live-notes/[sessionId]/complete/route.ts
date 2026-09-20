@@ -4,9 +4,13 @@ import {
   buildLiveNotesStudyContext,
   extractLiveNotesEmphasis,
 } from "@/lib/live-notes/notes-emphasis";
-import { liveNotesToSourceMarkdown } from "@/lib/live-notes/notes-review";
+import {
+  liveNotesToPlainText,
+  liveNotesToSourceMarkdown,
+} from "@/lib/live-notes/notes-review";
 import { packLiveLectureIngestBlob } from "@/lib/live-notes/pack-ingest";
 import { runLiveNotesWrapUp } from "@/lib/live-notes/run-notes-wrap-up";
+import { loadCanonicalLiveNoteSources } from "@/lib/live-notes/source-bundle";
 import {
   formatDeckForIngest,
   formatDeckForWrapUp,
@@ -19,6 +23,7 @@ import {
   shouldReuseExistingIngestJob,
 } from "@/lib/notes/ingest-job-retry";
 import { report } from "@/lib/report-error";
+import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
@@ -26,7 +31,7 @@ import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export const runtime = "nodejs";
-export const maxDuration = 90;
+export const maxDuration = 120;
 
 type Params = { params: Promise<{ sessionId: string }> };
 
@@ -204,14 +209,60 @@ export async function POST(request: Request, ctx: Params) {
   const deckPages = await loadSessionDeckPages(supabase, sessionId);
   const deckForWrapUp = formatDeckForWrapUp(deckPages);
   const deckForIngest = formatDeckForIngest(deckPages);
+  const canonicalSources = await loadCanonicalLiveNoteSources(
+    supabase,
+    sessionId
+  );
+  if (
+    attachedPdfText.length >= 12 &&
+    (canonicalSources.materials ?? []).length === 0
+  ) {
+    const name = attachedPdfName || "Attached course material";
+    const materials = canonicalSources.materials ?? [];
+    if (
+      !materials.some(
+        (material) =>
+          material.name === name && material.text === attachedPdfText
+      )
+    ) {
+      canonicalSources.materials = [
+        ...materials,
+        { name, text: attachedPdfText },
+      ];
+    }
+  }
+  if (
+    (canonicalSources.materials ?? []).reduce(
+      (sum, material) => sum + material.text.length,
+      0
+    ) > 80_000
+  ) {
+    canonicalSources.complete = false;
+    canonicalSources.incompleteReasons = [
+      ...(canonicalSources.incompleteReasons ?? []),
+      "uploaded material character limit exceeded",
+    ];
+  }
+  const noteInstruction = await loadNoteInstruction(
+    supabase,
+    "live_lecture_sessions",
+    { id: sessionId, user_id: user.id }
+  );
 
-  // Mirrors the confirm-transcript minimum — below this, generation would
-  // silently no-op, so reject with something actionable instead.
-  if (body.trim().length < 80) {
+  // Any authoritative source combination may drive generation. A deck-only
+  // or uploaded-material-only workflow must not be blocked for lacking audio.
+  const nonTranscriptSourceChars =
+    (canonicalSources.deck?.length ?? 0) +
+    (canonicalSources.screen?.length ?? 0) +
+    (canonicalSources.materials ?? []).reduce(
+      (sum, material) => sum + material.text.length,
+      0
+    );
+  if (body.trim().length < 80 && nonTranscriptSourceChars < 80) {
     return NextResponse.json(
       {
         error:
-          "Not enough speech was captured to build a course yet. Keep recording a bit longer, or check that the right audio source is being shared.",
+          "Not enough source material was captured to build a course yet. Add slides, a document, or more lecture audio and try again.",
       },
       { status: 400 }
     );
@@ -279,18 +330,21 @@ export async function POST(request: Request, ctx: Params) {
     .select("id", { count: "exact", head: true })
     .eq("exam_group_id", examGroupId);
 
-  // ── Wrap-up: consistency review + lecture summary ───────────────────────
-  // One Haiku pass verifies AI note sections, then prepends a grounded
-  // "## Lecture summary" for exam-morning review. Best effort: any failure
-  // leaves the notes as-is and generation proceeds.
+  // ── Wrap-up: canonical source synthesis + lecture summary ───────────────
+  // Rebuild the editable AI draft from all sources, then generate a grounded
+  // recap. Best effort: any failure leaves the notes as-is.
   let notesJson: unknown = session.notes_json;
   try {
     const next = await runLiveNotesWrapUp({
       notesJson,
-      transcript: transcriptOnly,
-      screenContent: screenContent || undefined,
-      deckContent: deckForWrapUp || undefined,
+      transcript: canonicalSources.transcript || transcriptOnly,
+      screenContent: canonicalSources.screen || screenContent || undefined,
+      deckContent: canonicalSources.deck || deckForWrapUp || undefined,
+      materials: canonicalSources.materials,
+      sourcesComplete: canonicalSources.complete,
+      sourceIncompleteReasons: canonicalSources.incompleteReasons,
       lectureTitle: title,
+      noteInstruction: noteInstruction || undefined,
       durationSeconds:
         typeof session.duration_seconds === "number"
           ? session.duration_seconds
@@ -303,7 +357,11 @@ export async function POST(request: Request, ctx: Params) {
       notesJson = next;
       const { error: notesErr } = await supabase
         .from("live_lecture_sessions")
-        .update({ notes_json: notesJson, updated_at: new Date().toISOString() })
+        .update({
+          notes_json: notesJson,
+          notes_text: liveNotesToPlainText(notesJson),
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", sessionId)
         .eq("user_id", user.id);
       if (notesErr) notesJson = session.notes_json;
@@ -322,12 +380,10 @@ export async function POST(request: Request, ctx: Params) {
   const notesSource =
     liveNotesToSourceMarkdown(notesJson) ||
     (typeof session.notes_text === "string" ? session.notes_text.trim() : "");
-  const handoutContent =
-    attachedPdfText.length >= 12
-      ? attachedPdfName
-        ? `### ${attachedPdfName}\n${attachedPdfText}`
-        : attachedPdfText
-      : "";
+  const handoutContent = (canonicalSources.materials ?? [])
+    .map((material) => `### ${material.name}\n${material.text}`)
+    .join("\n\n")
+    .slice(0, 48_000);
   const transcript = packLiveLectureIngestBlob({
     title,
     notesMarkdown: notesSource,

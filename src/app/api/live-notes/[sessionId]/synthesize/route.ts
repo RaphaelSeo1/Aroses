@@ -28,7 +28,7 @@ const MAX_EXCERPT_CHARS = 3_000;
 const MAX_EXISTING_SECTIONS = 200;
 const MAX_EXISTING_NOTES_CHARS = 100_000;
 /**
- * Hard per-session cap on Haiku note calls (runaway guard). The client
+ * Hard per-session cap on incremental note calls (runaway guard). The client
  * fires roughly every ~45–60s of continuous speech (5s heartbeat gated on
  * ~700 fresh chars + the previous call finishing its typed-out render), so
  * 200 covers a ~2.5–3h lecture at full pace.
@@ -48,7 +48,7 @@ const MAX_SYNTHESIZE_CALLS = 200;
  *
  * Streams (text/event-stream):
  *   event: thought data: { "message": string }
- *   event: op    data: { "op": "revise"|"append", "sectionId": string }
+ *   event: op    data: { "op": "revise"|"delete"|"append", "sectionId": string }
  *   event: text  data: { "delta": string }        // body of the active op
    *   event: done  data: { "appendSectionId": string, "seedRemaining"?: number, "seededThrough"?: number }
  *   event: error data: { "message": string }
