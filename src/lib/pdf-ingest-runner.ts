@@ -127,6 +127,7 @@ import { findSiblingCanonicalMaterial } from "@/lib/study-material-canonical";
 import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
+import { PDF_PROCESS_MAX_DURATION_SEC } from "@/lib/pdf-route-duration";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { logActivity, pruneActivityEvents } from "@/lib/activity-log";
 import {
@@ -242,9 +243,10 @@ async function withAnthropicRateLimitRetries<T>(
   jobId: string,
   phase: string,
   fn: () => Promise<T>,
-  options?: { maxAttempts?: number }
+  options?: { maxAttempts?: number; deadlineAt?: number }
 ): Promise<T> {
   const maxAttempts = options?.maxAttempts ?? 8;
+  const deadlineAt = options?.deadlineAt ?? null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       return await fn();
@@ -253,6 +255,22 @@ async function withAnthropicRateLimitRetries<T>(
         throw e;
       }
       const delayMs = backoffMsAfterRateLimit(e, attempt);
+      // Never start a backoff we cannot finish. Sleeping past the serverless
+      // wall clock gets the whole invocation killed mid-retry, so every module
+      // that HAD completed but was not yet persisted is paid for and thrown
+      // away, and the client restarts the same batch from scratch. Giving up
+      // early instead lets the caller persist its progress and return cleanly;
+      // the next invocation resumes from the saved prefix.
+      if (deadlineAt != null && Date.now() + delayMs > deadlineAt) {
+        console.warn("[pdf-ingest] out of time budget, not retrying", {
+          jobId,
+          phase,
+          attempt,
+          delayMs,
+          msLeft: deadlineAt - Date.now(),
+        });
+        throw e;
+      }
       console.warn("[pdf-ingest] rate limit, backing off", {
         jobId,
         phase,
@@ -263,6 +281,83 @@ async function withAnthropicRateLimitRetries<T>(
     }
   }
   throw new Error("[pdf-ingest] exhausted retries (unreachable)");
+}
+
+/**
+ * Exclusive lease for module expansion (migration 114).
+ *
+ * Without this, the browser poll loop, the per-minute cron reaper and the
+ * GET-route stall re-kick could all run `runPdfIngestExpandOne` for one job
+ * concurrently. Each read the same contiguous prefix, picked the same batch
+ * indices, and generated the same modules with Sonnet — every duplicate set
+ * billed, all but one thrown away.
+ *
+ * Time-bounded rather than released-on-exit so a killed lambda cannot wedge the
+ * job: the lease expires on its own and the reaper resumes.
+ *
+ * Fails OPEN when the column is missing so a database without migration 114
+ * still builds courses (just without the cost protection) — that case is logged
+ * loudly rather than silently tolerated.
+ */
+const EXPAND_LEASE_MS = 240_000;
+
+async function claimExpandLease(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+): Promise<boolean> {
+  const nowIso = new Date().toISOString();
+  const until = new Date(Date.now() + EXPAND_LEASE_MS).toISOString();
+  const { data, error } = await admin
+    .from("pdf_ingest_jobs")
+    .update({ expand_lease_until: until })
+    .eq("id", jobId)
+    .or(`expand_lease_until.is.null,expand_lease_until.lt.${nowIso}`)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingDbColumnError(error, "expand_lease_until")) {
+      console.error(
+        "[pdf-ingest] expand_lease_until column missing — apply migration 114. " +
+          "Running WITHOUT the concurrency lease; duplicate module generation is possible.",
+        jobId
+      );
+      return true;
+    }
+    console.warn("[pdf-ingest] lease claim failed", jobId, error);
+    return true;
+  }
+  return Boolean(data);
+}
+
+async function releaseExpandLease(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+): Promise<void> {
+  await admin
+    .from("pdf_ingest_jobs")
+    .update({ expand_lease_until: null })
+    .eq("id", jobId)
+    .then(
+      () => {},
+      () => {}
+    );
+}
+
+/** Extend a held lease so a long but healthy batch is not stolen mid-flight. */
+async function renewExpandLease(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+): Promise<void> {
+  const until = new Date(Date.now() + EXPAND_LEASE_MS).toISOString();
+  await admin
+    .from("pdf_ingest_jobs")
+    .update({ expand_lease_until: until })
+    .eq("id", jobId)
+    .then(
+      () => {},
+      () => {}
+    );
 }
 
 async function touchJobProgress(
@@ -1483,6 +1578,19 @@ export async function runPdfIngestExpandOne(
     (job as { ingest_source_images?: unknown }).ingest_source_images
   );
 
+  // Exclusive lease: if another invocation (client poll / cron reaper /
+  // stall re-kick) is already building this job, do nothing instead of
+  // regenerating the same modules with Sonnet and paying for both.
+  const gotLease = await claimExpandLease(admin, jobId);
+  if (!gotLease) {
+    console.info("[pdf-ingest] expand skipped — another worker holds the lease", {
+      jobId,
+      modulesBuilt: idx,
+      modulesTotal: n,
+    });
+    return { kind: "progress", modulesBuilt: idx, modulesTotal: n };
+  }
+
   if (prefix.length >= n) {
     const sourceIndex = await loadIngestSourceIndex(admin, jobId);
     const ingestAssetManifest = await loadIngestAssetManifest(admin, jobId);
@@ -1506,8 +1614,10 @@ export async function runPdfIngestExpandOne(
       }
     );
     if (!fin) {
+      await releaseExpandLease(admin, jobId);
       return { kind: "failed", message: "Could not save study material." };
     }
+    await releaseExpandLease(admin, jobId);
     return { kind: "complete", materialId: fin.materialId };
   }
 
@@ -1593,6 +1703,10 @@ export async function runPdfIngestExpandOne(
   const batchCount = pdfIngestModuleBatchSize(n - idx, modulePeerCount);
   const batchIndices = Array.from({ length: batchCount }, (_, offset) => idx + offset);
   const expandBatchStartedAt = Date.now();
+  // Leave headroom under the route's maxDuration so the persist + final merge
+  // below still run after the last module resolves.
+  const expandDeadlineAt =
+    expandBatchStartedAt + PDF_PROCESS_MAX_DURATION_SEC * 1000 - 45_000;
   console.info("[pdf-ingest] expand module batch", {
     jobId,
     batchCount,
@@ -1602,6 +1716,9 @@ export async function runPdfIngestExpandOne(
   });
   const moduleHeartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
+    // Keep the lease alive while this batch is genuinely working, so a slow
+    // but healthy batch is not stolen by the reaper mid-flight.
+    void renewExpandLease(admin, jobId);
   }, 22_000);
 
   // Persist each module at its outline index as soon as it resolves (even when
@@ -1731,14 +1848,15 @@ export async function runPdfIngestExpandOne(
               moduleGenOptions
             );
           },
-          // 6 attempts × 90 s exp-backoff cap = ~126 s worst-case retry +
-          // ~30 s generation = ~156 s. Comfortably under Vercel's 300 s
-          // maxDuration so /expand always returns cleanly to the client
-          // (which has its own retry loop via polling). 16 here meant the
-          // function would get force-killed mid-retry, the client would
-          // reconnect, and the same module would be re-attempted from zero
-          // — the UI looked stuck at "Writing module N of M" for minutes.
-          { maxAttempts: 6 }
+          // Bounded by the invocation's real time budget, not by an attempt
+          // count alone. The old comment here assumed ~126 s of worst-case
+          // backoff, but `backoffMsAfterRateLimit` returns 28/34/40/46/52 s for
+          // token-per-minute 429s — 200 s of sleeping before counting
+          // generation time. Six attempts could never fit in 300 s, so the
+          // lambda was killed mid-retry and the batch restarted from zero.
+          // Three attempts plus a hard deadline returns cleanly instead, and
+          // the next invocation resumes from the persisted prefix.
+          { maxAttempts: 3, deadlineAt: expandDeadlineAt }
         ).then((mod) => {
           const planned = moduleSources?.[moduleIndex];
           let injected = mod;
@@ -1811,6 +1929,9 @@ export async function runPdfIngestExpandOne(
     return { kind: "failed", message };
   } finally {
     clearInterval(moduleHeartbeat);
+    // Hand the job back so the next batch can start immediately. A crashed
+    // invocation never reaches here — its lease simply expires.
+    await releaseExpandLease(admin, jobId);
   }
 
   // Final batch write: merge once more against the live row so any module a
@@ -1906,8 +2027,10 @@ export async function runPdfIngestExpandOne(
       }
     );
     if (!fin) {
+      await releaseExpandLease(admin, jobId);
       return { kind: "failed", message: "Could not save study material." };
     }
+    await releaseExpandLease(admin, jobId);
     return { kind: "complete", materialId: fin.materialId };
   }
 
