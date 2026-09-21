@@ -78,6 +78,8 @@ export type NoteMatchCandidate = {
   courseId: string | null;
   updatedAt: string | null;
   deleted: boolean;
+  /** Notes-hub folder — a different origin from course materials / live sessions. */
+  sectionId?: string | null;
 };
 
 export type LiveSessionMatchCandidate = {
@@ -160,9 +162,37 @@ export function contentOverlapScore(cardText: string, corpus: string): number {
 }
 
 /**
+ * Restore a card whose stored `source_label` uniquely names a notes-hub
+ * note, when it currently sits on a different origin (course live session /
+ * PDF) whose display title is not that label.
+ *
+ * Exact title only — never "Lecture 4" vs "Lecture 4 - ER Targeting…".
+ */
+export function pickSectionNoteForStoredLabel(
+  label: string,
+  currentNote: NoteMatchCandidate | null,
+  notes: NoteMatchCandidate[]
+): string | null {
+  const wanted = normTitle(label);
+  if (!wanted || isGenericFocusTitle(label)) return null;
+  if (currentNote?.sectionId) return null;
+  if (currentNote && normTitle(currentNote.title) === wanted) return null;
+  const matches = notes.filter(
+    (n) => !n.deleted && n.sectionId && normTitle(n.title) === wanted
+  );
+  if (matches.length !== 1) return null;
+  const target = matches[0]!;
+  if (currentNote && currentNote.id === target.id) return null;
+  return target.id;
+}
+
+/**
  * Pick a live session for a focus card whose source_label matches a lecture
  * session title. Same-title collisions across courses use notes-body overlap
  * (and optional preferredCourseId from the PDF the card is currently on).
+ *
+ * Never used to move a card that already has a stable source_note_id or
+ * course material_id — those origins must stay put.
  */
 export function pickLiveSessionForFocusCard(
   label: string,
@@ -269,6 +299,21 @@ export function pickNoteForFocusLabel(
         .filter((id): id is string => Boolean(id && UUID_RE.test(id)))
     ),
   ];
+  const sectioned = candidates.filter(
+    (n) => typeof n.sectionId === "string" && n.sectionId
+  );
+  const courseOriginNotes = candidates.filter(
+    (n) => n.courseId && !(typeof n.sectionId === "string" && n.sectionId)
+  );
+  // Notes-hub folder vs course lecture / live session: never pick by title.
+  if (sectioned.length > 0 && (courseOriginNotes.length > 0 || live.length > 0)) {
+    return {
+      noteId: "",
+      courseId: null,
+      sessionId: null,
+      ambiguous: true,
+    };
+  }
 
   // Same title in two courses (PBHLTH Lecture 2 vs MCB 104 Lecture 2) must
   // not collapse into whichever session happened to sort first.

@@ -31,7 +31,7 @@ export type SrsDueByMaterial = {
   total: number;
   /** Present when personal cards can be attributed to distinct notes. */
   notes?: SrsDueNoteChild[];
-  /** Notes-hub folder id (`user_note_sections`) when the note is not course-linked. */
+  /** Notes-hub folder id (`user_note_sections`). Wins over a stamped course_id. */
   sectionId?: string | null;
   /** Current folder title from `user_note_sections` — never a hardcoded name. */
   sectionTitle?: string | null;

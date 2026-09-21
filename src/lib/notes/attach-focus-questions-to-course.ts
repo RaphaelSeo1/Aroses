@@ -19,6 +19,7 @@ export type NoteFocusImportPlan = {
 type LinkedNoteRow = {
   id: string;
   contentJson: unknown;
+  sectionId: string | null;
 };
 
 function asId(value: unknown): string | null {
@@ -28,18 +29,30 @@ function asId(value: unknown): string | null {
 async function loadNotesByJob(
   supabase: SupabaseClient,
   jobId: string,
-  userId: string
+  userId: string,
+  opts?: { skipHubSectionNotes?: boolean }
 ): Promise<LinkedNoteRow[]> {
+  const skipHub = opts?.skipHubSectionNotes === true;
   const rows: LinkedNoteRow[] = [];
   let notes: Array<Record<string, unknown>> | null = null;
   const first = await supabase
     .from("user_notes")
-    .select("id, content_json, deleted_at, user_id")
+    .select("id, content_json, deleted_at, user_id, section_id")
     .eq("ingest_job_id", jobId)
     .eq("user_id", userId)
     .limit(8);
   let error = first.error;
   notes = (first.data as Array<Record<string, unknown>> | null) ?? null;
+  if (error && isMissingDbColumnError(error, "section_id")) {
+    const retry = await supabase
+      .from("user_notes")
+      .select("id, content_json, deleted_at, user_id")
+      .eq("ingest_job_id", jobId)
+      .eq("user_id", userId)
+      .limit(8);
+    error = retry.error;
+    notes = (retry.data as Array<Record<string, unknown>> | null) ?? null;
+  }
   if (error && isMissingDbColumnError(error, "deleted_at")) {
     const retry = await supabase
       .from("user_notes")
@@ -57,7 +70,9 @@ async function loadNotesByJob(
     if (note.deleted_at) continue;
     const id = asId(note.id);
     if (!id) continue;
-    rows.push({ id, contentJson: note.content_json ?? null });
+    const sectionId = asId(note.section_id);
+    if (skipHub && sectionId) continue;
+    rows.push({ id, contentJson: note.content_json ?? null, sectionId });
   }
 
   const { data: sessions, error: sessionErr } = await supabase
@@ -74,7 +89,11 @@ async function loadNotesByJob(
     if (!noteId) continue;
     const existing = rows.find((r) => r.id === noteId);
     if (!existing) {
-      rows.push({ id: noteId, contentJson: session.notes_json ?? null });
+      rows.push({
+        id: noteId,
+        contentJson: session.notes_json ?? null,
+        sectionId: null,
+      });
     } else if (existing.contentJson == null) {
       existing.contentJson = session.notes_json ?? null;
     }
@@ -85,7 +104,8 @@ async function loadNotesByJob(
 async function loadNotesByMaterial(
   supabase: SupabaseClient,
   materialId: string,
-  userId: string
+  userId: string,
+  opts?: { skipHubSectionNotes?: boolean }
 ): Promise<LinkedNoteRow[]> {
   const { data: jobs, error } = await supabase
     .from("pdf_ingest_jobs")
@@ -99,7 +119,7 @@ async function loadNotesByMaterial(
   for (const job of jobs ?? []) {
     const jobId = asId(job.id);
     if (!jobId) continue;
-    for (const row of await loadNotesByJob(supabase, jobId, userId)) {
+    for (const row of await loadNotesByJob(supabase, jobId, userId, opts)) {
       if (seen.has(row.id)) continue;
       seen.add(row.id);
       out.push(row);
@@ -186,9 +206,12 @@ export async function planNoteFocusQuestionsForJob(
     modules: CourseModule[];
     materialId?: string | null;
     onlyUnattached?: boolean;
+    skipHubSectionNotes?: boolean;
   }
 ): Promise<NoteFocusImportPlan | null> {
-  const notes = await loadNotesByJob(supabase, opts.jobId, opts.userId);
+  const notes = await loadNotesByJob(supabase, opts.jobId, opts.userId, {
+    skipHubSectionNotes: opts.skipHubSectionNotes,
+  });
   if (notes.length === 0) return null;
   const questions = await loadFocusQuestionsForNotes(
     supabase,
@@ -244,6 +267,7 @@ export async function attachNoteFocusQuestionsToMaterial(
     jobId?: string | null;
     mergeIntoQuiz?: boolean;
     onlyUnattached?: boolean;
+    skipHubSectionNotes?: boolean;
   }
 ): Promise<{
   attached: number;
@@ -258,12 +282,14 @@ export async function attachNoteFocusQuestionsToMaterial(
       modules: opts.modules,
       materialId: opts.materialId,
       onlyUnattached: opts.onlyUnattached,
+      skipHubSectionNotes: opts.skipHubSectionNotes,
     });
   } else {
     const notes = await loadNotesByMaterial(
       supabase,
       opts.materialId,
-      opts.userId
+      opts.userId,
+      { skipHubSectionNotes: opts.skipHubSectionNotes }
     );
     if (notes.length === 0) {
       return { attached: 0, payloadModules: opts.modules, mappings: [] };
@@ -310,8 +336,11 @@ export async function relinkNoteFocusQuestionsForExistingMaterial(
     materialId: string;
     jobId?: string | null;
     mergeIntoQuiz?: boolean;
+    /** When true (default), notes in a hub folder stay notes-origin. */
+    skipHubSectionNotes?: boolean;
   }
 ): Promise<void> {
+  const skipHubSectionNotes = opts.skipHubSectionNotes !== false;
   const { count, error: countErr } = await supabase
     .from("user_personal_quiz_items")
     .select("id", { count: "exact", head: true })
@@ -335,6 +364,7 @@ export async function relinkNoteFocusQuestionsForExistingMaterial(
     jobId: opts.jobId,
     mergeIntoQuiz: opts.mergeIntoQuiz,
     onlyUnattached: true,
+    skipHubSectionNotes,
   });
   if (!opts.mergeIntoQuiz || result.payloadModules === payload.modules) return;
 

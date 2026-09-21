@@ -53,3 +53,11 @@ test("live session course wins over a stale note course_id", () => {
   assert.equal(courseIdForNotesFocusBucket(mcb, null), mcb);
   assert.equal(courseIdForNotesFocusBucket(null, pbhlth), pbhlth);
 });
+
+test("notes-hub section origin never inherits a course id", () => {
+  const pbhlth = "44444444-4444-4444-8444-444444444444";
+  const mcb = "11111111-1111-4111-8111-111111111111";
+  const section = "55555555-5555-4555-8555-555555555555";
+  assert.equal(courseIdForNotesFocusBucket(mcb, pbhlth, section), null);
+  assert.equal(courseIdForNotesFocusBucket(mcb, null, section), null);
+});

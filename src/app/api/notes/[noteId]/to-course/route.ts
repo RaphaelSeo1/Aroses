@@ -81,6 +81,7 @@ export async function POST(request: Request, ctx: Params) {
             materialId,
             jobId: note.ingest_job_id,
             mergeIntoQuiz: true,
+            skipHubSectionNotes: false,
           });
         } catch (e) {
           console.error("[notes/to-course] focus relink", e);

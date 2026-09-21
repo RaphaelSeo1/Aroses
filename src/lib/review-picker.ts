@@ -83,10 +83,12 @@ type Acc = {
 
 function notesHubGroupId(item: ReviewPickerSource): string | null {
   if (!isNotesFocusBucketId(item.materialId)) return null;
-  if (item.courseId) return null;
   if (!parseNotesFocusBucketNoteId(item.materialId)) return null;
+  // Hub folder identity wins over a stamped course_id so notes-section
+  // decks never fold into a similarly titled course lecture.
   const sectionId = item.sectionId?.trim();
   if (sectionId) return notesSectionGroupId(sectionId);
+  if (item.courseId) return null;
   if (item.hubKind === "live") return HUB_LIVE_GROUP_ID;
   if (item.hubKind === "tutor") return HUB_TUTOR_GROUP_ID;
   return HUB_STANDALONE_GROUP_ID;
@@ -229,9 +231,25 @@ export function groupReviewPickerRows(
     if (item.total <= 0 && (item.notes?.length ?? 0) === 0) continue;
 
     if (isNotesFocusBucketId(item.materialId)) {
-      const courseId = item.courseId;
-      const courseTitle = meaningfulCourseTitle(item.courseTitle);
-      if (courseId) {
+      const hubKey = notesHubGroupId(item);
+      if (hubKey) {
+        const hubKind: NotesHubKind =
+          item.sectionId?.trim()
+            ? "custom"
+            : item.hubKind === "live" || item.hubKind === "tutor"
+              ? item.hubKind
+              : "standalone";
+        const acc = ensureAcc(byKey, hubKey, {
+          courseId: null,
+          courseTitle: null,
+          fileName: notesHubGroupTitle(item),
+          sectionId: item.sectionId ?? null,
+          hubKind,
+        });
+        upsertNote(acc, noteChildFromSource(item, null));
+      } else if (item.courseId) {
+        const courseId = item.courseId;
+        const courseTitle = meaningfulCourseTitle(item.courseTitle);
         const key = `course:${normId(courseId)}`;
         const acc = ensureAcc(byKey, key, {
           courseId,
@@ -240,35 +258,17 @@ export function groupReviewPickerRows(
         });
         upsertNote(acc, noteChildFromSource(item, courseId));
       } else {
-        const hubKey = notesHubGroupId(item);
-        if (hubKey) {
-          const hubKind: NotesHubKind =
-            item.sectionId?.trim()
-              ? "custom"
-              : item.hubKind === "live" || item.hubKind === "tutor"
-                ? item.hubKind
-                : "standalone";
-          const acc = ensureAcc(byKey, hubKey, {
-            courseId: null,
-            courseTitle: null,
-            fileName: notesHubGroupTitle(item),
-            sectionId: item.sectionId ?? null,
-            hubKind,
-          });
-          upsertNote(acc, noteChildFromSource(item, null));
-        } else {
-          standalone.push({
-            id: item.materialId,
-            courseId: null,
-            courseTitle: null,
-            fileName: item.fileName || "Focus questions",
-            module: 0,
-            personal: item.personal,
-            total: item.personal,
-            children: [],
-            leafIds: [item.materialId],
-          });
-        }
+        standalone.push({
+          id: item.materialId,
+          courseId: null,
+          courseTitle: null,
+          fileName: item.fileName || "Focus questions",
+          module: 0,
+          personal: item.personal,
+          total: item.personal,
+          children: [],
+          leafIds: [item.materialId],
+        });
       }
       continue;
     }

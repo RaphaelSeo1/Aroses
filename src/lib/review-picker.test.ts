@@ -233,15 +233,16 @@ test("a later-created hub folder is its own parent using its own title", () => {
   assert.deepEqual(titles, ["Folder one", "Folder two"]);
 });
 
-test("course-linked notes stay under the course even when they also have a hub folder", () => {
+test("notes-hub folder origin stays in that folder even if a course_id was stamped", () => {
+  const sectionId = "55555555-5555-4555-8555-555555555555";
   const groups = groupReviewPickerRows([
     {
       materialId: `note:${NOTE_A}`,
-      fileName: "Lecture 2",
+      fileName: "Lecture 4",
       courseId: COURSE,
-      courseTitle: "Biology 101",
-      sectionId: "55555555-5555-4555-8555-555555555555",
-      sectionTitle: "Any folder name",
+      courseTitle: "MCB 104 (Fall 2026)",
+      sectionId,
+      sectionTitle: "MCB 104 !",
       hubKind: "custom",
       module: 0,
       personal: 3,
@@ -249,9 +250,60 @@ test("course-linked notes stay under the course even when they also have a hub f
     },
   ]);
   assert.equal(groups.length, 1);
-  assert.equal(groups[0]!.courseTitle, "Biology 101");
-  assert.equal(groups[0]!.hubKind == null || groups[0]!.hubKind === null, true);
-  assert.equal(groups[0]!.children[0]!.fileName, "Lecture 2");
+  assert.equal(groups[0]!.id, `section:${sectionId}`);
+  assert.equal(groups[0]!.hubKind, "custom");
+  assert.equal(groups[0]!.courseTitle, null);
+  assert.equal(
+    pickerParentLabel(groups[0]!, {
+      focusQuestions: "Focus questions",
+      courseFallback: "Course",
+    }),
+    "MCB 104 !"
+  );
+  assert.equal(groups[0]!.children[0]!.fileName, "Lecture 4");
+});
+
+test("identical Lecture 4 titles stay distinct across notes-hub vs course module", () => {
+  const sectionId = "55555555-5555-4555-8555-555555555555";
+  const groups = groupReviewPickerRows([
+    {
+      materialId: MAT,
+      fileName: "Lecture 4",
+      courseId: COURSE,
+      courseTitle: "MCB 104 (Fall 2026)",
+      module: 0,
+      personal: 16,
+      total: 16,
+    },
+    {
+      materialId: `note:${NOTE_A}`,
+      fileName: "Lecture 4 - ER Targeting, Endomembrane Trafficking, and mRNA-to-Protein Flow",
+      courseId: COURSE,
+      courseTitle: "MCB 104 (Fall 2026)",
+      sectionId,
+      sectionTitle: "MCB 104 !",
+      hubKind: "custom",
+      module: 0,
+      personal: 32,
+      total: 32,
+    },
+  ]);
+  assert.equal(groups.length, 2);
+  const hub = groups.find((g) => g.id === `section:${sectionId}`);
+  const course = groups.find((g) => g.courseTitle === "MCB 104 (Fall 2026)");
+  assert.ok(hub);
+  assert.ok(course);
+  assert.equal(hub!.personal, 32);
+  assert.equal(hub!.children[0]!.kind, "note");
+  assert.equal(course!.personal, 16);
+  assert.equal(course!.children.every((c) => c.kind === "module"), true);
+  assert.equal(
+    pickerParentLabel(hub!, {
+      focusQuestions: "Focus questions",
+      courseFallback: "Course",
+    }),
+    "MCB 104 !"
+  );
 });
 
 test("live lecture notes without a course group under Live lectures", () => {

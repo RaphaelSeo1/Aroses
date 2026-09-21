@@ -64,13 +64,18 @@ export function isNotesOriginFocusCard(row: {
 }
 
 /**
- * Course for a notes-focus Review row. A live session that owns the note
- * wins over a stale `user_notes.course_id` (title-match used to stamp the
- * wrong course onto Lecture 2 notes).
+ * Course for a notes-focus Review row.
+ *
+ * A notes-hub folder (`user_note_sections`) is its own origin — never fold
+ * those cards under a course just because a lecture/PDF shares the title
+ * or a stale `course_id` was stamped. Live-session course wins over a stale
+ * `user_notes.course_id` only when the note is not in a hub folder.
  */
 export function courseIdForNotesFocusBucket(
   noteCourseId: string | null | undefined,
-  liveSessionCourseId: string | null | undefined
+  liveSessionCourseId: string | null | undefined,
+  sectionId?: string | null
 ): string | null {
+  if (validUuid(sectionId)) return null;
   return validUuid(liveSessionCourseId) ?? validUuid(noteCourseId);
 }

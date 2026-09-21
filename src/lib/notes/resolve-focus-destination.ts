@@ -36,8 +36,9 @@ function firstModuleId(payload: unknown, preferred?: number): number {
  *
  * Notes / live notes / tutor notes are always notes-origin: persist
  * `source_note_id` + the note title, and never attach onto an existing
- * course PDF just because the note sits next to a course. Course grouping
- * in Review comes from `user_notes.course_id` (hydrated at read time).
+ * course PDF just because the note sits next to a course or shares a
+ * lecture title. Review grouping uses `user_notes.section_id` (hub folder)
+ * first, then `user_notes.course_id` for live-lecture notes without a folder.
  *
  * `materialId` without a note/live/tutor source is course-origin (in-lesson
  * notes on a study material).

@@ -98,6 +98,79 @@ test("notes-origin cards with a course stay on the note, not the PDF", () => {
   );
 });
 
+test("notes-hub Lecture 4 stays out of a same-titled course lecture", () => {
+  const sectionId = "55555555-5555-4555-8555-555555555555";
+  const byMaterial = new Map<string, SrsDueByMaterial>([
+    [
+      MAT,
+      {
+        materialId: MAT,
+        fileName: "Lecture 4",
+        courseId: COURSE,
+        courseTitle: "MCB 104 (Fall 2026)",
+        module: 8,
+        personal: 0,
+        total: 0,
+      },
+    ],
+  ]);
+  const notesMeta = new Map<string, NotesFocusBucketMeta>([
+    [
+      notesFocusBucketId(NOTE_A),
+      {
+        fileName:
+          "Lecture 4 - ER Targeting, Endomembrane Trafficking, and mRNA-to-Protein Flow",
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "MCB 104 !",
+        hubKind: "custom",
+      },
+    ],
+  ]);
+  for (let i = 0; i < 32; i++) {
+    addPersonalFocusCount(
+      byMaterial,
+      {
+        materialId: null,
+        sourceNoteId: NOTE_A,
+        sourceLabel:
+          "Lecture 4 - ER Targeting, Endomembrane Trafficking, and mRNA-to-Protein Flow",
+      },
+      notesMeta
+    );
+  }
+  for (let i = 0; i < 16; i++) {
+    addPersonalFocusCount(
+      byMaterial,
+      {
+        materialId: MAT,
+        sourceNoteId: null,
+        sourceLabel: "Lecture 4",
+      },
+      notesMeta
+    );
+  }
+  finalizeFocusBuckets(byMaterial);
+
+  const courseMat = byMaterial.get(MAT)!;
+  assert.equal(courseMat.personal, 16);
+  const noteBucket = byMaterial.get(notesFocusBucketId(NOTE_A))!;
+  assert.equal(noteBucket.personal, 32);
+  assert.equal(noteBucket.sectionId, sectionId);
+
+  const groups = groupReviewPickerRows([...byMaterial.values()]);
+  const hub = groups.find((g) => g.id === `section:${sectionId}`);
+  const course = groups.find((g) => g.courseTitle === "MCB 104 (Fall 2026)");
+  assert.ok(hub);
+  assert.ok(course);
+  assert.equal(pickerParentLabel(hub!, fallbacks), "MCB 104 !");
+  assert.equal(hub!.personal, 32);
+  assert.equal(course!.personal, 16);
+  assert.equal(course!.children.every((c) => c.kind === "module"), true);
+});
+
 test("notes-only cards keep the hub folder they belong to", () => {
   const byMaterial = new Map<string, SrsDueByMaterial>();
   const sectionId = "55555555-5555-4555-8555-555555555555";

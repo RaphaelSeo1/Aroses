@@ -200,9 +200,14 @@ export async function hydrateNotesFocusBucketMeta(
       | { id: string; title: string | null }[]
       | null;
     const courseRow = Array.isArray(courses) ? courses[0] : courses;
+    const sectionId =
+      typeof raw.section_id === "string" && raw.section_id.trim()
+        ? raw.section_id
+        : null;
     const courseId = courseIdForNotesFocusBucket(
       typeof raw.course_id === "string" ? raw.course_id : courseRow?.id,
-      sessionCourseByNoteId.get(id)
+      sessionCourseByNoteId.get(id),
+      sectionId
     );
     const noteTitle =
       typeof raw.title === "string" && raw.title.trim()
@@ -214,26 +219,23 @@ export async function hydrateNotesFocusBucketMeta(
       sessionTitle ||
       noteTitle ||
       "Notes";
-    const sectionId =
-      typeof raw.section_id === "string" && raw.section_id.trim()
-        ? raw.section_id
-        : null;
     const sectionTitle = sectionId
       ? (sectionTitleById.get(sectionId) ?? "New section")
       : null;
     let hubKind: NotesHubKind | null = null;
-    if (!courseId) {
-      if (sectionId) hubKind = "custom";
-      else if (liveNoteIds.has(id)) hubKind = "live";
+    if (sectionId) hubKind = "custom";
+    else if (!courseId) {
+      if (liveNoteIds.has(id)) hubKind = "live";
       else hubKind = "standalone";
     }
     out.set(bucketId, {
       fileName: title,
       courseId,
-      courseTitle:
-        (courseId ? courseTitleById.get(courseId) : null) ??
-        courseRow?.title ??
-        null,
+      courseTitle: sectionId
+        ? null
+        : (courseId ? courseTitleById.get(courseId) : null) ??
+          courseRow?.title ??
+          null,
       noteDeleted: Boolean((raw as { deleted_at?: unknown }).deleted_at),
       sectionId,
       sectionTitle,

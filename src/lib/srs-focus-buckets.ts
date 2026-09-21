@@ -83,7 +83,7 @@ export function ensureNotesBucket(
 /**
  * Count a personal/focus card as notes-origin (per-note Review child) or as
  * course-origin (personal on the study material). Notes-origin never folds
- * into an existing PDF child just because material_id was set.
+ * into an existing PDF child just because material_id was set or titles match.
  */
 export function addPersonalFocusCount(
   byMaterial: Map<string, SrsDueByMaterial>,

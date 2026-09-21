@@ -4,6 +4,7 @@ import {
   contentOverlapScore,
   pickLiveSessionForFocusCard,
   pickNoteForFocusLabel,
+  pickSectionNoteForStoredLabel,
 } from "./match-focus-note.ts";
 
 const NOTE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -395,4 +396,101 @@ test("preferredCourseId picks the matching course when Lecture titles collide", 
   );
   assert.equal(match?.sessionId, SESSION_B);
   assert.equal(match?.courseId, OTHER);
+});
+
+const SECTION = "55555555-5555-4555-8555-555555555555";
+
+test("does not pick a course live session over a notes-hub folder with the same title", () => {
+  const match = pickNoteForFocusLabel(
+    "Lecture 4",
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 4",
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+      },
+    ],
+    [
+      {
+        id: SESSION,
+        title: "Lecture 4",
+        courseId: COURSE,
+        userNoteId: NOTE_B,
+        updatedAt: "2026-09-11T00:00:00Z",
+      },
+    ]
+  );
+  assert.equal(match?.ambiguous, true);
+  assert.equal(match?.noteId, "");
+});
+
+test("restores a unique notes-hub title that was parked on a course lecture note", () => {
+  const hubTitle =
+    "Lecture 4 - ER Targeting, Endomembrane Trafficking, and mRNA-to-Protein Flow";
+  const target = pickSectionNoteForStoredLabel(
+    hubTitle,
+    {
+      id: NOTE_B,
+      title: "Lecture 4",
+      courseId: COURSE,
+      updatedAt: "2026-09-11T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+    [
+      {
+        id: NOTE_A,
+        title: hubTitle,
+        courseId: COURSE,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 4",
+        courseId: COURSE,
+        updatedAt: "2026-09-11T00:00:00Z",
+        deleted: false,
+        sectionId: null,
+      },
+    ]
+  );
+  assert.equal(target, NOTE_A);
+});
+
+test("does not restore when Lecture 4 exists in both a hub folder and a course", () => {
+  const target = pickSectionNoteForStoredLabel(
+    "Lecture 4",
+    {
+      id: NOTE_B,
+      title: "Lecture 4",
+      courseId: COURSE,
+      updatedAt: "2026-09-11T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 4",
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 4",
+        courseId: COURSE,
+        updatedAt: "2026-09-11T00:00:00Z",
+        deleted: false,
+        sectionId: null,
+      },
+    ]
+  );
+  assert.equal(target, null);
 });
