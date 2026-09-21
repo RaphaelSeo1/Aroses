@@ -539,7 +539,8 @@ function ProductTourInner() {
       pathname === "/onboarding" ||
       pathname === "/intro" ||
       pathname === "/login" ||
-      pathname === "/signup"
+      pathname === "/signup" ||
+      pathname === "/paused"
     ) {
       return;
     }

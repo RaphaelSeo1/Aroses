@@ -2,8 +2,9 @@
  * Paths guests may hit without signing in. Everything else in the product
  * (notes, review, courses, tutor, live notes, dashboard) requires an account.
  *
- * Proxy matcher already skips `/intro`, `/help`, `/legal`, `/auth`, and static
- * assets; those are listed here so page-level and test logic stay aligned.
+ * Proxy matcher skips `/auth` and static assets. `/intro`, `/help`, and `/legal`
+ * stay on this list so page-level checks match, but the site pause redirects
+ * them to `/paused` while the product is closed.
  */
 
 const PUBLIC_EXACT = new Set([
@@ -13,6 +14,7 @@ const PUBLIC_EXACT = new Set([
   "/signup",
   "/reset-password",
   "/brand",
+  "/paused",
 ]);
 
 const PUBLIC_PREFIXES = [

@@ -40,6 +40,39 @@ import {
 } from "@/lib/billing/paid-access";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { TOUR_DEMO_COOKIE } from "@/lib/product-tour/tour-demo-cookie";
+import {
+  isSitePauseExemptPath,
+  isSitePaused,
+  sitePauseAllowsUser,
+} from "@/lib/site-pause";
+
+function pauseDenial(
+  request: NextRequest,
+  baseResponse: NextResponse
+): NextResponse {
+  const pathname = request.nextUrl.pathname;
+  if (pathname.startsWith("/api/")) {
+    const response = NextResponse.json(
+      { error: "Aroses is paused." },
+      {
+        status: 503,
+        headers: { "Cache-Control": "no-store" },
+      }
+    );
+    baseResponse.cookies.getAll().forEach((cookie) => {
+      response.cookies.set(cookie.name, cookie.value);
+    });
+    return response;
+  }
+  const url = request.nextUrl.clone();
+  url.pathname = "/paused";
+  url.search = "";
+  const redirectResponse = NextResponse.redirect(url);
+  baseResponse.cookies.getAll().forEach((cookie) => {
+    redirectResponse.cookies.set(cookie.name, cookie.value);
+  });
+  return redirectResponse;
+}
 
 function unavailableResponse(baseResponse: NextResponse): NextResponse {
   const response = NextResponse.json(
@@ -69,7 +102,10 @@ export async function proxy(request: NextRequest) {
 
   // API GET/HEAD (and allowed unpaid mutations like checkout) skip the
   // global user gate; mutating product APIs still need a paid check below.
+  // While the site is paused this skip would let signed-out clients keep
+  // calling product APIs, so the pause check below has to see the user.
   if (
+    !isSitePaused() &&
     pathname.startsWith("/api/") &&
     !isAuthEmailDomainAllowlistEnforced() &&
     (!mutatingApi || isUnpaidMutationAllowedApi(pathname))
@@ -119,15 +155,31 @@ export async function proxy(request: NextRequest) {
           "[proxy] Supabase auth slow — passing through:",
           result.error.message
         );
+        if (
+          isSitePaused() &&
+          !isSitePauseExemptPath(pathname)
+        ) {
+          return pauseDenial(request, supabaseResponse);
+        }
         return supabaseResponse;
       }
       console.error("[proxy] Supabase auth unavailable:", result.error.message);
       return unavailableResponse(supabaseResponse);
     }
     user = result.data.user;
+    if (
+      isSitePaused() &&
+      !isSitePauseExemptPath(pathname) &&
+      !sitePauseAllowsUser(user)
+    ) {
+      return pauseDenial(request, supabaseResponse);
+    }
   } catch (error) {
     if (isSupabaseTransportFailure(error)) {
       console.error("[proxy] Supabase auth slow — passing through:", error);
+      if (isSitePaused() && !isSitePauseExemptPath(pathname)) {
+        return pauseDenial(request, supabaseResponse);
+      }
       return supabaseResponse;
     }
     console.error("[proxy] Supabase auth request failed:", error);
@@ -392,6 +444,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!intro(?:/|$)|help(?:/|$)|legal(?:/|$)|auth(?:/|$)|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!auth(?:/|$)|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

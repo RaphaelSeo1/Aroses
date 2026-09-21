@@ -19,6 +19,11 @@ const nextConfig: NextConfig = {
       process.env.NEXT_PUBLIC_APP_ADMIN_EMAILS ||
       process.env.APP_ADMIN_EMAILS ||
       "",
+    // Default closed. Set SITE_PAUSED=0 and redeploy to reopen.
+    NEXT_PUBLIC_SITE_PAUSED:
+      process.env.NEXT_PUBLIC_SITE_PAUSED ||
+      process.env.SITE_PAUSED ||
+      "1",
   },
   turbopack: {
     root: projectRoot,
