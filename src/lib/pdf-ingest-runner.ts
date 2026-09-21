@@ -514,14 +514,36 @@ function mapAiFailureToMessage(jobId: string, e: unknown): string {
     if (e.status === 404) {
       return "The configured AI model is not available (404). Update ANTHROPIC_COURSE_MODEL or redeploy — fast profile uses Claude Haiku 4.5.";
     }
+    if (e.status === 401 || e.status === 403) {
+      return "The Anthropic API key was rejected (auth error). Check ANTHROPIC_API_KEY and the account's billing status.";
+    }
     if (e.status === 529 || e.status === 503) {
       return "The AI service is temporarily overloaded. Try again in a few minutes.";
     }
     if (e.status === 429) {
       return "Too many AI requests right now. Wait a minute and retry this file.";
     }
-    if (e.status === 400) {
+    if (e.status === 400 || e.status === 402) {
       const body = (e.message ?? "").toLowerCase();
+      // Out of Anthropic credits. This arrives as a 400 whose body names the
+      // credit balance, so without this branch it fell through to the generic
+      // "network or model timeout" fallback — which sent us hunting timeouts
+      // when the real answer was an empty account.
+      if (
+        body.includes("credit balance") ||
+        body.includes("insufficient_quota") ||
+        body.includes("billing") ||
+        body.includes("payment required")
+      ) {
+        return "The Anthropic account is out of credits. Top up the balance in the Anthropic console, then retry this PDF.";
+      }
+      if (
+        body.includes("authentication") ||
+        body.includes("invalid x-api-key") ||
+        body.includes("api key")
+      ) {
+        return "The Anthropic API key is invalid or expired. Update ANTHROPIC_API_KEY and redeploy.";
+      }
       if (
         body.includes("too long") ||
         body.includes("maximum") ||
@@ -552,7 +574,12 @@ function mapAiFailureToMessage(jobId: string, e: unknown): string {
   if (msg.length > 0 && msg.length <= 200) {
     return msg;
   }
-  return "AI processing failed (network or model timeout). Try again in a moment.";
+  // Do not assert "timeout" for an error we could not classify — that framing
+  // sent us debugging the network when the account was simply out of credits.
+  if (msg.length > 0) {
+    return `AI processing failed: ${msg.slice(0, 180)}`;
+  }
+  return "AI processing failed for an unknown reason. Check the server logs and the Anthropic account status.";
 }
 
 type IndexedStoredModules = (CourseModule | null)[];
