@@ -138,11 +138,7 @@ export function structurePlanTargets(
     const maxBoost = depth === "maximum" ? 1.15 : 1;
     minLessons = clampInt(Math.ceil((chunkCount / 1.3) * maxBoost), 3, 56);
     maxLessons = clampInt(Math.ceil((chunkCount / 1.05) * maxBoost), minLessons, 72);
-    maxModules = clampInt(
-      envInt("COURSE_FULL_MAX_MODULES", depth === "maximum" ? 22 : 18),
-      4,
-      28
-    );
+    maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 12), 4, 12);
   }
 
   const minModules =

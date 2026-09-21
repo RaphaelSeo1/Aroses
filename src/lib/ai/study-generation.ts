@@ -2180,7 +2180,7 @@ function outlineMaxModules(profile: CourseBuildProfile): number {
   if (profile === "balanced") {
     return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
   }
-  return clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
+  return clampInt(envInt("COURSE_FULL_MAX_MODULES", 12), 4, 12);
 }
 
 /**
