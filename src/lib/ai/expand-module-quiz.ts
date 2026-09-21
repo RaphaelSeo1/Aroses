@@ -11,7 +11,7 @@ import {
 } from "@/lib/course-output-language";
 import type { CourseModule, CourseQuizItem } from "@/types/course";
 
-const MODEL = "claude-sonnet-4-6";
+const MODEL = "claude-haiku-4-5";
 
 const MAX_LESSON_CHARS = 28_000;
 

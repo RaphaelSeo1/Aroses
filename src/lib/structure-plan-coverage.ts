@@ -118,11 +118,7 @@ export function structurePlanTargets(
       chunkCount <= 2 ? 1 : clampInt(Math.ceil(chunkCount / 2.2), 2, 16);
     maxLessons =
       chunkCount <= 2 ? 2 : clampInt(Math.ceil(chunkCount / 1.6), minLessons, 20);
-    if (chunkCount >= 60) maxModules = 8;
-    else if (chunkCount >= 20) maxModules = 6;
-    else if (chunkCount >= 10) maxModules = 6;
-    else if (chunkCount >= 5) maxModules = 6;
-    else maxModules = 4;
+    maxModules = 4;
   } else if (profile === "fast") {
     // Prefer fewer, denser lessons (e.g. ~4–5 instead of ~7 for mid-size decks).
     minLessons = clampInt(Math.ceil(chunkCount / 2.2), 2, 12);
@@ -131,14 +127,19 @@ export function structurePlanTargets(
   } else if (profile === "balanced") {
     minLessons = clampInt(Math.ceil(chunkCount / 2.0), 2, 16);
     maxLessons = clampInt(Math.ceil(chunkCount / 1.5), minLessons, 20);
-    maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
+    maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 6), 4, 6);
   } else {
-    // full / maximum: deepest profiles — more modules and more lessons per the source.
+    // full: Advanced stays at 6 modules; Premium (maximum) may use 8.
     const depth = getGenerationDepthContext();
-    const maxBoost = depth === "maximum" ? 1.05 : 1;
+    const premium = depth === "maximum";
+    const maxBoost = premium ? 1.05 : 1;
     minLessons = clampInt(Math.ceil((chunkCount / 2.4) * maxBoost), 4, 16);
     maxLessons = clampInt(Math.ceil((chunkCount / 1.8) * maxBoost), minLessons, 24);
-    maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 6), 3, 6);
+    maxModules = clampInt(
+      envInt("COURSE_FULL_MAX_MODULES", premium ? 8 : 6),
+      3,
+      premium ? 8 : 6
+    );
   }
 
   const minModules =

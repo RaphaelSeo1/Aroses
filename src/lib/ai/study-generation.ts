@@ -104,16 +104,16 @@ function envInt(name: string, fallback: number): number {
 /** Target quiz bank size per module after generation (includes post-parse backfill). */
 export function moduleQuizTarget(profile: CourseBuildProfile): number {
   if (profile === "full") {
-    return clampInt(envInt("COURSE_FULL_QUIZ_MIN", 6), 4, 10);
+    return clampInt(envInt("COURSE_FULL_QUIZ_MIN", 8), 6, 8);
   }
   if (profile === "express") {
-    return clampInt(envInt("COURSE_EXPRESS_QUIZ_MIN", 10), 3, 16);
+    return clampInt(envInt("COURSE_EXPRESS_QUIZ_MIN", 6), 4, 6);
   }
   if (profile === "fast") {
-    return clampInt(envInt("COURSE_FAST_QUIZ_MIN", 10), 3, 16);
+    return clampInt(envInt("COURSE_FAST_QUIZ_MIN", 6), 4, 6);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_QUIZ_MIN", 10), 3, 16);
+    return clampInt(envInt("COURSE_BALANCED_QUIZ_MIN", 8), 6, 8);
   }
   const _never: never = profile;
   return _never;
@@ -385,7 +385,7 @@ ${chunk}`;
 function resolveCourseModel(profile: CourseBuildProfile): string {
   const override = process.env.ANTHROPIC_COURSE_MODEL?.trim();
   if (override) return override;
-  if (profile === "express" || profile === "fast" || profile === "balanced") {
+  if (profile === "express" || profile === "fast") {
     return "claude-haiku-4-5";
   }
   return "claude-sonnet-4-6";
@@ -1356,11 +1356,11 @@ function outlineInstruction(
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
     maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 6);
   } else if (profile === "balanced") {
-    moduleCount = `Use **4 to ${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 4, but a long lecture deck or multi-topic document should use more (toward ${maxModules}). Give each major topic or section its own focused module; do not compress the whole document into one or two catch-alls.`;
-    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 5), 2, 8);
+    moduleCount = `Use **3 to ${maxModules}** modules. Prefer fewer, denser modules. A short handout may need only 3; do not exceed ${maxModules}.`;
+    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 4), 2, 4);
   } else {
     moduleCount = `Use **3 to ${maxModules}** modules. Prefer fewer, denser modules that still cover the whole document — combine closely related topics instead of splitting every heading into its own module. A short handout may need only 3; a long lecture deck should stay at or under ${maxModules}. Every major section of the document must still be represented.`;
-    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 4), 2, 6);
+    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 5), 3, 5);
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
@@ -1575,9 +1575,7 @@ ${brokenAssistantText.slice(0, 100_000)}`;
       ? [12_288, 20_480]
       : profile === "fast"
         ? [16_384, 24_576]
-        : profile === "balanced"
-          ? [20_480, 30_720]
-          : [10_240];
+        : [10_240];
 
   let lastText = "";
   for (const moduleRepairMax of repairBudgets) {
@@ -2169,15 +2167,20 @@ export function assembleModuleSourcesFromPlan(
  */
 function outlineMaxModules(profile: CourseBuildProfile): number {
   if (profile === "express") {
-    return clampInt(envInt("COURSE_EXPRESS_MAX_MODULES", 3), 2, 3);
+    return clampInt(envInt("COURSE_EXPRESS_MAX_MODULES", 4), 2, 4);
   }
   if (profile === "fast") {
-    return clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 6);
+    return clampInt(envInt("COURSE_FAST_MAX_MODULES", 5), 2, 5);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
+    return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 6), 4, 6);
   }
-  return clampInt(envInt("COURSE_FULL_MAX_MODULES", 6), 3, 6);
+  const premium = getGenerationDepthContext() === "maximum";
+  return clampInt(
+    envInt("COURSE_FULL_MAX_MODULES", premium ? 8 : 6),
+    3,
+    premium ? 8 : 6
+  );
 }
 
 /**
@@ -2312,10 +2315,19 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
   if (profile === "fast") {
     return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 12_288), 6144, 24_576);
   }
-  if (profile === "full") {
-    return clampInt(envInt("COURSE_FULL_MODULE_MAX_TOKENS", 8_192), 4_096, 12_288);
+  if (profile === "full" || profile === "balanced") {
+    return clampInt(
+      envInt(
+        profile === "full"
+          ? "COURSE_FULL_MODULE_MAX_TOKENS"
+          : "COURSE_BALANCED_MODULE_MAX_TOKENS",
+        8_192
+      ),
+      4_096,
+      10_240
+    );
   }
-  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 12_288), 8192, 30_720);
+  return 8_192;
 }
 
 /**
@@ -2332,9 +2344,7 @@ function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
       ? [Math.min(20_480, Math.round(base * 1.6))]
       : profile === "fast"
         ? [Math.min(24_576, Math.round(base * 1.5))]
-        : profile === "balanced"
-          ? [Math.min(30_720, Math.max(20_480, Math.round(base * 1.4)))]
-          : [Math.min(10_240, Math.round(base * 1.25))];
+        : [Math.min(10_240, Math.round(base * 1.25))];
   return [...new Set([base, ...extra])].sort((a, b) => a - b);
 }
 
