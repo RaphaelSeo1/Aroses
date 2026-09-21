@@ -71,7 +71,7 @@ test("public paid tiers have the specified entitlements", () => {
       depth: "comprehensive",
       early: true,
       regular: 79.99,
-      promo: 29.99,
+      promo: 39.99,
     },
     premium: {
       gens: 4,

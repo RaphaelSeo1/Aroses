@@ -59,7 +59,7 @@ test("strips duplicated A/B/C/D prefixes from edited choices", () => {
     explanation: "From the lecture.",
   });
   assert.equal(result.ok, true);
-  if (!result.ok) return;
+  if (!result.ok || result.question.type !== "mcq") return;
   assert.deepEqual(result.question.choices, [
     "The provider absorbs the cost",
     "The patient",

@@ -276,7 +276,7 @@ export class InMemoryGenerationLedger {
   }
 
   /** Content delete must call NOTHING on this ledger. Exposed for tests. */
-  deleteCourse(): void {
+  deleteCourse(_courseId?: string): void {
     // Intentionally empty — deleting a course never refunds usage.
   }
 }

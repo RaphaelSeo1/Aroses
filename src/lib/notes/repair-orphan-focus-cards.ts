@@ -50,7 +50,14 @@ export async function applyHubFocusCardRestores(
     .select("id, source_note_id, source_label, source_excerpt, material_id, item")
     .eq("user_id", userId)
     .limit(2000);
-  let rows = first.data;
+  let rows: Array<{
+    id: string;
+    source_note_id: string | null;
+    source_label: string | null;
+    source_excerpt: string | null;
+    material_id: string | null;
+    item: unknown;
+  }> | null = first.data;
   if (first.error && isMissingDbColumnError(first.error, "item")) {
     const fallback = await supabase
       .from("user_personal_quiz_items")
@@ -61,7 +68,7 @@ export async function applyHubFocusCardRestores(
       console.error("[applyHubFocusCardRestores load]", fallback.error);
       return 0;
     }
-    rows = fallback.data;
+    rows = (fallback.data ?? []).map((row) => ({ ...row, item: null }));
   } else if (first.error) {
     console.error("[applyHubFocusCardRestores load]", first.error);
     return 0;
