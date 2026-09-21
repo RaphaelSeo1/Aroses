@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
 import { isReviewQuestionEnabled } from "@/lib/srs/question-mutation";
+import {
+  loadNotesFocusOriginCatalog,
+  remapPersonalFocusOriginRows,
+} from "@/lib/notes/focus-origin-catalog";
 import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
-import { repairOrphanNotesFocusCards } from "@/lib/notes/repair-orphan-focus-cards";
 import {
   isNotesFocusBucketId,
   notesFocusBucketId,
@@ -105,11 +108,7 @@ export async function GET() {
 
   // Focus-card counts (may include non-owned materials). Nested by source
   // note even when the card is attached to a course material_id.
-  try {
-    await repairOrphanNotesFocusCards(supabase, user.id);
-  } catch (e) {
-    console.error("[practice-scope repair focus]", e);
-  }
+  // Read-only: do not rewrite quiz identity while listing Review decks.
   type PersonalRow = {
     material_id?: string | null;
     source_note_id?: string | null;
@@ -161,16 +160,23 @@ export async function GET() {
     personalRows = [];
   }
 
+  const originNotes = await loadNotesFocusOriginCatalog(supabase, user.id);
+  const remappedPersonal = remapPersonalFocusOriginRows(
+    (personalRows ?? []).map((row) => ({
+      materialId: row.material_id ?? null,
+      sourceNoteId:
+        typeof row.source_note_id === "string" ? row.source_note_id : null,
+      sourceLabel:
+        typeof row.source_label === "string" ? row.source_label : null,
+    })),
+    originNotes
+  );
   const missingPersonalMats = new Set<string>();
   const notesBucketIds = new Set<string>();
-  for (const row of personalRows ?? []) {
-    notesBucketIds.add(
-      notesFocusBucketId(
-        typeof row.source_note_id === "string" ? row.source_note_id : null
-      )
-    );
-    if (!row.material_id) continue;
-    const id = (row.material_id as string).toLowerCase();
+  for (const row of remappedPersonal) {
+    notesBucketIds.add(notesFocusBucketId(row.sourceNoteId));
+    if (!row.materialId) continue;
+    const id = row.materialId.toLowerCase();
     if (!isNotesFocusBucketId(id) && !materialById.has(id)) {
       missingPersonalMats.add(id);
     }
@@ -257,18 +263,8 @@ export async function GET() {
     });
   }
 
-  for (const row of personalRows ?? []) {
-    addPersonalFocusCount(
-      byMaterial,
-      {
-        materialId: row.material_id ?? null,
-        sourceNoteId:
-          typeof row.source_note_id === "string" ? row.source_note_id : null,
-        sourceLabel:
-          typeof row.source_label === "string" ? row.source_label : null,
-      },
-      notesMeta
-    );
+  for (const row of remappedPersonal) {
+    addPersonalFocusCount(byMaterial, row, notesMeta);
   }
   finalizeFocusBuckets(byMaterial);
 

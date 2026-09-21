@@ -3,12 +3,15 @@ import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload, CourseQuizItem } from "@/types/course";
 import type { SrsRating } from "@/lib/srs-sm2";
 import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
-import { repairOrphanNotesFocusCards } from "@/lib/notes/repair-orphan-focus-cards";
 import {
-  isGenericFocusTitle,
+  loadNotesFocusOriginCatalog,
+  remapPersonalFocusOriginRows,
+} from "@/lib/notes/focus-origin-catalog";
+import {
   isNotesFocusBucketId,
   isNotesOriginFocusCard,
   notesFocusBucketId,
+  preferredFocusDisplayTitle,
 } from "@/lib/notes/notes-focus-bucket";
 import {
   parseSrsSessionScope,
@@ -245,11 +248,6 @@ export async function GET(request: Request) {
   const personalNew: SessionCard[] = [];
 
   if (scope !== "module") {
-    try {
-      await repairOrphanNotesFocusCards(supabase, user.id);
-    } catch (e) {
-      console.error("[srs/session repair focus]", e);
-    }
     const uuids =
       allowedMaterialUuids == null
         ? null
@@ -273,14 +271,12 @@ export async function GET(request: Request) {
           await loadPersonalQuizRows(supabase, user.id, "materials", uuids)
         );
       }
-      if (sessionScope.noteFilterActive && sessionScope.noteIds.size > 0) {
-        pushUnique(
-          await loadPersonalQuizRows(supabase, user.id, "sourceNotes", [
-            ...sessionScope.noteIds,
-          ])
-        );
-      }
-      if (sessionScope.includeLegacyNotes) {
+      if (sessionScope.noteFilterActive) {
+        // Load all personal rows so hub-origin cards still parked on a
+        // course lecture note can be included by resolved origin, not SQL
+        // source_note_id (Review fetch must not rewrite those ids).
+        pushUnique(await loadPersonalQuizRows(supabase, user.id, "all"));
+      } else if (sessionScope.includeLegacyNotes) {
         pushUnique(await loadPersonalQuizRows(supabase, user.id, "notes"));
       }
     }
@@ -322,15 +318,21 @@ export async function GET(request: Request) {
       }
     }
 
+    const originNotes = await loadNotesFocusOriginCatalog(supabase, user.id);
+    const remappedOrigins = remapPersonalFocusOriginRows(
+      (personalRows ?? []).map((row) => ({
+        materialId:
+          typeof row.material_id === "string" ? row.material_id : null,
+        sourceNoteId:
+          typeof row.source_note_id === "string" ? row.source_note_id : null,
+        sourceLabel:
+          typeof row.source_label === "string" ? row.source_label : null,
+      })),
+      originNotes
+    );
     const notesBucketIds = new Set<string>();
-    for (const row of personalRows ?? []) {
-      notesBucketIds.add(
-        notesFocusBucketId(
-          typeof row.source_note_id === "string"
-            ? row.source_note_id
-            : null
-        )
-      );
+    for (const row of remappedOrigins) {
+      notesBucketIds.add(notesFocusBucketId(row.sourceNoteId));
     }
     const notesMeta = await hydrateNotesFocusBucketMeta(
       supabase,
@@ -338,10 +340,11 @@ export async function GET(request: Request) {
       notesBucketIds
     );
 
-    for (const row of personalRows ?? []) {
-      const rawMid = row.material_id as string | null;
-      const sourceNoteId =
-        typeof row.source_note_id === "string" ? row.source_note_id : null;
+    for (let i = 0; i < (personalRows ?? []).length; i++) {
+      const row = personalRows[i]!;
+      const remapped = remappedOrigins[i]!;
+      const rawMid = remapped.materialId;
+      const sourceNoteId = remapped.sourceNoteId;
       if (
         !personalCardInScope(sessionScope, {
           materialId: rawMid,
@@ -381,16 +384,11 @@ export async function GET(request: Request) {
 
       const dueIso = (row.due_at as string) ?? nowIso;
       const isDue = new Date(dueIso).getTime() <= Date.now();
-      const notesLabel =
-        (noteMeta?.fileName && !isGenericFocusTitle(noteMeta.fileName)
-          ? noteMeta.fileName
-          : null) ??
-        (sourceLabel && !isGenericFocusTitle(sourceLabel)
-          ? sourceLabel
-          : null) ??
-        noteMeta?.fileName ??
-        sourceLabel ??
-        "Focus questions";
+      const notesLabel = preferredFocusDisplayTitle(
+        noteMeta?.fileName,
+        sourceLabel,
+        "Focus questions"
+      );
       const courseTitle = treatAsNotes
         ? (noteMeta?.courseTitle ?? null)
         : deriveCourseTitle(mat) ?? noteMeta?.courseTitle ?? null;

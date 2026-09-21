@@ -5,9 +5,11 @@ import {
   isGenericFocusTitle,
   isNotesFocusBucketId,
   isNotesOriginFocusCard,
+  isShortLectureTitle,
   notesFocusBucketId,
   NOTES_FOCUS_BUCKET_ID,
   parseNotesFocusBucketNoteId,
+  preferredFocusDisplayTitle,
 } from "./notes-focus-bucket.ts";
 
 test("notesFocusBucketId uses per-note buckets when note id is known", () => {
@@ -27,6 +29,35 @@ test("isGenericFocusTitle rejects placeholders but keeps real note titles", () =
   assert.equal(isGenericFocusTitle("Notes"), true);
   assert.equal(isGenericFocusTitle("Lecture 2"), false);
   assert.equal(isGenericFocusTitle("PBHLTH 162A"), false);
+});
+
+test("short Lecture N titles are not enough to rehome a card", () => {
+  assert.equal(isShortLectureTitle("Lecture 3"), true);
+  assert.equal(
+    isShortLectureTitle(
+      "Lecture 3 - Nuclear Envelope and Transport"
+    ),
+    false
+  );
+});
+
+test("preferredFocusDisplayTitle keeps a distinctive stored label", () => {
+  assert.equal(
+    preferredFocusDisplayTitle(
+      "Lecture 2",
+      "Lecture 2 - Nuclear Architecture and Chromatin",
+      "Notes"
+    ),
+    "Lecture 2 - Nuclear Architecture and Chromatin"
+  );
+  assert.equal(
+    preferredFocusDisplayTitle(
+      "Lecture 1 - DNA Organization and Chromatin",
+      "Lecture 1 - DNA Organization and Chromatin",
+      "Notes"
+    ),
+    "Lecture 1 - DNA Organization and Chromatin"
+  );
 });
 
 test("isNotesOriginFocusCard is the note id or a notes-only row, not a PDF label", () => {

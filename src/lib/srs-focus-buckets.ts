@@ -4,6 +4,7 @@ import {
   isNotesFocusBucketId,
   isNotesOriginFocusCard,
   notesFocusBucketId,
+  preferredFocusDisplayTitle,
 } from "./notes/notes-focus-bucket.ts";
 import type { SrsDueByMaterial } from "./srs-due.ts";
 
@@ -19,13 +20,11 @@ function noteTitle(
   sourceLabel: string | null | undefined,
   sourceNoteId: string | null
 ): string {
-  const hydrated = (meta?.fileName ?? "").trim();
-  if (hydrated && !isGenericFocusTitle(hydrated)) return hydrated;
-  const label = (sourceLabel ?? "").trim();
-  if (label && !isGenericFocusTitle(label)) return label;
-  if (hydrated) return hydrated;
-  if (label) return label;
-  return sourceNoteId ? "Notes" : "Focus questions";
+  return preferredFocusDisplayTitle(
+    meta?.fileName,
+    sourceLabel,
+    sourceNoteId ? "Notes" : "Focus questions"
+  );
 }
 
 export function ensureNotesBucket(

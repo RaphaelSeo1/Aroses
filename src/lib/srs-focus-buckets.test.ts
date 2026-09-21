@@ -7,6 +7,8 @@ import {
 import type { NotesFocusBucketMeta } from "./notes/hydrate-notes-focus-buckets.ts";
 import type { SrsDueByMaterial } from "./srs-due.ts";
 import { notesFocusBucketId } from "./notes/notes-focus-bucket.ts";
+import { remapPersonalFocusOriginRows } from "./notes/focus-origin-catalog.ts";
+import type { NoteMatchCandidate } from "./notes/match-focus-note.ts";
 import {
   groupReviewPickerRows,
   pickerChildLabel,
@@ -18,6 +20,9 @@ const COURSE = "11111111-1111-4111-8111-111111111111";
 const PBHLTH = "44444444-4444-4444-8444-444444444444";
 const NOTE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const NOTE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const NOTE_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const NOTE_D = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const NOTE_E = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 
 const fallbacks = {
   focusQuestions: "Focus questions",
@@ -323,4 +328,188 @@ test("two notes on the same course stay as separate note children", () => {
     groups[0]!.children.map((c) => c.fileName).sort(),
     ["Lecture 2", "Office hours"]
   );
+});
+
+test("hub Lecture 1–4 stay distinct from a same-titled course after a bad remap", () => {
+  const sectionId = "55555555-5555-4555-8555-555555555555";
+  const l1 =
+    "Lecture 1 - DNA Organization and Chromatin";
+  const l2 = "Lecture 2 - Nuclear Architecture and Chromatin";
+  const l3 = "Lecture 3 - Nuclear Envelope and Transport";
+  const l4 =
+    "Lecture 4 - ER Targeting, Endomembrane Trafficking, and mRNA-to-Protein Flow";
+  const catalog: NoteMatchCandidate[] = [
+    {
+      id: NOTE_A,
+      title: l1,
+      courseId: COURSE,
+      updatedAt: "2026-09-01T00:00:00Z",
+      deleted: false,
+      sectionId,
+    },
+    {
+      id: NOTE_B,
+      title: "Lecture 2",
+      courseId: COURSE,
+      updatedAt: "2026-09-02T00:00:00Z",
+      deleted: false,
+      sectionId,
+    },
+    {
+      id: NOTE_C,
+      title: "Lecture 3",
+      courseId: COURSE,
+      updatedAt: "2026-09-03T00:00:00Z",
+      deleted: false,
+      sectionId,
+    },
+    {
+      id: NOTE_D,
+      title: l4,
+      courseId: COURSE,
+      updatedAt: "2026-09-04T00:00:00Z",
+      deleted: false,
+      sectionId,
+    },
+    {
+      id: NOTE_E,
+      title: "Lecture 3",
+      courseId: COURSE,
+      updatedAt: "2026-09-05T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+  ];
+  const remapped = remapPersonalFocusOriginRows(
+    [
+      ...Array.from({ length: 42 }, () => ({
+        materialId: null,
+        sourceNoteId: NOTE_A,
+        sourceLabel: l1,
+      })),
+      ...Array.from({ length: 28 }, () => ({
+        materialId: null,
+        sourceNoteId: NOTE_E,
+        sourceLabel: l2,
+      })),
+      ...Array.from({ length: 28 }, () => ({
+        materialId: null,
+        sourceNoteId: NOTE_E,
+        sourceLabel: l3,
+      })),
+      ...Array.from({ length: 32 }, () => ({
+        materialId: null,
+        sourceNoteId: NOTE_D,
+        sourceLabel: l4,
+      })),
+      ...Array.from({ length: 16 }, () => ({
+        materialId: MAT,
+        sourceNoteId: null,
+        sourceLabel: "Lecture 4",
+      })),
+    ],
+    catalog
+  );
+
+  const byMaterial = new Map<string, SrsDueByMaterial>([
+    [
+      MAT,
+      {
+        materialId: MAT,
+        fileName: "Lecture 4",
+        courseId: COURSE,
+        courseTitle: "MCB 104 (Fall 2026)",
+        module: 0,
+        personal: 0,
+        total: 0,
+      },
+    ],
+  ]);
+  const notesMeta = new Map<string, NotesFocusBucketMeta>([
+    [
+      notesFocusBucketId(NOTE_A),
+      {
+        fileName: l1,
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "MCB 104 !",
+        hubKind: "custom",
+      },
+    ],
+    [
+      notesFocusBucketId(NOTE_B),
+      {
+        fileName: "Lecture 2",
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "MCB 104 !",
+        hubKind: "custom",
+      },
+    ],
+    [
+      notesFocusBucketId(NOTE_C),
+      {
+        fileName: "Lecture 3",
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "MCB 104 !",
+        hubKind: "custom",
+      },
+    ],
+    [
+      notesFocusBucketId(NOTE_D),
+      {
+        fileName: l4,
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "MCB 104 !",
+        hubKind: "custom",
+      },
+    ],
+    [
+      notesFocusBucketId(NOTE_E),
+      {
+        fileName: "Lecture 3",
+        courseId: COURSE,
+        courseTitle: "MCB 104 (Fall 2026)",
+        noteDeleted: false,
+      },
+    ],
+  ]);
+  for (const row of remapped) {
+    addPersonalFocusCount(byMaterial, row, notesMeta);
+  }
+  finalizeFocusBuckets(byMaterial);
+
+  const groups = groupReviewPickerRows([...byMaterial.values()]);
+  const hub = groups.find((g) => g.id === `section:${sectionId}`);
+  const course = groups.find((g) => g.courseTitle === "MCB 104 (Fall 2026)");
+  assert.ok(hub);
+  assert.ok(course);
+  assert.equal(pickerParentLabel(hub!, fallbacks), "MCB 104 !");
+  assert.equal(hub!.children.length, 4);
+  assert.equal(hub!.children.every((c) => c.kind === "note"), true);
+  assert.deepEqual(
+    hub!.children.map((c) => c.fileName).sort(),
+    [l1, l2, l3, l4].sort()
+  );
+  assert.equal(
+    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_B))!.personal,
+    28
+  );
+  assert.equal(
+    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_C))!.personal,
+    28
+  );
+  assert.equal(course!.personal, 16);
+  assert.equal(course!.children.every((c) => c.kind === "module"), true);
+  assert.equal(byMaterial.has(notesFocusBucketId(NOTE_E)), false);
 });

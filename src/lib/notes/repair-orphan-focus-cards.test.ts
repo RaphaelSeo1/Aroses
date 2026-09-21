@@ -5,7 +5,9 @@ import {
   pickLiveSessionForFocusCard,
   pickNoteForFocusLabel,
   pickSectionNoteForStoredLabel,
+  resolveFocusCardNoteId,
 } from "./match-focus-note.ts";
+import { repairOrphanNotesFocusCards } from "./repair-orphan-focus-cards.ts";
 
 const NOTE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const NOTE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -493,4 +495,109 @@ test("does not restore when Lecture 4 exists in both a hub folder and a course",
     ]
   );
   assert.equal(target, null);
+});
+
+test("restores Lecture 2 parked on course Lecture 3 when the label still names the hub note", () => {
+  const hubTitle = "Lecture 2 - Nuclear Architecture and Chromatin";
+  const target = pickSectionNoteForStoredLabel(
+    hubTitle,
+    {
+      id: NOTE_B,
+      title: "Lecture 3",
+      courseId: COURSE,
+      updatedAt: "2026-09-11T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 2",
+        courseId: COURSE,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 3",
+        courseId: COURSE,
+        updatedAt: "2026-09-11T00:00:00Z",
+        deleted: false,
+        sectionId: null,
+      },
+    ]
+  );
+  assert.equal(target, NOTE_A);
+});
+
+test("does not steal a course Lecture 3 card whose label is only Lecture 3", () => {
+  const target = pickSectionNoteForStoredLabel(
+    "Lecture 3",
+    {
+      id: NOTE_B,
+      title: "Lecture 3",
+      courseId: COURSE,
+      updatedAt: "2026-09-11T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 3 - Nuclear Envelope and Transport",
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 3",
+        courseId: COURSE,
+        updatedAt: "2026-09-11T00:00:00Z",
+        deleted: false,
+        sectionId: null,
+      },
+    ]
+  );
+  assert.equal(target, null);
+});
+
+test("resolveFocusCardNoteId keeps a hub-section origin even if a course_id was stamped", () => {
+  const resolved = resolveFocusCardNoteId(
+    NOTE_A,
+    "Lecture 4",
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 4",
+        courseId: COURSE,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 4",
+        courseId: COURSE,
+        updatedAt: "2026-09-11T00:00:00Z",
+        deleted: false,
+        sectionId: null,
+      },
+    ]
+  );
+  assert.equal(resolved, NOTE_A);
+});
+
+test("repairOrphanNotesFocusCards never writes quiz identity", async () => {
+  const calls: string[] = [];
+  const supabase = {
+    from(table: string) {
+      calls.push(`from:${table}`);
+      throw new Error(`unexpected ${table} access`);
+    },
+  };
+  await repairOrphanNotesFocusCards(supabase as never, "user-id");
+  assert.deepEqual(calls, []);
 });

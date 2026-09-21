@@ -44,6 +44,35 @@ export function isGenericFocusTitle(label: string | null | undefined): boolean {
   );
 }
 
+/** Bare "Lecture 3" — collides with course PDFs; not enough to rehome a card. */
+export function isShortLectureTitle(label: string | null | undefined): boolean {
+  const s = (label ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  return /^lecture \d+$/.test(s);
+}
+
+/** Picker/session title: keep a distinctive stored label; never write it back. */
+export function preferredFocusDisplayTitle(
+  noteTitle: string | null | undefined,
+  sourceLabel: string | null | undefined,
+  fallback: string
+): string {
+  const hydrated = (noteTitle ?? "").trim();
+  const label = (sourceLabel ?? "").trim();
+  if (
+    label &&
+    !isGenericFocusTitle(label) &&
+    !isShortLectureTitle(label) &&
+    (!hydrated || isGenericFocusTitle(hydrated) || isShortLectureTitle(hydrated))
+  ) {
+    return label;
+  }
+  if (hydrated && !isGenericFocusTitle(hydrated)) return hydrated;
+  if (label && !isGenericFocusTitle(label)) return label;
+  if (hydrated) return hydrated;
+  if (label) return label;
+  return fallback;
+}
+
 function validUuid(id: string | null | undefined): string | null {
   const s = (id ?? "").trim();
   return s && UUID_RE.test(s) ? s : null;

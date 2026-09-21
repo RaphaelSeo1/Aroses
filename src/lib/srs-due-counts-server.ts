@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SrsDueCounts } from "@/lib/srs-due";
+import {
+  loadNotesFocusOriginCatalog,
+  remapPersonalFocusOriginRows,
+} from "@/lib/notes/focus-origin-catalog";
 import { hydrateNotesFocusBucketMeta } from "@/lib/notes/hydrate-notes-focus-buckets";
 import {
   isNotesFocusBucketId,
@@ -156,9 +160,7 @@ export async function fetchSrsDueCountsForUser(
     }
   }
 
-  // Orphan focus-card repair is intentionally not on this hot path — it can
-  // take hundreds of ms and the Review/nav badge poll every minute. Session
-  // start and practice-scope still run repair when the learner opens decks.
+  // Review fetch is read-only: never UPDATE/DELETE quiz identity here.
 
   type PersonalDueRow = {
     material_id?: string | null;
@@ -246,13 +248,20 @@ export async function fetchSrsDueCountsForUser(
     }
   }
 
+  const originNotes = await loadNotesFocusOriginCatalog(supabase, userId);
+  const remapped = remapPersonalFocusOriginRows(
+    (perRows ?? []).map((row) => ({
+      materialId: row.material_id ?? null,
+      sourceNoteId:
+        typeof row.source_note_id === "string" ? row.source_note_id : null,
+      sourceLabel:
+        typeof row.source_label === "string" ? row.source_label : null,
+    })),
+    originNotes
+  );
   const notesBucketIds = new Set<string>();
-  for (const row of perRows ?? []) {
-    notesBucketIds.add(
-      notesFocusBucketId(
-        typeof row.source_note_id === "string" ? row.source_note_id : null
-      )
-    );
+  for (const row of remapped) {
+    notesBucketIds.add(notesFocusBucketId(row.sourceNoteId));
   }
   const notesMeta = await hydrateNotesFocusBucketMeta(
     supabase,
@@ -260,18 +269,8 @@ export async function fetchSrsDueCountsForUser(
     notesBucketIds
   );
 
-  for (const row of perRows ?? []) {
-    addPersonalFocusCount(
-      byMaterial,
-      {
-        materialId: row.material_id ?? null,
-        sourceNoteId:
-          typeof row.source_note_id === "string" ? row.source_note_id : null,
-        sourceLabel:
-          typeof row.source_label === "string" ? row.source_label : null,
-      },
-      notesMeta
-    );
+  for (const row of remapped) {
+    addPersonalFocusCount(byMaterial, row, notesMeta);
   }
 
   const { totalModule, totalPersonal } = finalizeFocusBuckets(byMaterial);

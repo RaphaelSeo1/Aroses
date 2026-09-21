@@ -1,4 +1,7 @@
-import { isGenericFocusTitle } from "./notes-focus-bucket.ts";
+import {
+  isGenericFocusTitle,
+  isShortLectureTitle,
+} from "./notes-focus-bucket.ts";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -161,12 +164,47 @@ export function contentOverlapScore(cardText: string, corpus: string): number {
   return hits / card.length;
 }
 
+function distinctiveLectureTail(value: string): string | null {
+  const stripped = (value ?? "")
+    .trim()
+    .replace(/^\s*lecture\s+\d+\s*[-–—:|]\s*/i, "");
+  const n = normTitle(stripped);
+  if (!n || isShortLectureTitle(n)) return null;
+  if (n === normTitle(value)) {
+    return n.length >= 16 ? n : null;
+  }
+  return n.length >= 8 ? n : null;
+}
+
+function lectureNumber(value: string): string | null {
+  const m = normTitle(value).match(/^lecture\s+(\d+)\b/);
+  return m ? m[1]! : null;
+}
+
+function hubSectionNotes(notes: NoteMatchCandidate[]): NoteMatchCandidate[] {
+  return notes.filter(
+    (n) => !n.deleted && typeof n.sectionId === "string" && n.sectionId
+  );
+}
+
+function uniqueHubNote(
+  matches: NoteMatchCandidate[],
+  currentNote: NoteMatchCandidate | null
+): string | null {
+  if (matches.length !== 1) return null;
+  const target = matches[0]!;
+  if (currentNote && currentNote.id === target.id) return null;
+  return target.id;
+}
+
 /**
  * Restore a card whose stored `source_label` uniquely names a notes-hub
- * note, when it currently sits on a different origin (course live session /
- * PDF) whose display title is not that label.
+ * note after a previous title-match parked it on a course lecture / PDF.
  *
- * Exact title only — never "Lecture 4" vs "Lecture 4 - ER Targeting…".
+ * Prefers an existing hub `section_id` origin. Never uses a bare
+ * "Lecture 4" collision. Long labels ("ER Targeting…", "Nuclear…",
+ * "DNA Organization…") can reattach even when the hub row was shortened
+ * to "Lecture N".
  */
 export function pickSectionNoteForStoredLabel(
   label: string,
@@ -175,15 +213,67 @@ export function pickSectionNoteForStoredLabel(
 ): string | null {
   const wanted = normTitle(label);
   if (!wanted || isGenericFocusTitle(label)) return null;
+  // Already on a notes-hub folder row — never steal it onto a course lecture.
   if (currentNote?.sectionId) return null;
-  if (currentNote && normTitle(currentNote.title) === wanted) return null;
-  const matches = notes.filter(
-    (n) => !n.deleted && n.sectionId && normTitle(n.title) === wanted
+  // Bare "Lecture 4" collides with course PDFs / live sessions.
+  if (isShortLectureTitle(label)) return null;
+
+  const hub = hubSectionNotes(notes);
+
+  const exact = uniqueHubNote(
+    hub.filter((n) => normTitle(n.title) === wanted),
+    currentNote
   );
-  if (matches.length !== 1) return null;
-  const target = matches[0]!;
-  if (currentNote && currentNote.id === target.id) return null;
-  return target.id;
+  if (exact) return exact;
+
+  const labelTail = distinctiveLectureTail(label);
+  if (!labelTail) return null;
+
+  const mentioned = hub.filter((n) => {
+    const title = normTitle(n.title);
+    const noteTail = distinctiveLectureTail(n.title);
+    if (title.length >= 16 && wanted.includes(title)) return true;
+    if (noteTail && wanted.includes(noteTail)) return true;
+    if (noteTail && labelTail.includes(noteTail)) return true;
+    return false;
+  });
+  const fromMention = uniqueHubNote(mentioned, currentNote);
+  if (fromMention) return fromMention;
+
+  // Hub titles may have been shortened to "Lecture 2" while source_label
+  // still has "Lecture 2 - Nuclear…". Unique lecture number in the hub.
+  const lec = lectureNumber(label);
+  if (!lec) return null;
+  return uniqueHubNote(
+    hub.filter((n) => lectureNumber(n.title) === lec),
+    currentNote
+  );
+}
+
+/**
+ * Read-time origin for a personal card. Hub `section_id` wins; otherwise a
+ * unique stored label can point back at a hub note. Never writes.
+ */
+export function resolveFocusCardNoteId(
+  sourceNoteId: string | null | undefined,
+  sourceLabel: string | null | undefined,
+  notes: NoteMatchCandidate[]
+): string | null {
+  const noteId =
+    typeof sourceNoteId === "string" && UUID_RE.test(sourceNoteId.trim())
+      ? sourceNoteId.trim()
+      : null;
+  const current = noteId
+    ? (notes.find((n) => n.id === noteId) ?? null)
+    : null;
+  if (current?.sectionId && !current.deleted) return current.id;
+  const restored = pickSectionNoteForStoredLabel(
+    typeof sourceLabel === "string" ? sourceLabel : "",
+    current,
+    notes
+  );
+  if (restored) return restored;
+  return noteId;
 }
 
 /**
