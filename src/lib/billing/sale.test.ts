@@ -12,9 +12,7 @@ test("promo ON charges promo recurring price IDs and shows regular as compare-at
   const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
   process.env.SUBSCRIPTION_PROMO_ENABLED = "true";
   try {
-    assert.equal(salePriceMonthly("basic"), 3.99);
     assert.equal(salePriceMonthly("student"), 14.99);
-    assert.equal(salePriceMonthly("plus"), 24.99);
     assert.equal(salePriceMonthly("advanced"), 39.99);
     assert.equal(salePriceMonthly("premium"), 59.99);
     assert.equal(compareAtPriceMonthly("advanced"), 79.99);
@@ -42,9 +40,7 @@ test("promo OFF charges regular recurring price IDs with no strikethrough", () =
   const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
   process.env.SUBSCRIPTION_PROMO_ENABLED = "false";
   try {
-    assert.equal(salePriceMonthly("basic"), 19.99);
     assert.equal(salePriceMonthly("student"), 39.99);
-    assert.equal(salePriceMonthly("plus"), 59.99);
     assert.equal(salePriceMonthly("advanced"), 79.99);
     assert.equal(salePriceMonthly("premium"), 109.99);
     assert.equal(compareAtPriceMonthly("advanced"), null);
@@ -75,7 +71,6 @@ test("missing checkout Price names the promo env var while promo is on", () => {
   process.env.SUBSCRIPTION_PROMO_ENABLED = "true";
   try {
     assert.equal(checkoutPriceEnvName("student"), "STRIPE_PRICE_STUDENT_PROMO");
-    assert.equal(checkoutPriceEnvName("basic"), "STRIPE_PRICE_BASIC_PROMO");
   } finally {
     process.env.SUBSCRIPTION_PROMO_ENABLED = prev;
   }
@@ -85,7 +80,7 @@ test("each paid tier has distinct regular vs promo display prices while promo is
   const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
   process.env.SUBSCRIPTION_PROMO_ENABLED = "true";
   try {
-    for (const tier of ["basic", "student", "plus", "advanced", "premium"] as const) {
+    for (const tier of ["student", "advanced", "premium"] as const) {
       assert.ok(salePriceMonthly(tier) < PLANS[tier].priceMonthly, tier);
     }
   } finally {

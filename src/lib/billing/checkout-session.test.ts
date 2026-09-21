@@ -38,7 +38,7 @@ test("Student checkout is a subscription with a 3-day trial on the server price 
 });
 
 test("non-Student tiers stay subscriptions without a trial", () => {
-  for (const tier of ["basic", "plus", "advanced", "premium"] as const) {
+  for (const tier of ["advanced", "premium"] as const) {
     const params = planCheckoutSessionParams({
       customerId: "cus_test",
       priceId: ADVANCED_PROMO_PRICE,

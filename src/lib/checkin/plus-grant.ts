@@ -27,9 +27,9 @@ export function shouldGrantPlusForStreak(opts: {
 }
 
 /**
- * Skip if they already have paid access at Plus or higher (Stripe or grant).
- * Expired check-in Plus does not block a later streak.
- * Free / Basic / Student may receive the grant (never a downgrade).
+ * Skip if they already have paid access at Student or higher (Stripe or grant).
+ * An expired check-in grant does not block a later streak.
+ * Only Free may receive the grant (never a downgrade).
  */
 export function plusGrantSkipReason(
   sub: PaidAccessSnapshot,
@@ -37,6 +37,6 @@ export function plusGrantSkipReason(
 ): PlusGrantSkipReason | null {
   if (!hasPaidProductAccess(sub, now)) return null;
   const tier = (parsePlanTier(sub.tier) ?? "free") as PlanTier;
-  if (PLAN_RANK[tier] >= PLAN_RANK.plus) return "already_plus_or_higher";
+  if (PLAN_RANK[tier] >= PLAN_RANK.student) return "already_plus_or_higher";
   return null;
 }

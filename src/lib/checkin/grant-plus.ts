@@ -6,8 +6,8 @@ import { getUserSubscription } from "@/lib/billing/subscription";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
- * Grant one month of Plus as an admin-style comp (`admin_granted`,
- * `grant_source = checkin`). Skips Plus/Advanced/Premium so we never
+ * Grant one month of Student as an admin-style comp (`admin_granted`,
+ * `grant_source = checkin`). Skips Student/Advanced/Premium so we never
  * downgrade or wipe a higher Stripe plan. Keeps stripe_customer_id;
  * clears stripe_subscription_id so webhooks do not immediately revert
  * (same as a manual admin grant).
@@ -35,7 +35,7 @@ export async function grantCheckInPlusMonth(
 
   const payload = {
     user_id: userId,
-    tier: "plus" as const,
+    tier: "student" as const,
     status: "active",
     stripe_customer_id: sub.stripeCustomerId,
     stripe_subscription_id: null,

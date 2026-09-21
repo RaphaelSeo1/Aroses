@@ -23,40 +23,24 @@ import type { Dictionary } from "@/locales";
 function planStrings(t: Dictionary["billing"], tier: PlanTier) {
   const names: Record<PlanTier, string> = {
     free: t.planFree,
-    basic: t.planBasic,
     student: t.planStudent,
-    plus: t.planPlus,
     advanced: t.planAdvanced,
     premium: t.planPremium,
   };
   const taglines: Record<PlanTier, string> = {
     free: t.planFreeTag,
-    basic: t.planBasicTag,
     student: t.planStudentTag,
-    plus: t.planPlusTag,
     advanced: t.planAdvancedTag,
     premium: t.planPremiumTag,
   };
   const includes: Record<PlanTier, string | null> = {
     free: null,
-    basic: t.planBasicIncludes,
     student: t.planStudentIncludes,
-    plus: t.planPlusIncludes,
     advanced: t.planAdvancedIncludes,
     premium: t.planPremiumIncludes,
   };
   const highlights: Record<PlanTier, string[]> = {
     free: [t.planFreeHighlight1, t.planFreeHighlight2, t.planFreeHighlight3],
-    basic: [
-      t.planBasicHighlight1,
-      t.planBasicHighlight2,
-      t.planBasicHighlight3,
-      t.planBasicHighlight4,
-      t.planBasicHighlight5,
-      t.planBasicHighlight6,
-      t.planBasicHighlight7,
-      t.planBasicHighlight8,
-    ],
     student: [
       t.planStudentHighlight1,
       t.planStudentHighlight2,
@@ -64,14 +48,6 @@ function planStrings(t: Dictionary["billing"], tier: PlanTier) {
       t.planStudentHighlight4,
       t.planStudentHighlight5,
       t.planStudentHighlight6,
-    ],
-    plus: [
-      t.planPlusHighlight1,
-      t.planPlusHighlight2,
-      t.planPlusHighlight3,
-      t.planPlusHighlight4,
-      t.planPlusHighlight5,
-      t.planPlusHighlight6,
     ],
     advanced: [
       t.planAdvancedHighlight1,
@@ -91,29 +67,11 @@ function planStrings(t: Dictionary["billing"], tier: PlanTier) {
       t.planPremiumHighlight6,
     ],
   };
-  const depthName: Record<PlanTier, string | null> = {
-    free: null,
-    basic: t.depthEssential,
-    student: t.depthStandard,
-    plus: t.depthDetailed,
-    advanced: t.depthComprehensive,
-    premium: t.depthMaximum,
-  };
-  const depthHint: Record<PlanTier, string | null> = {
-    free: null,
-    basic: t.depthEssentialHint,
-    student: t.depthStandardHint,
-    plus: t.depthDetailedHint,
-    advanced: t.depthComprehensiveHint,
-    premium: t.depthMaximumHint,
-  };
   return {
     name: names[tier],
     tagline: taglines[tier],
     includes: includes[tier],
     highlights: highlights[tier],
-    depthName: depthName[tier],
-    depthHint: depthHint[tier],
   };
 }
 
@@ -435,20 +393,6 @@ export function BillingClient({
                 ) : null}
               </div>
 
-              {plan.depthName ? (
-                <p
-                  className="mt-4 truncate text-[11px] text-zinc-500 dark:text-zinc-400"
-                  title={plan.depthHint ?? undefined}
-                >
-                  <span className="font-medium text-zinc-600 dark:text-zinc-300">
-                    {t.billing.depthLabel}
-                  </span>
-                  <span className="mx-1.5 text-zinc-300 dark:text-zinc-600">
-                    ·
-                  </span>
-                  <span>{plan.depthName}</span>
-                </p>
-              ) : null}
 
               {plan.includes ? (
                 <p className="mt-4 text-[10px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">

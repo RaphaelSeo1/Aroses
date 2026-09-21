@@ -7,7 +7,7 @@ import {
   remainingAfterUpgrade,
   sumUsage,
 } from "./generation-usage-ledger.ts";
-import { CHECKOUT_PLAN_ORDER, generationDepthForTier } from "./plans.ts";
+import { CHECKOUT_PLAN_ORDER } from "./plans.ts";
 import { sumSourcePageUnits } from "./source-page-units.ts";
 import {
   pdfCapWouldExceed,
@@ -399,17 +399,6 @@ test("internal free has no generation entitlement", () => {
     cap: 0,
   });
   assert.equal(blocked.ok, false);
-});
-
-test("each paid plan snapshots the correct generation depth", () => {
-  assert.equal(generationDepthForTier("basic"), "essential");
-  assert.equal(generationDepthForTier("student"), "standard");
-  assert.equal(generationDepthForTier("plus"), "detailed");
-  assert.equal(generationDepthForTier("advanced"), "comprehensive");
-  assert.equal(generationDepthForTier("premium"), "maximum");
-  for (const tier of CHECKOUT_PLAN_ORDER) {
-    assert.notEqual(generationDepthForTier(tier), undefined);
-  }
 });
 
 test("promo vs regular checkout IDs agree with display charged price path", () => {

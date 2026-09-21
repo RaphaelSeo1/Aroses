@@ -12,9 +12,7 @@ import {
 } from "./admin-plan-subscription-rows.ts";
 
 test("paid plan tiers include Basic and Plus", () => {
-  assert.equal(isPaidPlanTier("basic"), true);
   assert.equal(isPaidPlanTier("student"), true);
-  assert.equal(isPaidPlanTier("plus"), true);
   assert.equal(isPaidPlanTier("advanced"), true);
   assert.equal(isPaidPlanTier("premium"), true);
   assert.equal(isPaidPlanTier("free"), false);
@@ -24,9 +22,7 @@ test("charged prices use promo monthly USD when promo is on", () => {
   const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
   process.env.SUBSCRIPTION_PROMO_ENABLED = "true";
   try {
-    assert.equal(listPriceCentsForTier("basic"), 399);
     assert.equal(listPriceCentsForTier("student"), 1499);
-    assert.equal(listPriceCentsForTier("plus"), 2499);
     assert.equal(listPriceCentsForTier("advanced"), 3999);
     assert.equal(listPriceCentsForTier("premium"), 5999);
   } finally {
@@ -38,9 +34,7 @@ test("charged prices use regular monthly USD when promo is off", () => {
   const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
   process.env.SUBSCRIPTION_PROMO_ENABLED = "false";
   try {
-    assert.equal(listPriceCentsForTier("basic"), 1999);
     assert.equal(listPriceCentsForTier("student"), 3999);
-    assert.equal(listPriceCentsForTier("plus"), 5999);
     assert.equal(listPriceCentsForTier("advanced"), 7999);
     assert.equal(listPriceCentsForTier("premium"), 10999);
   } finally {

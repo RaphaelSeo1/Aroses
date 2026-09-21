@@ -4,7 +4,6 @@ import {
   CHECKOUT_PLAN_ORDER,
   PLANS,
   courseGenerationCap,
-  generationDepthForTier,
   hasEarlyAccess,
   isPaidTier,
   lectureRecordingCap,
@@ -23,44 +22,20 @@ test("public paid tiers have the specified entitlements", () => {
       pdfs: number;
       voiceMin: number;
       recordings: number;
-      depth: string;
       early: boolean;
       regular: number;
       promo: number;
     }
   > = {
-    basic: {
-      gens: 1,
-      pages: 80,
-      pdfs: 3,
-      voiceMin: 30,
-      recordings: 1,
-      depth: "essential",
-      early: false,
-      regular: 19.99,
-      promo: 3.99,
-    },
     student: {
       gens: 2,
       pages: 200,
       pdfs: 5,
       voiceMin: 90,
       recordings: 3,
-      depth: "standard",
       early: false,
       regular: 39.99,
       promo: 14.99,
-    },
-    plus: {
-      gens: 3,
-      pages: 300,
-      pdfs: 8,
-      voiceMin: 150,
-      recordings: 5,
-      depth: "detailed",
-      early: false,
-      regular: 59.99,
-      promo: 24.99,
     },
     advanced: {
       gens: 3,
@@ -68,7 +43,6 @@ test("public paid tiers have the specified entitlements", () => {
       pdfs: 10,
       voiceMin: 180,
       recordings: 6,
-      depth: "comprehensive",
       early: true,
       regular: 79.99,
       promo: 39.99,
@@ -79,7 +53,6 @@ test("public paid tiers have the specified entitlements", () => {
       pdfs: 12,
       voiceMin: 240,
       recordings: 8,
-      depth: "maximum",
       early: true,
       regular: 109.99,
       promo: 59.99,
@@ -93,7 +66,6 @@ test("public paid tiers have the specified entitlements", () => {
     assert.equal(maxPdfsPerCourse(tier), e.pdfs, tier);
     assert.equal(voiceCapSeconds(tier), e.voiceMin * 60, tier);
     assert.equal(lectureRecordingCap(tier), e.recordings, tier);
-    assert.equal(generationDepthForTier(tier), e.depth, tier);
     assert.equal(hasEarlyAccess(tier), e.early, tier);
     assert.equal(PLANS[tier].priceMonthly, e.regular, tier);
     assert.equal(PLANS[tier].promoPriceMonthly, e.promo, tier);
@@ -113,7 +85,6 @@ test("internal free has zero expensive allowances and is not at checkout", () =>
 
 test("numeric limits are not additive across tiers", () => {
   assert.equal(sourcePageCap("student"), 200);
-  assert.notEqual(sourcePageCap("student"), sourcePageCap("basic") + 200);
   assert.equal(courseGenerationCap("advanced"), 3);
   assert.equal(sourcePageCap("premium"), 500);
 });

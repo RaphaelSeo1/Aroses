@@ -33,8 +33,6 @@ test("student trial defaults ON and only applies to Student", () => {
   withTrialEnv({}, () => {
     assert.equal(isStudentTrialActive(), true);
     assert.equal(studentTrialDaysForCheckout("student"), STUDENT_TRIAL_DAYS);
-    assert.equal(studentTrialDaysForCheckout("basic"), null);
-    assert.equal(studentTrialDaysForCheckout("plus"), null);
     assert.equal(studentTrialDaysForCheckout("advanced"), null);
     assert.equal(studentTrialDaysForCheckout("premium"), null);
   });

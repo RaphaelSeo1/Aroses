@@ -212,7 +212,7 @@ export type AdminUserRow = {
   displayName: string | null;
   username: string | null;
   onboardingCompletedAt: string | null;
-  planTier: "free" | "basic" | "student" | "plus" | "advanced" | "premium";
+  planTier: "free" | "student" | "advanced" | "premium";
   planStatus: string;
   planAdminGranted: boolean;
 };
@@ -324,14 +324,13 @@ export async function fetchAdminUserDirectory(
     const sub = subMap.get(u.id);
     const email = typeof u.email === "string" ? u.email.trim() : "";
     const tierRaw = (sub?.tier ?? "free").toLowerCase();
+    // Retired `basic` / `plus` rows read as Student (see LEGACY_TIER_ALIASES).
     const planTier =
-      tierRaw === "basic" ||
-      tierRaw === "student" ||
-      tierRaw === "plus" ||
-      tierRaw === "advanced" ||
-      tierRaw === "premium"
-        ? tierRaw
-        : "free";
+      tierRaw === "basic" || tierRaw === "plus" || tierRaw === "student"
+        ? ("student" as const)
+        : tierRaw === "advanced" || tierRaw === "premium"
+          ? tierRaw
+          : ("free" as const);
     return {
       id: u.id,
       email: email.length > 0 ? email : "—",

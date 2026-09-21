@@ -118,17 +118,13 @@ export function checkoutStripePriceId(tier: PaidPlanTier): string | null {
 }
 
 const PROMO_PRICE_ENV: Record<PaidPlanTier, string> = {
-  basic: "STRIPE_PRICE_BASIC_PROMO",
   student: "STRIPE_PRICE_STUDENT_PROMO",
-  plus: "STRIPE_PRICE_PLUS_PROMO",
   advanced: "STRIPE_PRICE_ADVANCED_PROMO",
   premium: "STRIPE_PRICE_PREMIUM_PROMO",
 };
 
 const REGULAR_PRICE_ENV: Record<PaidPlanTier, string> = {
-  basic: "STRIPE_PRICE_BASIC_REGULAR",
   student: "STRIPE_PRICE_STUDENT_REGULAR",
-  plus: "STRIPE_PRICE_PLUS_REGULAR",
   advanced: "STRIPE_PRICE_ADVANCED_REGULAR",
   premium: "STRIPE_PRICE_PREMIUM_REGULAR",
 };

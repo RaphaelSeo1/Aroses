@@ -19,7 +19,6 @@ import { parseCourseOutputLanguage } from "@/lib/course-output-language";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import {
-  generationDepthForTier,
   maxPdfsPerCourse,
   PLANS,
 } from "@/lib/billing/plans";
@@ -499,7 +498,6 @@ async function handleProcessPdfPost(request: Request): Promise<Response> {
   const snapshot = {
     usage_reservation_id: reserved.reservationId,
     billing_tier_snapshot: reserved.tier,
-    generation_depth: generationDepthForTier(reserved.tier),
   };
   const snapRes = await admin
     .from("pdf_ingest_jobs")

@@ -15,9 +15,7 @@ type Props = {
 
 const TIER_OPTIONS: { value: PlanTier; label: string }[] = [
   { value: "free", label: "Unsubscribed" },
-  { value: "basic", label: "Basic" },
   { value: "student", label: "Student" },
-  { value: "plus", label: "Plus" },
   { value: "advanced", label: "Advanced" },
   { value: "premium", label: "Premium" },
 ];
@@ -37,14 +35,8 @@ function tierBadgeClass(tier: PlanTier): string {
   if (tier === "advanced") {
     return "bg-amber-50 text-amber-900 ring-amber-600/15 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-500/30";
   }
-  if (tier === "plus") {
-    return "bg-indigo-50 text-indigo-800 ring-indigo-600/15 dark:bg-indigo-950/50 dark:text-indigo-200 dark:ring-indigo-500/30";
-  }
   if (tier === "student") {
     return "bg-sky-50 text-sky-800 ring-sky-600/15 dark:bg-sky-950/50 dark:text-sky-200 dark:ring-sky-500/30";
-  }
-  if (tier === "basic") {
-    return "bg-emerald-50 text-emerald-800 ring-emerald-600/15 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-500/30";
   }
   return "bg-zinc-100 text-zinc-700 ring-zinc-500/15 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-500/25";
 }

@@ -29,9 +29,7 @@ function resolveHonestItem(
       question: item.question,
       paragraphs: [
         tf(helpContent[locale].faq.pricingParagraph, {
-          basicPrice: formatUsdAmount(salePriceMonthly("basic")),
           studentPrice: formatUsdAmount(salePriceMonthly("student")),
-          plusPrice: formatUsdAmount(salePriceMonthly("plus")),
           advancedPrice: formatUsdAmount(salePriceMonthly("advanced")),
           premiumPrice: formatUsdAmount(salePriceMonthly("premium")),
           studentGens: String(PLANS.student.courseGenerations),

@@ -61,17 +61,13 @@ function planCardCopy(
 ) {
   const names: Record<PlanTier, string> = {
     free: billing.planFree,
-    basic: billing.planBasic,
     student: billing.planStudent,
-    plus: billing.planPlus,
     advanced: billing.planAdvanced,
     premium: billing.planPremium,
   };
   const taglines: Record<PlanTier, string> = {
     free: billing.planFreeTag,
-    basic: billing.planBasicTag,
     student: billing.planStudentTag,
-    plus: billing.planPlusTag,
     advanced: billing.planAdvancedTag,
     premium: billing.planPremiumTag,
   };
@@ -81,23 +77,11 @@ function planCardCopy(
       billing.planFreeHighlight2,
       billing.planFreeHighlight3,
     ],
-    basic: [
-      billing.planBasicHighlight1,
-      billing.planBasicHighlight2,
-      billing.planBasicHighlight3,
-      billing.planBasicHighlight5,
-    ],
     student: [
       billing.planStudentIncludes,
       billing.planStudentHighlight1,
       billing.planStudentHighlight2,
       billing.planStudentHighlight5,
-    ],
-    plus: [
-      billing.planPlusIncludes,
-      billing.planPlusHighlight1,
-      billing.planPlusHighlight2,
-      billing.planPlusHighlight5,
     ],
     advanced: [
       billing.planAdvancedIncludes,

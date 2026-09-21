@@ -22,12 +22,8 @@ function planLabel(
   t: ReturnType<typeof useT>
 ): string {
   switch (tier) {
-    case "basic":
-      return t.billing.planBasic;
     case "student":
       return t.billing.planStudent;
-    case "plus":
-      return t.billing.planPlus;
     case "advanced":
       return t.billing.planAdvanced;
     case "premium":

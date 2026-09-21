@@ -44,18 +44,14 @@ function usageTone(pct: number): "ok" | "warn" | "hot" {
 function planDisplayName(
   billing: {
     planFree: string;
-    planBasic: string;
     planStudent: string;
-    planPlus: string;
     planAdvanced: string;
     planPremium: string;
   },
   tier: PlanTier
 ): string {
   if (tier === "free") return billing.planFree;
-  if (tier === "basic") return billing.planBasic;
   if (tier === "student") return billing.planStudent;
-  if (tier === "plus") return billing.planPlus;
   if (tier === "advanced") return billing.planAdvanced;
   return billing.planPremium;
 }

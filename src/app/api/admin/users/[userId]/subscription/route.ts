@@ -15,9 +15,7 @@ const UUID_RE =
 
 const TIERS = new Set<PlanTier>([
   "free",
-  "basic",
   "student",
-  "plus",
   "advanced",
   "premium",
 ]);

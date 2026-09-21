@@ -1,42 +1,25 @@
 /**
  * Subscription plans — THE single source of truth for tiers, prices, Stripe
- * price IDs, voice allowance, generation caps, source pages, PDF limits,
- * lecture-recording caps, and course-generation depth.
+ * price IDs, voice allowance, generation caps, source pages, PDF limits and
+ * lecture-recording caps.
+ *
+ * Three paid tiers: Student, Advanced, Premium. Course generation depth is NOT
+ * a tier capability — every plan builds courses the same way.
  *
  * Internal `free` is the unsubscribed fallback (canceled / missing / unpaid).
  * It is never offered at checkout and has no expensive AI allowances.
  *
- * Numeric limits are NOT additive across tiers. Student gets 200 source pages
- * total — not Basic's 80 plus Student's 200.
+ * Numeric limits are NOT additive across tiers.
  *
  * To show/hide checkout and the billing page site-wide, see
  * `feature-flag.ts` (`BILLING_UI_ENABLED`).
  */
 
-export type PlanTier =
-  | "free"
-  | "basic"
-  | "student"
-  | "plus"
-  | "advanced"
-  | "premium";
+export type PlanTier = "free" | "student" | "advanced" | "premium";
 
-export const PAID_PLAN_TIERS = [
-  "basic",
-  "student",
-  "plus",
-  "advanced",
-  "premium",
-] as const;
+export const PAID_PLAN_TIERS = ["student", "advanced", "premium"] as const;
 
 export type PaidPlanTier = (typeof PAID_PLAN_TIERS)[number];
-
-export type CourseGenerationDepth =
-  | "essential"
-  | "standard"
-  | "detailed"
-  | "comprehensive"
-  | "maximum";
 
 export type PlanConfig = {
   tier: PlanTier;
@@ -64,7 +47,6 @@ export type PlanConfig = {
   maxPdfsPerCourse: number;
   /** New live lecture recording sessions per billing period. */
   lectureRecordings: number;
-  generationDepth: CourseGenerationDepth;
   earlyAccess: boolean;
   /** One-line tagline for the pricing card. */
   tagline: string;
@@ -88,12 +70,8 @@ function uniqueIds(...ids: Array<string | null | undefined>): string[] {
   return out;
 }
 
-const BASIC_REGULAR =
-  envId("STRIPE_PRICE_BASIC_REGULAR") ?? envId("STRIPE_PRICE_BASIC");
 const STUDENT_REGULAR =
   envId("STRIPE_PRICE_STUDENT_REGULAR") ?? envId("STRIPE_PRICE_STUDENT");
-const PLUS_REGULAR =
-  envId("STRIPE_PRICE_PLUS_REGULAR") ?? envId("STRIPE_PRICE_PLUS");
 const ADVANCED_REGULAR =
   envId("STRIPE_PRICE_ADVANCED_REGULAR") ?? envId("STRIPE_PRICE_ADVANCED");
 const PREMIUM_REGULAR =
@@ -113,43 +91,9 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     sourcePages: 0,
     maxPdfsPerCourse: 0,
     lectureRecordings: 0,
-    generationDepth: "essential",
     earlyAccess: false,
     tagline: "Unpaid default — not offered at checkout.",
     highlights: ["Choose a plan to generate AI courses."],
-  },
-  basic: {
-    tier: "basic",
-    name: "Basic",
-    priceMonthly: 19.99,
-    promoPriceMonthly: 3.99,
-    stripePriceId: BASIC_REGULAR,
-    stripePromoPriceId: envId("STRIPE_PRICE_BASIC_PROMO"),
-    legacyStripePriceIds: uniqueIds(
-      envId("STRIPE_PRICE_BASIC"),
-      BASIC_REGULAR
-    ).filter((id) => id !== BASIC_REGULAR),
-    voiceMinutes: 30,
-    courseGenerations: 1,
-    sourcePages: 80,
-    maxPdfsPerCourse: 3,
-    lectureRecordings: 1,
-    generationDepth: "essential",
-    earlyAccess: false,
-    tagline: "Core AI studying for lighter workloads.",
-    highlights: [
-      "Essential AI course generation",
-      "1 AI course generation / billing period",
-      "80 source pages",
-      "Up to 3 PDFs per course",
-      "30 minutes voice tutoring",
-      "1 lecture recording",
-      "Unlimited quizzes",
-      "SRS / flashcards",
-      "Text tutoring",
-      "Notes Hub",
-      "Mentored Learning on generated courses",
-    ],
   },
   student: {
     tier: "student",
@@ -167,44 +111,14 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     sourcePages: 200,
     maxPdfsPerCourse: 5,
     lectureRecordings: 3,
-    generationDepth: "standard",
     earlyAccess: false,
     tagline: "For students studying across multiple classes.",
     highlights: [
-      "Standard course generation",
       "2 AI course generations",
       "200 source pages",
       "Up to 5 PDFs per course",
       "1.5 hours voice tutoring",
       "3 lecture recordings",
-    ],
-  },
-  plus: {
-    tier: "plus",
-    name: "Plus",
-    priceMonthly: 59.99,
-    promoPriceMonthly: 24.99,
-    stripePriceId: PLUS_REGULAR,
-    stripePromoPriceId: envId("STRIPE_PRICE_PLUS_PROMO"),
-    legacyStripePriceIds: uniqueIds(
-      envId("STRIPE_PRICE_PLUS"),
-      PLUS_REGULAR
-    ).filter((id) => id !== PLUS_REGULAR),
-    voiceMinutes: 150,
-    courseGenerations: 3,
-    sourcePages: 300,
-    maxPdfsPerCourse: 8,
-    lectureRecordings: 5,
-    generationDepth: "detailed",
-    earlyAccess: false,
-    tagline: "More courses, voice, and deeper explanations.",
-    highlights: [
-      "Detailed course generation",
-      "3 AI course generations",
-      "300 source pages",
-      "Up to 8 PDFs per course",
-      "2.5 hours voice tutoring",
-      "5 lecture recordings",
     ],
   },
   advanced: {
@@ -223,11 +137,9 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     sourcePages: 400,
     maxPdfsPerCourse: 10,
     lectureRecordings: 6,
-    generationDepth: "comprehensive",
     earlyAccess: true,
     tagline: "Comprehensive depth, higher limits, and early access.",
     highlights: [
-      "Comprehensive course generation",
       "3 AI course generations",
       "400 source pages",
       "Up to 10 PDFs per course",
@@ -252,11 +164,9 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
     sourcePages: 500,
     maxPdfsPerCourse: 12,
     lectureRecordings: 8,
-    generationDepth: "maximum",
     earlyAccess: true,
     tagline: "Maximum depth and the highest Aroses limits.",
     highlights: [
-      "Maximum course generation",
       "4 AI course generations",
       "500 source pages",
       "Up to 12 PDFs per course",
@@ -269,29 +179,23 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
 /** Internal order including the unpaid default (not shown at checkout). */
 export const PLAN_ORDER: PlanTier[] = [
   "free",
-  "basic",
   "student",
-  "plus",
   "advanced",
   "premium",
 ];
 
 /** Plans students can buy. Free is not offered. */
 export const CHECKOUT_PLAN_ORDER: PaidPlanTier[] = [
-  "basic",
   "student",
-  "plus",
   "advanced",
   "premium",
 ];
 
 export const PLAN_RANK: Record<PlanTier, number> = {
   free: 0,
-  basic: 1,
-  student: 2,
-  plus: 3,
-  advanced: 4,
-  premium: 5,
+  student: 1,
+  advanced: 2,
+  premium: 3,
 };
 
 /**
@@ -312,10 +216,21 @@ export function isPaidPlanTier(tier: string): tier is PaidPlanTier {
   return (PAID_PLAN_TIERS as readonly string[]).includes(tier.toLowerCase());
 }
 
+/**
+ * Retired tiers still present on existing subscription rows. `basic` and `plus`
+ * were removed when pricing went back to three paid tiers; anyone still carrying
+ * one (including users who earned `plus` from the day-30 check-in streak) is
+ * read as Student so they never silently lose paid access.
+ */
+const LEGACY_TIER_ALIASES: Record<string, PlanTier> = {
+  basic: "student",
+  plus: "student",
+};
+
 export function parsePlanTier(raw: string | null | undefined): PlanTier | null {
   const t = (raw ?? "").trim().toLowerCase();
   if ((PLAN_ORDER as readonly string[]).includes(t)) return t as PlanTier;
-  return null;
+  return LEGACY_TIER_ALIASES[t] ?? null;
 }
 
 export function hasEarlyAccess(tier: PlanTier): boolean {
@@ -356,10 +271,6 @@ export function maxPdfsPerCourse(tier: PlanTier): number {
 
 export function lectureRecordingCap(tier: PlanTier): number {
   return Math.max(0, PLANS[tier]?.lectureRecordings ?? 0);
-}
-
-export function generationDepthForTier(tier: PlanTier): CourseGenerationDepth {
-  return PLANS[tier]?.generationDepth ?? "essential";
 }
 
 export function formatUsdAmount(amount: number): string {
