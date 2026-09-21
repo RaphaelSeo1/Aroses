@@ -674,9 +674,9 @@ export default async function NotesHubPage() {
   return (
     <>
       <AppHeader right={<HeaderNavLoggedInServer />} />
-      <main className="min-h-[calc(100vh-4rem)] bg-app-gradient">
-        <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
-          <div data-tour="notes-hub">
+      <main className="min-h-[calc(100vh-3.5rem)] bg-app-gradient sm:min-h-[calc(100vh-4rem)] md:h-[calc(100dvh-4rem)] md:min-h-0 md:overflow-hidden">
+        <div className="mx-auto flex h-full min-h-0 max-w-6xl flex-col gap-6 px-4 py-10 sm:px-6 sm:py-14 md:py-8">
+          <div data-tour="notes-hub" className="shrink-0">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
               Your library
             </p>

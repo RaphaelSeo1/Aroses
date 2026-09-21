@@ -675,7 +675,7 @@ function SortableSectionRow({
       </div>
 
       {showNoteList && isOpen ? (
-        <ul className="mb-2 ml-2 mt-0.5 max-h-[min(20rem,40vh)] space-y-0.5 overflow-y-auto overscroll-contain border-l border-zinc-200 pl-2 dark:border-zinc-800 sm:max-h-[min(22rem,45vh)]">
+        <ul className="mb-2 ml-2 mt-0.5 max-h-[min(20rem,40vh)] space-y-0.5 overflow-y-auto overscroll-contain border-l border-zinc-200 pl-2 dark:border-zinc-800 sm:max-h-[min(22rem,45vh)] md:max-h-none md:overflow-visible">
           {count === 0 ? (
             <li className="px-2.5 py-2 text-xs italic text-zinc-400 dark:text-zinc-600">
               {meta.emptyLabel}

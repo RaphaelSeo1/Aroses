@@ -13,7 +13,7 @@ import {
 } from "@dnd-kit/core";
 import { arrayMove, sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { alertDialog, confirmDialog, promptDialog } from "@/components/AppDialogs";
 import { NotesDocGrid } from "@/components/notes-hub/NotesDocCard";
 import {
@@ -108,6 +108,25 @@ function applyMoveToSections(
 
     return section;
   });
+}
+
+function HubSplit({
+  sidebar,
+  children,
+}: {
+  sidebar: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-6 md:flex-row md:gap-8 md:overflow-hidden">
+      <aside className="min-h-0 md:h-full md:min-h-0 md:shrink-0 md:overflow-y-auto md:overscroll-contain md:pr-1">
+        {sidebar}
+      </aside>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col md:overflow-hidden">
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export function NotesHubClient({
@@ -837,31 +856,33 @@ export function NotesHubClient({
   const renderMainContent = (draggableNotes: boolean) => {
     if (empty) {
       return (
-        <div className="rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90">
-          <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-            No notes yet
-          </p>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-            Start a blank note, or notes from live lectures, tutor sessions, and
-            courses will show up here automatically.
-          </p>
-          <button
-            type="button"
-            onClick={() => void createNote()}
-            disabled={creating}
-            data-requires-paid
-            className="mt-6 rounded-full bg-violet-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
-          >
-            {creating ? "Creating…" : "Create your first note"}
-          </button>
+        <div className="min-h-0 flex-1 md:overflow-y-auto md:overscroll-contain">
+          <div className="rounded-3xl border border-zinc-200/90 bg-white/90 p-10 text-center shadow-sm dark:border-zinc-800 dark:bg-zinc-950/90">
+            <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+              No notes yet
+            </p>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+              Start a blank note, or notes from live lectures, tutor sessions, and
+              courses will show up here automatically.
+            </p>
+            <button
+              type="button"
+              onClick={() => void createNote()}
+              disabled={creating}
+              data-requires-paid
+              className="mt-6 rounded-full bg-violet-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+            >
+              {creating ? "Creating…" : "Create your first note"}
+            </button>
+          </div>
         </div>
       );
     }
 
     if (isSearching) {
       return (
-        <section>
-          <header className="mb-4">
+        <section className="flex min-h-0 flex-1 flex-col">
+          <header className="mb-4 shrink-0">
             <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
               Search results
             </h2>
@@ -871,43 +892,45 @@ export function NotesHubClient({
                 : `${searchHits.length} note${searchHits.length === 1 ? "" : "s"} matching “${searchQuery.trim()}”`}
             </p>
           </header>
-          {searchHits.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-zinc-200 bg-white/60 px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950/40">
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                Try another word, or clear search to browse by section.
-              </p>
-            </div>
-          ) : (
-            <ul className="divide-y divide-zinc-100 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-sm dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-950">
-              {searchHits.map((hit) => (
-                <li key={hit.card.key}>
-                  <Link
-                    href={hit.card.href}
-                    data-requires-paid
-                    className="block px-4 py-3.5 transition hover:bg-zinc-50 dark:hover:bg-zinc-900/60"
-                  >
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                      <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                        {hit.card.title}
+          <div className="min-h-0 flex-1 md:overflow-y-auto md:overscroll-contain">
+            {searchHits.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-zinc-200 bg-white/60 px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950/40">
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  Try another word, or clear search to browse by section.
+                </p>
+              </div>
+            ) : (
+              <ul className="divide-y divide-zinc-100 overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-sm dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-950">
+                {searchHits.map((hit) => (
+                  <li key={hit.card.key}>
+                    <Link
+                      href={hit.card.href}
+                      data-requires-paid
+                      className="block px-4 py-3.5 transition hover:bg-zinc-50 dark:hover:bg-zinc-900/60"
+                    >
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                          {hit.card.title}
+                        </p>
+                        <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
+                          {hit.card.dateLabel}
+                        </p>
+                      </div>
+                      <p className="mt-0.5 text-[11px] font-medium text-violet-700 dark:text-violet-300">
+                        {hit.sectionTitle}
+                        {hit.card.subtitle ? ` · ${hit.card.subtitle}` : ""}
                       </p>
-                      <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
-                        {hit.card.dateLabel}
-                      </p>
-                    </div>
-                    <p className="mt-0.5 text-[11px] font-medium text-violet-700 dark:text-violet-300">
-                      {hit.sectionTitle}
-                      {hit.card.subtitle ? ` · ${hit.card.subtitle}` : ""}
-                    </p>
-                    {hit.snippet ? (
-                      <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                        {hit.snippet}
-                      </p>
-                    ) : null}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
+                      {hit.snippet ? (
+                        <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+                          {hit.snippet}
+                        </p>
+                      ) : null}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </section>
       );
     }
@@ -915,8 +938,8 @@ export function NotesHubClient({
     if (!activeSection) return null;
 
     return (
-      <section>
-        <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <section className="flex min-h-0 flex-1 flex-col">
+        <header className="mb-4 flex shrink-0 flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
               {activeSection.title}
@@ -934,40 +957,42 @@ export function NotesHubClient({
           ) : null}
         </header>
 
-        {activeSection.cards.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-zinc-200 bg-white/60 px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950/40">
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              Nothing in this section yet.
-              {isCustomSection(activeSection)
-                ? " Open the sidebar note ⋮ menu → Move to."
-                : ""}
-            </p>
-            {canCreateInSection ? (
-              <button
-                type="button"
-                onClick={() => void createNote()}
-                disabled={creating}
-                data-requires-paid
-                className="mt-4 rounded-full bg-violet-600 px-5 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
-              >
-                {creating ? "Creating…" : "+ New note"}
-              </button>
-            ) : null}
-          </div>
-        ) : (
-          <NotesDocGrid
-            cards={activeSection.cards}
-            draggableNotes={draggableNotes}
-            onRenameNote={(c) => void renameNote(c)}
-            onDeleteNote={(c) => void deleteNote(c)}
-            onMoveNote={moveSingleNote}
-            moveTargets={moveTargets}
-            onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
-            onRemoveFromSection={removeFromSection}
-            onRestoreNote={(c) => void restoreNote(c)}
-            onPurgeNote={(c) => void purgeNote(c)}
-          />
-        )}
+        <div className="min-h-0 flex-1 md:overflow-y-auto md:overscroll-contain">
+          {activeSection.cards.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-zinc-200 bg-white/60 px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-950/40">
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                Nothing in this section yet.
+                {isCustomSection(activeSection)
+                  ? " Open the sidebar note ⋮ menu → Move to."
+                  : ""}
+              </p>
+              {canCreateInSection ? (
+                <button
+                  type="button"
+                  onClick={() => void createNote()}
+                  disabled={creating}
+                  data-requires-paid
+                  className="mt-4 rounded-full bg-violet-600 px-5 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+                >
+                  {creating ? "Creating…" : "+ New note"}
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <NotesDocGrid
+              cards={activeSection.cards}
+              draggableNotes={draggableNotes}
+              onRenameNote={(c) => void renameNote(c)}
+              onDeleteNote={(c) => void deleteNote(c)}
+              onMoveNote={moveSingleNote}
+              moveTargets={moveTargets}
+              onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
+              onRemoveFromSection={removeFromSection}
+              onRestoreNote={(c) => void restoreNote(c)}
+              onPurgeNote={(c) => void purgeNote(c)}
+            />
+          )}
+        </div>
       </section>
     );
   };
@@ -986,10 +1011,33 @@ export function NotesHubClient({
     </div>
   );
 
+  const sidebar = (
+    <NotesHubSidebar
+      sections={sections}
+      activeSectionId={activeSectionId}
+      onSectionSelect={setActiveSectionId}
+      onAddSection={() => void addSection()}
+      onRenameSection={(s) => void renameSection(s)}
+      onDeleteSection={(s) => void deleteSection(s)}
+      onChangeSectionEmoji={(s, emoji) => void changeSectionEmoji(s, emoji)}
+      onRenameNote={(c) => void renameNote(c)}
+      onDeleteNote={(c) => void deleteNote(c)}
+      onMoveNote={moveSingleNote}
+      moveTargets={moveTargets}
+      onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
+      onRemoveFromSection={removeFromSection}
+      onRestoreNote={(c) => void restoreNote(c)}
+      onPurgeNote={(c) => void purgeNote(c)}
+      addingSection={addingSection}
+      draggableNotes={dndMounted}
+      dragKind={dragKind}
+    />
+  );
+
   return (
-    <div>
+    <div className="flex min-h-0 flex-1 flex-col gap-4 md:overflow-hidden md:gap-6">
       {!empty ? (
-        <div className="relative mt-6">
+        <div className="relative shrink-0">
           <label htmlFor="notes-search" className="sr-only">
             Search notes
           </label>
@@ -1031,7 +1079,7 @@ export function NotesHubClient({
         </div>
       ) : null}
 
-      <div className="mt-4 md:hidden">{toolbar}</div>
+      <div className="shrink-0 md:hidden">{toolbar}</div>
 
       {dndMounted ? (
         <DndContext
@@ -1042,37 +1090,10 @@ export function NotesHubClient({
           onDragEnd={handleDragEnd}
           onDragCancel={handleDragCancel}
         >
-          <div className="mt-6 flex flex-col gap-6 md:mt-8 md:flex-row md:gap-8">
-            <aside className="md:sticky md:top-20 md:self-start">
-              <NotesHubSidebar
-                sections={sections}
-                activeSectionId={activeSectionId}
-                onSectionSelect={setActiveSectionId}
-                onAddSection={() => void addSection()}
-                onRenameSection={(s) => void renameSection(s)}
-                onDeleteSection={(s) => void deleteSection(s)}
-                onChangeSectionEmoji={(s, emoji) =>
-                  void changeSectionEmoji(s, emoji)
-                }
-                onRenameNote={(c) => void renameNote(c)}
-                onDeleteNote={(c) => void deleteNote(c)}
-                onMoveNote={moveSingleNote}
-                moveTargets={moveTargets}
-                onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
-                onRemoveFromSection={removeFromSection}
-                onRestoreNote={(c) => void restoreNote(c)}
-                onPurgeNote={(c) => void purgeNote(c)}
-                addingSection={addingSection}
-                draggableNotes
-                dragKind={dragKind}
-              />
-            </aside>
-
-            <div className="min-w-0 flex-1">
-              <div className="mb-4 hidden md:block">{toolbar}</div>
-              {renderMainContent(true)}
-            </div>
-          </div>
+          <HubSplit sidebar={sidebar}>
+            <div className="mb-4 hidden shrink-0 md:block">{toolbar}</div>
+            {renderMainContent(true)}
+          </HubSplit>
           <DragOverlay dropAnimation={null}>
             {dragLabel ? (
               <div className="rounded-lg bg-white px-3 py-2 text-xs font-medium shadow-lg ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-700">
@@ -1082,34 +1103,10 @@ export function NotesHubClient({
           </DragOverlay>
         </DndContext>
       ) : (
-        <div className="mt-6 flex flex-col gap-6 md:mt-8 md:flex-row md:gap-8">
-          <aside className="md:sticky md:top-20 md:self-start">
-            <NotesHubSidebar
-              sections={sections}
-              activeSectionId={activeSectionId}
-              onSectionSelect={setActiveSectionId}
-              onAddSection={() => void addSection()}
-              onRenameSection={(s) => void renameSection(s)}
-              onDeleteSection={(s) => void deleteSection(s)}
-              onChangeSectionEmoji={(s, emoji) =>
-                void changeSectionEmoji(s, emoji)
-              }
-              onRenameNote={(c) => void renameNote(c)}
-              onDeleteNote={(c) => void deleteNote(c)}
-              onMoveNote={moveSingleNote}
-              moveTargets={moveTargets}
-              onMoveToNewSection={(c) => void moveNoteToNewSection(c)}
-              onRemoveFromSection={removeFromSection}
-              onRestoreNote={(c) => void restoreNote(c)}
-              onPurgeNote={(c) => void purgeNote(c)}
-              addingSection={addingSection}
-            />
-          </aside>
-          <div className="min-w-0 flex-1">
-            <div className="mb-4 hidden md:block">{toolbar}</div>
-            {renderMainContent(false)}
-          </div>
-        </div>
+        <HubSplit sidebar={sidebar}>
+          <div className="mb-4 hidden shrink-0 md:block">{toolbar}</div>
+          {renderMainContent(false)}
+        </HubSplit>
       )}
     </div>
   );
