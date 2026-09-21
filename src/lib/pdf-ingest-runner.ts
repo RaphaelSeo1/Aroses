@@ -68,7 +68,6 @@ import { sourcePageCap } from "@/lib/billing/plans";
 import { resolveBillingPeriod } from "@/lib/billing/billing-period";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import { getUserSubscription } from "@/lib/billing/subscription";
-import { enterGenerationDepthFromJob } from "@/lib/ai/generation-depth-context";
 import { enrichModulesWithPdfAssets } from "@/lib/pdf-ingest/enrich-modules-with-assets";
 import { placeAllPdfAssetsIntoModules } from "@/lib/pdf-ingest/place-course-assets";
 import {
@@ -1353,14 +1352,7 @@ export async function runPdfIngestExpandOne(
         job.id,
         typeof job.course_id === "string" ? job.course_id : null
       )
-    : {
-        studyContext: null,
-        outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE,
-        generationDepth: null,
-        billingTierSnapshot: null,
-      };
-
-  enterGenerationDepthFromJob(expandGenerationContext);
+    : { studyContext: null, outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE };
 
   const sourceTextForLocale =
     typeof job?.ingest_source_text === "string" ? job.ingest_source_text : "";
@@ -2106,14 +2098,7 @@ export async function runPdfIngestJob(
         claimed.id,
         typeof claimed.course_id === "string" ? claimed.course_id : null
       )
-    : {
-        studyContext: null,
-        outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE,
-        generationDepth: null,
-        billingTierSnapshot: null,
-      };
-
-  enterGenerationDepthFromJob(generationContext);
+    : { studyContext: null, outputLanguage: DEFAULT_COURSE_OUTPUT_LANGUAGE };
 
   if (claimErr) {
     console.error("[pdf-ingest] claim", jobId, claimErr);
@@ -2503,8 +2488,6 @@ export async function runPdfIngestContinueAfterTranscript(
     jobId,
     typeof job.course_id === "string" ? job.course_id : null
   );
-  enterGenerationDepthFromJob(generationContext);
-
   await runPdfIngestOutlinePhase(admin, {
     jobId,
     claimed: job,

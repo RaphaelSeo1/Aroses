@@ -63,13 +63,6 @@ import {
 } from "@/lib/live-notes/notes-emphasis";
 import { formatSelfStudyGenerationBlock } from "@/lib/self-study-context";
 import { splitCombinedSourceBlocks } from "@/lib/study-ingest/combine";
-import {
-  buildProfileForDepth,
-  depthInstructionBlock,
-  depthOutlineCoverageHint,
-  type CourseBuildProfile,
-} from "@/lib/ai/generation-depth-config";
-import { getGenerationDepthContext } from "@/lib/ai/generation-depth-context";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
@@ -89,10 +82,13 @@ export type { CourseOutlinePayload } from "@/lib/ai/course-payload";
  * PDF ingest uses a **chunked** pipeline (outline in `runPdfIngestJob`, then one module per
  * `POST /api/process-pdf/expand`) so each invocation stays within the serverless wall clock.
  *
- * **Default** follows the user's snapshotted plan depth (Essential→express …
- * Maximum→full). `COURSE_BUILD_PROFILE` remains a developer/test override when
- * no job depth is in context (legacy jobs).
+ * **Default `express`**: Haiku, tight caps — targets **~2–5 minutes** for a typical lecture PDF
+ * (network + model latency vary; huge decks may exceed). Use `COURSE_BUILD_PROFILE=fast`,
+ * `balanced`, or `full` for richer, slower output. `balanced` defaults are tuned to stay a bit
+ * richer than `fast` without the old “~2× wall-clock” gap (see module/outline retries and caps).
+ * `ANTHROPIC_COURSE_MODEL` overrides models.
  */
+type CourseBuildProfile = "express" | "fast" | "balanced" | "full";
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -104,16 +100,16 @@ function envInt(name: string, fallback: number): number {
 /** Target quiz bank size per module after generation (includes post-parse backfill). */
 export function moduleQuizTarget(profile: CourseBuildProfile): number {
   if (profile === "full") {
-    return clampInt(envInt("COURSE_FULL_QUIZ_MIN", 8), 6, 8);
+    return clampInt(envInt("COURSE_FULL_QUIZ_MIN", 12), 4, 24);
   }
   if (profile === "express") {
-    return clampInt(envInt("COURSE_EXPRESS_QUIZ_MIN", 6), 4, 6);
+    return clampInt(envInt("COURSE_EXPRESS_QUIZ_MIN", 10), 3, 16);
   }
   if (profile === "fast") {
-    return clampInt(envInt("COURSE_FAST_QUIZ_MIN", 6), 4, 6);
+    return clampInt(envInt("COURSE_FAST_QUIZ_MIN", 10), 3, 16);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_QUIZ_MIN", 8), 6, 8);
+    return clampInt(envInt("COURSE_BALANCED_QUIZ_MIN", 10), 3, 16);
   }
   const _never: never = profile;
   return _never;
@@ -158,7 +154,7 @@ async function ensureModuleQuizCount(
   );
 
   const maxRounds =
-    profile === "express" || profile === "fast" ? 1 : profile === "balanced" ? 2 : 1;
+    profile === "express" || profile === "fast" ? 1 : profile === "balanced" ? 2 : 3;
   for (let round = 0; round < maxRounds && quiz.length < target; round++) {
     const need = target - quiz.length;
     const batch = Math.min(16, Math.max(6, need + 4));
@@ -200,14 +196,17 @@ function clampInt(n: number, min: number, max: number): number {
 }
 
 function resolveCourseBuildProfile(): CourseBuildProfile {
-  const depth = getGenerationDepthContext();
-  if (depth) return buildProfileForDepth(depth);
   const p = process.env.COURSE_BUILD_PROFILE?.trim().toLowerCase();
   if (p === "full") return "full";
   if (p === "balanced") return "balanced";
   if (p === "fast") return "fast";
   if (p === "express") return "express";
-  // Legacy jobs / tests without a snapshotted depth.
+  // Default when COURSE_BUILD_PROFILE is unset (e.g. production without the env
+  // var): `balanced` (Haiku) — cheaper and faster than `full` (Sonnet) while
+  // still producing genuinely in-depth, multi-module courses. The balanced
+  // depth knobs below (material chars, module/lesson caps, coverage prompt) are
+  // tuned up from stock so large PDFs keep near-`full` coverage. Set
+  // COURSE_BUILD_PROFILE=full to restore the Sonnet deep build.
   return "balanced";
 }
 
@@ -385,7 +384,7 @@ ${chunk}`;
 function resolveCourseModel(profile: CourseBuildProfile): string {
   const override = process.env.ANTHROPIC_COURSE_MODEL?.trim();
   if (override) return override;
-  if (profile === "express" || profile === "fast") {
+  if (profile === "express" || profile === "fast" || profile === "balanced") {
     return "claude-haiku-4-5";
   }
   return "claude-sonnet-4-6";
@@ -442,12 +441,11 @@ function materialCharLimit(profile: CourseBuildProfile): number {
     );
     return clampInt(fromEnv, 20_000, MAX_MATERIAL_CHARS);
   }
-  // full: enough source to cover a mid-size deck without sending 240k chars
-  // into every Sonnet module (that input alone was ~$0.18/module).
+  // full: ingest the whole source by default so no later section is dropped.
   return clampInt(
-    envInt("COURSE_FULL_MATERIAL_CHARS", 80_000),
-    40_000,
-    160_000
+    envInt("COURSE_FULL_MATERIAL_CHARS", MAX_MATERIAL_CHARS),
+    60_000,
+    480_000
   );
 }
 
@@ -652,18 +650,16 @@ async function sleep(ms: number) {
  * this just tells the outliner to map every section/heading to a module/lesson.
  */
 function outlineCoverageBlock(profile: CourseBuildProfile): string {
-  const depth = getGenerationDepthContext();
-  const depthHint = depth ? `${depthOutlineCoverageHint(depth)}\n` : "";
   if (profile === "express") {
-    return `${depthHint}COVERAGE: Map **every major section/heading** in the excerpt to its own lesson_title — do not merge unrelated topics. Use enough modules to cover the full deck. Never omit foundational concepts.`;
+    return "COVERAGE: Map **every major section/heading** in the excerpt to its own lesson_title — do not merge unrelated topics. Use enough modules to cover the full deck.";
   }
   if (profile === "fast") {
-    return `${depthHint}COVERAGE: Map obvious sections in this excerpt to modules; stay within the caps above. Never omit foundational concepts.`;
+    return "COVERAGE: Map obvious sections in this excerpt to modules; stay within the caps above.";
   }
   if (profile === "balanced") {
-    return `${depthHint}COVERAGE: Plan modules + lesson_titles that together map **every section, heading, and distinct topic across the whole document** — first page to last. Walk it end to end using the headings to infer structure; do not plan only for the opening pages. Later pages and the document middle each need their own modules/lessons.`;
+    return "COVERAGE: Plan modules + lesson_titles that together map **every section, heading, and distinct topic across the whole document** — first page to last. Walk it end to end using the headings to infer structure; do not plan only for the opening pages. Later pages and the document middle each need their own modules/lessons.";
   }
-  return `${depthHint}COVERAGE: Map the whole document first page to last, but **combine related headings** so the course stays within the module and lesson caps. Prefer fewer denser modules over one module per heading. Later pages must still be represented — fold them into an existing module rather than overflowing the cap.`;
+  return `COVERAGE (critical): Plan modules + lesson_titles that together **map every section, heading, and distinct topic across the entire document** — first page to last. The material below is the **full document** unless it is extremely large. Walk it end to end; do not plan only for the opening pages and stop. Later pages and the document middle each need their own modules/lessons. Full lesson bodies are written from the same source later.`;
 }
 
 /**
@@ -708,14 +704,10 @@ function administrativeContentExclusionRules(): string {
  * `tableAndDataFidelityRules`).
  */
 function lessonGenerationSpec(): string {
-  const depth = getGenerationDepthContext();
-  const depthBlock = depth
-    ? `\n\nThe COURSE DEPTH block governs enrichment, examples, synthesis, and secondary coverage. Accuracy and source fidelity remain mandatory.\n${depthInstructionBlock(depth)}`
-    : "";
-  return `You convert source teaching material into self-contained study lessons. The source may be slides, a lecture transcript, a textbook page, an article, or a mix. Your job is to preserve everything teachable in the source that this course depth requires, and expand it into prose a student can learn from WITHOUT the original.
+  return `You convert source teaching material into self-contained study lessons. The source may be slides, a lecture transcript, a textbook page, an article, or a mix. Your job is to preserve everything teachable in the source and expand it into prose a student can learn from WITHOUT the original.
 
 COVERAGE — the core rule:
-Every concept, distinction, mechanism, worked example, named entity, framework, and cause→effect explanation in the source that this depth calls for must appear in the lessons. Do not drop foundational material because it is hard to phrase, buried in a messy transcript, or only stated once. If the source teaches a core idea, the lesson keeps it.
+Every concept, distinction, mechanism, worked example, named entity, framework, and cause→effect explanation in the source must appear in the lessons. Do not drop material because it is hard to phrase, buried in a messy transcript, or only stated once. If the source teaches it, the lesson keeps it.
 
 Treat ALL sources as equal in weight. A rambling spoken transcript carries as much teachable content as a clean slide — often more. Do NOT favor neatly formatted sources over messy ones. The connective reasoning a lecturer says out loud is usually the most valuable content and the easiest to lose. Mine every source as hard as the cleanest one.
 
@@ -724,7 +716,7 @@ NON-REDUNDANCY — teach each thing exactly ONCE:
 - A brief one-line recap or an explicit back-reference ("as covered earlier in the section on X") is fine, but do NOT re-derive, re-define, or re-explain in depth material already taught earlier.
 - Across modules and lessons, build on earlier coverage instead of repeating it: each later lesson must add NEW material, not restate a prior lesson's explanation. If two planned lessons would cover the same idea, teach it fully in the first and only reference it from the second.
 - Within a single lesson, present each point once; never restate the same explanation in different words later in the same lesson.
-- This does NOT weaken COVERAGE: still cover what the depth requires — but each distinct thing ONCE, in its best location.
+- This does NOT weaken COVERAGE: still cover EVERYTHING the source teaches — but each distinct thing ONCE, in its best location.
 
 WHAT TO KEEP:
 - definitions and the distinctions between similar terms
@@ -759,7 +751,7 @@ OUTPUT per lesson — map onto the lesson JSON object the system consumes:
 - "key_terms" (DISCRETIONARY — no fixed count; judge from the source): an array of { "term", "definition" } objects. Include a key term ONLY when it is a distinct, important term the source introduces and defines or uses meaningfully — typically a named concept, technique, drug, formula, or field-specific vocabulary a student would study. Add as many as the material genuinely warrants — that may be ZERO for a lesson with no notable terminology. Do NOT pad with trivial or common words (e.g. "cell", "energy", "important", "example", "overview"), do NOT hit a quota, and never invent terms not grounded in the source. An empty key_terms array is valid and is preferred over filler. For Latin-script terms, capitalize properly (Title Case for multi-word terms; keep standard acronyms like DNA, HIV, ATP as uppercase). Do not leave ordinary English terms in all-lowercase.
 - "examples" (aim for AT LEAST 1–2 per lesson): concrete real-world examples that help a student understand the concept. PREFER the source's own specific example whenever it provides one, keeping its actual details. When the source gives NO example, you MAY add a brief, clearly illustrative real-world example of your own that correctly illustrates the concept. GUARDRAIL: an added example must be a GENERIC illustrative scenario only — it must NOT invent source-specific facts, figures, numbers, named cases, doses, or data, and must NOT contradict the source; the lesson's core facts and figures stay strictly source-faithful. NEVER output a placeholder string like "real world example 1" or "Clinical scenario…" — every example must be a real, substantive illustration. Output an array of example strings.
 
-Before finishing, check each distinct teachable point in the source against your lessons. If anything in the source isn't covered, add it. Also confirm every lesson's "content" is real teaching prose (not empty or key-terms-only), that each concept is taught in depth only once, and that each lesson carries at least one helpful real-world example.${depthBlock}`;
+Before finishing, check each distinct teachable point in the source against your lessons. If anything in the source isn't covered, add it. Also confirm every lesson's "content" is real teaching prose (not empty or key-terms-only), that each concept is taught in depth only once, and that each lesson carries at least one helpful real-world example.`;
 }
 
 /**
@@ -1356,11 +1348,11 @@ function outlineInstruction(
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
     maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 6);
   } else if (profile === "balanced") {
-    moduleCount = `Use **3 to ${maxModules}** modules. Prefer fewer, denser modules. A short handout may need only 3; do not exceed ${maxModules}.`;
-    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 4), 2, 4);
+    moduleCount = `Use **4 to ${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 4, but a long lecture deck or multi-topic document should use more (toward ${maxModules}). Give each major topic or section its own focused module; do not compress the whole document into one or two catch-alls.`;
+    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 5), 2, 8);
   } else {
-    moduleCount = `Use **3 to ${maxModules}** modules. Prefer fewer, denser modules that still cover the whole document — combine closely related topics instead of splitting every heading into its own module. A short handout may need only 3; a long lecture deck should stay at or under ${maxModules}. Every major section of the document must still be represented.`;
-    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 5), 3, 5);
+    moduleCount = `Use **at least 5** and up to **${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 5–6, but a long lecture deck, chapter, or multi-topic document should use many more (toward the maximum). Split the material into focused modules so each major topic, section, or learning objective gets its own module — prefer MORE, narrower modules over a few broad ones. Do NOT compress later pages into one catch-all module; every distinct section of the document, from first page to last, must be represented.`;
+    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 12), 3, 20);
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
@@ -1476,7 +1468,7 @@ function moduleInstruction(
         ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
         : profile === "balanced"
           ? `STYLE (balanced): Teach clearly with examples; aim **under ~500 words** per lesson.`
-          : `STYLE (full): Concise Sonnet lessons — **under ~350 words** each. Teach the planned topic clearly with one or two examples. Do not write a textbook chapter.`;
+          : "";
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. ${moduleTitleDirective}
 ${generationContextSuffix(studyContext, outputLanguage)}
@@ -1575,7 +1567,9 @@ ${brokenAssistantText.slice(0, 100_000)}`;
       ? [12_288, 20_480]
       : profile === "fast"
         ? [16_384, 24_576]
-        : [10_240];
+        : profile === "balanced"
+          ? [20_480, 30_720]
+          : [24_576, 32_768];
 
   let lastText = "";
   for (const moduleRepairMax of repairBudgets) {
@@ -1588,7 +1582,10 @@ ${brokenAssistantText.slice(0, 100_000)}`;
         messages: [{ role: "user", content: prompt }],
       },
       {
-        maxAttempts: 2,
+        maxAttempts:
+          profile === "express" || profile === "fast" || profile === "balanced"
+            ? 2
+            : 3,
       }
     );
 
@@ -1684,7 +1681,7 @@ ${sourceForRepair}
         ? 12_288
         : profile === "balanced"
           ? 16_384
-          : 10_240;
+          : 24_576;
 
   const msg = await createMessageWithRetries(
     anthropic,
@@ -1700,7 +1697,7 @@ ${sourceForRepair}
           ? 1
           : profile === "balanced"
             ? 2
-            : 1,
+            : 3,
     }
   );
 
@@ -1745,7 +1742,8 @@ async function ensureModuleLessonFields(
 ): Promise<CourseModule> {
   if (!moduleNeedsLessonContent(module)) return module;
 
-  const maxRepairs = 1;
+  const maxRepairs =
+    profile === "express" || profile === "fast" || profile === "balanced" ? 1 : 2;
   let out = module;
   for (let i = 0; i < maxRepairs && moduleNeedsLessonContent(out); i++) {
     try {
@@ -2167,20 +2165,15 @@ export function assembleModuleSourcesFromPlan(
  */
 function outlineMaxModules(profile: CourseBuildProfile): number {
   if (profile === "express") {
-    return clampInt(envInt("COURSE_EXPRESS_MAX_MODULES", 4), 2, 4);
+    return clampInt(envInt("COURSE_EXPRESS_MAX_MODULES", 3), 2, 3);
   }
   if (profile === "fast") {
-    return clampInt(envInt("COURSE_FAST_MAX_MODULES", 5), 2, 5);
+    return clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 6);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 6), 4, 6);
+    return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
   }
-  const premium = getGenerationDepthContext() === "maximum";
-  return clampInt(
-    envInt("COURSE_FULL_MAX_MODULES", premium ? 8 : 6),
-    3,
-    premium ? 8 : 6
-  );
+  return clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
 }
 
 /**
@@ -2265,7 +2258,7 @@ export async function generateCourseOutlineFromMaterial(
   const maxAttempts =
     profile === "express" || profile === "fast" || profile === "balanced"
       ? 1
-      : 2;
+      : 4;
 
   const rawText = await invokeUserMessageForPdfText(
     anthropic,
@@ -2315,19 +2308,8 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
   if (profile === "fast") {
     return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 12_288), 6144, 24_576);
   }
-  if (profile === "full" || profile === "balanced") {
-    return clampInt(
-      envInt(
-        profile === "full"
-          ? "COURSE_FULL_MODULE_MAX_TOKENS"
-          : "COURSE_BALANCED_MODULE_MAX_TOKENS",
-        8_192
-      ),
-      4_096,
-      10_240
-    );
-  }
-  return 8_192;
+  if (profile === "full") return 30_720;
+  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 12_288), 8192, 30_720);
 }
 
 /**
@@ -2344,7 +2326,9 @@ function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
       ? [Math.min(20_480, Math.round(base * 1.6))]
       : profile === "fast"
         ? [Math.min(24_576, Math.round(base * 1.5))]
-        : [Math.min(10_240, Math.round(base * 1.25))];
+        : profile === "balanced"
+          ? [Math.min(30_720, Math.max(20_480, Math.round(base * 1.4)))]
+          : [Math.min(30_720, Math.round(base * 1.4))];
   return [...new Set([base, ...extra])].sort((a, b) => a - b);
 }
 
@@ -2872,7 +2856,7 @@ export async function generateCourseModuleFromMaterial(
   const maxAttempts =
     profile === "express" || profile === "fast" || profile === "balanced"
       ? 2
-      : 2;
+      : 5;
 
   const tokenBudgets = moduleMaxTokenBudgets(profile);
   let lastRaw = "";
