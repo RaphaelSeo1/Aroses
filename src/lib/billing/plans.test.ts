@@ -31,54 +31,54 @@ test("public paid tiers have the specified entitlements", () => {
   > = {
     basic: {
       gens: 1,
-      pages: 100,
+      pages: 80,
       pdfs: 3,
-      voiceMin: 60,
-      recordings: 2,
+      voiceMin: 30,
+      recordings: 1,
       depth: "essential",
       early: false,
       regular: 19.99,
       promo: 3.99,
     },
     student: {
-      gens: 3,
-      pages: 250,
-      pdfs: 6,
-      voiceMin: 240,
-      recordings: 8,
+      gens: 2,
+      pages: 200,
+      pdfs: 5,
+      voiceMin: 90,
+      recordings: 3,
       depth: "standard",
       early: false,
       regular: 39.99,
       promo: 14.99,
     },
     plus: {
-      gens: 5,
-      pages: 400,
-      pdfs: 10,
-      voiceMin: 420,
-      recordings: 15,
+      gens: 3,
+      pages: 300,
+      pdfs: 8,
+      voiceMin: 150,
+      recordings: 5,
       depth: "detailed",
       early: false,
       regular: 59.99,
       promo: 24.99,
     },
     advanced: {
-      gens: 10,
-      pages: 750,
-      pdfs: 15,
-      voiceMin: 600,
-      recordings: 25,
+      gens: 3,
+      pages: 400,
+      pdfs: 10,
+      voiceMin: 180,
+      recordings: 6,
       depth: "comprehensive",
       early: true,
       regular: 79.99,
-      promo: 5,
+      promo: 29.99,
     },
     premium: {
-      gens: 20,
-      pages: 1000,
-      pdfs: 25,
-      voiceMin: 1500,
-      recordings: 40,
+      gens: 4,
+      pages: 500,
+      pdfs: 12,
+      voiceMin: 240,
+      recordings: 8,
       depth: "maximum",
       early: true,
       regular: 109.99,
@@ -112,8 +112,8 @@ test("internal free has zero expensive allowances and is not at checkout", () =>
 });
 
 test("numeric limits are not additive across tiers", () => {
-  assert.equal(sourcePageCap("student"), 250);
-  assert.notEqual(sourcePageCap("student"), sourcePageCap("basic") + 250);
-  assert.equal(courseGenerationCap("advanced"), 10);
-  assert.equal(sourcePageCap("premium"), 1000);
+  assert.equal(sourcePageCap("student"), 200);
+  assert.notEqual(sourcePageCap("student"), sourcePageCap("basic") + 200);
+  assert.equal(courseGenerationCap("advanced"), 3);
+  assert.equal(sourcePageCap("premium"), 500);
 });

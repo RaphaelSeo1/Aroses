@@ -25,13 +25,13 @@ test("admin unlimited is not the Stripe Premium quota", () => {
     "premium"
   );
   assert.equal(premium.unlimited, false);
-  assert.equal(premium.coursesCap, 20);
-  assert.equal(premium.courseGenerationsCap, 20);
-  assert.equal(premium.sourcePagesCap, 1000);
+  assert.equal(premium.coursesCap, 4);
+  assert.equal(premium.courseGenerationsCap, 4);
+  assert.equal(premium.sourcePagesCap, 500);
   assert.equal(premium.voiceCapSeconds, voiceCapSeconds("premium"));
   assert.equal(premium.recordingsCap, lectureRecordingCap("premium"));
-  assert.equal(premium.voiceCapSeconds, 25 * 3600);
-  assert.equal(premium.recordingsCap, 40);
+  assert.equal(premium.voiceCapSeconds, 4 * 3600);
+  assert.equal(premium.recordingsCap, 8);
 });
 
 test("normal paid and free users keep their plan meters", () => {
@@ -40,11 +40,11 @@ test("normal paid and free users keep their plan meters", () => {
     "student"
   );
   assert.equal(student.unlimited, false);
-  assert.equal(student.coursesCap, 3);
-  assert.equal(student.courseGenerationsCap, 3);
-  assert.equal(student.sourcePagesCap, 250);
-  assert.equal(student.voiceCapSeconds, 4 * 3600);
-  assert.equal(student.recordingsCap, 8);
+  assert.equal(student.coursesCap, 2);
+  assert.equal(student.courseGenerationsCap, 2);
+  assert.equal(student.sourcePagesCap, 200);
+  assert.equal(student.voiceCapSeconds, 90 * 60);
+  assert.equal(student.recordingsCap, 3);
 
   const free = resolvePlanMeterCaps(
     { id: OTHER_ID, email: "unpaid@example.com" },

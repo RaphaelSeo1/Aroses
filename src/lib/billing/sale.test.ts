@@ -15,7 +15,7 @@ test("promo ON charges promo recurring price IDs and shows regular as compare-at
     assert.equal(salePriceMonthly("basic"), 3.99);
     assert.equal(salePriceMonthly("student"), 14.99);
     assert.equal(salePriceMonthly("plus"), 24.99);
-    assert.equal(salePriceMonthly("advanced"), 5);
+    assert.equal(salePriceMonthly("advanced"), 29.99);
     assert.equal(salePriceMonthly("premium"), 59.99);
     assert.equal(compareAtPriceMonthly("advanced"), 79.99);
     assert.equal(compareAtPriceMonthly("premium"), 109.99);

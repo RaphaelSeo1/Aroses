@@ -27,7 +27,7 @@ test("charged prices use promo monthly USD when promo is on", () => {
     assert.equal(listPriceCentsForTier("basic"), 399);
     assert.equal(listPriceCentsForTier("student"), 1499);
     assert.equal(listPriceCentsForTier("plus"), 2499);
-    assert.equal(listPriceCentsForTier("advanced"), 500);
+    assert.equal(listPriceCentsForTier("advanced"), 2999);
     assert.equal(listPriceCentsForTier("premium"), 5999);
   } finally {
     process.env.SUBSCRIPTION_PROMO_ENABLED = prev;
@@ -54,7 +54,7 @@ test("stored Stripe amount wins over catalog sale price", () => {
   try {
     assert.equal(listPriceCentsForTier("advanced", 7999), 7999);
     assert.equal(listPriceCentsForTier("advanced", 0), 0);
-    assert.equal(listPriceCentsForTier("advanced", null), 500);
+    assert.equal(listPriceCentsForTier("advanced", null), 2999);
     assert.equal(storedStripeAmountCents({ amount_cents: 500 }), 500);
     assert.equal(storedStripeAmountCents({ stripe_amount_cents: 7999 }), 7999);
     assert.equal(storedStripeAmountCents({}), null);
@@ -150,7 +150,7 @@ test("plan KPIs count current subscribers and paying MRR only", () => {
   assert.equal(summary.mrrCents, 14998);
 });
 
-test("screenshot case: one paying Advanced at promo $5, admin Premiums excluded from MRR", () => {
+test("screenshot case: one paying Advanced at promo $29.99, admin Premiums excluded from MRR", () => {
   const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
   process.env.SUBSCRIPTION_PROMO_ENABLED = "true";
   try {
@@ -194,11 +194,11 @@ test("screenshot case: one paying Advanced at promo $5, admin Premiums excluded 
       },
     ];
 
-    assert.equal(rows[0].amountCents, 500);
+    assert.equal(rows[0].amountCents, 2999);
     const summary = summarizeAdminPlanSubscriptions(rows);
     assert.equal(summary.subscriberCount, 3);
     assert.equal(summary.payingCount, 1);
-    assert.equal(summary.mrrCents, 500);
+    assert.equal(summary.mrrCents, 2999);
   } finally {
     process.env.SUBSCRIPTION_PROMO_ENABLED = prev;
   }
