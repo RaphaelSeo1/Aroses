@@ -289,45 +289,73 @@ async function withAnthropicRateLimitRetries<T>(
  * Without this, the browser poll loop, the per-minute cron reaper and the
  * GET-route stall re-kick could all run `runPdfIngestExpandOne` for one job
  * concurrently. Each read the same contiguous prefix, picked the same batch
- * indices, and generated the same modules with Sonnet — every duplicate set
- * billed, all but one thrown away.
+ * indices, and generated the same modules — every duplicate set billed, all but
+ * one thrown away. Measured: 830 Sonnet calls on a 7-module job.
+ *
+ * The compare-and-set runs as a single SQL statement (RPC) rather than a
+ * PostgREST filter, so there is no client-side filter string that could fail to
+ * parse and silently let two workers through.
  *
  * Time-bounded rather than released-on-exit so a killed lambda cannot wedge the
  * job: the lease expires on its own and the reaper resumes.
- *
- * Fails OPEN when the column is missing so a database without migration 114
- * still builds courses (just without the cost protection) — that case is logged
- * loudly rather than silently tolerated.
  */
-const EXPAND_LEASE_MS = 240_000;
+const EXPAND_LEASE_SECONDS = 240;
+
+/**
+ * Hard ceiling on Claude calls for one ingest job, counted from the usage
+ * ledger. This is the backstop: if the lease or the retry deadline is ever
+ * defeated by a bug, a build still cannot drain the account — it fails loudly
+ * after this many calls instead. A healthy build uses well under 30.
+ */
+function maxClaudeCallsPerJob(): number {
+  const raw = process.env.PDF_INGEST_MAX_CALLS_PER_JOB?.trim();
+  const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  if (Number.isFinite(n) && n > 0) return n;
+  return 90;
+}
+
+/**
+ * True when this job has already burned its call budget. Counts rows in
+ * `ai_usage_events` (migration 078), which every Claude wrapper writes to.
+ * Fails OPEN on a missing table/error — the lease is the primary protection and
+ * we never want telemetry trouble to block a legitimate build.
+ */
+async function jobExceededCallBudget(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  jobId: string
+): Promise<{ exceeded: boolean; calls: number; limit: number }> {
+  const limit = maxClaudeCallsPerJob();
+  try {
+    const { count, error } = await admin
+      .from("ai_usage_events")
+      .select("id", { count: "exact", head: true })
+      .eq("job_id", jobId);
+    if (error) return { exceeded: false, calls: 0, limit };
+    const calls = count ?? 0;
+    return { exceeded: calls >= limit, calls, limit };
+  } catch {
+    return { exceeded: false, calls: 0, limit };
+  }
+}
 
 async function claimExpandLease(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string
 ): Promise<boolean> {
-  const nowIso = new Date().toISOString();
-  const until = new Date(Date.now() + EXPAND_LEASE_MS).toISOString();
-  const { data, error } = await admin
-    .from("pdf_ingest_jobs")
-    .update({ expand_lease_until: until })
-    .eq("id", jobId)
-    .or(`expand_lease_until.is.null,expand_lease_until.lt.${nowIso}`)
-    .select("id")
-    .maybeSingle();
-
+  const { data, error } = await admin.rpc("claim_pdf_ingest_expand_lease", {
+    p_job_id: jobId,
+    p_lease_seconds: EXPAND_LEASE_SECONDS,
+  });
   if (error) {
-    if (isMissingDbColumnError(error, "expand_lease_until")) {
-      console.error(
-        "[pdf-ingest] expand_lease_until column missing — apply migration 114. " +
-          "Running WITHOUT the concurrency lease; duplicate module generation is possible.",
-        jobId
-      );
-      return true;
-    }
-    console.warn("[pdf-ingest] lease claim failed", jobId, error);
+    console.error(
+      "[pdf-ingest] lease RPC unavailable — apply migration 114. Running WITHOUT " +
+        "the concurrency lease; the per-job call ceiling is the only guard.",
+      jobId,
+      error.message
+    );
     return true;
   }
-  return Boolean(data);
+  return data === true;
 }
 
 async function releaseExpandLease(
@@ -335,25 +363,23 @@ async function releaseExpandLease(
   jobId: string
 ): Promise<void> {
   await admin
-    .from("pdf_ingest_jobs")
-    .update({ expand_lease_until: null })
-    .eq("id", jobId)
+    .rpc("release_pdf_ingest_expand_lease", { p_job_id: jobId })
     .then(
       () => {},
       () => {}
     );
 }
 
-/** Extend a held lease so a long but healthy batch is not stolen mid-flight. */
+/** Extend a held lease so a slow but healthy batch is not stolen mid-flight. */
 async function renewExpandLease(
   admin: NonNullable<ReturnType<typeof createAdminClient>>,
   jobId: string
 ): Promise<void> {
-  const until = new Date(Date.now() + EXPAND_LEASE_MS).toISOString();
   await admin
-    .from("pdf_ingest_jobs")
-    .update({ expand_lease_until: until })
-    .eq("id", jobId)
+    .rpc("renew_pdf_ingest_expand_lease", {
+      p_job_id: jobId,
+      p_lease_seconds: EXPAND_LEASE_SECONDS,
+    })
     .then(
       () => {},
       () => {}
@@ -1619,6 +1645,31 @@ export async function runPdfIngestExpandOne(
     }
     await releaseExpandLease(admin, jobId);
     return { kind: "complete", materialId: fin.materialId };
+  }
+
+  // Hard spend ceiling — checked only when there is module work left, so a
+  // job whose modules are all built can always finalize and save.
+  // Counted from the usage ledger across ALL invocations
+  // for this job, so it survives lambda restarts and catches any runaway the
+  // lease and the retry deadline fail to prevent. A healthy build is under 30.
+  const budget = await jobExceededCallBudget(admin, jobId);
+  if (budget.exceeded) {
+    console.error("[pdf-ingest] job exceeded Claude call budget — failing", {
+      jobId,
+      calls: budget.calls,
+      limit: budget.limit,
+    });
+    await failJobUnlessStale(
+      admin,
+      jobId,
+      storagePaths,
+      "This build used far more AI calls than expected and was stopped to protect your account. Please try again, or contact support if it keeps happening.",
+      expandEpoch
+    );
+    return {
+      kind: "failed",
+      message: "Build stopped after exceeding its AI call budget.",
+    };
   }
 
   await touchJobProgress(admin, jobId);
