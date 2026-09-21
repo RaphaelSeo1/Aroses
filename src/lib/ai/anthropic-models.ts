@@ -3,8 +3,8 @@
  *
  * Chat surfaces (study, calendar Ask Rose, live lecture, review) and short
  * mentored turns share `tutorChatModel()` — Claude Sonnet 4.6 unless
- * `ANTHROPIC_TUTOR_FAST_MODEL` is set. Focus-question generation stays on
- * Haiku; it can be clicked without a cap.
+ * `ANTHROPIC_TUTOR_FAST_MODEL` is set. Focus questions use Sonnet on their
+ * own. Module quiz backfill and "generate more questions" stay on Haiku.
  *
  * Voice tutor *spoken* replies still use `tutorReplyModel()` (same Sonnet
  * default unless `ANTHROPIC_TUTOR_MODEL` is set). That override is for

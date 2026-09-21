@@ -3,7 +3,7 @@ import {
   normalizeQuizItemsLoose,
   stripJsonFence,
 } from "@/lib/ai/course-payload";
-import { ANTHROPIC_HAIKU } from "@/lib/ai/anthropic-models";
+import { ANTHROPIC_SONNET } from "@/lib/ai/anthropic-models";
 import { quizDifficultyWordingRules } from "@/lib/ai/quiz-difficulty-wording";
 import { quizQuestionVolumeRules } from "@/lib/ai/quiz-question-volume";
 import type {
@@ -574,7 +574,7 @@ export async function generatePersonalQuizFromNotes(
   });
 
   const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 1 });
-  const model = ANTHROPIC_HAIKU;
+  const model = ANTHROPIC_SONNET;
 
   const msg = await anthropic.messages.create({
     model,
