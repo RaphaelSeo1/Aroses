@@ -590,6 +590,158 @@ test("resolveFocusCardNoteId keeps a hub-section origin even if a course_id was 
   assert.equal(resolved, NOTE_A);
 });
 
+const HUB_L2_TITLE =
+  "Lecture 2 - Nuclear Organization: From Chromatin Structure to Gene Regulation";
+const HUB_L3_TITLE =
+  "Lecture 3 - Nuclear Organization, Targeting Signals, and the Ran GTPase Cycle";
+
+test("short Lecture 3 label parked on MCB course note restores to hub Lecture 3", () => {
+  const target = pickSectionNoteForStoredLabel(
+    "Lecture 3",
+    {
+      id: NOTE_B,
+      title: "Lecture 3",
+      courseId: COURSE,
+      courseTitle: "MCB 104 (Fall 2026)",
+      updatedAt: "2026-09-11T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+    [
+      {
+        id: NOTE_A,
+        title: HUB_L3_TITLE,
+        courseId: null,
+        courseTitle: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+        sectionTitle: "MCB 104 !",
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 3",
+        courseId: COURSE,
+        courseTitle: "MCB 104 (Fall 2026)",
+        updatedAt: "2026-09-11T00:00:00Z",
+        deleted: false,
+        sectionId: null,
+      },
+    ]
+  );
+  assert.equal(target, NOTE_A);
+});
+
+test("short Lecture 2 on PBHLTH does not restore onto MCB 104 hub Lecture 2", () => {
+  const target = pickSectionNoteForStoredLabel(
+    "Lecture 2",
+    {
+      id: NOTE_B,
+      title: "Lecture 2",
+      courseId: OTHER,
+      courseTitle: "PBHLTH 162A (Fall 2026)",
+      updatedAt: "2026-09-11T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+    [
+      {
+        id: NOTE_A,
+        title: HUB_L2_TITLE,
+        courseId: null,
+        courseTitle: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+        sectionTitle: "MCB 104 !",
+        notesText:
+          "Chromatin structure, nucleosomes, and gene regulation in the nucleus.",
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 2",
+        courseId: OTHER,
+        courseTitle: "PBHLTH 162A (Fall 2026)",
+        updatedAt: "2026-09-11T00:00:00Z",
+        deleted: false,
+        sectionId: null,
+      },
+    ]
+  );
+  assert.equal(target, null);
+});
+
+test("Ran GTPase card text restores onto hub Lecture 3 when the label was overwritten", () => {
+  const target = pickSectionNoteForStoredLabel(
+    "Lecture 3",
+    {
+      id: NOTE_B,
+      title: "Lecture 3",
+      courseId: COURSE,
+      courseTitle: "MCB 104 (Fall 2026)",
+      updatedAt: "2026-09-11T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+    [
+      {
+        id: NOTE_A,
+        title: HUB_L2_TITLE,
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+        sectionTitle: "MCB 104 !",
+        notesText:
+          "Chromatin structure to gene regulation. Nucleosomes, TADs, cohesin loops, euchromatin.",
+      },
+      {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        title: HUB_L3_TITLE,
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+        sectionTitle: "MCB 104 !",
+        notesText:
+          "Nuclear import uses importin, NLS, Ran-GTP, Ran-GAP, Ran-GEF, nucleoporins, and the Ran GTPase cycle.",
+      },
+      {
+        id: NOTE_B,
+        title: "Lecture 3",
+        courseId: COURSE,
+        courseTitle: "MCB 104 (Fall 2026)",
+        updatedAt: "2026-09-11T00:00:00Z",
+        deleted: false,
+        sectionId: null,
+      },
+    ],
+    "What does Ran-GTP bind to initiate nuclear export of cargo through the NPC?"
+  );
+  assert.equal(target, "cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+});
+
+test("course-native PDF card with no note id is not restored onto a hub lecture", () => {
+  const resolved = resolveFocusCardNoteId(
+    null,
+    "Lecture 4",
+    [
+      {
+        id: NOTE_A,
+        title:
+          "Lecture 4 - ER Targeting, Endomembrane Trafficking, and mRNA-to-Protein Flow",
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+        sectionTitle: "MCB 104 !",
+      },
+    ],
+    { materialId: "22222222-2222-4222-8222-222222222222" }
+  );
+  assert.equal(resolved, null);
+});
+
 test("repairOrphanNotesFocusCards never writes quiz identity", async () => {
   const calls: string[] = [];
   const supabase = {

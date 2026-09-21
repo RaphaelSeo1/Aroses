@@ -83,6 +83,10 @@ export type NoteMatchCandidate = {
   deleted: boolean;
   /** Notes-hub folder — a different origin from course materials / live sessions. */
   sectionId?: string | null;
+  sectionTitle?: string | null;
+  courseTitle?: string | null;
+  /** Live-notes / hub body — used to re-home remapped cards by overlap. */
+  notesText?: string | null;
 };
 
 export type LiveSessionMatchCandidate = {
@@ -197,28 +201,49 @@ function uniqueHubNote(
   return target.id;
 }
 
-/**
- * Restore a card whose stored `source_label` uniquely names a notes-hub
- * note after a previous title-match parked it on a course lecture / PDF.
- *
- * Prefers an existing hub `section_id` origin. Never uses a bare
- * "Lecture 4" collision. Long labels ("ER Targeting…", "Nuclear…",
- * "DNA Organization…") can reattach even when the hub row was shortened
- * to "Lecture N".
- */
-export function pickSectionNoteForStoredLabel(
+/** "MCB 104 (Fall 2026)" and "MCB 104 !" share a course code. */
+export function courseCodeKey(title: string | null | undefined): string {
+  return normTitle(title)
+    .replace(/[!.]+/g, " ")
+    .replace(/\s*\([^)]*\)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function sectionRelatedToCourse(
+  sectionTitle: string | null | undefined,
+  courseTitle: string | null | undefined
+): boolean {
+  const section = courseCodeKey(sectionTitle);
+  const course = courseCodeKey(courseTitle);
+  if (!section || !course) return false;
+  return (
+    section === course ||
+    section.startsWith(`${course} `) ||
+    course.startsWith(`${section} `) ||
+    section.startsWith(course) ||
+    course.startsWith(section)
+  );
+}
+
+function sameHubSection(
+  a: NoteMatchCandidate | null,
+  b: NoteMatchCandidate | null
+): boolean {
+  const left = a?.sectionId;
+  const right = b?.sectionId;
+  return Boolean(left && right && left === right);
+}
+
+function matchHubNoteByLongLabel(
   label: string,
   currentNote: NoteMatchCandidate | null,
-  notes: NoteMatchCandidate[]
+  hub: NoteMatchCandidate[]
 ): string | null {
   const wanted = normTitle(label);
-  if (!wanted || isGenericFocusTitle(label)) return null;
-  // Already on a notes-hub folder row — never steal it onto a course lecture.
-  if (currentNote?.sectionId) return null;
-  // Bare "Lecture 4" collides with course PDFs / live sessions.
-  if (isShortLectureTitle(label)) return null;
-
-  const hub = hubSectionNotes(notes);
+  if (!wanted || isGenericFocusTitle(label) || isShortLectureTitle(label)) {
+    return null;
+  }
 
   const exact = uniqueHubNote(
     hub.filter((n) => normTitle(n.title) === wanted),
@@ -251,28 +276,152 @@ export function pickSectionNoteForStoredLabel(
 }
 
 /**
+ * Bare "Lecture 3" after a rewrite still maps back when the hub note in a
+ * related folder has that lecture number and a long distinctive title.
+ * PBHLTH Lecture 2 stays off MCB 104 ! because the course codes differ.
+ */
+function matchHubNoteByShortLecture(
+  label: string,
+  currentNote: NoteMatchCandidate | null,
+  hub: NoteMatchCandidate[]
+): string | null {
+  if (!isShortLectureTitle(label)) return null;
+  if (currentNote?.sectionId) return null;
+  const lec = lectureNumber(label);
+  if (!lec) return null;
+
+  const longHub = hub.filter((n) => {
+    if (lectureNumber(n.title) !== lec) return false;
+    return Boolean(distinctiveLectureTail(n.title));
+  });
+  if (longHub.length !== 1) return null;
+  const target = longHub[0]!;
+  if (currentNote && currentNote.id === target.id) return null;
+
+  const currentLec = currentNote ? lectureNumber(currentNote.title) : null;
+  const currentIsShortCourseLecture =
+    Boolean(currentNote) &&
+    !currentNote!.sectionId &&
+    (isShortLectureTitle(currentNote!.title) || currentLec === lec);
+  if (!currentIsShortCourseLecture) return null;
+  if (
+    currentNote?.courseTitle &&
+    sectionRelatedToCourse(target.sectionTitle, currentNote.courseTitle)
+  ) {
+    return target.id;
+  }
+  return null;
+}
+
+function matchHubNoteByContent(
+  cardText: string,
+  currentNote: NoteMatchCandidate | null,
+  hub: NoteMatchCandidate[]
+): string | null {
+  const text = (cardText ?? "").trim();
+  if (!text) return null;
+  if (currentNote?.sectionId && !currentNote.deleted) return null;
+
+  const scored = hub
+    .filter((n) => (n.notesText ?? "").trim())
+    .map((note) => ({
+      note,
+      score: contentOverlapScore(text, note.notesText ?? ""),
+    }))
+    .sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  if (!best) return null;
+  const second = scored[1];
+  const margin = second ? best.score - second.score : best.score;
+  if (best.score < 0.12) return null;
+  if (second && margin < 0.02 && best.score < 0.2) return null;
+  if (currentNote && currentNote.id === best.note.id) return null;
+  return best.note.id;
+}
+
+/**
+ * Restore a card whose stored `source_label` uniquely names a notes-hub
+ * note after a previous title-match parked it on a course lecture / PDF.
+ *
+ * Prefers an existing hub `section_id` origin. Never uses a bare
+ * "Lecture 4" collision unless the parked row is a course lecture whose
+ * course name matches the hub folder (MCB 104 vs MCB 104 !). Long labels
+ * ("ER Targeting…", "Ran GTPase…", "Chromatin Structure…") can reattach
+ * even when the hub row was shortened to "Lecture N".
+ */
+export function pickSectionNoteForStoredLabel(
+  label: string,
+  currentNote: NoteMatchCandidate | null,
+  notes: NoteMatchCandidate[],
+  cardText?: string | null
+): string | null {
+  const wanted = normTitle(label);
+  if (!wanted || isGenericFocusTitle(label)) return null;
+
+  const hub = hubSectionNotes(notes);
+  const sameSectionHub = currentNote?.sectionId
+    ? hub.filter((n) => n.sectionId === currentNote.sectionId)
+    : hub;
+
+  if (currentNote?.sectionId && !currentNote.deleted) {
+    // Already on a hub folder row. Only move to a sibling in that folder
+    // when the stored label uniquely names a different hub note.
+    const sibling = matchHubNoteByLongLabel(label, currentNote, sameSectionHub);
+    if (sibling) {
+      const target = notes.find((n) => n.id === sibling) ?? null;
+      if (sameHubSection(currentNote, target)) return sibling;
+    }
+    return null;
+  }
+
+  const byLong = matchHubNoteByLongLabel(label, currentNote, hub);
+  if (byLong) return byLong;
+
+  const byShort = matchHubNoteByShortLecture(label, currentNote, hub);
+  if (byShort) return byShort;
+
+  return matchHubNoteByContent(cardText ?? "", currentNote, hub);
+}
+
+export type ResolveFocusCardNoteOpts = {
+  cardText?: string | null;
+  materialId?: string | null;
+};
+
+/**
  * Read-time origin for a personal card. Hub `section_id` wins; otherwise a
- * unique stored label can point back at a hub note. Never writes.
+ * unique stored label / related hub lecture / note-body overlap can point
+ * back at a hub note. Never writes.
  */
 export function resolveFocusCardNoteId(
   sourceNoteId: string | null | undefined,
   sourceLabel: string | null | undefined,
-  notes: NoteMatchCandidate[]
+  notes: NoteMatchCandidate[],
+  opts?: ResolveFocusCardNoteOpts
 ): string | null {
   const noteId =
     typeof sourceNoteId === "string" && UUID_RE.test(sourceNoteId.trim())
       ? sourceNoteId.trim()
       : null;
+  const materialId =
+    typeof opts?.materialId === "string" && UUID_RE.test(opts.materialId.trim())
+      ? opts.materialId.trim()
+      : null;
   const current = noteId
     ? (notes.find((n) => n.id === noteId) ?? null)
     : null;
-  if (current?.sectionId && !current.deleted) return current.id;
+
+  // Course-native PDF cards with no note id must stay on the material.
+  if (materialId && !noteId) return null;
+
   const restored = pickSectionNoteForStoredLabel(
     typeof sourceLabel === "string" ? sourceLabel : "",
     current,
-    notes
+    notes,
+    opts?.cardText
   );
   if (restored) return restored;
+  if (current?.sectionId && !current.deleted) return current.id;
   return noteId;
 }
 

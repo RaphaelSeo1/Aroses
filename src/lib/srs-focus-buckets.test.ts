@@ -513,3 +513,173 @@ test("hub Lecture 1–4 stay distinct from a same-titled course after a bad rema
   assert.equal(course!.children.every((c) => c.kind === "module"), true);
   assert.equal(byMaterial.has(notesFocusBucketId(NOTE_E)), false);
 });
+
+test("short Lecture 3/4 labels on the MCB course still restore to MCB 104 ! hub notes", () => {
+  const sectionId = "55555555-5555-4555-8555-555555555555";
+  const l1 = "Lecture 1 - DNA Organization and Transcriptional Control";
+  const l2 =
+    "Lecture 2 - Nuclear Organization: From Chromatin Structure to Gene Regulation";
+  const l3 =
+    "Lecture 3 - Nuclear Organization, Targeting Signals, and the Ran GTPase Cycle";
+  const l4 =
+    "Lecture 4 - ER Targeting, Endomembrane Trafficking, and mRNA-to-Protein Flow";
+  const catalog: NoteMatchCandidate[] = [
+    {
+      id: NOTE_A,
+      title: l1,
+      courseId: null,
+      updatedAt: "2026-09-01T00:00:00Z",
+      deleted: false,
+      sectionId,
+      sectionTitle: "MCB 104 !",
+    },
+    {
+      id: NOTE_B,
+      title: l2,
+      courseId: null,
+      updatedAt: "2026-09-02T00:00:00Z",
+      deleted: false,
+      sectionId,
+      sectionTitle: "MCB 104 !",
+      notesText: "Chromatin structure to gene regulation. Nucleosomes and TADs.",
+    },
+    {
+      id: NOTE_C,
+      title: l3,
+      courseId: null,
+      updatedAt: "2026-09-03T00:00:00Z",
+      deleted: false,
+      sectionId,
+      sectionTitle: "MCB 104 !",
+      notesText: "Importin, NLS, Ran-GTP and the Ran GTPase cycle.",
+    },
+    {
+      id: NOTE_D,
+      title: l4,
+      courseId: null,
+      updatedAt: "2026-09-04T00:00:00Z",
+      deleted: false,
+      sectionId,
+      sectionTitle: "MCB 104 !",
+    },
+    {
+      id: NOTE_E,
+      title: "Lecture 3",
+      courseId: COURSE,
+      courseTitle: "MCB 104 (Fall 2026)",
+      updatedAt: "2026-09-05T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+    {
+      id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      title: "Lecture 4",
+      courseId: COURSE,
+      courseTitle: "MCB 104 (Fall 2026)",
+      updatedAt: "2026-09-06T00:00:00Z",
+      deleted: false,
+      sectionId: null,
+    },
+  ];
+  const remapped = remapPersonalFocusOriginRows(
+    [
+      ...Array.from({ length: 42 }, () => ({
+        materialId: null,
+        sourceNoteId: NOTE_A,
+        sourceLabel: l1,
+      })),
+      ...Array.from({ length: 56 }, () => ({
+        materialId: null,
+        sourceNoteId: NOTE_E,
+        sourceLabel: "Lecture 3",
+        cardText:
+          "What does Ran-GTP bind to initiate nuclear export through the NPC?",
+      })),
+      ...Array.from({ length: 32 }, () => ({
+        materialId: null,
+        sourceNoteId: NOTE_D,
+        sourceLabel: "Lecture 4",
+      })),
+      ...Array.from({ length: 16 }, () => ({
+        materialId: null,
+        sourceNoteId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        sourceLabel: "Lecture 4",
+        cardText: "What does SRP recognize to initiate ER-directed delivery?",
+      })),
+    ],
+    catalog
+  );
+
+  const byMaterial = new Map<string, SrsDueByMaterial>();
+  const notesMeta = new Map<string, NotesFocusBucketMeta>([
+    [
+      notesFocusBucketId(NOTE_A),
+      {
+        fileName: l1,
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "MCB 104 !",
+        hubKind: "custom",
+      },
+    ],
+    [
+      notesFocusBucketId(NOTE_B),
+      {
+        fileName: l2,
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "MCB 104 !",
+        hubKind: "custom",
+      },
+    ],
+    [
+      notesFocusBucketId(NOTE_C),
+      {
+        fileName: l3,
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "MCB 104 !",
+        hubKind: "custom",
+      },
+    ],
+    [
+      notesFocusBucketId(NOTE_D),
+      {
+        fileName: l4,
+        courseId: null,
+        courseTitle: null,
+        noteDeleted: false,
+        sectionId,
+        sectionTitle: "MCB 104 !",
+        hubKind: "custom",
+      },
+    ],
+  ]);
+  for (const row of remapped) {
+    addPersonalFocusCount(byMaterial, row, notesMeta);
+  }
+  finalizeFocusBuckets(byMaterial);
+
+  const groups = groupReviewPickerRows([...byMaterial.values()]);
+  const hub = groups.find((g) => g.id === `section:${sectionId}`);
+  assert.ok(hub);
+  assert.equal(pickerParentLabel(hub!, fallbacks), "MCB 104 !");
+  const names = hub!.children.map((c) => c.fileName).sort();
+  assert.ok(names.includes(l1));
+  assert.ok(names.includes(l3));
+  assert.ok(names.includes(l4));
+  assert.equal(
+    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_C))!.personal,
+    56
+  );
+  assert.equal(
+    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_D))!.personal,
+    48
+  );
+});

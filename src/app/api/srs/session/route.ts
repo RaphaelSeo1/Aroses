@@ -7,6 +7,7 @@ import {
   loadNotesFocusOriginCatalog,
   remapPersonalFocusOriginRows,
 } from "@/lib/notes/focus-origin-catalog";
+import { focusCardText } from "@/lib/notes/match-focus-note";
 import {
   isNotesFocusBucketId,
   isNotesOriginFocusCard,
@@ -327,6 +328,12 @@ export async function GET(request: Request) {
           typeof row.source_note_id === "string" ? row.source_note_id : null,
         sourceLabel:
           typeof row.source_label === "string" ? row.source_label : null,
+        cardText: [
+          typeof row.source_excerpt === "string" ? row.source_excerpt : "",
+          focusCardText(row.item),
+        ]
+          .filter(Boolean)
+          .join("\n"),
       })),
       originNotes
     );

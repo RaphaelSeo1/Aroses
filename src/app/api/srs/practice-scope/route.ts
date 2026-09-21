@@ -113,6 +113,7 @@ export async function GET() {
     material_id?: string | null;
     source_note_id?: string | null;
     source_label?: string | null;
+    source_excerpt?: string | null;
   };
   const buildPersonal = (select: string, filterDeleted: boolean) => {
     let q = supabase
@@ -123,7 +124,7 @@ export async function GET() {
     return q;
   };
   let firstPersonal = await buildPersonal(
-    "material_id, source_note_id, source_label",
+    "material_id, source_note_id, source_label, source_excerpt",
     true
   );
   if (
@@ -131,7 +132,7 @@ export async function GET() {
     isMissingDbColumnError(firstPersonal.error, "deleted_at")
   ) {
     firstPersonal = await buildPersonal(
-      "material_id, source_note_id, source_label",
+      "material_id, source_note_id, source_label, source_excerpt",
       false
     );
   }
@@ -153,6 +154,7 @@ export async function GET() {
       material_id: (row as { material_id?: string | null }).material_id ?? null,
       source_note_id: null,
       source_label: null,
+      source_excerpt: null,
     }));
   }
   if (personalErr) {
@@ -168,6 +170,8 @@ export async function GET() {
         typeof row.source_note_id === "string" ? row.source_note_id : null,
       sourceLabel:
         typeof row.source_label === "string" ? row.source_label : null,
+      cardText:
+        typeof row.source_excerpt === "string" ? row.source_excerpt : null,
     })),
     originNotes
   );

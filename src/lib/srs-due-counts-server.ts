@@ -166,6 +166,7 @@ export async function fetchSrsDueCountsForUser(
     material_id?: string | null;
     source_label?: string | null;
     source_note_id?: string | null;
+    source_excerpt?: string | null;
   };
   const buildPersonalDue = (select: string, filterDeleted: boolean) => {
     let q = supabase
@@ -178,7 +179,7 @@ export async function fetchSrsDueCountsForUser(
     return q;
   };
   let firstPersonal = await buildPersonalDue(
-    "material_id, source_label, source_note_id",
+    "material_id, source_label, source_note_id, source_excerpt",
     true
   );
   if (
@@ -186,7 +187,7 @@ export async function fetchSrsDueCountsForUser(
     isMissingDbColumnError(firstPersonal.error, "deleted_at")
   ) {
     firstPersonal = await buildPersonalDue(
-      "material_id, source_label, source_note_id",
+      "material_id, source_label, source_note_id, source_excerpt",
       false
     );
   }
@@ -205,6 +206,7 @@ export async function fetchSrsDueCountsForUser(
       material_id: (row as { material_id?: string | null }).material_id ?? null,
       source_label: null,
       source_note_id: null,
+      source_excerpt: null,
     }));
   }
   if (perErr) {
@@ -256,6 +258,8 @@ export async function fetchSrsDueCountsForUser(
         typeof row.source_note_id === "string" ? row.source_note_id : null,
       sourceLabel:
         typeof row.source_label === "string" ? row.source_label : null,
+      cardText:
+        typeof row.source_excerpt === "string" ? row.source_excerpt : null,
     })),
     originNotes
   );
