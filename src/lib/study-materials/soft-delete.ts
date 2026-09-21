@@ -7,13 +7,29 @@ export async function softDeleteStudyMaterial(
   materialId: string
 ): Promise<"soft" | "hard" | "fail"> {
   const now = new Date().toISOString();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("study_materials")
     .update({ deleted_at: now })
     .eq("id", materialId)
-    .is("deleted_at", null);
+    .is("deleted_at", null)
+    .select("id");
 
-  if (!error) return "soft";
+  if (!error) {
+    // Zero rows: already soft-deleted or RLS blocked — treat as soft success
+    // only when we actually updated; otherwise try hard-delete path below only
+    // for missing-column errors.
+    if ((data?.length ?? 0) > 0) return "soft";
+    const check = await supabase
+      .from("study_materials")
+      .select("id, deleted_at")
+      .eq("id", materialId)
+      .maybeSingle();
+    if (check.data && (check.data as { deleted_at?: string | null }).deleted_at) {
+      return "soft";
+    }
+    console.error("[softDeleteStudyMaterial] no row updated", materialId);
+    return "fail";
+  }
 
   if (isMissingDbColumnError(error, "deleted_at")) {
     const hard = await supabase

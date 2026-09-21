@@ -115,23 +115,43 @@ export async function GET() {
     source_note_id?: string | null;
     source_label?: string | null;
   };
-  const firstPersonal = await supabase
-    .from("user_personal_quiz_items")
-    .select("material_id, source_note_id, source_label")
-    .eq("user_id", user.id);
-  let personalRows: PersonalRow[] | null = firstPersonal.data;
+  const buildPersonal = (select: string, filterDeleted: boolean) => {
+    let q = supabase
+      .from("user_personal_quiz_items")
+      .select(select)
+      .eq("user_id", user.id);
+    if (filterDeleted) q = q.is("deleted_at", null);
+    return q;
+  };
+  let firstPersonal = await buildPersonal(
+    "material_id, source_note_id, source_label",
+    true
+  );
+  if (
+    firstPersonal.error &&
+    isMissingDbColumnError(firstPersonal.error, "deleted_at")
+  ) {
+    firstPersonal = await buildPersonal(
+      "material_id, source_note_id, source_label",
+      false
+    );
+  }
+  let personalRows: PersonalRow[] | null = firstPersonal.data as PersonalRow[] | null;
   let personalErr = firstPersonal.error;
   if (
     personalErr &&
     isMissingDbColumnError(personalErr, "source_label", "source_note_id")
   ) {
-    const fallback = await supabase
-      .from("user_personal_quiz_items")
-      .select("material_id")
-      .eq("user_id", user.id);
+    let fallback = await buildPersonal("material_id", true);
+    if (
+      fallback.error &&
+      isMissingDbColumnError(fallback.error, "deleted_at")
+    ) {
+      fallback = await buildPersonal("material_id", false);
+    }
     personalErr = fallback.error;
     personalRows = (fallback.data ?? []).map((row) => ({
-      material_id: row.material_id ?? null,
+      material_id: (row as { material_id?: string | null }).material_id ?? null,
       source_note_id: null,
       source_label: null,
     }));

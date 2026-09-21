@@ -499,11 +499,12 @@ async function loadPersonalQuizRows(
   mode: "all" | "materials" | "notes" | "sourceNotes",
   materialIds?: string[]
 ): Promise<Record<string, unknown>[]> {
-  const run = async (select: string) => {
+  const run = async (select: string, filterDeleted: boolean) => {
     let q = supabase
       .from("user_personal_quiz_items")
       .select(select)
       .eq("user_id", userId);
+    if (filterDeleted) q = q.is("deleted_at", null);
     if (mode === "materials" && materialIds && materialIds.length > 0) {
       q = q.in("material_id", materialIds);
     } else if (mode === "notes") {
@@ -514,14 +515,24 @@ async function loadPersonalQuizRows(
     return q.order("due_at", { ascending: true });
   };
 
-  const full = await run(PERSONAL_SELECT_FULL);
+  let full = await run(PERSONAL_SELECT_FULL, true);
+  if (full.error && isMissingDbColumnError(full.error, "deleted_at")) {
+    full = await run(PERSONAL_SELECT_FULL, false);
+  }
+  const runCompat = async (select: string) => {
+    let res = await run(select, true);
+    if (res.error && isMissingDbColumnError(res.error, "deleted_at")) {
+      res = await run(select, false);
+    }
+    return res;
+  };
   if (full.error && isMissingDbColumnError(full.error, "source_excerpt")) {
-    const labeled = await run(PERSONAL_SELECT_LABEL);
+    const labeled = await runCompat(PERSONAL_SELECT_LABEL);
     if (!labeled.error) {
       return (labeled.data ?? []) as unknown as Record<string, unknown>[];
     }
     if (isMissingDbColumnError(labeled.error, "source_label")) {
-      const fallback = await run(PERSONAL_SELECT_BASE);
+      const fallback = await runCompat(PERSONAL_SELECT_BASE);
       if (fallback.error) {
         console.error("[srs/session personal]", fallback.error);
         return [];
@@ -532,7 +543,7 @@ async function loadPersonalQuizRows(
     return [];
   }
   if (full.error && isMissingDbColumnError(full.error, "source_label")) {
-    const fallback = await run(PERSONAL_SELECT_BASE);
+    const fallback = await runCompat(PERSONAL_SELECT_BASE);
     if (fallback.error) {
       console.error("[srs/session personal]", fallback.error);
       return [];

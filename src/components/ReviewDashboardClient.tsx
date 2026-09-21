@@ -245,7 +245,7 @@ export function ReviewDashboardClient() {
     );
   }
 
-  // ----------- empty state (no decks at all) -----------
+  // ----------- empty state (no active decks) -----------
   if (materials.length === 0) {
     return (
       <section className="space-y-6">
@@ -294,6 +294,10 @@ export function ReviewDashboardClient() {
             </a>
           </div>
         </div>
+        <ReviewDeletedMaterials
+          refreshKey={deletedRefreshKey}
+          onRestored={refresh}
+        />
       </section>
     );
   }

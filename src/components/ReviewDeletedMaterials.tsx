@@ -15,7 +15,7 @@ export type DeletedReviewMaterial = {
 
 /**
  * Collapsible “Deleted” area on Review — restore or permanently purge
- * soft-deleted module review materials.
+ * soft-deleted module and notes-focus review decks.
  */
 export function ReviewDeletedMaterials({
   refreshKey = 0,
@@ -43,14 +43,18 @@ export function ReviewDeletedMaterials({
       const json = (await res.json()) as {
         materials?: DeletedReviewMaterial[];
       };
-      setMaterials(json.materials ?? []);
+      const next = json.materials ?? [];
+      setMaterials(next);
+      if (next.length > 0 && refreshKey > 0) {
+        setOpen(true);
+      }
     } catch {
       setError(t.review.deletedLoadError);
       setMaterials([]);
     } finally {
       setLoading(false);
     }
-  }, [t.review.deletedLoadError]);
+  }, [refreshKey, t.review.deletedLoadError]);
 
   useEffect(() => {
     void load();

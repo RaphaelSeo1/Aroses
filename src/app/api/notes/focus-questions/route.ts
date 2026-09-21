@@ -7,7 +7,7 @@ import {
   NOTES_FOCUS_BUCKET_ID,
   parseNotesFocusBucketNoteId,
 } from "@/lib/notes/notes-focus-bucket";
-import { purgeFocusQuestionsForNote } from "@/lib/notes/purge-focus-for-note";
+import { softDeleteFocusQuestionsForNote } from "@/lib/notes/soft-delete-focus";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 import { insertPersonalQuizItems } from "@/lib/notes/personal-quiz-insert";
 import { resolveFocusDestination } from "@/lib/notes/resolve-focus-destination";
@@ -24,7 +24,7 @@ const MAX_CORPUS = 8_000;
  * Turn a notes selection / section into private focus cards (SRS).
  *
  * DELETE /api/notes/focus-questions
- * Remove notes-only focus cards (no course material) for this user.
+ * Soft-delete notes-focus cards for this user (appear under Deleted on Review).
  */
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -150,27 +150,48 @@ export async function DELETE(request: Request) {
   const noteFromBucket = parseNotesFocusBucketNoteId(bucketParam);
 
   if (noteIdParam && isUuid(noteIdParam)) {
-    await purgeFocusQuestionsForNote(supabase, user.id, noteIdParam);
+    const result = await softDeleteFocusQuestionsForNote(
+      supabase,
+      user.id,
+      noteIdParam
+    );
+    if (result === "fail") {
+      return NextResponse.json({ error: "Could not delete." }, { status: 500 });
+    }
     return NextResponse.json({
       ok: true,
       bucket: `note:${noteIdParam.toLowerCase()}`,
+      permanent: result === "hard",
     });
   }
   if (noteFromBucket) {
-    await purgeFocusQuestionsForNote(supabase, user.id, noteFromBucket);
-    return NextResponse.json({ ok: true, bucket: bucketParam });
+    const result = await softDeleteFocusQuestionsForNote(
+      supabase,
+      user.id,
+      noteFromBucket
+    );
+    if (result === "fail") {
+      return NextResponse.json({ error: "Could not delete." }, { status: 500 });
+    }
+    return NextResponse.json({
+      ok: true,
+      bucket: bucketParam,
+      permanent: result === "hard",
+    });
   }
 
-  const { error } = await supabase
-    .from("user_personal_quiz_items")
-    .delete()
-    .eq("user_id", user.id)
-    .is("material_id", null);
-
-  if (error) {
-    console.error("[notes/focus-questions delete]", error);
+  const result = await softDeleteFocusQuestionsForNote(
+    supabase,
+    user.id,
+    null
+  );
+  if (result === "fail") {
     return NextResponse.json({ error: "Could not delete." }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true, bucket: NOTES_FOCUS_BUCKET_ID });
+  return NextResponse.json({
+    ok: true,
+    bucket: NOTES_FOCUS_BUCKET_ID,
+    permanent: result === "hard",
+  });
 }

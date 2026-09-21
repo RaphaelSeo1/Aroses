@@ -120,7 +120,14 @@ export async function canEditStudyMaterial(
   userId: string,
   materialId: string
 ): Promise<boolean> {
-  const courseId = await resolveMaterialCourseId(supabase, materialId);
+  const { data } = await supabase
+    .from("study_materials")
+    .select("course_id, user_id")
+    .eq("id", materialId)
+    .maybeSingle();
+  if (!data) return false;
+  if ((data as { user_id?: string }).user_id === userId) return true;
+  const courseId = (data as { course_id?: string | null }).course_id;
   if (!courseId) return false;
   return canEditCourse(supabase, userId, courseId);
 }

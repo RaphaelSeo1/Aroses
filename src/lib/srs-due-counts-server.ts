@@ -160,34 +160,47 @@ export async function fetchSrsDueCountsForUser(
   // take hundreds of ms and the Review/nav badge poll every minute. Session
   // start and practice-scope still run repair when the learner opens decks.
 
-  let perQ = supabase
-    .from("user_personal_quiz_items")
-    .select("material_id, source_label, source_note_id")
-    .eq("user_id", userId)
-    .lte("due_at", nowIso);
-  if (materialFilter) perQ = perQ.eq("material_id", materialFilter);
   type PersonalDueRow = {
     material_id?: string | null;
     source_label?: string | null;
     source_note_id?: string | null;
   };
-  const firstPersonal = await perQ;
+  const buildPersonalDue = (select: string, filterDeleted: boolean) => {
+    let q = supabase
+      .from("user_personal_quiz_items")
+      .select(select)
+      .eq("user_id", userId)
+      .lte("due_at", nowIso);
+    if (filterDeleted) q = q.is("deleted_at", null);
+    if (materialFilter) q = q.eq("material_id", materialFilter);
+    return q;
+  };
+  let firstPersonal = await buildPersonalDue(
+    "material_id, source_label, source_note_id",
+    true
+  );
+  if (
+    firstPersonal.error &&
+    isMissingDbColumnError(firstPersonal.error, "deleted_at")
+  ) {
+    firstPersonal = await buildPersonalDue(
+      "material_id, source_label, source_note_id",
+      false
+    );
+  }
   let perErr = firstPersonal.error;
-  let perRows: PersonalDueRow[] | null = firstPersonal.data;
+  let perRows: PersonalDueRow[] | null = firstPersonal.data as PersonalDueRow[] | null;
   if (
     perErr &&
     isMissingDbColumnError(perErr, "source_label", "source_note_id")
   ) {
-    let fallback = supabase
-      .from("user_personal_quiz_items")
-      .select("material_id")
-      .eq("user_id", userId)
-      .lte("due_at", nowIso);
-    if (materialFilter) fallback = fallback.eq("material_id", materialFilter);
-    const fb = await fallback;
+    let fb = await buildPersonalDue("material_id", true);
+    if (fb.error && isMissingDbColumnError(fb.error, "deleted_at")) {
+      fb = await buildPersonalDue("material_id", false);
+    }
     perErr = fb.error;
     perRows = (fb.data ?? []).map((row) => ({
-      material_id: row.material_id ?? null,
+      material_id: (row as { material_id?: string | null }).material_id ?? null,
       source_label: null,
       source_note_id: null,
     }));

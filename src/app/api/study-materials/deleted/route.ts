@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { canEditStudyMaterial } from "@/lib/collaboration/permissions";
 import {
+  isNotesFocusBucketId,
+} from "@/lib/notes/notes-focus-bucket";
+import {
+  listDeletedFocusDecks,
+  parseDeletedFocusBucketId,
+  purgeDeletedFocusQuestionsForNote,
+  restoreFocusQuestionsForNote,
+} from "@/lib/notes/soft-delete-focus";
+import {
   purgeStudyMaterial,
   restoreStudyMaterial,
 } from "@/lib/study-materials/soft-delete";
@@ -34,7 +43,7 @@ function courseTitle(
   return courses.title ?? null;
 }
 
-/** GET /api/study-materials/deleted — soft-deleted module review materials. */
+/** GET /api/study-materials/deleted — soft-deleted module + focus review decks. */
 export async function GET() {
   const supabase = await createClient();
   const {
@@ -53,23 +62,40 @@ export async function GET() {
     .not("deleted_at", "is", null)
     .order("deleted_at", { ascending: false });
 
+  let materials: {
+    materialId: string;
+    fileName: string;
+    courseId: string | null;
+    courseTitle: string | null;
+    deletedAt: string;
+    kind: "material" | "focus";
+  }[] = [];
+
   if (error) {
-    if (isMissingDbColumnError(error, "deleted_at")) {
-      return NextResponse.json({ materials: [] });
+    if (!isMissingDbColumnError(error, "deleted_at")) {
+      console.error("[study-materials/deleted GET]", error);
+      return NextResponse.json({ error: "Could not load." }, { status: 500 });
     }
-    console.error("[study-materials/deleted GET]", error);
-    return NextResponse.json({ error: "Could not load." }, { status: 500 });
+  } else {
+    materials = ((data ?? []) as unknown as DeletedMaterialRow[]).map(
+      (row) => ({
+        materialId: row.id,
+        fileName: row.file_name ?? "Untitled upload",
+        courseId: row.course_id,
+        courseTitle: courseTitle(row.courses),
+        deletedAt: row.deleted_at,
+        kind: "material" as const,
+      })
+    );
   }
 
-  const materials = ((data ?? []) as unknown as DeletedMaterialRow[]).map(
-    (row) => ({
-      materialId: row.id,
-      fileName: row.file_name ?? "Untitled upload",
-      courseId: row.course_id,
-      courseTitle: courseTitle(row.courses),
-      deletedAt: row.deleted_at,
-    })
-  );
+  // Also list soft-deleted notes-focus decks.
+  const focusDecks = await listDeletedFocusDecks(supabase, user.id);
+  for (const deck of focusDecks) {
+    materials.push({ ...deck, kind: "focus" });
+  }
+
+  materials.sort((a, b) => (a.deletedAt < b.deletedAt ? 1 : -1));
 
   return NextResponse.json({ materials });
 }
@@ -77,6 +103,7 @@ export async function GET() {
 /**
  * POST /api/study-materials/deleted
  * body: { action: "restore" | "purge", materialIds: string[] }
+ * materialIds may be study-material UUIDs or notes-focus bucket ids (`note:…` / `notes`).
  */
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -105,7 +132,7 @@ export async function POST(request: Request) {
   }
 
   const materialIds = body.materialIds
-    .filter((id): id is string => typeof id === "string" && UUID_RE.test(id))
+    .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
     .slice(0, MAX_IDS);
 
   if (materialIds.length === 0) {
@@ -114,6 +141,23 @@ export async function POST(request: Request) {
 
   let ok = 0;
   for (const materialId of materialIds) {
+    if (isNotesFocusBucketId(materialId)) {
+      const noteId = parseDeletedFocusBucketId(materialId);
+      if (noteId === undefined) continue;
+      if (body.action === "restore") {
+        if (await restoreFocusQuestionsForNote(supabase, user.id, noteId)) {
+          ok += 1;
+        }
+      } else if (
+        await purgeDeletedFocusQuestionsForNote(supabase, user.id, noteId)
+      ) {
+        ok += 1;
+      }
+      continue;
+    }
+
+    if (!UUID_RE.test(materialId)) continue;
+
     const allowed = await canEditStudyMaterial(supabase, user.id, materialId);
     if (!allowed) continue;
 
