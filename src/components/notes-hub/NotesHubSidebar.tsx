@@ -12,6 +12,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { EmojiPickerButton } from "@/components/EmojiPickerButton";
 import { sectionAcceptsNoteDrop as sectionAcceptsNoteDropFn } from "@/lib/notes/hub-layout";
 import {
+  hubSectionAutoExpandsOnSelect,
+  initialHubExpandedSectionIds,
+} from "@/lib/notes/hub-sidebar-expand";
+import {
   isCustomSection,
   type NoteDocCardData,
   type NoteHubSection,
@@ -757,15 +761,12 @@ export function NotesHubSidebar({
   dragKind?: "note" | "section" | null;
   moveReady?: boolean;
 }) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => {
-    const initial = new Set<string>();
-    const active = sections.find((s) => s.id === activeSectionId);
-    if (active) initial.add(active.id);
-    else if (sections[0]) initial.add(sections[0].id);
-    return initial;
-  });
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(initialHubExpandedSectionIds(sections, activeSectionId))
+  );
 
   useEffect(() => {
+    if (!hubSectionAutoExpandsOnSelect(activeSectionId)) return;
     setExpanded((prev) => {
       if (prev.has(activeSectionId)) return prev;
       const next = new Set(prev);
