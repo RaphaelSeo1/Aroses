@@ -104,8 +104,8 @@ export function depthInstructionBlock(depth: CourseGenerationDepth): string {
     case "maximum":
       return `COURSE DEPTH — MAXIMUM:
 - Include everything Comprehensive requires, plus maximum useful educational source coverage, the deepest useful explanations, advanced and niche details where relevant, more applications, deeper synthesis, nuanced distinctions, relevant caveats and edge cases, the strongest practice-question coverage, and sophisticated multi-concept reasoning.
-- Preserve the maximum educationally useful depth from the source. Maximum does NOT mean "generate the longest possible text."
-- Source coverage: MAXIMUM USEFUL COVERAGE. Do not invent unsupported relationships or pad with filler.`;
+- Preserve the maximum educationally useful depth from the source. Maximum does NOT mean "generate the longest possible text." Keep each lesson compact — cover the idea once, then stop.
+- Source coverage: MAXIMUM USEFUL COVERAGE within the module/lesson caps. Do not invent unsupported relationships or pad with filler.`;
   }
 }
 

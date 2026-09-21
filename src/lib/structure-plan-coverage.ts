@@ -135,10 +135,10 @@ export function structurePlanTargets(
   } else {
     // full / maximum: deepest profiles — more modules and more lessons per the source.
     const depth = getGenerationDepthContext();
-    const maxBoost = depth === "maximum" ? 1.15 : 1;
-    minLessons = clampInt(Math.ceil((chunkCount / 1.3) * maxBoost), 3, 56);
-    maxLessons = clampInt(Math.ceil((chunkCount / 1.05) * maxBoost), minLessons, 72);
-    maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 12), 4, 12);
+    const maxBoost = depth === "maximum" ? 1.05 : 1;
+    minLessons = clampInt(Math.ceil((chunkCount / 2.4) * maxBoost), 4, 16);
+    maxLessons = clampInt(Math.ceil((chunkCount / 1.8) * maxBoost), minLessons, 24);
+    maxModules = clampInt(envInt("COURSE_FULL_MAX_MODULES", 6), 3, 6);
   }
 
   const minModules =

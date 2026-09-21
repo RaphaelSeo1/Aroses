@@ -104,7 +104,7 @@ function envInt(name: string, fallback: number): number {
 /** Target quiz bank size per module after generation (includes post-parse backfill). */
 export function moduleQuizTarget(profile: CourseBuildProfile): number {
   if (profile === "full") {
-    return clampInt(envInt("COURSE_FULL_QUIZ_MIN", 12), 4, 24);
+    return clampInt(envInt("COURSE_FULL_QUIZ_MIN", 6), 4, 10);
   }
   if (profile === "express") {
     return clampInt(envInt("COURSE_EXPRESS_QUIZ_MIN", 10), 3, 16);
@@ -158,7 +158,7 @@ async function ensureModuleQuizCount(
   );
 
   const maxRounds =
-    profile === "express" || profile === "fast" ? 1 : profile === "balanced" ? 2 : 3;
+    profile === "express" || profile === "fast" ? 1 : profile === "balanced" ? 2 : 1;
   for (let round = 0; round < maxRounds && quiz.length < target; round++) {
     const need = target - quiz.length;
     const batch = Math.min(16, Math.max(6, need + 4));
@@ -442,11 +442,12 @@ function materialCharLimit(profile: CourseBuildProfile): number {
     );
     return clampInt(fromEnv, 20_000, MAX_MATERIAL_CHARS);
   }
-  // full: ingest the whole source by default so no later section is dropped.
+  // full: enough source to cover a mid-size deck without sending 240k chars
+  // into every Sonnet module (that input alone was ~$0.18/module).
   return clampInt(
-    envInt("COURSE_FULL_MATERIAL_CHARS", MAX_MATERIAL_CHARS),
-    60_000,
-    480_000
+    envInt("COURSE_FULL_MATERIAL_CHARS", 80_000),
+    40_000,
+    160_000
   );
 }
 
@@ -662,7 +663,7 @@ function outlineCoverageBlock(profile: CourseBuildProfile): string {
   if (profile === "balanced") {
     return `${depthHint}COVERAGE: Plan modules + lesson_titles that together map **every section, heading, and distinct topic across the whole document** — first page to last. Walk it end to end using the headings to infer structure; do not plan only for the opening pages. Later pages and the document middle each need their own modules/lessons.`;
   }
-  return `${depthHint}COVERAGE (critical): Plan modules + lesson_titles that together **map every section, heading, and distinct topic across the entire document** — first page to last. The material below is the **full document** unless it is extremely large. Walk it end to end; do not plan only for the opening pages and stop. Later pages and the document middle each need their own modules/lessons. Full lesson bodies are written from the same source later.`;
+  return `${depthHint}COVERAGE: Map the whole document first page to last, but **combine related headings** so the course stays within the module and lesson caps. Prefer fewer denser modules over one module per heading. Later pages must still be represented — fold them into an existing module rather than overflowing the cap.`;
 }
 
 /**
@@ -1358,8 +1359,8 @@ function outlineInstruction(
     moduleCount = `Use **4 to ${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 4, but a long lecture deck or multi-topic document should use more (toward ${maxModules}). Give each major topic or section its own focused module; do not compress the whole document into one or two catch-alls.`;
     maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 5), 2, 8);
   } else {
-    moduleCount = `Use **at least 5** and up to **${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 5–6, but a long lecture deck, chapter, or multi-topic document should use many more (toward the maximum). Split the material into focused modules so each major topic, section, or learning objective gets its own module — prefer MORE, narrower modules over a few broad ones. Do NOT compress later pages into one catch-all module; every distinct section of the document, from first page to last, must be represented.`;
-    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 12), 3, 20);
+    moduleCount = `Use **3 to ${maxModules}** modules. Prefer fewer, denser modules that still cover the whole document — combine closely related topics instead of splitting every heading into its own module. A short handout may need only 3; a long lecture deck should stay at or under ${maxModules}. Every major section of the document must still be represented.`;
+    maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 4), 2, 6);
   }
 
   return `You are an expert course designer. From the material below, output ONLY a compact JSON **outline** (no full lesson bodies, no quiz questions).
@@ -1475,7 +1476,7 @@ function moduleInstruction(
         ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
         : profile === "balanced"
           ? `STYLE (balanced): Teach clearly with examples; aim **under ~500 words** per lesson.`
-          : "";
+          : `STYLE (full): Concise Sonnet lessons — **under ~350 words** each. Teach the planned topic clearly with one or two examples. Do not write a textbook chapter.`;
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. ${moduleTitleDirective}
 ${generationContextSuffix(studyContext, outputLanguage)}
@@ -1576,7 +1577,7 @@ ${brokenAssistantText.slice(0, 100_000)}`;
         ? [16_384, 24_576]
         : profile === "balanced"
           ? [20_480, 30_720]
-          : [24_576, 32_768];
+          : [10_240];
 
   let lastText = "";
   for (const moduleRepairMax of repairBudgets) {
@@ -1589,10 +1590,7 @@ ${brokenAssistantText.slice(0, 100_000)}`;
         messages: [{ role: "user", content: prompt }],
       },
       {
-        maxAttempts:
-          profile === "express" || profile === "fast" || profile === "balanced"
-            ? 2
-            : 3,
+        maxAttempts: 2,
       }
     );
 
@@ -1688,7 +1686,7 @@ ${sourceForRepair}
         ? 12_288
         : profile === "balanced"
           ? 16_384
-          : 24_576;
+          : 10_240;
 
   const msg = await createMessageWithRetries(
     anthropic,
@@ -1704,7 +1702,7 @@ ${sourceForRepair}
           ? 1
           : profile === "balanced"
             ? 2
-            : 3,
+            : 1,
     }
   );
 
@@ -1749,8 +1747,7 @@ async function ensureModuleLessonFields(
 ): Promise<CourseModule> {
   if (!moduleNeedsLessonContent(module)) return module;
 
-  const maxRepairs =
-    profile === "express" || profile === "fast" || profile === "balanced" ? 1 : 2;
+  const maxRepairs = 1;
   let out = module;
   for (let i = 0; i < maxRepairs && moduleNeedsLessonContent(out); i++) {
     try {
@@ -2180,7 +2177,7 @@ function outlineMaxModules(profile: CourseBuildProfile): number {
   if (profile === "balanced") {
     return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
   }
-  return clampInt(envInt("COURSE_FULL_MAX_MODULES", 12), 4, 12);
+  return clampInt(envInt("COURSE_FULL_MAX_MODULES", 6), 3, 6);
 }
 
 /**
@@ -2265,7 +2262,7 @@ export async function generateCourseOutlineFromMaterial(
   const maxAttempts =
     profile === "express" || profile === "fast" || profile === "balanced"
       ? 1
-      : 4;
+      : 2;
 
   const rawText = await invokeUserMessageForPdfText(
     anthropic,
@@ -2315,7 +2312,9 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
   if (profile === "fast") {
     return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 12_288), 6144, 24_576);
   }
-  if (profile === "full") return 30_720;
+  if (profile === "full") {
+    return clampInt(envInt("COURSE_FULL_MODULE_MAX_TOKENS", 8_192), 4_096, 12_288);
+  }
   return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 12_288), 8192, 30_720);
 }
 
@@ -2335,7 +2334,7 @@ function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
         ? [Math.min(24_576, Math.round(base * 1.5))]
         : profile === "balanced"
           ? [Math.min(30_720, Math.max(20_480, Math.round(base * 1.4)))]
-          : [Math.min(30_720, Math.round(base * 1.4))];
+          : [Math.min(10_240, Math.round(base * 1.25))];
   return [...new Set([base, ...extra])].sort((a, b) => a - b);
 }
 
@@ -2863,7 +2862,7 @@ export async function generateCourseModuleFromMaterial(
   const maxAttempts =
     profile === "express" || profile === "fast" || profile === "balanced"
       ? 2
-      : 5;
+      : 2;
 
   const tokenBudgets = moduleMaxTokenBudgets(profile);
   let lastRaw = "";

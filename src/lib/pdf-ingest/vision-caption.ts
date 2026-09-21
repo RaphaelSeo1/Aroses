@@ -1,7 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 
-const SONNET = "claude-sonnet-4-6";
+const CAPTION_MODEL =
+  process.env.PDF_INGEST_VISION_MODEL?.trim() || "claude-haiku-4-5";
 
 export type AssetVisionCaption = {
   type: "table" | "figure" | "image" | "decorative" | "page_snapshot";
@@ -163,7 +164,7 @@ export async function captionVisualAsset(input: {
       });
 
       const msg = await anthropic.messages.create({
-        model: SONNET,
+        model: CAPTION_MODEL,
         max_tokens: 512,
         temperature: 0.1,
         messages: [
