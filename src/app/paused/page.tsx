@@ -20,6 +20,16 @@ export default function PausedPage() {
         <p className="mt-4 text-base leading-relaxed text-neutral-600 dark:text-neutral-300">
           The site is closed while we work on it. It will be back soon.
         </p>
+        <p className="mt-3 text-base leading-relaxed text-neutral-600 dark:text-neutral-300">
+          For questions, email{" "}
+          <a
+            href="mailto:raphaelseo.business@gmail.com"
+            className="underline decoration-neutral-400 underline-offset-2 hover:text-neutral-900 dark:hover:text-white"
+          >
+            raphaelseo.business@gmail.com
+          </a>
+          .
+        </p>
         <Link
           href="/admin-login"
           className="mt-8 inline-flex rounded-full bg-rose-700 px-5 py-2.5 text-sm font-medium text-white hover:bg-rose-800"
