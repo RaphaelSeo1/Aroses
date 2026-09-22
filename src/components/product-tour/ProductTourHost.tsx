@@ -540,7 +540,8 @@ function ProductTourInner() {
       pathname === "/intro" ||
       pathname === "/login" ||
       pathname === "/signup" ||
-      pathname === "/paused"
+      pathname === "/paused" ||
+      pathname === "/admin-login"
     ) {
       return;
     }

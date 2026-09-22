@@ -15,6 +15,7 @@ const PUBLIC_EXACT = new Set([
   "/reset-password",
   "/brand",
   "/paused",
+  "/admin-login",
 ]);
 
 const PUBLIC_PREFIXES = [

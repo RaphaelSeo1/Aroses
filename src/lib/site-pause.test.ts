@@ -60,6 +60,7 @@ test("only the founder account gets through while paused", () => {
 test("pause keeps login, password reset, the notice, and Stripe webhooks", () => {
   assert.equal(isSitePauseExemptPath("/paused"), true);
   assert.equal(isSitePauseExemptPath("/login"), true);
+  assert.equal(isSitePauseExemptPath("/admin-login"), true);
   assert.equal(isSitePauseExemptPath("/reset-password"), true);
   assert.equal(isSitePauseExemptPath("/api/billing/webhook"), true);
   assert.equal(isSitePauseExemptPath("/"), false);

@@ -21,10 +21,10 @@ export default function PausedPage() {
           The site is closed while we work on it. It will be back soon.
         </p>
         <Link
-          href="/login"
+          href="/admin-login"
           className="mt-8 inline-flex rounded-full bg-rose-700 px-5 py-2.5 text-sm font-medium text-white hover:bg-rose-800"
         >
-          Sign in
+          Admin login
         </Link>
       </div>
     </main>

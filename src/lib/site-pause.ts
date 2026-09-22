@@ -22,6 +22,9 @@ export function isSitePaused(): boolean {
 export function isSitePauseExemptPath(pathname: string): boolean {
   if (pathname === "/paused" || pathname.startsWith("/paused/")) return true;
   if (pathname === "/login" || pathname.startsWith("/login/")) return true;
+  if (pathname === "/admin-login" || pathname.startsWith("/admin-login/")) {
+    return true;
+  }
   if (pathname === "/reset-password" || pathname.startsWith("/reset-password/")) {
     return true;
   }

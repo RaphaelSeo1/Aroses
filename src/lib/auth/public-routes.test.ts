@@ -22,6 +22,7 @@ test("marketing, legal, help, and auth stay public for guests", () => {
     "/share/session/tok",
     "/brand",
     "/paused",
+    "/admin-login",
   ]) {
     assert.equal(isPublicUnauthenticatedPath(path), true, path);
   }
