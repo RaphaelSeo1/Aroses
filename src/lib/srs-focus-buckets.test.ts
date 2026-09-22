@@ -495,26 +495,30 @@ test("hub Lecture 1–4 stay distinct from a same-titled course after a bad rema
   assert.ok(hub);
   assert.ok(course);
   assert.equal(pickerParentLabel(hub!, fallbacks), "MCB 104 !");
-  assert.equal(hub!.children.length, 4);
-  assert.equal(hub!.children.every((c) => c.kind === "note"), true);
+  assert.equal(hub!.children.length, 2);
   assert.deepEqual(
     hub!.children.map((c) => c.fileName).sort(),
-    [l1, l2, l3, l4].sort()
+    [l1, l4].sort()
   );
   assert.equal(
-    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_B))!.personal,
-    28
+    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_A))!.personal,
+    42
   );
   assert.equal(
-    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_C))!.personal,
-    28
+    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_D))!.personal,
+    32
   );
-  assert.equal(course!.personal, 16);
-  assert.equal(course!.children.every((c) => c.kind === "module"), true);
-  assert.equal(byMaterial.has(notesFocusBucketId(NOTE_E)), false);
+  assert.equal(
+    course!.children.find((c) => c.id === notesFocusBucketId(NOTE_E))!.personal,
+    56
+  );
+  assert.equal(
+    course!.children.find((c) => c.kind === "module")!.personal,
+    16
+  );
 });
 
-test("short Lecture 3/4 labels on the MCB course still restore to MCB 104 ! hub notes", () => {
+test("similar Lecture 3/4 labels stay on the note they were saved to", () => {
   const sectionId = "55555555-5555-4555-8555-555555555555";
   const l1 = "Lecture 1 - DNA Organization and Transcriptional Control";
   const l2 =
@@ -670,16 +674,31 @@ test("short Lecture 3/4 labels on the MCB course still restore to MCB 104 ! hub 
   const hub = groups.find((g) => g.id === `section:${sectionId}`);
   assert.ok(hub);
   assert.equal(pickerParentLabel(hub!, fallbacks), "MCB 104 !");
-  const names = hub!.children.map((c) => c.fileName).sort();
-  assert.ok(names.includes(l1));
-  assert.ok(names.includes(l3));
-  assert.ok(names.includes(l4));
+  assert.deepEqual(
+    hub!.children.map((c) => c.id).sort(),
+    [notesFocusBucketId(NOTE_A), notesFocusBucketId(NOTE_D)].sort()
+  );
   assert.equal(
-    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_C))!.personal,
-    56
+    hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_A))!.personal,
+    42
   );
   assert.equal(
     hub!.children.find((c) => c.id === notesFocusBucketId(NOTE_D))!.personal,
-    48
+    32
+  );
+  assert.equal(
+    groups.some((g) =>
+      g.children.some((c) => c.id === notesFocusBucketId(NOTE_C))
+    ),
+    false
+  );
+  const parked = groups.find((g) =>
+    g.children.some((c) => c.id === notesFocusBucketId(NOTE_E))
+  );
+  assert.ok(parked);
+  assert.notEqual(parked!.id, `section:${sectionId}`);
+  assert.equal(
+    parked!.children.find((c) => c.id === notesFocusBucketId(NOTE_E))!.personal,
+    56
   );
 });

@@ -389,14 +389,15 @@ export type ResolveFocusCardNoteOpts = {
 };
 
 /**
- * Read-time origin for a personal card. Hub `section_id` wins; otherwise a
- * unique stored label / related hub lecture / note-body overlap can point
- * back at a hub note. Never writes.
+ * Read-time origin for a personal card. The stored note id is the boundary:
+ * a similar lecture title, course code, or note-body overlap must not move
+ * the card onto another note or course. Cards with no stored note stay
+ * unassigned rather than being guessed. Never writes.
  */
 export function resolveFocusCardNoteId(
   sourceNoteId: string | null | undefined,
-  sourceLabel: string | null | undefined,
-  notes: NoteMatchCandidate[],
+  _sourceLabel: string | null | undefined,
+  _notes: NoteMatchCandidate[],
   opts?: ResolveFocusCardNoteOpts
 ): string | null {
   const noteId =
@@ -407,21 +408,9 @@ export function resolveFocusCardNoteId(
     typeof opts?.materialId === "string" && UUID_RE.test(opts.materialId.trim())
       ? opts.materialId.trim()
       : null;
-  const current = noteId
-    ? (notes.find((n) => n.id === noteId) ?? null)
-    : null;
 
   // Course-native PDF cards with no note id must stay on the material.
   if (materialId && !noteId) return null;
-
-  const restored = pickSectionNoteForStoredLabel(
-    typeof sourceLabel === "string" ? sourceLabel : "",
-    current,
-    notes,
-    opts?.cardText
-  );
-  if (restored) return restored;
-  if (current?.sectionId && !current.deleted) return current.id;
   return noteId;
 }
 

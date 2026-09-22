@@ -1,10 +1,4 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isMissingDbColumnError } from "../supabase/schema-compat.ts";
-import { focusCardText } from "./match-focus-note.ts";
-import {
-  loadNotesFocusOriginCatalog,
-  remapPersonalFocusOriginRows,
-} from "./focus-origin-catalog.ts";
 
 export {
   pickNoteForFocusLabel,
@@ -36,87 +30,14 @@ export async function repairOrphanNotesFocusCards(
 }
 
 /**
- * One-time write: put remapped notes-hub cards back on the hub note their
- * label / related course folder / note body still identifies. Never called
- * from Review GET.
+ * Previously rewrote `source_note_id` when a stored label resembled another
+ * lecture. That moved focus cards across courses and notes. It must not run.
  */
 export async function applyHubFocusCardRestores(
-  supabase: SupabaseClient,
-  userId: string
+  _supabase: SupabaseClient,
+  _userId: string
 ): Promise<number> {
-  const notes = await loadNotesFocusOriginCatalog(supabase, userId);
-  const first = await supabase
-    .from("user_personal_quiz_items")
-    .select("id, source_note_id, source_label, source_excerpt, material_id, item")
-    .eq("user_id", userId)
-    .limit(2000);
-  let rows: Array<{
-    id: string;
-    source_note_id: string | null;
-    source_label: string | null;
-    source_excerpt: string | null;
-    material_id: string | null;
-    item: unknown;
-  }> | null = first.data;
-  if (first.error && isMissingDbColumnError(first.error, "item")) {
-    const fallback = await supabase
-      .from("user_personal_quiz_items")
-      .select("id, source_note_id, source_label, source_excerpt, material_id")
-      .eq("user_id", userId)
-      .limit(2000);
-    if (fallback.error) {
-      console.error("[applyHubFocusCardRestores load]", fallback.error);
-      return 0;
-    }
-    rows = (fallback.data ?? []).map((row) => ({ ...row, item: null }));
-  } else if (first.error) {
-    console.error("[applyHubFocusCardRestores load]", first.error);
-    return 0;
-  }
-
-  const list = rows ?? [];
-  const remapped = remapPersonalFocusOriginRows(
-    list.map((row) => ({
-      materialId:
-        typeof row.material_id === "string" ? row.material_id : null,
-      sourceNoteId:
-        typeof row.source_note_id === "string" ? row.source_note_id : null,
-      sourceLabel:
-        typeof row.source_label === "string" ? row.source_label : null,
-      cardText: [
-        typeof row.source_excerpt === "string" ? row.source_excerpt : "",
-        focusCardText(row.item),
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    })),
-    notes
-  );
-
-  const titleById = new Map(notes.map((n) => [n.id, n.title]));
-  let patched = 0;
-  for (let i = 0; i < list.length; i++) {
-    const row = list[i]!;
-    const next = remapped[i]!;
-    const current =
-      typeof row.source_note_id === "string" ? row.source_note_id : null;
-    if (!next.sourceNoteId || next.sourceNoteId === current) continue;
-    const hubTitle = titleById.get(next.sourceNoteId)?.trim() || null;
-    const patch: Record<string, unknown> = {
-      source_note_id: next.sourceNoteId,
-      material_id: null,
-    };
-    if (hubTitle) patch.source_label = hubTitle.slice(0, 200);
-    const { error } = await supabase
-      .from("user_personal_quiz_items")
-      .update(patch)
-      .eq("id", row.id)
-      .eq("user_id", userId);
-    if (error) {
-      console.error("[applyHubFocusCardRestores patch]", row.id, error);
-      continue;
-    }
-    patched += 1;
-  }
-  return patched;
+  void _supabase;
+  void _userId;
+  return 0;
 }

@@ -721,6 +721,58 @@ test("Ran GTPase card text restores onto hub Lecture 3 when the label was overwr
   assert.equal(target, "cccccccc-cccc-4ccc-8ccc-cccccccccccc");
 });
 
+test("a stored note id is not moved onto a similarly titled lecture", () => {
+  const viruses = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const nuclear = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const resolved = resolveFocusCardNoteId(
+    viruses,
+    "Lecture 3 - Viruses",
+    [
+      {
+        id: viruses,
+        title: "Lecture 3 - Viruses",
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+        sectionTitle: "PH 162A",
+      },
+      {
+        id: nuclear,
+        title: "Lecture 3 - Nuclear Organization, Targeting Signals, and the Ran GTPase Cycle",
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: "99999999-9999-4999-8999-999999999999",
+        sectionTitle: "MCB 104 !",
+        notesText: "Ran GTPase, importin, NLS, and nuclear pore transport.",
+      },
+    ],
+    { cardText: "What does Ran-GTP bind during nuclear export?" }
+  );
+  assert.equal(resolved, viruses);
+});
+
+test("a card with no note id is not guessed onto a similar title", () => {
+  const resolved = resolveFocusCardNoteId(
+    null,
+    "Lecture 3 - Viruses",
+    [
+      {
+        id: NOTE_A,
+        title: "Lecture 3 - Viruses",
+        courseId: null,
+        updatedAt: "2026-09-10T00:00:00Z",
+        deleted: false,
+        sectionId: SECTION,
+        sectionTitle: "PH 162A",
+      },
+    ],
+    { cardText: "Capsid, envelope, and viral genome." }
+  );
+  assert.equal(resolved, null);
+});
+
 test("course-native PDF card with no note id is not restored onto a hub lecture", () => {
   const resolved = resolveFocusCardNoteId(
     null,
