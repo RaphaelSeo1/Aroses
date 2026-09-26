@@ -129,9 +129,9 @@ export function structurePlanTargets(
     maxLessons = clampInt(Math.ceil(chunkCount / 1.6), minLessons, 16);
     maxModules = 5;
   } else if (profile === "balanced") {
-    minLessons = clampInt(Math.ceil(chunkCount / 2.0), 2, 16);
-    maxLessons = clampInt(Math.ceil(chunkCount / 1.5), minLessons, 20);
-    maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
+    minLessons = clampInt(Math.ceil(chunkCount / 8), 2, 6);
+    maxLessons = clampInt(Math.ceil(chunkCount / 5), minLessons, 6);
+    maxModules = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 4);
   } else {
     // full: deepest profile — more modules and more lessons per the source.
     minLessons = clampInt(Math.ceil(chunkCount / 1.3), 3, 48);

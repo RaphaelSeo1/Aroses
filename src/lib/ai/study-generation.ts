@@ -109,7 +109,7 @@ export function moduleQuizTarget(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_QUIZ_MIN", 10), 3, 16);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_QUIZ_MIN", 10), 3, 16);
+    return clampInt(envInt("COURSE_BALANCED_QUIZ_MIN", 4), 2, 8);
   }
   const _never: never = profile;
   return _never;
@@ -125,6 +125,9 @@ function moduleFreeResponseMin(
       1,
       target
     );
+  }
+  if (profile === "balanced") {
+    return clampInt(envInt("COURSE_BALANCED_FREE_RESPONSE_MIN", 1), 1, target);
   }
   return clampInt(
     envInt("COURSE_FREE_RESPONSE_MIN", Math.max(2, Math.floor(target / 3))),
@@ -866,8 +869,8 @@ QUIZ (critical): Each module needs a practical practice set — **at least ${qui
     quizFooter =
       `Include enough quiz objects per module to meet the minimums above (≥${quizTarget} total, ≥${frMin} free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.`;
   } else if (profile === "balanced") {
-    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
-    sizeRules = `Rules for output size (important): use **4 to ${maxBalMods}** modules, scaling to the size of the source (short handout ≈ 4, long deck toward ${maxBalMods}). Prefer **fewer, longer lessons** (about 2–5 per module) that keep the same information — do not split every subtopic into its own thin lesson. Keep each lesson "content" clear; aim under roughly 700 words per lesson when combining related material. Every module must include at least one lesson.
+    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 4);
+    sizeRules = `Rules for output size (important): use **2 to ${maxBalMods}** modules. A short handout is 2. A 30–50 page lecture is still only ${maxBalMods}. Prefer **2 lessons per module**. Keep each lesson "content" under roughly **350 words**. Every module must include at least one lesson.
 
 QUIZ (critical): Each module needs **at least ${quizTarget} questions per module**, with **at least ${frMin}** type free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Choice text must NOT include A)/B)/C)/D) prefixes. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
     quizFooter =
@@ -1348,8 +1351,8 @@ function outlineInstruction(
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
     maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 6);
   } else if (profile === "balanced") {
-    moduleCount = `Use **4 to ${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 4, but a long lecture deck or multi-topic document should use more (toward ${maxModules}). Give each major topic or section its own focused module; do not compress the whole document into one or two catch-alls.`;
-    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 5), 2, 8);
+    moduleCount = `Use **2 to ${maxModules}** modules. A short handout is 2. A long lecture deck is still only ${maxModules} — group related sections together instead of giving every topic its own module.`;
+    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 2), 1, 3);
   } else {
     moduleCount = `Use **at least 5** and up to **${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 5–6, but a long lecture deck, chapter, or multi-topic document should use many more (toward the maximum). Split the material into focused modules so each major topic, section, or learning objective gets its own module — prefer MORE, narrower modules over a few broad ones. Do NOT compress later pages into one catch-all module; every distinct section of the document, from first page to last, must be represented.`;
     maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 12), 3, 20);
@@ -1467,7 +1470,7 @@ function moduleInstruction(
       : profile === "fast"
         ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
         : profile === "balanced"
-          ? `STYLE (balanced): Teach clearly with examples; aim **under ~500 words** per lesson.`
+          ? `STYLE (balanced): Teach the planned points once, clearly, with one example when the source has one. Each lesson **under ~350 words**. Do not write a second explanation of the same idea.`
           : "";
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. ${moduleTitleDirective}
@@ -2171,7 +2174,7 @@ function outlineMaxModules(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 6);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
+    return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 4);
   }
   return clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
 }
@@ -2309,15 +2312,14 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 12_288), 6144, 24_576);
   }
   if (profile === "full") return 30_720;
-  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 12_288), 8192, 30_720);
+  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 4_096), 2048, 6_144);
 }
 
 /**
  * Escalating output budgets when the first pass truncates mid-JSON. Balanced
- * gets one escalation too (fidelity): a table-heavy module that truncates at
- * the base budget retries with more room instead of falling straight into the
- * JSON-repair path. The escalation call only fires on detected truncation, so
- * healthy builds pay nothing extra.
+ * may step from 4,096 to at most 6,144. It must not jump to a 20k-token retry:
+ * that second call is most of the bill. The escalation only fires on detected
+ * truncation, so a module that fits pays for one call.
  */
 function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
   const base = moduleMaxTokens(profile);
@@ -2327,7 +2329,7 @@ function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
       : profile === "fast"
         ? [Math.min(24_576, Math.round(base * 1.5))]
         : profile === "balanced"
-          ? [Math.min(30_720, Math.max(20_480, Math.round(base * 1.4)))]
+          ? [Math.min(6_144, Math.max(base, Math.round(base * 1.25)))]
           : [Math.min(30_720, Math.round(base * 1.4))];
   return [...new Set([base, ...extra])].sort((a, b) => a - b);
 }
