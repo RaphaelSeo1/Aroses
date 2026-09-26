@@ -5,10 +5,6 @@ import {
 } from "@/components/live-notes/LiveNotesSurface";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
 import { loadSessionDeckMeta } from "@/lib/live-notes/slide-pages";
-import {
-  ingestJobRowToRetryView,
-  shouldReuseExistingIngestJob,
-} from "@/lib/notes/ingest-job-retry";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
@@ -81,17 +77,6 @@ export default async function StandaloneNoteRecordPage({ params }: Props) {
 
   const ingestJobId =
     typeof session.ingest_job_id === "string" ? session.ingest_job_id : null;
-  let ingestJobReusable = false;
-  if (ingestJobId) {
-    const { data: ingestJob } = await supabase
-      .from("pdf_ingest_jobs")
-      .select("status, updated_at, ingest_phase")
-      .eq("id", ingestJobId)
-      .maybeSingle();
-    ingestJobReusable = shouldReuseExistingIngestJob(
-      ingestJobRowToRetryView(ingestJob)
-    );
-  }
 
   const initialSession: LiveNotesInitialSession = {
     id: session.id,
@@ -106,7 +91,7 @@ export default async function StandaloneNoteRecordPage({ params }: Props) {
         ? session.duration_seconds
         : 0,
     ingestJobId,
-    ingestJobReusable,
+    ingestJobReusable: false,
     lastSegmentSeq:
       initialSegments.length > 0
         ? initialSegments[initialSegments.length - 1].seq

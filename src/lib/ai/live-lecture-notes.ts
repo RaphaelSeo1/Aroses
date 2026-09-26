@@ -1,6 +1,6 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
-import { voiceRules } from "@/lib/ai/study-generation";
+import { voiceRules } from "@/lib/ai/voice-rules";
 import {
   DEFAULT_NOTES_OUTLINE_RULES,
   TUTOR_NOTES_QUALITY_RULES,

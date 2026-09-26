@@ -2,7 +2,6 @@ import { Analytics } from "@vercel/analytics/next";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Noto_Sans_KR } from "next/font/google";
 import Script from "next/script";
-import { ActivePdfBuildProvider } from "@/components/ActivePdfBuildProvider";
 import { AppAdminNavGate } from "@/components/AppAdminNavGate";
 import { AppDialogs } from "@/components/AppDialogs";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
@@ -101,11 +100,9 @@ export default async function RootLayout({
         <ScrollRestoration />
         <ThemeHydration />
         <LocaleProvider locale={locale} dict={dict}>
-          <ActivePdfBuildProvider>
-            <AppAdminNavGate impersonating={Boolean(viewAs)}>
-              {children}
-            </AppAdminNavGate>
-          </ActivePdfBuildProvider>
+          <AppAdminNavGate impersonating={Boolean(viewAs)}>
+            {children}
+          </AppAdminNavGate>
           <AppDialogs />
           <ProductTourHost />
           <PaidFeatureGate impersonationAccess={viewAs?.paidAccess ?? null} />

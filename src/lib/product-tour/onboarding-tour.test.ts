@@ -61,10 +61,9 @@ test("pickTourCourseFromList falls back to a Bio 1A title when the live id is mi
 test("site tour comes first, then a short Bio 1A dip at Explore", () => {
   const steps = buildProductTourSteps(BIO_1A_COURSE_ID);
   const ids = steps.map((s) => s.id);
-  assert.deepEqual(ids.slice(0, 7), [
+  assert.deepEqual(ids.slice(0, 6), [
     "welcome",
     "create-course",
-    "course-modes",
     "library-courses",
     "notes-tile",
     "notes-hub",

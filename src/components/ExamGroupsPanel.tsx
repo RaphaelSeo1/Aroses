@@ -21,7 +21,6 @@ import Link from "next/link";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { CourseUploadForm } from "@/components/CourseUploadForm";
 import type { CourseOutputLanguage } from "@/lib/course-output-language";
 import {
   displayMaterialSectionLabel,
@@ -586,10 +585,7 @@ export function ExamGroupsPanel({
   courseId,
   groups,
   materials,
-  failedJobs = [],
   initialSectionId,
-  isSelfStudy = false,
-  defaultOutputLanguage,
   readOnly = false,
 }: {
   courseId: string;
@@ -606,21 +602,6 @@ export function ExamGroupsPanel({
   readOnly?: boolean;
 }) {
   const router = useRouter();
-  const [dismissedJobIds, setDismissedJobIds] = useState<Set<string>>(() => new Set());
-
-  async function dismissFailedJob(jobId: string) {
-    setDismissedJobIds((prev) => new Set([...prev, jobId]));
-    try {
-      const res = await fetch(`/api/process-pdf/jobs/${jobId}/dismiss`, { method: "DELETE" });
-      if (!res.ok) {
-        // If the server rejected the dismiss (e.g. status changed), force a full
-        // page reload so the banner reflects the true server state.
-        router.refresh();
-      }
-    } catch {
-      // Best-effort — already hidden locally; stale banner will clear on next refresh
-    }
-  }
   const [activeId, setActiveId] = useState(() => {
     if (
       initialSectionId &&
@@ -1271,64 +1252,6 @@ export function ExamGroupsPanel({
           <p className="mt-1 text-xs text-red-600 dark:text-red-400">{groupRenameError}</p>
         )}
 
-        {/* Failed jobs for the active section */}
-        {failedJobs.filter((j) => j.exam_group_id === activeId && !dismissedJobIds.has(j.id)).length > 0 && (
-          <div className="mt-6 space-y-2">
-            {failedJobs
-              .filter((j) => j.exam_group_id === activeId && !dismissedJobIds.has(j.id))
-              .map((j) => (
-                <div
-                  key={j.id}
-                  className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/60 dark:bg-red-950/40"
-                >
-                  <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400">
-                    <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
-                  </svg>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-red-800 dark:text-red-200">
-                      {j.original_file_name ?? "A PDF"} failed to process
-                    </p>
-                    <p className="mt-0.5 text-xs text-red-700 dark:text-red-300">
-                      {j.error_message ?? "An error occurred during extraction."}{" "}
-                      Re-upload this file below to try again.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void dismissFailedJob(j.id)}
-                    className="ml-auto shrink-0 rounded-lg p-1 text-red-400 hover:bg-red-100 hover:text-red-700 dark:hover:bg-red-900/40 dark:hover:text-red-200"
-                    aria-label="Dismiss"
-                  >
-                    <svg viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
-                      <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-          </div>
-        )}
-
-        {!readOnly ? (
-          <div className="mt-8 border-t border-zinc-100 pt-8 dark:border-zinc-800">
-            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              Upload for{" "}
-              <span className="text-brand dark:text-brand-soft">
-                {groups.find((g) => g.id === activeId)?.name ?? "this section"}
-              </span>
-            </h3>
-            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              Slides or readings for this section only.
-            </p>
-            <div className="mt-6">
-              <CourseUploadForm
-                courseId={courseId}
-                examGroupId={activeId}
-                isSelfStudy={isSelfStudy}
-                defaultOutputLanguage={defaultOutputLanguage}
-              />
-            </div>
-          </div>
-        ) : null}
       </div>
 
       {materialsForActive.length > 0 && (

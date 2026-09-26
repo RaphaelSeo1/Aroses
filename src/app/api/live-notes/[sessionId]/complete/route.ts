@@ -1,33 +1,15 @@
 import { NextResponse } from "next/server";
 import { recordVoiceSeconds } from "@/lib/billing/voice-usage";
-import {
-  buildLiveNotesStudyContext,
-  extractLiveNotesEmphasis,
-} from "@/lib/live-notes/notes-emphasis";
-import {
-  liveNotesToPlainText,
-  liveNotesToSourceMarkdown,
-} from "@/lib/live-notes/notes-review";
-import { packLiveLectureIngestBlob } from "@/lib/live-notes/pack-ingest";
+import { liveNotesToPlainText } from "@/lib/live-notes/notes-review";
 import { runLiveNotesWrapUp } from "@/lib/live-notes/run-notes-wrap-up";
 import { loadCanonicalLiveNoteSources } from "@/lib/live-notes/source-bundle";
 import {
-  formatDeckForIngest,
   formatDeckForWrapUp,
   loadSessionDeckPages,
 } from "@/lib/live-notes/slide-pages";
-import { supersedeIngestJob } from "@/lib/notes/create-ingest-job-from-text";
-import { relinkNoteFocusQuestionsForExistingMaterial } from "@/lib/notes/attach-focus-questions-to-course";
-import {
-  ingestJobRowToRetryView,
-  shouldReuseExistingIngestJob,
-} from "@/lib/notes/ingest-job-retry";
 import { report } from "@/lib/report-error";
 import { loadNoteInstruction } from "@/lib/load-note-instruction";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
-import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
-import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export const runtime = "nodejs";
@@ -46,16 +28,12 @@ function formatTimestamp(ms: number): string {
 /**
  * POST /api/live-notes/[sessionId]/complete
  *
- * Wrap-up handoff: compose generated notes (slide-folded content included),
- * the speech transcript, and uploaded session material (deck pages, on-screen
- * extracts, optional chat handout) into one ingest blob, upload as `.txt`,
- * then insert a `pdf_ingest_jobs` row parked at `reviewing_transcript`.
+ * Finish a course-attached lecture: wrap up the notes from the transcript,
+ * slides, and on-screen extracts, meter remaining voice time, and mark the
+ * session completed. Does not start a course build.
  *
  * Optional JSON body: `{ attachedPdfText?, attachedPdfName? }` — chat-attached
  * handout still sitting in the client's sessionStorage.
- *
- * Idempotent when the existing ingest job is still healthy. Failed or stale
- * jobs are replaced so the student can retry while notes still exist.
  */
 export async function POST(request: Request, ctx: Params) {
   const { sessionId } = await ctx.params;
@@ -106,47 +84,13 @@ export async function POST(request: Request, ctx: Params) {
     return NextResponse.json(
       {
         error:
-          "This recording belongs to a standalone note. Use Stop recording instead of building a course here.",
+          "This recording belongs to a standalone note. Use Stop recording.",
       },
       { status: 409 }
     );
   }
 
   const courseId = session.course_id as string;
-
-  let replaceJobId: string | null = null;
-  if (typeof session.ingest_job_id === "string" && session.ingest_job_id) {
-    const { data: existingJob } = await supabase
-      .from("pdf_ingest_jobs")
-      .select("status, updated_at, ingest_phase, ingest_epoch, material_id")
-      .eq("id", session.ingest_job_id)
-      .maybeSingle();
-    const view = ingestJobRowToRetryView(existingJob);
-    if (shouldReuseExistingIngestJob(view)) {
-      const materialId =
-        typeof (existingJob as { material_id?: unknown } | null)?.material_id ===
-        "string"
-          ? ((existingJob as { material_id: string }).material_id)
-          : null;
-      if (view?.status === "complete" && materialId) {
-        try {
-          await relinkNoteFocusQuestionsForExistingMaterial(supabase, {
-            userId: user.id,
-            materialId,
-            jobId: session.ingest_job_id,
-            mergeIntoQuiz: true,
-          });
-        } catch (e) {
-          console.error("[live-notes/complete] focus relink", e);
-        }
-      }
-      return NextResponse.json({
-        jobId: session.ingest_job_id,
-        redirect: `/dashboard/courses/${courseId}/study/build?pdfJobs=${session.ingest_job_id}`,
-      });
-    }
-    replaceJobId = session.ingest_job_id;
-  }
 
   // ── Compose the transcript ────────────────────────────────────────────────
   const { data: segments, error: segErr } = await supabase
@@ -208,7 +152,6 @@ export async function POST(request: Request, ctx: Params) {
 
   const deckPages = await loadSessionDeckPages(supabase, sessionId);
   const deckForWrapUp = formatDeckForWrapUp(deckPages);
-  const deckForIngest = formatDeckForIngest(deckPages);
   const canonicalSources = await loadCanonicalLiveNoteSources(
     supabase,
     sessionId
@@ -248,87 +191,6 @@ export async function POST(request: Request, ctx: Params) {
     "live_lecture_sessions",
     { id: sessionId, user_id: user.id }
   );
-
-  // Any authoritative source combination may drive generation. A deck-only
-  // or uploaded-material-only workflow must not be blocked for lacking audio.
-  const nonTranscriptSourceChars =
-    (canonicalSources.deck?.length ?? 0) +
-    (canonicalSources.screen?.length ?? 0) +
-    (canonicalSources.materials ?? []).reduce(
-      (sum, material) => sum + material.text.length,
-      0
-    );
-  if (body.trim().length < 80 && nonTranscriptSourceChars < 80) {
-    return NextResponse.json(
-      {
-        error:
-          "Not enough source material was captured to build a course yet. Add slides, a document, or more lecture audio and try again.",
-      },
-      { status: 400 }
-    );
-  }
-
-  const admin = createAdminClient();
-  if (!admin) {
-    return NextResponse.json(
-      {
-        error:
-          "Server is not configured for storage. Set SUPABASE_SERVICE_ROLE_KEY on the host, then redeploy.",
-      },
-      { status: 500 }
-    );
-  }
-
-  // ── Resolve the exam group (job column is NOT NULL) ─────────────────────
-  let examGroupId =
-    typeof session.exam_group_id === "string" ? session.exam_group_id : null;
-  if (!examGroupId) {
-    const { data: firstGroup } = await supabase
-      .from("exam_groups")
-      .select("id")
-      .eq("course_id", courseId)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    examGroupId = firstGroup?.id ?? null;
-  }
-  if (!examGroupId) {
-    const { data: created } = await supabase
-      .from("exam_groups")
-      .insert({
-        course_id: courseId,
-        user_id: user.id,
-        name: "My materials",
-        sort_order: 0,
-      })
-      .select("id")
-      .maybeSingle();
-    examGroupId = created?.id ?? null;
-  }
-  if (!examGroupId) {
-    return NextResponse.json(
-      { error: "Could not find a section for this course." },
-      { status: 500 }
-    );
-  }
-
-  // ── Course output language (same source the upload form uses) ───────────
-  const { data: courseRow } = await supabase
-    .from("courses")
-    .select("output_language")
-    .eq("id", courseId)
-    .maybeSingle();
-  const outputLanguage =
-    typeof courseRow?.output_language === "string" &&
-    courseRow.output_language.trim()
-      ? courseRow.output_language.trim()
-      : null;
-
-  const { count: existingMaterialCount } = await supabase
-    .from("study_materials")
-    .select("id", { count: "exact", head: true })
-    .eq("exam_group_id", examGroupId);
 
   // ── Wrap-up: canonical source synthesis + lecture summary ───────────────
   // Rebuild the editable AI draft from all sources, then generate a grounded
@@ -374,127 +236,6 @@ export async function POST(request: Request, ctx: Params) {
     });
   }
 
-  // ── Ingest source: notes + transcript + slides (screen/handout extra) ──
-  // Fair-share packing so no source class is dropped. Student lines still
-  // go to study_context for extra weight, plus the three-source instructions.
-  const notesSource =
-    liveNotesToSourceMarkdown(notesJson) ||
-    (typeof session.notes_text === "string" ? session.notes_text.trim() : "");
-  const handoutContent = (canonicalSources.materials ?? [])
-    .map((material) => `### ${material.name}\n${material.text}`)
-    .join("\n\n")
-    .slice(0, 48_000);
-  const transcript = packLiveLectureIngestBlob({
-    title,
-    notesMarkdown: notesSource,
-    transcript: body,
-    screenContent,
-    deckContent: deckForIngest,
-    handoutContent,
-  });
-
-  const emphasis = extractLiveNotesEmphasis(notesJson);
-  const studyContext = buildLiveNotesStudyContext({
-    emphasis,
-    lectureTitle: title,
-    liveLectureSources: true,
-  });
-
-  // ── Upload the composed source as the job's storage object ──────────────
-  // `{userId}/{uuid}.txt` matches the ingest path contract, so retry /
-  // failure-cleanup paths that download or remove the object work unchanged.
-  const storagePath = `${user.id}/${crypto.randomUUID()}.txt`;
-  const { error: uploadErr } = await admin.storage
-    .from(STUDY_PDF_INGEST_BUCKET)
-    .upload(storagePath, new Blob([transcript], { type: "text/plain" }), {
-      contentType: "text/plain",
-      upsert: false,
-    });
-  if (uploadErr) {
-    console.error("[live-notes/complete] transcript upload", sessionId, uploadErr);
-    void report("live-notes.transcript_upload_failed", uploadErr, {
-      userId: user.id,
-      detail: { sessionId },
-    });
-    return NextResponse.json(
-      { error: "Could not save the transcript file." },
-      { status: 500 }
-    );
-  }
-
-  // ── Insert the job parked at reviewing_transcript ────────────────────────
-  // Same recoverable state audio uploads reach after Whisper: the reaper
-  // leaves it alone, and confirm-transcript drives the unmodified pipeline.
-  const jobInsert: Record<string, unknown> = {
-    user_id: user.id,
-    course_id: courseId,
-    exam_group_id: examGroupId,
-    storage_path: storagePath,
-    original_file_name: `${title}.txt`,
-    status: "running",
-    ingest_phase: "reviewing_transcript",
-    ingest_transcript: transcript,
-    source_format: "text",
-    material_sort_order: existingMaterialCount ?? 0,
-    ...(outputLanguage ? { output_language: outputLanguage } : {}),
-    ...(studyContext ? { study_context: studyContext } : {}),
-  };
-
-  let { data: jobRow, error: jobErr } = await admin
-    .from("pdf_ingest_jobs")
-    .insert(jobInsert as never)
-    .select("id")
-    .single();
-
-  // Older databases may lack the optional context columns — retry without.
-  if (
-    jobErr &&
-    isMissingDbColumnError(
-      jobErr,
-      "study_context",
-      "material_sort_order",
-      "output_language"
-    )
-  ) {
-    const minimal = { ...jobInsert };
-    delete minimal.study_context;
-    delete minimal.material_sort_order;
-    delete minimal.output_language;
-    ({ data: jobRow, error: jobErr } = await admin
-      .from("pdf_ingest_jobs")
-      .insert(minimal as never)
-      .select("id")
-      .single());
-  }
-
-  if (jobErr || !jobRow) {
-    console.error("[live-notes/complete] job insert", sessionId, jobErr);
-    await admin.storage
-      .from(STUDY_PDF_INGEST_BUCKET)
-      .remove([storagePath])
-      .catch(() => {});
-    void report("live-notes.job_insert_failed", jobErr ?? "no row", {
-      userId: user.id,
-      detail: { sessionId },
-    });
-    const migrationHint = isMissingDbColumnError(
-      jobErr,
-      "ingest_phase",
-      "ingest_transcript",
-      "source_format",
-      "material_sort_order",
-      "output_language"
-    )
-      ? " Apply migrations 027, 039, and 040 in Supabase, then try again."
-      : "";
-    return NextResponse.json(
-      { error: `Could not start the course build.${migrationHint}` },
-      { status: 500 }
-    );
-  }
-
-  const jobId = jobRow.id as string;
-
   // ── Meter the un-metered tail of Deepgram seconds ────────────────────────
   const durationSeconds =
     typeof session.duration_seconds === "number" ? session.duration_seconds : 0;
@@ -505,32 +246,28 @@ export async function POST(request: Request, ctx: Params) {
     await recordVoiceSeconds(user.id, unmetered);
   }
 
-  // ── Close out the session ────────────────────────────────────────────────
   const { error: sessionErr } = await supabase
     .from("live_lecture_sessions")
     .update({
       status: "completed",
       ended_at: new Date().toISOString(),
-      ingest_job_id: jobId,
       metered_seconds: Math.max(durationSeconds, meteredSeconds),
       updated_at: new Date().toISOString(),
     })
     .eq("id", sessionId)
     .eq("user_id", user.id);
   if (sessionErr) {
-    // Job exists and is recoverable via the build page; just surface the gap.
     void report("live-notes.session_close_failed", sessionErr, {
       userId: user.id,
-      detail: { sessionId, jobId },
+      detail: { sessionId },
     });
-  }
-
-  if (replaceJobId && replaceJobId !== jobId) {
-    await supersedeIngestJob(replaceJobId);
+    return NextResponse.json(
+      { error: "Could not finish this lecture." },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json({
-    jobId,
-    redirect: `/dashboard/courses/${courseId}/study/build?pdfJobs=${jobId}&section=${examGroupId}`,
+    redirect: `/dashboard/courses/${courseId}`,
   });
 }

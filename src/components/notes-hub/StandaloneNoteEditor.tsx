@@ -3,14 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { confirmDialog, promptDialog } from "@/components/AppDialogs";
 import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
 import { NotesDocView } from "@/components/notes-hub/NotesDocView";
 
-/**
- * Standalone note editor with optional convert-to-course. Notes stay as notes
- * until the user explicitly starts a build.
- */
+/** Standalone note editor. Notes stay as notes. */
 export function StandaloneNoteEditor({
   noteId,
   initialTitle,
@@ -18,8 +14,6 @@ export function StandaloneNoteEditor({
   initialUpdatedAt = null,
   initialActiveSessionId = null,
   lectureSessionId = null,
-  courseId,
-  ingestJobId,
 }: {
   noteId: string;
   initialTitle: string;
@@ -28,8 +22,6 @@ export function StandaloneNoteEditor({
   initialActiveSessionId?: string | null;
   /** Latest live lecture session for this note — enables Lecture recap generate. */
   lectureSessionId?: string | null;
-  courseId: string | null;
-  ingestJobId: string | null;
 }) {
   const router = useRouter();
   const [title, setTitle] = useState(initialTitle);
@@ -37,7 +29,6 @@ export function StandaloneNoteEditor({
   titleRef.current = title;
   const titleDirtyRef = useRef(false);
   const titleSaveTimerRef = useRef<number | null>(null);
-  const [building, setBuilding] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(
@@ -167,49 +158,6 @@ export function StandaloneNoteEditor({
     [flushTitleKeepalive, saveTitle, router]
   );
 
-  const handleBuildCourse = async () => {
-    if (building) return;
-    setError(null);
-
-    const courseTitle = await promptDialog({
-      title: "Build a course from these notes",
-      label: "Course title",
-      placeholder: title,
-      defaultValue: title,
-    });
-    if (!courseTitle) return;
-
-    const ok = await confirmDialog({
-      title: ingestJobId ? "Retry course build?" : "Start course build?",
-      body:
-        "Your notes will become the source material for a new course. You can review and edit the text before generation starts. The note itself stays here either way.",
-      confirmLabel: ingestJobId ? "Retry build" : "Build course",
-    });
-    if (!ok) return;
-
-    setBuilding(true);
-    try {
-      const res = await fetch(`/api/notes/${noteId}/to-course`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ courseTitle }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        redirect?: string;
-        error?: string;
-      };
-      if (!res.ok || !data.redirect) {
-        setError(data.error || "Could not start the course build.");
-        setBuilding(false);
-        return;
-      }
-      router.push(data.redirect);
-    } catch {
-      setError("Could not start the course build. Check your connection.");
-      setBuilding(false);
-    }
-  };
-
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -252,26 +200,6 @@ export function StandaloneNoteEditor({
               {recording ? "Starting…" : "⏺ Record lecture"}
             </button>
           )}
-          {ingestJobId && courseId ? (
-            <Link
-              href={`/dashboard/courses/${courseId}/study/build?pdfJobs=${ingestJobId}`}
-              className="rounded-full border border-zinc-300 px-4 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            >
-              View course build
-            </Link>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => void handleBuildCourse()}
-            disabled={building}
-            className="rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:from-violet-700 hover:to-fuchsia-700 disabled:opacity-60"
-          >
-            {building
-              ? "Starting…"
-              : ingestJobId
-                ? "Retry course build"
-                : "Build course from notes"}
-          </button>
         </div>
       </div>
       {error ? (
@@ -284,8 +212,7 @@ export function StandaloneNoteEditor({
       ) : null}
       <p className="mb-4 text-xs text-zinc-500 dark:text-zinc-400">
         Record a lecture with tab, system, or mic audio — Rose transcribes and
-        writes notes live. Or type freely anytime; building a course copies
-        your notes into the course pipeline.
+        writes notes live. Or type freely anytime.
       </p>
       <NotesDocView
         notesEndpoint={`/api/notes/${noteId}`}

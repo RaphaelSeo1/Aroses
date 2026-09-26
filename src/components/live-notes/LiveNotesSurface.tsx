@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { confirmDialog, promptDialog } from "@/components/AppDialogs";
+import { confirmDialog } from "@/components/AppDialogs";
 import {
   NotesPanel,
   type NotesPanelHandle,
@@ -1484,7 +1484,7 @@ export function LiveNotesSurface({
       if (!res.ok || !data.redirect) {
         setError(
           data.error ||
-            "Could not start the course build. Your transcript and notes are saved to this session — use Resume on the course page to pick up where you left off."
+            "Could not finish this lecture. Your transcript and notes are saved on this session."
         );
         setFinishing(false);
         return;
@@ -1504,47 +1504,6 @@ export function LiveNotesSurface({
     sessionId,
     router,
   ]);
-
-  const handleBuildCourseFromNotes = useCallback(async () => {
-    if (!isStandalone || !session.userNoteId || finishing) return;
-    setError(null);
-    const courseTitle = await promptDialog({
-      title: "Build a course from these notes",
-      label: "Course title",
-      placeholder: liveTitleRef.current || "Notes course",
-      defaultValue: liveTitleRef.current || "",
-    });
-    if (!courseTitle) return;
-    const ok = await confirmDialog({
-      title: "Start course build?",
-      body:
-        "Your notes will become the source material for a new course. You can review the text before generation starts. The note itself stays here.",
-      confirmLabel: "Build course",
-    });
-    if (!ok) return;
-    setFinishing(true);
-    try {
-      await flushNow();
-      const res = await fetch(`/api/notes/${session.userNoteId}/to-course`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ courseTitle }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        redirect?: string;
-        error?: string;
-      };
-      if (!res.ok || !data.redirect) {
-        setError(data.error || "Could not start the course build.");
-        setFinishing(false);
-        return;
-      }
-      router.push(data.redirect);
-    } catch {
-      setError("Could not start the course build. Check your connection.");
-      setFinishing(false);
-    }
-  }, [isStandalone, session.userNoteId, finishing, flushNow, router]);
 
   const handleDelete = useCallback(async () => {
     if (deleting || finishing) return;
@@ -1587,15 +1546,7 @@ export function LiveNotesSurface({
     allNotesHref,
   ]);
 
-  const alreadyCompleted =
-    !isStandalone &&
-    session.status === "completed" &&
-    Boolean(session.ingestJobId) &&
-    session.ingestJobReusable !== false;
-  const canRetryCourseBuild =
-    !isStandalone &&
-    Boolean(session.ingestJobId) &&
-    session.ingestJobReusable === false;
+  const alreadyCompleted = !isStandalone && session.status === "completed";
   const isLive = status === "recording" || status === "reconnecting";
   const liveAudioCapture = hasLiveAudioCapture(mediaStream);
   const canResumeLivePaused =
@@ -1815,7 +1766,6 @@ export function LiveNotesSurface({
           ) : null}
 
           {alreadyCompleted ||
-          canRetryCourseBuild ||
           (!isStandalone && (started || segments.length > 0)) ||
           (isStandalone && isLive) ? (
             confirmFinish ? (
@@ -1827,14 +1777,10 @@ export function LiveNotesSurface({
                   className="rounded-full bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
                   {finishing
-                    ? isStandalone
-                      ? "Saving…"
-                      : "Building…"
+                    ? "Saving…"
                     : isStandalone
                       ? "Confirm — stop & stay"
-                      : canRetryCourseBuild
-                        ? "Confirm — retry course"
-                        : "Confirm — build course"}
+                      : "Confirm — finish"}
                 </button>
                 <button
                   type="button"
@@ -1850,9 +1796,7 @@ export function LiveNotesSurface({
                 type="button"
                 onClick={() => {
                   if (alreadyCompleted && session.courseId) {
-                    router.push(
-                      `/dashboard/courses/${session.courseId}/study/build?pdfJobs=${session.ingestJobId}`
-                    );
+                    router.push(`/dashboard/courses/${session.courseId}`);
                   } else {
                     setConfirmFinish(true);
                   }
@@ -1861,31 +1805,14 @@ export function LiveNotesSurface({
                 className="rounded-full bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
               >
                 {alreadyCompleted
-                  ? "View course build"
-                  : canRetryCourseBuild
-                    ? finishing
-                      ? "Retrying…"
-                      : "Retry course build"
+                  ? "Open course"
                   : finishing
-                    ? isStandalone
-                      ? "Saving…"
-                      : "Building…"
+                    ? "Saving…"
                     : isStandalone
                       ? "Stop recording"
-                      : "Finish & build course"}
+                      : "Finish lecture"}
               </button>
             )
-          ) : null}
-
-          {isStandalone && session.userNoteId ? (
-            <button
-              type="button"
-              onClick={() => void handleBuildCourseFromNotes()}
-              disabled={finishing || deleting}
-              className="rounded-full border border-violet-200 bg-violet-50 px-4 py-1.5 text-xs font-semibold text-violet-800 hover:bg-violet-100 disabled:opacity-60 dark:border-violet-900/50 dark:bg-violet-950/40 dark:text-violet-200"
-            >
-              {finishing ? "Starting…" : "Build course from notes"}
-            </button>
           ) : null}
 
           <button

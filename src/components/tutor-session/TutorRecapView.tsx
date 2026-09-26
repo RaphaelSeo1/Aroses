@@ -74,8 +74,6 @@ export function TutorRecapView({ sessionId, initial }: Props) {
   const [shareToggling, setShareToggling] = useState(false);
 
   // To-course CTA state.
-  const [converting, setConverting] = useState(false);
-  const [convertError, setConvertError] = useState<string | null>(null);
 
   // On mount, pull the current share state so the toggle reflects
   // reality. (We don't include it in the initial server fetch to
@@ -291,36 +289,6 @@ export function TutorRecapView({ sessionId, initial }: Props) {
     window.print();
   }, [markdown]);
 
-  // To course
-  const turnIntoCourse = useCallback(async () => {
-    if (converting) return;
-    setConverting(true);
-    setConvertError(null);
-    try {
-      const res = await fetch(
-        `/api/tutor-session/${sessionId}/to-course`,
-        { method: "POST" }
-      );
-      const body = (await res.json().catch(() => ({}))) as {
-        courseId?: string;
-        materialId?: string;
-        error?: string;
-      };
-      if (!res.ok || !body.courseId) {
-        throw new Error(body.error ?? `Convert failed (${res.status})`);
-      }
-      router.push(`/dashboard?course=${body.courseId}`);
-    } catch (e) {
-      console.error("[TutorRecapView turnIntoCourse]", e);
-      setConvertError(
-        e instanceof Error
-          ? e.message
-          : "Couldn't turn this into a course. Try again."
-      );
-      setConverting(false);
-    }
-  }, [converting, router, sessionId]);
-
   const deleteSession = useCallback(async () => {
     const ok = await confirmDialog({
       title: "Delete this session?",
@@ -432,15 +400,6 @@ export function TutorRecapView({ sessionId, initial }: Props) {
                     {linkCopyState === "copied" ? "Link copied!" : "Copy link"}
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={turnIntoCourse}
-                  disabled={converting}
-                  title="Build a structured course from this session"
-                  className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-800 transition hover:bg-rose-100 disabled:opacity-50"
-                >
-                  {converting ? "Building course…" : "Turn into course"}
-                </button>
               </>
             ) : null}
             {!editing && (status === "failed" || status === "ready") ? (
@@ -484,11 +443,6 @@ export function TutorRecapView({ sessionId, initial }: Props) {
           </div>
         </div>
 
-        {convertError ? (
-          <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-800 print:hidden">
-            {convertError}
-          </div>
-        ) : null}
         {saveError ? (
           <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-800 print:hidden">
             {saveError}
