@@ -5,17 +5,9 @@ import { buildLivePreviewCourse, tryOutlinePreviewFromStreamTail } from "@/lib/p
 import { enrichModulesWithPdfAssets } from "@/lib/pdf-ingest/enrich-modules-with-assets";
 import {
   countIngestModulesBuilt,
-  runPdfIngestContinueAfterTranscript,
   runPdfIngestExpandOne,
   runPdfIngestJob,
 } from "@/lib/pdf-ingest-runner";
-import {
-  ingestJobRowToRetryView,
-  isTextIngestJob,
-  shouldMarkIngestJobFailedAsStale,
-  STALE_PENDING_MS,
-  STALE_RUNNING_MS,
-} from "@/lib/notes/ingest-job-retry";
 import { parseCourseAssetManifest } from "@/lib/study-ingest/course-assets";
 import { parseIngestPageArtifacts } from "@/lib/study-ingest/inject-pdf-tables-into-module";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -40,8 +32,9 @@ type Params = { params: Promise<{ jobId: string }> };
  *
  * Default **express** jobs should finish in minutes; stale budget still allows slow networks.
  * Use longer client/server budgets when `COURSE_BUILD_PROFILE=full` or similar.
- * Transcript review is a user pause and is never marked stale.
  */
+const STALE_PENDING_MS = 15 * 60 * 1000 + 30_000;
+const STALE_RUNNING_MS = 18 * 60 * 1000 + 30_000;
 
 export async function GET(_request: Request, ctx: Params) {
   const { jobId } = await ctx.params;
@@ -95,21 +88,22 @@ export async function GET(_request: Request, ctx: Params) {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
-  const jobView = ingestJobRowToRetryView(row);
   const updatedAt =
     typeof row.updated_at === "string" ? Date.parse(row.updated_at) : NaN;
   const staleBudgetMs =
     row.status === "pending" ? STALE_PENDING_MS : STALE_RUNNING_MS;
-  const stale = jobView ? shouldMarkIngestJobFailedAsStale(jobView) : false;
+  const stale =
+    (row.status === "pending" || row.status === "running") &&
+    Number.isFinite(updatedAt) &&
+    Date.now() - updatedAt > staleBudgetMs;
 
   if (stale) {
     const staleName =
       typeof row.original_file_name === "string" && row.original_file_name.trim()
         ? row.original_file_name.trim()
         : undefined;
-    const staleMessage = jobView && isTextIngestJob(jobView)
-      ? "This build stopped making progress for a long time (the server may have hit a time limit). Your notes are still saved — use Retry build to continue."
-      : "This build stopped making progress for a long time (the server may have hit a time limit or lost the connection). Try uploading the PDF again on a stable network. Hard-refresh the page first so your browser runs the latest upload code. Confirm migrations 020–028 are applied in Supabase and the service role key is set on the host.";
+    const staleMessage =
+      "This build stopped making progress for a long time (the server may have hit a time limit or lost the connection). Try uploading the PDF again on a stable network. Hard-refresh the page first so your browser runs the latest upload code. Confirm migrations 020–028 are applied in Supabase and the service role key is set on the host.";
 
     // Persist the failure instead of only synthesizing it in the response.
     // Previously the UI said "failed" while the DB row stayed running, so the
@@ -382,28 +376,6 @@ export async function GET(_request: Request, ctx: Params) {
     });
   }
 
-  // Notes / live-lecture confirm parks at digesting_full_pdf. If `after()` on
-  // confirm-transcript dies, expandOne returns "not ready" and the UI sits
-  // on "Preparing your notes". Resume from the stored transcript.
-  const DIGEST_STALL_MS = 60_000;
-  const isStuckDigesting =
-    phaseForModuleCheck === "digesting_full_pdf" &&
-    row.status === "running" &&
-    outlineForModuleCheck == null &&
-    Number.isFinite(updatedAt) &&
-    Date.now() - updatedAt > DIGEST_STALL_MS &&
-    currentEpoch < MAX_AUTO_RECOVERIES;
-  if (isStuckDigesting) {
-    console.warn("[jobs/get] kicking stalled digesting_full_pdf job", jobId);
-    after(() => {
-      void runPdfIngestContinueAfterTranscript(jobId, {
-        driveModules: true,
-      }).catch((e) =>
-        console.error("[jobs/get] kick after digest stall", jobId, e)
-      );
-    });
-  }
-
   const outline = row.ingest_outline as { modules?: unknown[] } | null;
   const previewOutlineRaw = (row as { ingest_preview_outline?: unknown })
     .ingest_preview_outline;
@@ -455,12 +427,6 @@ export async function GET(_request: Request, ctx: Params) {
   const ingestTranscript =
     typeof (row as { ingest_transcript?: unknown }).ingest_transcript === "string"
       ? (row as { ingest_transcript: string }).ingest_transcript
-      : undefined;
-
-  const sourceFormatRaw = (row as { source_format?: unknown }).source_format;
-  const sourceFormat =
-    sourceFormatRaw === "text" || sourceFormatRaw === "pdf"
-      ? sourceFormatRaw
       : undefined;
 
   let previewCourse: CoursePayload | null = null;
@@ -539,9 +505,7 @@ export async function GET(_request: Request, ctx: Params) {
     originalFileName,
     streamPreview,
     ingestPhase,
-    sourceFormat,
-    ingestTranscript:
-      ingestPhase === "reviewing_transcript" ? ingestTranscript : undefined,
+    ingestTranscript,
     previewCourse,
   });
 }

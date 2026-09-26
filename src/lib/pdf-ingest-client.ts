@@ -137,7 +137,12 @@ async function pollJobProgressWhileExpandRuns(
     applySnapshot(got.data);
   };
 
-  options.onProgress?.(formatLine(lastBuilt, ""));
+  options.onProgress?.(
+    formatLine(
+      lastBuilt,
+      lastBuilt === 0 ? " · generating first batch…" : ""
+    )
+  );
 
   let expandDone = false;
   void expandPromise.finally(() => {
@@ -150,7 +155,7 @@ async function pollJobProgressWhileExpandRuns(
     if (expandDone) break;
     await pollOnce();
     if (!expandDone) {
-      options.onProgress?.(formatLine(lastBuilt, ""));
+      options.onProgress?.(formatLine(lastBuilt, " · still working…"));
     }
   }
 
@@ -515,23 +520,6 @@ export async function pollPdfIngestJob(
       continue;
     }
 
-    if (ingestPhase === "digesting_full_pdf") {
-      onProgress?.({
-        line: "Preparing your notes and transcript for the course…",
-        bar: "indeterminate",
-      });
-      if (!signal?.aborted) {
-        void fetch("/api/process-pdf/expand", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jobId }),
-          signal,
-        }).catch(() => {});
-      }
-      await sleep(8_000);
-      continue;
-    }
-
     // Drive `POST /expand`:
     // built === total but job is still `running` (server saves all modules then finalizes;
     // if the client never got the completion response from the last module expand, or
@@ -622,20 +610,14 @@ export async function pollPdfIngestJob(
             ? ` · ${formatElapsedShort(Date.now() - startedMid)}`
             : "";
         // Keep the count monotonic across iterations (never regress the display).
-        const advanced = expJson.modulesBuilt > builtHighWater;
         builtHighWater = Math.max(builtHighWater, expJson.modulesBuilt);
         onProgress?.({
-          line: `Writing modules… · ${builtHighWater}/${expJson.modulesTotal} built${elapsedMid}`,
+          line: `Built ${builtHighWater}/${expJson.modulesTotal} modules${elapsedMid}. Continuing…`,
           bar: Math.min(
             100,
             (builtHighWater / expJson.modulesTotal) * 100
           ),
         });
-        // The server is already writing this job. An expand that did not
-        // finish a new module was only told the lock is taken — wait before
-        // asking again so the status line does not flip every second.
-        await sleep(advanced ? EXPAND_MODULE_GAP_MS : 2_000);
-        continue;
       }
       await sleep(EXPAND_MODULE_GAP_MS);
       continue;

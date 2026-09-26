@@ -58,16 +58,6 @@ import {
 import { ensurePdfVisualsAtFinalize } from "@/lib/pdf-ingest/ensure-pdf-visuals";
 import { report, addJobDegradedReason } from "@/lib/report-error";
 import { enterAiUsageContext } from "@/lib/billing/ai-usage";
-import {
-  finalizeUsageForJob,
-  lookupReservationIdForJob,
-  releaseUsageForJob,
-  reserveSourcePages,
-} from "@/lib/billing/course-cap";
-import { sourcePageCap } from "@/lib/billing/plans";
-import { resolveBillingPeriod } from "@/lib/billing/billing-period";
-import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
-import { getUserSubscription } from "@/lib/billing/subscription";
 import { enrichModulesWithPdfAssets } from "@/lib/pdf-ingest/enrich-modules-with-assets";
 import { placeAllPdfAssetsIntoModules } from "@/lib/pdf-ingest/place-course-assets";
 import {
@@ -88,14 +78,6 @@ import type {
   CourseStructurePlan,
 } from "@/lib/ai/course-payload";
 import type { CoursePayload } from "@/types/course";
-import {
-  persistNoteFocusQuestionLinks,
-  planNoteFocusQuestionsForJob,
-} from "@/lib/notes/attach-focus-questions-to-course";
-import {
-  mergeFocusQuestionsIntoModuleQuizzes,
-  type FocusQuestionMapping,
-} from "@/lib/notes/map-focus-questions-to-modules";
 import {
   assembleModuleSourcesFromPlan,
   generateCourseModuleFromMaterial,
@@ -127,7 +109,6 @@ import { findSiblingCanonicalMaterial } from "@/lib/study-material-canonical";
 import { lessonMarkdownHasImages } from "@/lib/lesson-content-layout";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isMissingDbColumnError } from "@/lib/supabase/schema-compat";
-import { PDF_PROCESS_MAX_DURATION_SEC } from "@/lib/pdf-route-duration";
 import { STUDY_PDF_INGEST_BUCKET } from "@/lib/study-pdf-ingest";
 import { logActivity, pruneActivityEvents } from "@/lib/activity-log";
 import {
@@ -243,10 +224,9 @@ async function withAnthropicRateLimitRetries<T>(
   jobId: string,
   phase: string,
   fn: () => Promise<T>,
-  options?: { maxAttempts?: number; deadlineAt?: number }
+  options?: { maxAttempts?: number }
 ): Promise<T> {
   const maxAttempts = options?.maxAttempts ?? 8;
-  const deadlineAt = options?.deadlineAt ?? null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       return await fn();
@@ -255,22 +235,6 @@ async function withAnthropicRateLimitRetries<T>(
         throw e;
       }
       const delayMs = backoffMsAfterRateLimit(e, attempt);
-      // Never start a backoff we cannot finish. Sleeping past the serverless
-      // wall clock gets the whole invocation killed mid-retry, so every module
-      // that HAD completed but was not yet persisted is paid for and thrown
-      // away, and the client restarts the same batch from scratch. Giving up
-      // early instead lets the caller persist its progress and return cleanly;
-      // the next invocation resumes from the saved prefix.
-      if (deadlineAt != null && Date.now() + delayMs > deadlineAt) {
-        console.warn("[pdf-ingest] out of time budget, not retrying", {
-          jobId,
-          phase,
-          attempt,
-          delayMs,
-          msLeft: deadlineAt - Date.now(),
-        });
-        throw e;
-      }
       console.warn("[pdf-ingest] rate limit, backing off", {
         jobId,
         phase,
@@ -281,109 +245,6 @@ async function withAnthropicRateLimitRetries<T>(
     }
   }
   throw new Error("[pdf-ingest] exhausted retries (unreachable)");
-}
-
-/**
- * Exclusive lease for module expansion (migration 114).
- *
- * Without this, the browser poll loop, the per-minute cron reaper and the
- * GET-route stall re-kick could all run `runPdfIngestExpandOne` for one job
- * concurrently. Each read the same contiguous prefix, picked the same batch
- * indices, and generated the same modules — every duplicate set billed, all but
- * one thrown away. Measured: 830 Sonnet calls on a 7-module job.
- *
- * The compare-and-set runs as a single SQL statement (RPC) rather than a
- * PostgREST filter, so there is no client-side filter string that could fail to
- * parse and silently let two workers through.
- *
- * Time-bounded rather than released-on-exit so a killed lambda cannot wedge the
- * job: the lease expires on its own and the reaper resumes.
- */
-const EXPAND_LEASE_SECONDS = 240;
-
-/**
- * Hard ceiling on Claude calls for one ingest job, counted from the usage
- * ledger. This is the backstop: if the lease or the retry deadline is ever
- * defeated by a bug, a build still cannot drain the account — it fails loudly
- * after this many calls instead. A healthy build uses well under 30.
- */
-function maxClaudeCallsPerJob(): number {
-  const raw = process.env.PDF_INGEST_MAX_CALLS_PER_JOB?.trim();
-  const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  if (Number.isFinite(n) && n > 0) return n;
-  return 90;
-}
-
-/**
- * True when this job has already burned its call budget. Counts rows in
- * `ai_usage_events` (migration 078), which every Claude wrapper writes to.
- * Fails OPEN on a missing table/error — the lease is the primary protection and
- * we never want telemetry trouble to block a legitimate build.
- */
-async function jobExceededCallBudget(
-  admin: NonNullable<ReturnType<typeof createAdminClient>>,
-  jobId: string
-): Promise<{ exceeded: boolean; calls: number; limit: number }> {
-  const limit = maxClaudeCallsPerJob();
-  try {
-    const { count, error } = await admin
-      .from("ai_usage_events")
-      .select("id", { count: "exact", head: true })
-      .eq("job_id", jobId);
-    if (error) return { exceeded: false, calls: 0, limit };
-    const calls = count ?? 0;
-    return { exceeded: calls >= limit, calls, limit };
-  } catch {
-    return { exceeded: false, calls: 0, limit };
-  }
-}
-
-async function claimExpandLease(
-  admin: NonNullable<ReturnType<typeof createAdminClient>>,
-  jobId: string
-): Promise<boolean> {
-  const { data, error } = await admin.rpc("claim_pdf_ingest_expand_lease", {
-    p_job_id: jobId,
-    p_lease_seconds: EXPAND_LEASE_SECONDS,
-  });
-  if (error) {
-    console.error(
-      "[pdf-ingest] lease RPC unavailable — apply migration 114. Running WITHOUT " +
-        "the concurrency lease; the per-job call ceiling is the only guard.",
-      jobId,
-      error.message
-    );
-    return true;
-  }
-  return data === true;
-}
-
-async function releaseExpandLease(
-  admin: NonNullable<ReturnType<typeof createAdminClient>>,
-  jobId: string
-): Promise<void> {
-  await admin
-    .rpc("release_pdf_ingest_expand_lease", { p_job_id: jobId })
-    .then(
-      () => {},
-      () => {}
-    );
-}
-
-/** Extend a held lease so a slow but healthy batch is not stolen mid-flight. */
-async function renewExpandLease(
-  admin: NonNullable<ReturnType<typeof createAdminClient>>,
-  jobId: string
-): Promise<void> {
-  await admin
-    .rpc("renew_pdf_ingest_expand_lease", {
-      p_job_id: jobId,
-      p_lease_seconds: EXPAND_LEASE_SECONDS,
-    })
-    .then(
-      () => {},
-      () => {}
-    );
 }
 
 async function touchJobProgress(
@@ -452,7 +313,6 @@ async function failJob(
       updated_at: new Date().toISOString(),
     })
     .eq("id", jobId);
-  await releaseUsageForJob(jobId).catch(() => {});
   await removeIngestObject(admin, storagePath, options);
 }
 
@@ -514,36 +374,14 @@ function mapAiFailureToMessage(jobId: string, e: unknown): string {
     if (e.status === 404) {
       return "The configured AI model is not available (404). Update ANTHROPIC_COURSE_MODEL or redeploy — fast profile uses Claude Haiku 4.5.";
     }
-    if (e.status === 401 || e.status === 403) {
-      return "The Anthropic API key was rejected (auth error). Check ANTHROPIC_API_KEY and the account's billing status.";
-    }
     if (e.status === 529 || e.status === 503) {
       return "The AI service is temporarily overloaded. Try again in a few minutes.";
     }
     if (e.status === 429) {
       return "Too many AI requests right now. Wait a minute and retry this file.";
     }
-    if (e.status === 400 || e.status === 402) {
+    if (e.status === 400) {
       const body = (e.message ?? "").toLowerCase();
-      // Out of Anthropic credits. This arrives as a 400 whose body names the
-      // credit balance, so without this branch it fell through to the generic
-      // "network or model timeout" fallback — which sent us hunting timeouts
-      // when the real answer was an empty account.
-      if (
-        body.includes("credit balance") ||
-        body.includes("insufficient_quota") ||
-        body.includes("billing") ||
-        body.includes("payment required")
-      ) {
-        return "The Anthropic account is out of credits. Top up the balance in the Anthropic console, then retry this PDF.";
-      }
-      if (
-        body.includes("authentication") ||
-        body.includes("invalid x-api-key") ||
-        body.includes("api key")
-      ) {
-        return "The Anthropic API key is invalid or expired. Update ANTHROPIC_API_KEY and redeploy.";
-      }
       if (
         body.includes("too long") ||
         body.includes("maximum") ||
@@ -574,12 +412,7 @@ function mapAiFailureToMessage(jobId: string, e: unknown): string {
   if (msg.length > 0 && msg.length <= 200) {
     return msg;
   }
-  // Do not assert "timeout" for an error we could not classify — that framing
-  // sent us debugging the network when the account was simply out of credits.
-  if (msg.length > 0) {
-    return `AI processing failed: ${msg.slice(0, 180)}`;
-  }
-  return "AI processing failed for an unknown reason. Check the server logs and the Anthropic account status.";
+  return "AI processing failed (network or model timeout). Try again in a moment.";
 }
 
 type IndexedStoredModules = (CourseModule | null)[];
@@ -816,7 +649,6 @@ async function finalizePdfIngest(
     .eq("id", jobId)
     .maybeSingle();
   if (alreadyDone?.status === "complete" && alreadyDone?.material_id) {
-    await finalizeUsageForJob(jobId).catch(() => {});
     return { materialId: alreadyDone.material_id as string };
   }
 
@@ -1058,7 +890,7 @@ async function finalizePdfIngest(
     );
   }
 
-  let payload: CoursePayload = localizedMaterial
+  const payload: CoursePayload = localizedMaterial
     ? localizedMaterial.display
     : {
         title: outline.title,
@@ -1087,39 +919,6 @@ async function finalizePdfIngest(
       "Could not resolve course owner for this upload."
     );
     return null;
-  }
-
-  let importedFocusMappings: FocusQuestionMapping[] = [];
-  try {
-    const planned = await planNoteFocusQuestionsForJob(admin, {
-      userId: materialOwnerId,
-      jobId,
-      modules: payload.modules,
-    });
-    if (planned && planned.mappings.length > 0) {
-      importedFocusMappings = planned.mappings;
-      payload = { ...payload, modules: planned.modules };
-      if (localizedMaterial) {
-        const canonicalModules =
-          localizedMaterial.canonical === localizedMaterial.display
-            ? planned.modules
-            : mergeFocusQuestionsIntoModuleQuizzes(
-                localizedMaterial.canonical.modules,
-                planned.mappings
-              );
-        localizedMaterial = {
-          ...localizedMaterial,
-          display: payload,
-          canonical: {
-            ...localizedMaterial.canonical,
-            modules: canonicalModules,
-          },
-        };
-      }
-    }
-  } catch (e) {
-    await report("pdf-ingest.note_focus_import_failed", e, { jobId });
-    void addJobDegradedReason(admin, jobId, "note_focus_import_failed");
   }
 
   // Resolve this material's sidebar position so the section stays in UPLOAD
@@ -1416,8 +1215,6 @@ async function finalizePdfIngest(
       : null;
   }
 
-  await finalizeUsageForJob(jobId).catch(() => {});
-
   await logActivity(
     {
       userId: materialOwnerId,
@@ -1436,22 +1233,6 @@ async function finalizePdfIngest(
       detail: { materialId: row.id },
     });
     throw e;
-  }
-
-  if (importedFocusMappings.length > 0) {
-    try {
-      await persistNoteFocusQuestionLinks(admin, {
-        userId: materialOwnerId,
-        materialId: row.id,
-        mappings: importedFocusMappings,
-      });
-    } catch (e) {
-      await report("pdf-ingest.note_focus_attach_failed", e, {
-        jobId,
-        detail: { materialId: row.id },
-      });
-      void addJobDegradedReason(admin, jobId, "note_focus_attach_failed");
-    }
   }
 
   await removeIngestObject(admin, storagePath, {
@@ -1631,19 +1412,6 @@ export async function runPdfIngestExpandOne(
     (job as { ingest_source_images?: unknown }).ingest_source_images
   );
 
-  // Exclusive lease: if another invocation (client poll / cron reaper /
-  // stall re-kick) is already building this job, do nothing instead of
-  // regenerating the same modules with Sonnet and paying for both.
-  const gotLease = await claimExpandLease(admin, jobId);
-  if (!gotLease) {
-    console.info("[pdf-ingest] expand skipped — another worker holds the lease", {
-      jobId,
-      modulesBuilt: idx,
-      modulesTotal: n,
-    });
-    return { kind: "progress", modulesBuilt: idx, modulesTotal: n };
-  }
-
   if (prefix.length >= n) {
     const sourceIndex = await loadIngestSourceIndex(admin, jobId);
     const ingestAssetManifest = await loadIngestAssetManifest(admin, jobId);
@@ -1667,36 +1435,9 @@ export async function runPdfIngestExpandOne(
       }
     );
     if (!fin) {
-      await releaseExpandLease(admin, jobId);
       return { kind: "failed", message: "Could not save study material." };
     }
-    await releaseExpandLease(admin, jobId);
     return { kind: "complete", materialId: fin.materialId };
-  }
-
-  // Hard spend ceiling — checked only when there is module work left, so a
-  // job whose modules are all built can always finalize and save.
-  // Counted from the usage ledger across ALL invocations
-  // for this job, so it survives lambda restarts and catches any runaway the
-  // lease and the retry deadline fail to prevent. A healthy build is under 30.
-  const budget = await jobExceededCallBudget(admin, jobId);
-  if (budget.exceeded) {
-    console.error("[pdf-ingest] job exceeded Claude call budget — failing", {
-      jobId,
-      calls: budget.calls,
-      limit: budget.limit,
-    });
-    await failJobUnlessStale(
-      admin,
-      jobId,
-      storagePaths,
-      "This build used far more AI calls than expected and was stopped to protect your account. Please try again, or contact support if it keeps happening.",
-      expandEpoch
-    );
-    return {
-      kind: "failed",
-      message: "Build stopped after exceeding its AI call budget.",
-    };
   }
 
   await touchJobProgress(admin, jobId);
@@ -1781,10 +1522,6 @@ export async function runPdfIngestExpandOne(
   const batchCount = pdfIngestModuleBatchSize(n - idx, modulePeerCount);
   const batchIndices = Array.from({ length: batchCount }, (_, offset) => idx + offset);
   const expandBatchStartedAt = Date.now();
-  // Leave headroom under the route's maxDuration so the persist + final merge
-  // below still run after the last module resolves.
-  const expandDeadlineAt =
-    expandBatchStartedAt + PDF_PROCESS_MAX_DURATION_SEC * 1000 - 45_000;
   console.info("[pdf-ingest] expand module batch", {
     jobId,
     batchCount,
@@ -1794,9 +1531,6 @@ export async function runPdfIngestExpandOne(
   });
   const moduleHeartbeat = setInterval(() => {
     void touchJobProgress(admin, jobId);
-    // Keep the lease alive while this batch is genuinely working, so a slow
-    // but healthy batch is not stolen by the reaper mid-flight.
-    void renewExpandLease(admin, jobId);
   }, 22_000);
 
   // Persist each module at its outline index as soon as it resolves (even when
@@ -1926,15 +1660,14 @@ export async function runPdfIngestExpandOne(
               moduleGenOptions
             );
           },
-          // Bounded by the invocation's real time budget, not by an attempt
-          // count alone. The old comment here assumed ~126 s of worst-case
-          // backoff, but `backoffMsAfterRateLimit` returns 28/34/40/46/52 s for
-          // token-per-minute 429s — 200 s of sleeping before counting
-          // generation time. Six attempts could never fit in 300 s, so the
-          // lambda was killed mid-retry and the batch restarted from zero.
-          // Three attempts plus a hard deadline returns cleanly instead, and
-          // the next invocation resumes from the persisted prefix.
-          { maxAttempts: 3, deadlineAt: expandDeadlineAt }
+          // 6 attempts × 90 s exp-backoff cap = ~126 s worst-case retry +
+          // ~30 s generation = ~156 s. Comfortably under Vercel's 300 s
+          // maxDuration so /expand always returns cleanly to the client
+          // (which has its own retry loop via polling). 16 here meant the
+          // function would get force-killed mid-retry, the client would
+          // reconnect, and the same module would be re-attempted from zero
+          // — the UI looked stuck at "Writing module N of M" for minutes.
+          { maxAttempts: 6 }
         ).then((mod) => {
           const planned = moduleSources?.[moduleIndex];
           let injected = mod;
@@ -2007,9 +1740,6 @@ export async function runPdfIngestExpandOne(
     return { kind: "failed", message };
   } finally {
     clearInterval(moduleHeartbeat);
-    // Hand the job back so the next batch can start immediately. A crashed
-    // invocation never reaches here — its lease simply expires.
-    await releaseExpandLease(admin, jobId);
   }
 
   // Final batch write: merge once more against the live row so any module a
@@ -2105,10 +1835,8 @@ export async function runPdfIngestExpandOne(
       }
     );
     if (!fin) {
-      await releaseExpandLease(admin, jobId);
       return { kind: "failed", message: "Could not save study material." };
     }
-    await releaseExpandLease(admin, jobId);
     return { kind: "complete", materialId: fin.materialId };
   }
 
@@ -2225,19 +1953,6 @@ export async function reapStaleIngestJobs(options?: {
       tasks.push(
         resumeStalledExtraction(admin, row).catch((e) =>
           console.warn("[pdf-ingest] reaper extraction resume failed", e)
-        )
-      );
-      continue;
-    }
-    if (phase === "reviewing_transcript") {
-      continue;
-    }
-    if (phase === "digesting_full_pdf") {
-      tasks.push(
-        runPdfIngestContinueAfterTranscript(row.id, {
-          driveModules: true,
-        }).catch((e) =>
-          console.warn("[pdf-ingest] reaper digest resume failed", e)
         )
       );
       continue;
@@ -2438,63 +2153,8 @@ export async function runPdfIngestJob(
       jobId,
       chars: extracted.text.length,
       numpages: extracted.numpages,
-      sourcePageUnits: extracted.sourcePageUnits,
       retainStorage: extracted.retainStorage,
     });
-
-    const sourceUnits = Math.max(0, extracted.sourcePageUnits);
-    await admin
-      .from("pdf_ingest_jobs")
-      .update({
-        source_page_units: sourceUnits,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", jobId)
-      .then(({ error }) => {
-        if (error && isMissingDbColumnError(error, "source_page_units")) {
-          return { error: null };
-        }
-        return { error };
-      }, () => ({ error: null }));
-
-    const ownerId =
-      typeof claimed.user_id === "string" ? claimed.user_id : null;
-    if (ownerId && sourceUnits > 0) {
-      const reservationId = await lookupReservationIdForJob(jobId);
-      if (!reservationId) {
-        await failJobUnlessStale(
-          admin,
-          jobId,
-          cleanupPaths,
-          "Billing metering is temporarily unavailable. Try again in a moment.",
-          claimedEpoch
-        );
-        return;
-      }
-      const unlimited = await isUnlimitedPlanMeterUser(ownerId);
-      if (!unlimited) {
-        const sub = await getUserSubscription(ownerId);
-        const period = resolveBillingPeriod(sub);
-        const pages = await reserveSourcePages({
-          userId: ownerId,
-          reservationId,
-          sourcePageUnits: sourceUnits,
-          cap: sourcePageCap(sub.tier),
-          periodStart: period.startIso,
-          periodEnd: period.endIso,
-        });
-        if (!pages.ok) {
-          await failJobUnlessStale(
-            admin,
-            jobId,
-            cleanupPaths,
-            pages.error,
-            claimedEpoch
-          );
-          return;
-        }
-      }
-    }
 
     await touchJobProgress(admin, jobId);
   } catch (e) {
@@ -2617,11 +2277,6 @@ export async function runPdfIngestJob(
 
 /**
  * Resume after the student confirms an audio/video transcript.
- *
- * Claims `reviewing_transcript` → `digesting_full_pdf` so a second kick
- * (client `/expand` or a retried confirm) no-ops while this worker is alive.
- * If the worker died mid-digest, `updated_at` goes stale and a later kick
- * can reclaim.
  */
 export async function runPdfIngestContinueAfterTranscript(
   jobId: string,
@@ -2630,40 +2285,18 @@ export async function runPdfIngestContinueAfterTranscript(
   const admin = createAdminClient();
   if (!admin) return;
 
-  const CONTINUE_SELECT =
-    "id, user_id, course_id, exam_group_id, storage_path, original_file_name, ingest_epoch, created_at, ingest_transcript, source_files, status, ingest_phase";
-
-  const { data: freshClaim } = await admin
+  const { data: job } = await admin
     .from("pdf_ingest_jobs")
-    .update({
-      ingest_phase: "digesting_full_pdf",
-      updated_at: new Date().toISOString(),
-    })
+    .select(
+      "id, user_id, course_id, exam_group_id, storage_path, original_file_name, ingest_epoch, created_at, ingest_transcript, source_files, status, ingest_phase"
+    )
     .eq("id", jobId)
-    .eq("status", "running")
-    .eq("ingest_phase", "reviewing_transcript")
-    .select(CONTINUE_SELECT)
     .maybeSingle();
 
-  let job = freshClaim;
-  if (!job) {
-    const staleBefore = new Date(Date.now() - 12_000).toISOString();
-    const { data: staleClaim } = await admin
-      .from("pdf_ingest_jobs")
-      .update({
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", jobId)
-      .eq("status", "running")
-      .eq("ingest_phase", "digesting_full_pdf")
-      .is("ingest_outline", null)
-      .lt("updated_at", staleBefore)
-      .select(CONTINUE_SELECT)
-      .maybeSingle();
-    job = staleClaim;
-  }
-
   if (!job || job.status !== "running") return;
+  if ((job as { ingest_phase?: string }).ingest_phase !== "reviewing_transcript") {
+    return;
+  }
 
   const transcript =
     typeof (job as { ingest_transcript?: unknown }).ingest_transcript === "string"
@@ -2689,6 +2322,7 @@ export async function runPdfIngestContinueAfterTranscript(
     jobId,
     typeof job.course_id === "string" ? job.course_id : null
   );
+
   await runPdfIngestOutlinePhase(admin, {
     jobId,
     claimed: job,
@@ -2786,34 +2420,14 @@ async function runPdfIngestOutlinePhase(
 
   // Structure planning uses per-chunk source text on the job; skip the slow
   // multi-call digest for long PDFs when chunks already carry full coverage.
-  // Heartbeat while digesting — a 500k live-lecture blob can take well over
-  // the 15s phase-1 stall window, which would otherwise reset the job.
-  const digestHeartbeat = setInterval(() => {
-    void touchJobProgress(admin, jobId);
-  }, 8_000);
-  let storedMaterial: string;
-  try {
-    if (chunks.length === 0 && sourceTextForOutline.length > 24_000) {
-      await admin
-        .from("pdf_ingest_jobs")
-        .update({
-          ingest_phase: "digesting_full_pdf",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", jobId)
-        .eq("ingest_epoch", claimedEpoch);
-    }
-    storedMaterial =
-      chunks.length > 0
-        ? materialTextForPdfIngest(sourceTextForOutline)
-        : sourceTextForOutline.length > 24_000
-          ? await buildMaterialDigestFromFullPdfText(sourceTextForOutline, {
-              studyContext: courseStudyContext ?? undefined,
-            })
-          : materialTextForPdfIngest(sourceTextForOutline);
-  } finally {
-    clearInterval(digestHeartbeat);
-  }
+  const storedMaterial =
+    chunks.length > 0
+      ? materialTextForPdfIngest(sourceTextForOutline)
+      : sourceTextForOutline.length > 24_000
+        ? await buildMaterialDigestFromFullPdfText(sourceTextForOutline, {
+            studyContext: courseStudyContext ?? undefined,
+          })
+        : materialTextForPdfIngest(sourceTextForOutline);
 
   if (await isStaleIngestEpoch(admin, jobId, claimedEpoch)) {
     return;
@@ -2897,15 +2511,14 @@ async function runPdfIngestOutlinePhase(
 
   // STRUCTURE_PLANNING routing: use the content planner when the global flag
   // is on, the job combines more than one source file (a manually grouped
-  // "lecture"), or a SINGLE file is larger than the shared *outline* excerpt.
+  // "lecture"), or a SINGLE file is larger than the shared material excerpt.
   // The last case is a fidelity guard: on the plain outline path every module
-  // writer sees the same head/tail excerpt, so a document past the outline
-  // budget silently loses its MIDDLE chapters from planning + prompts.
+  // writer sees the same head/tail excerpt, so a document past the profile's
+  // material cap silently loses its MIDDLE chapters from all module prompts.
   // The planner instead maps lessons to chunk ids and each module expands from
-  // its own chunk-aligned source (fair-truncated per chunk so middle slides
-  // are never wholly omitted). Small single files keep the cheap outline
-  // path. Visual enrichment and per-lesson source attribution still run for
-  // BOTH paths below.
+  // its own chunk-aligned source. Small single files keep the cheap outline
+  // path (short, pedagogical titles; no extra plan call). Visual enrichment
+  // and per-lesson source attribution still run for BOTH paths below.
   const distinctSourceFiles = new Set(
     chunks.map((c) => c.sourceFileName).filter((n) => Boolean(n))
   ).size;

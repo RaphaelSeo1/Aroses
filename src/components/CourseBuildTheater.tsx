@@ -109,12 +109,6 @@ function tabStatusLine(
       detail: t.livePreviewStream,
     };
   }
-  if (snap?.ingestPhase === "digesting_full_pdf") {
-    return {
-      line: t.preparingNotes,
-      detail: t.preparingNotesDetail,
-    };
-  }
   if (snap?.ingestPhase === "planning_outline") {
     return {
       line: t.planningOutline,
@@ -300,11 +294,6 @@ export function CourseBuildTheater({
   const [streamByJob, setStreamByJob] = useState<Record<string, string | null>>(
     {}
   );
-  const [confirmedJobIds, setConfirmedJobIds] = useState<Record<string, boolean>>(
-    {}
-  );
-  const confirmedJobIdsRef = useRef(confirmedJobIds);
-  confirmedJobIdsRef.current = confirmedJobIds;
 
   const courseHome = `/dashboard/courses/${courseId}`;
   const courseHomeWithSection =
@@ -385,14 +374,7 @@ export function CourseBuildTheater({
 
   const onJobSnapshot = useCallback(
     (id: string, snap: PollPdfIngestJobSnapshot) => {
-      setSnapshotByJob((prev) => {
-        const next =
-          confirmedJobIdsRef.current[id] &&
-          snap.ingestPhase === "reviewing_transcript"
-            ? { ...snap, ingestPhase: "digesting_full_pdf" as const }
-            : snap;
-        return { ...prev, [id]: next };
-      });
+      setSnapshotByJob((prev) => ({ ...prev, [id]: snap }));
     },
     []
   );
@@ -475,7 +457,6 @@ export function CourseBuildTheater({
 
     const boot = async () => {
       const labelMap: Record<string, string> = {};
-      const autoConfirmIds: string[] = [];
       await Promise.all(
         jobIds.map(async (id) => {
           try {
@@ -483,23 +464,12 @@ export function CourseBuildTheater({
               signal: ac.signal,
             });
             const raw = await r.text();
-            const j = JSON.parse(raw) as {
-              originalFileName?: string;
-              ingestPhase?: string;
-              sourceFormat?: string;
-            };
-            const fileName =
+            const j = JSON.parse(raw) as { originalFileName?: string };
+            labelMap[id] =
               typeof j.originalFileName === "string" &&
               j.originalFileName.trim()
                 ? j.originalFileName.trim()
                 : t.courseBuild.pdfLabel;
-            labelMap[id] = fileName.replace(/\.txt$/i, "");
-            if (
-              j.ingestPhase === "reviewing_transcript" &&
-              (j.sourceFormat === "text" || /\.txt$/i.test(fileName))
-            ) {
-              autoConfirmIds.push(id);
-            }
           } catch {
             if (!ac.signal.aborted) labelMap[id] = t.courseBuild.pdfLabel;
           }
@@ -519,19 +489,6 @@ export function CourseBuildTheater({
           ])
         )
       );
-      if (autoConfirmIds.length > 0) {
-        setConfirmedJobIds((prev) => ({
-          ...prev,
-          ...Object.fromEntries(autoConfirmIds.map((id) => [id, true])),
-        }));
-        await Promise.all(
-          autoConfirmIds.map((id) =>
-            fetch(`/api/process-pdf/jobs/${id}/confirm-transcript`, {
-              method: "POST",
-            }).catch(() => null)
-          )
-        );
-      }
       setPhase("running");
     };
 
@@ -1026,37 +983,11 @@ export function CourseBuildTheater({
           )}
 
           {snapshotByJob[activeJob]?.ingestPhase === "reviewing_transcript" &&
-          snapshotByJob[activeJob]?.ingestTranscript &&
-          !confirmedJobIds[activeJob] ? (
+          snapshotByJob[activeJob]?.ingestTranscript ? (
             <div className="mb-8">
               <TranscriptReviewPanel
                 jobId={activeJob}
                 initialTranscript={snapshotByJob[activeJob]!.ingestTranscript!}
-                onConfirmed={() => {
-                  setConfirmedJobIds((prev) => ({
-                    ...prev,
-                    [activeJob]: true,
-                  }));
-                  setSnapshotByJob((prev) => {
-                    const cur = prev[activeJob];
-                    if (!cur) return prev;
-                    return {
-                      ...prev,
-                      [activeJob]: {
-                        ...cur,
-                        ingestPhase: "digesting_full_pdf",
-                      },
-                    };
-                  });
-                  void fetch("/api/process-pdf/expand", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      jobId: activeJob,
-                      resumeTranscript: true,
-                    }),
-                  }).catch(() => {});
-                }}
               />
             </div>
           ) : null}

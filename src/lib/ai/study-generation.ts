@@ -19,6 +19,7 @@ import type {
   IngestChunkSummary,
 } from "@/lib/study-ingest/chunking";
 import { parsePageNumbersFromPosition } from "@/lib/study-ingest/chunk-position";
+import { combinedSourceMarker } from "@/lib/study-ingest/combine";
 import { filterChunkTableBlocksToPages } from "@/lib/study-ingest/enrich-chunks-with-page-tables";
 import {
   enhanceTabularPlaintext,
@@ -28,7 +29,6 @@ import {
 import {
   buildDeterministicStructurePlan,
   normalizeStructurePlanTitles,
-  rebalanceStructurePlanByCharBudget,
   structurePlanCoveragePromptBlock,
   structurePlanTargets,
   validateStructurePlanCoverage,
@@ -49,7 +49,6 @@ import {
   type TitleScript,
 } from "@/lib/study-ingest/normalize-ingest-title";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
-import { quizDifficultyWordingRules } from "@/lib/ai/quiz-difficulty-wording";
 import { auditModuleQuantitativeConsistency } from "@/lib/ai/course-quantitative-qa";
 import {
   DEFAULT_COURSE_OUTPUT_LANGUAGE,
@@ -57,12 +56,7 @@ import {
   inferCourseLanguageFromText,
   type CourseOutputLanguage,
 } from "@/lib/course-output-language";
-import {
-  formatLiveLectureGenerationBlock,
-  isLiveLectureStudyContext,
-} from "@/lib/live-notes/notes-emphasis";
 import { formatSelfStudyGenerationBlock } from "@/lib/self-study-context";
-import { splitCombinedSourceBlocks } from "@/lib/study-ingest/combine";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
@@ -109,7 +103,7 @@ export function moduleQuizTarget(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_QUIZ_MIN", 10), 3, 16);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_QUIZ_MIN", 4), 2, 8);
+    return clampInt(envInt("COURSE_BALANCED_QUIZ_MIN", 10), 3, 16);
   }
   const _never: never = profile;
   return _never;
@@ -125,9 +119,6 @@ function moduleFreeResponseMin(
       1,
       target
     );
-  }
-  if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_FREE_RESPONSE_MIN", 1), 1, target);
   }
   return clampInt(
     envInt("COURSE_FREE_RESPONSE_MIN", Math.max(2, Math.floor(target / 3))),
@@ -227,13 +218,9 @@ const DIGEST_CHUNK_CHARS = 22_000;
 const MAX_DIGEST_CHUNKS = 40;
 
 /**
- * Turn full extracted PDF/text into a single string that fits `materialCharLimit`.
+ * Turn full extracted PDF text into a single string that fits `materialCharLimit`.
  * Short inputs return truncated raw text (no extra model calls). Long inputs are
- * chunked and summarized so later outline/module steps can use the whole source.
- *
- * Combined multi-source blobs (live lecture notes+transcript+slides, or several
- * uploads) are digested per source with a fair share of the cap so one class
- * cannot crowd out another.
+ * chunked and summarized so later outline/module steps can use the whole deck.
  */
 export async function buildMaterialDigestFromFullPdfText(
   fullText: string,
@@ -265,118 +252,63 @@ export async function buildMaterialDigestFromFullPdfText(
     typeof options?.studyContext === "string" && options.studyContext.trim().length > 0
       ? options.studyContext.trim().slice(0, 2_500)
       : "";
-  const liveLecture =
-    typeof options?.studyContext === "string" &&
-    isLiveLectureStudyContext(options.studyContext);
 
-  const digestMax =
-    profile === "express"
-      ? 3072
-      : profile === "fast"
-        ? 4096
-        : profile === "balanced"
-          ? 4096
-          : 6144;
-  const maxAttempts =
-    profile === "express"
-      ? 1
-      : profile === "fast"
-        ? 2
-        : profile === "balanced"
-          ? 2
-          : 3;
+  const chunks: string[] = [];
+  for (
+    let i = 0;
+    i < compact.length && chunks.length < MAX_DIGEST_CHUNKS;
+    i += DIGEST_CHUNK_CHARS
+  ) {
+    chunks.push(compact.slice(i, i + DIGEST_CHUNK_CHARS));
+  }
 
-  const digestRules = `RULES:
+  const summaries: string[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i]!;
+    const prompt = `You are compressing slice ${i + 1} of ${chunks.length} from a long PDF transcript into dense study notes. Another step will turn the merged digest into a course.
+
+RULES:
 - Preserve **facts**: definitions, formulas, theorems, numbered steps, dates, names, terminology.
 - Preserve **tables, matrices, and enumerated lists VERBATIM**: reproduce any table (e.g. drug tables with names, dosages, half-lives, MAC values, blood/gas partition coefficients, potency ratios, onset/duration, side-effects, contraindications) as a GitHub-flavored **markdown table** (header row + \`|---|\` separator). Keep every proper noun and every number exactly, in the same row/column. NEVER collapse a table into prose or into category names, and never drop, round, or regroup values. Keep each item under the exact category it appears in, and keep mixed-language terms in full, both languages (e.g. "디아제팜(diazepam)").
 - Preserve **structure hints**: chapter/section titles visible in this slice.
-- No JSON, no roleplay.${
-    liveLecture
-      ? `
-- This slice may be notes, a speech transcript, slides, on-screen extracts, or a handout — treat it as one source among several. Keep unique content even if you suspect another source repeats it; later steps de-duplicate.`
-      : ""
-  }`;
-
-  async function digestOneBody(
-    body: string,
-    maxChunks: number
-  ): Promise<string> {
-    const chunks: string[] = [];
-    for (
-      let i = 0;
-      i < body.length && chunks.length < maxChunks;
-      i += DIGEST_CHUNK_CHARS
-    ) {
-      chunks.push(body.slice(i, i + DIGEST_CHUNK_CHARS));
-    }
-    const summaries: string[] = [];
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i]!;
-      const prompt = `You are compressing slice ${i + 1} of ${chunks.length} from a long source document into dense study notes. Another step will turn the merged digest into a course.
-
-${digestRules}
+- No JSON, no roleplay.
 
 ${studySnippet ? `Learner context (optional emphasis):\n${studySnippet}\n\n` : ""}--- SLICE ${i + 1}/${chunks.length} ---
 ${chunk}`;
 
-      const msg = await createMessageWithRetries(
-        anthropic,
-        {
-          model,
-          max_tokens: digestMax,
-          temperature: 0.12,
-          messages: [{ role: "user", content: prompt }],
-        },
-        { maxAttempts }
-      );
-      summaries.push(extractTextBlock(msg));
-      await options?.onChunkDone?.();
-    }
-    return summaries.join("\n\n---\n\n");
-  }
+    const digestMax =
+      profile === "express"
+        ? 3072
+        : profile === "fast"
+          ? 4096
+          : profile === "balanced"
+            ? 4096
+            : 6144;
 
-  const { preamble, blocks } = splitCombinedSourceBlocks(compact);
-  if (blocks.length >= 2) {
-    const markerOverhead =
-      blocks.reduce((n, b) => n + b.marker.length + 2, 0) +
-      (preamble.length > 0 ? preamble.length + 2 : 0) +
-      8;
-    const bodyBudget = Math.max(2_000, cap - markerOverhead);
-    const alloc = allocateBudgetAcrossSources(
-      blocks.map((b) => b.body.length),
-      bodyBudget
-    );
-    let chunksLeft = MAX_DIGEST_CHUNKS;
-    const digested: string[] = [];
-    for (let i = 0; i < blocks.length; i++) {
-      const b = blocks[i]!;
-      const share = Math.max(800, alloc[i]!);
-      let body: string;
-      if (b.body.length <= share) {
-        body = b.body;
-      } else if (chunksLeft <= 0) {
-        body = truncateMaterial(b.body, share);
-      } else {
-        const maxChunks = Math.max(
-          1,
-          Math.min(
-            chunksLeft,
-            Math.ceil(b.body.length / DIGEST_CHUNK_CHARS)
-          )
-        );
-        const summary = await digestOneBody(b.body, maxChunks);
-        chunksLeft -= maxChunks;
-        body = truncateMaterial(summary, share);
+    const msg = await createMessageWithRetries(
+      anthropic,
+      {
+        model,
+        max_tokens: digestMax,
+        temperature: 0.12,
+        messages: [{ role: "user", content: prompt }],
+      },
+      {
+        maxAttempts:
+          profile === "express"
+            ? 1
+            : profile === "fast"
+              ? 2
+              : profile === "balanced"
+                ? 2
+                : 3,
       }
-      digested.push(`${b.marker}\n${body}`);
-    }
-    return truncateMaterial(
-      [preamble, digested.join("\n\n")].filter((s) => s.length > 0).join("\n\n"),
-      cap
     );
+    summaries.push(extractTextBlock(msg));
+    await options?.onChunkDone?.();
   }
 
-  const merged = `=== FULL DOCUMENT DIGEST ===\n\n${await digestOneBody(compact, MAX_DIGEST_CHUNKS)}`;
+  const merged = `=== FULL DOCUMENT DIGEST (${chunks.length} slices) ===\n\n${summaries.join("\n\n---\n\n")}`;
   return truncateMaterial(merged, cap);
 }
 
@@ -453,16 +385,16 @@ function materialCharLimit(profile: CourseBuildProfile): number {
 }
 
 /**
- * True when a source is too large for the shared head/tail excerpt used by the
- * plain outline path. Uses the *outline* budget (smaller than the module
- * budget) so medium condensed slide PDFs that still fit the module cap — but
- * would lose their middle on the outline excerpt — get structure planning with
- * chunk-aligned per-module sources. Disable via `STRUCTURE_PLAN_LARGE_SOURCE=0`.
+ * True when a source is too large for the shared head/tail excerpt every
+ * module writer sees (`truncateMaterial` drops the MIDDLE of the document past
+ * `materialCharLimit`). The ingest runner uses this to route large single-file
+ * uploads through structure planning, where each module gets its own
+ * chunk-aligned source text instead — so middle chapters actually reach the
+ * module writer. Disable via `STRUCTURE_PLAN_LARGE_SOURCE=0`.
  */
 export function sourceExceedsSharedMaterialBudget(totalChars: number): boolean {
   if (process.env.STRUCTURE_PLAN_LARGE_SOURCE?.trim() === "0") return false;
-  const profile = resolveCourseBuildProfile();
-  return totalChars > outlineMaterialCharLimit(profile);
+  return totalChars > materialCharLimit(resolveCourseBuildProfile());
 }
 
 /**
@@ -503,6 +435,17 @@ const PRESERVE_MARKER_RE =
   /--- (?:TABLES|FIGURES) FROM ORIGINAL PDF[\s\S]*?(?=(?:\n\n--- (?:TABLES|FIGURES) FROM ORIGINAL PDF)|(?:\n\n\[from )|$)/g;
 const PIPE_TABLE_RE = /(\|[^\n]+\|\n\|[\s\-:|]+\|(?:\n\|[^\n]+\|)*)/g;
 const MD_IMAGE_RE = /!\[[^\]]*\]\([^)]+\)/g;
+
+/**
+ * Matches the per-source delimiter emitted by `combinedSourceMarker`
+ * (`src/lib/study-ingest/combine.ts`) and by `assembleModuleSourcesFromPlan`
+ * below. When a combined multi-source material exceeds the char budget we split
+ * on these markers and allocate the budget FAIRLY across sources instead of
+ * first-come-first-served, so a long PDF/transcript that follows an image is
+ * never silently dropped. Keep the format in sync with `combinedSourceMarker`.
+ */
+const SOURCE_BLOCK_MARKER_RE =
+  /^===== SOURCE \d+\/\d+ — FILE: .+? =====$/gm;
 
 /**
  * Round-robin fair allocation of `bodyBudget` characters across N source bodies:
@@ -557,8 +500,25 @@ function truncateMaterialFairlyAcrossSources(
   text: string,
   maxChars: number
 ): string | null {
-  const { preamble, blocks } = splitCombinedSourceBlocks(text);
-  if (blocks.length < 2) return null;
+  SOURCE_BLOCK_MARKER_RE.lastIndex = 0;
+  const markers: { index: number; line: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = SOURCE_BLOCK_MARKER_RE.exec(text)) !== null) {
+    markers.push({ index: m.index, line: m[0] });
+  }
+  if (markers.length < 2) return null;
+
+  const preamble = text.slice(0, markers[0]!.index).trim();
+  const blocks: { marker: string; body: string }[] = [];
+  for (let i = 0; i < markers.length; i++) {
+    const start = markers[i]!.index;
+    const end = i + 1 < markers.length ? markers[i + 1]!.index : text.length;
+    const segment = text.slice(start, end);
+    const nl = segment.indexOf("\n");
+    const marker = (nl >= 0 ? segment.slice(0, nl) : segment).trim();
+    const body = (nl >= 0 ? segment.slice(nl + 1) : "").trim();
+    blocks.push({ marker, body });
+  }
 
   const markerOverhead =
     blocks.reduce((n, b) => n + b.marker.length + 2, 0) +
@@ -853,34 +813,32 @@ function courseInstruction(
   if (profile === "full") {
     sizeRules = `Rules for output size (important): use **at least 5 modules and up to 14** unless the source is extremely short — split the material into many focused modules so each major topic gets its own. Keep each lesson "content" thorough but under roughly 1000 words so the full answer fits in one response. Every module must include at least one lesson.
 
-QUIZ (critical): Each module needs a rich practice set — **at least ${quizTarget} questions per module**, with **at least ${frMin} items** whose type is free_response (short written answer). The rest should be mcq. Aim for roughly half MCQ and half free-response overall. MCQs must have exactly 4 choices. Choice text must NOT include A)/B)/C)/D) or "A." prefixes — the UI already labels letters. Every free_response **must** include **reference_answer** (snake_case, non-empty, several sentences of rubric — key ideas and acceptable points).`;
+QUIZ (critical): Each module needs a rich practice set — **at least ${quizTarget} questions per module**, with **at least ${frMin} items** whose type is free_response (short written answer). The rest should be mcq. Aim for roughly half MCQ and half free-response overall. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, several sentences of rubric — key ideas and acceptable points).`;
     quizFooter =
       `Include many quiz objects per module (minimum ${quizTarget} total per module, including ≥${frMin} free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.`;
   } else if (profile === "express") {
     sizeRules = `Rules for output size (critical for speed): use **2 or 3** modules only. At most **3 lessons per module**. Each lesson "content" must be **under 500 words** — clear and complete for its planned scope, not a textbook.
 
-QUIZ (critical): Each module needs **at least ${quizTarget} questions**, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ with exactly 4 choices. Choice text must NOT include A)/B)/C)/D) prefixes.`;
+QUIZ (critical): Each module needs **at least ${quizTarget} questions**, with **at least ${frMin}** type free_response (reference_answer required). The rest MCQ with exactly 4 choices.`;
     quizFooter =
       `Meet the minimums above (≥${quizTarget} quiz items per module, including ≥${frMin} free_response). Only return valid JSON. No markdown fences, no extra text. Base everything on the uploaded material.`;
   } else if (profile === "fast") {
     sizeRules = `Rules for output size (important): use at least 2 modules and at most 4 unless the source is extremely short. Keep each lesson "content" clear and instructive but under roughly 500 words. Every module must include at least one lesson.
 
-QUIZ (critical): Each module needs a practical practice set — **at least ${quizTarget} questions per module**, with **at least ${frMin} items** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Choice text must NOT include A)/B)/C)/D) prefixes. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
+QUIZ (critical): Each module needs a practical practice set — **at least ${quizTarget} questions per module**, with **at least ${frMin} items** whose type is free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
     quizFooter =
       `Include enough quiz objects per module to meet the minimums above (≥${quizTarget} total, ≥${frMin} free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.`;
   } else if (profile === "balanced") {
-    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 4);
-    sizeRules = `Rules for output size (important): use **2 to ${maxBalMods}** modules. A short handout is 2. A 30–50 page lecture is still only ${maxBalMods}. Prefer **2 lessons per module**. Keep each lesson "content" under roughly **350 words**. Every module must include at least one lesson.
+    const maxBalMods = clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
+    sizeRules = `Rules for output size (important): use **4 to ${maxBalMods}** modules, scaling to the size of the source (short handout ≈ 4, long deck toward ${maxBalMods}). Prefer **fewer, longer lessons** (about 2–5 per module) that keep the same information — do not split every subtopic into its own thin lesson. Keep each lesson "content" clear; aim under roughly 700 words per lesson when combining related material. Every module must include at least one lesson.
 
-QUIZ (critical): Each module needs **at least ${quizTarget} questions per module**, with **at least ${frMin}** type free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Choice text must NOT include A)/B)/C)/D) prefixes. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
+QUIZ (critical): Each module needs **at least ${quizTarget} questions per module**, with **at least ${frMin}** type free_response (short written answer). The rest should be mcq. MCQs must have exactly 4 choices. Every free_response **must** include **reference_answer** (snake_case, non-empty, concise rubric).`;
     quizFooter =
       `Include enough quiz objects per module to meet the minimums above (≥${quizTarget} total, ≥${frMin} free_response). Do not omit free_response types — they are required. Only return valid JSON. No markdown fences, no extra text. Base everything strictly on the uploaded material — do not add outside information.`;
   } else {
     const _bad: never = profile;
     throw new Error(`Unhandled course build profile: ${String(_bad)}`);
   }
-
-  quizFooter = `${quizFooter}\n\n${quizDifficultyWordingRules()}`;
 
   return `You are an expert course designer and educator. You have been given raw course material (lecture slides, syllabi, notes). Your job is NOT to summarize this material. Your job is to use it as a source to BUILD a complete, professional, structured course that a student would genuinely pay for.
 ${generationContextSuffix(studyContext, outputLanguage)}
@@ -913,7 +871,6 @@ Generate the course in this exact JSON format:
       "quiz": [
         {
           "type": "mcq",
-          "difficulty": "easy",
           "question": "question text",
           "choices": ["A", "B", "C", "D"],
           "correct": "A",
@@ -921,7 +878,6 @@ Generate the course in this exact JSON format:
         },
         {
           "type": "free_response",
-          "difficulty": "medium",
           "question": "open-ended prompt requiring reasoning or recall",
           "reference_answer": "what a strong answer should cover — concepts, definitions, and acceptable variants",
           "explanation": "why those ideas matter and common misconceptions"
@@ -1329,8 +1285,6 @@ function generationContextSuffix(
   if (studyContext) {
     const block = selfStudyBlock(studyContext);
     if (block.trim()) parts.push(block.trim());
-    const live = formatLiveLectureGenerationBlock(studyContext);
-    if (live.trim()) parts.push(live.trim());
   }
   return `\n${parts.join("\n\n")}\n`;
 }
@@ -1351,8 +1305,8 @@ function outlineInstruction(
     moduleCount = `Use **2 to ${maxModules}** modules so the course can be built quickly.`;
     maxLessonTitles = clampInt(envInt("COURSE_FAST_MAX_LESSON_TITLES", 4), 1, 6);
   } else if (profile === "balanced") {
-    moduleCount = `Use **2 to ${maxModules}** modules. A short handout is 2. A long lecture deck is still only ${maxModules} — group related sections together instead of giving every topic its own module.`;
-    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 2), 1, 3);
+    moduleCount = `Use **4 to ${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 4, but a long lecture deck or multi-topic document should use more (toward ${maxModules}). Give each major topic or section its own focused module; do not compress the whole document into one or two catch-alls.`;
+    maxLessonTitles = clampInt(envInt("COURSE_BALANCED_MAX_LESSON_TITLES", 5), 2, 8);
   } else {
     moduleCount = `Use **at least 5** and up to **${maxModules}** modules, and **scale the number to the size of the source**: a short handout may need only 5–6, but a long lecture deck, chapter, or multi-topic document should use many more (toward the maximum). Split the material into focused modules so each major topic, section, or learning objective gets its own module — prefer MORE, narrower modules over a few broad ones. Do NOT compress later pages into one catch-all module; every distinct section of the document, from first page to last, must be represented.`;
     maxLessonTitles = clampInt(envInt("COURSE_FULL_MAX_LESSON_TITLES", 12), 3, 20);
@@ -1429,8 +1383,7 @@ function moduleQuizMinForGeneration(profile: CourseBuildProfile): number {
 function moduleQuizRules(profile: CourseBuildProfile): string {
   const genMin = moduleQuizMinForGeneration(profile);
   const frMin = moduleFreeResponseMin(profile, genMin);
-  return `QUIZ (this module only): **at least ${genMin}** questions for now (with **at least ${frMin}** type free_response, reference_answer required). The rest MCQ with exactly 4 choices each. Choice text must NOT include A)/B)/C)/D) prefixes. Do not shrink lesson content to fit more quiz items — additional questions are added server-side later.
-${quizDifficultyWordingRules()}`;
+  return `QUIZ (this module only): **at least ${genMin}** questions for now (with **at least ${frMin}** type free_response, reference_answer required). The rest MCQ with exactly 4 choices each. Do not shrink lesson content to fit more quiz items — additional questions are added server-side later.`;
 }
 
 function looksLikeTruncatedJson(text: string): boolean {
@@ -1470,7 +1423,7 @@ function moduleInstruction(
       : profile === "fast"
         ? `STYLE (fast): Write clearly with enough detail to teach (use examples, connect ideas), but avoid unnecessary fluff.`
         : profile === "balanced"
-          ? `STYLE (balanced): Teach the planned points once, clearly, with one example when the source has one. Each lesson **under ~350 words**. Do not write a second explanation of the same idea.`
+          ? `STYLE (balanced): Teach clearly with examples; aim **under ~500 words** per lesson.`
           : "";
 
   return `You are expanding **one module** of a structured course (${moduleIndex + 1} of ${n}). Course title: ${JSON.stringify(outline.title)}. Module id **must be** ${stub.id}. ${moduleTitleDirective}
@@ -1917,10 +1870,8 @@ export async function planCourseStructureFromChunks(
     console.info("[study-generation] deterministic structure plan", {
       chunks: normalizedSummaries.length,
     });
-    return finalizeStructurePlan(
-      buildDeterministicStructurePlan(normalizedSummaries, profile),
-      normalizedSummaries,
-      profile
+    return normalizeStructurePlanTitles(
+      buildDeterministicStructurePlan(normalizedSummaries, profile)
     );
   }
 
@@ -1992,7 +1943,7 @@ export async function planCourseStructureFromChunks(
           modules: plan.modules.length,
         });
       }
-      return finalizeStructurePlan(plan, normalizedSummaries, profile);
+      return normalizeStructurePlanTitles(plan);
     }
 
     lastCoverageError = coverageError;
@@ -2006,34 +1957,9 @@ export async function planCourseStructureFromChunks(
     "[study-generation] using deterministic structure plan (full chunk coverage)",
     { chunks: chunkSummaries.length, lastError: lastCoverageError }
   );
-  return finalizeStructurePlan(
-    buildDeterministicStructurePlan(normalizedSummaries, profile),
-    normalizedSummaries,
-    profile
+  return normalizeStructurePlanTitles(
+    buildDeterministicStructurePlan(normalizedSummaries, profile)
   );
-}
-
-/** Rebalance fat modules by char budget, then polish titles. */
-function finalizeStructurePlan(
-  plan: CourseStructurePlan,
-  chunkSummaries: IngestChunkSummary[],
-  profile: CourseBuildProfile
-): CourseStructurePlan {
-  const targets = structurePlanTargets(chunkSummaries.length, profile);
-  const rebalanced = rebalanceStructurePlanByCharBudget(
-    plan,
-    chunkSummaries,
-    materialCharLimit(profile),
-    targets.maxModules
-  );
-  if (rebalanced.modules.length !== plan.modules.length) {
-    console.info("[study-generation] rebalanced fat modules by char budget", {
-      before: plan.modules.length,
-      after: rebalanced.modules.length,
-      maxModules: targets.maxModules,
-    });
-  }
-  return normalizeStructurePlanTitles(rebalanced);
 }
 
 /** Convert a structure plan into the existing outline shape (expand/finalize unchanged). */
@@ -2061,66 +1987,9 @@ export function structurePlanToOutline(
 }
 
 /**
- * Join labeled chunk bodies into a module source without silently dropping
- * middle chunks when over budget. Each chunk gets a fair share of the char
- * budget; over-budget chunks are truncated individually (tables/figures still
- * protected by `truncateMaterial`). Classic head+tail on the joined blob used
- * to erase whole assigned chunks from condensed slide decks.
- */
-function joinChunksFairly(
-  blocks: { label: string; body: string }[],
-  maxChars: number
-): string {
-  if (blocks.length === 0) return "";
-
-  const renderedFull = blocks.map((b) => `${b.label}\n${b.body}`);
-  const fullJoined = enhanceTabularPlaintext(renderedFull.join("\n\n"));
-  if (fullJoined.length <= maxChars) return fullJoined;
-
-  if (blocks.length === 1) {
-    return truncateMaterial(fullJoined, maxChars);
-  }
-
-  const labelOverhead = blocks.reduce(
-    (n, b) => n + b.label.length + 1 /*newline*/ + 2 /*join*/,
-    0
-  );
-  const bodyBudget = Math.max(2_000, maxChars - labelOverhead);
-  const lengths = blocks.map((b) => b.body.length);
-  const alloc = allocateBudgetAcrossSources(lengths, bodyBudget);
-  const parts = blocks.map((b, i) => {
-    const budget = Math.max(400, alloc[i]!);
-    const body =
-      budget >= b.body.length
-        ? b.body
-        : truncateMaterial(b.body, budget);
-    return `${b.label}\n${body}`;
-  });
-  const out = enhanceTabularPlaintext(parts.join("\n\n"));
-  if (out.length <= maxChars) return out;
-
-  // Last resort: tighten body budgets proportionally rather than head+tail
-  // the joined text (which would re-introduce silent middle-chunk drops).
-  const scale = Math.max(0.35, (maxChars - labelOverhead) / Math.max(1, out.length - labelOverhead));
-  const tight = blocks.map((b, i) => {
-    const budget = Math.max(320, Math.floor(alloc[i]! * scale));
-    const body =
-      budget >= b.body.length
-        ? b.body
-        : truncateMaterial(b.body, budget);
-    return `${b.label}\n${body}`;
-  });
-  const tightened = enhanceTabularPlaintext(tight.join("\n\n"));
-  return tightened.length <= maxChars
-    ? tightened
-    : tightened.slice(0, maxChars);
-}
-
-/**
  * Assemble index-aligned per-module source text from each module's lessons'
  * source_chunk_ids. A module's text is the concatenation (in chunk order) of
- * every chunk its lessons reference, with a fair per-chunk budget so middle
- * chunks are never wholly omitted when the module exceeds the char cap.
+ * every chunk its lessons reference, truncated to the module char budget.
  * Modules with no resolvable chunk ids get an empty string (caller falls back
  * to the whole combined source text).
  */
@@ -2145,16 +2014,38 @@ export function assembleModuleSourcesFromPlan(
       .sort((a, b) => (orderOf.get(a) ?? 0) - (orderOf.get(b) ?? 0));
     if (ordered.length === 0) return "";
 
-    const blocks = ordered.map((id) => {
+    // Group this module's chunks by their originating FILE (preserving first-seen
+    // order) so a module that mixes sources (e.g. an image + a PDF) is labeled
+    // per source and gets a FAIR share of the char budget — `truncateMaterial`
+    // splits on the SOURCE marker below and allocates the budget round-robin
+    // across sources instead of letting whichever file comes first win.
+    const fileOrder: string[] = [];
+    const blocksByFile = new Map<string, string[]>();
+    for (const id of ordered) {
       const c = byId.get(id)!;
       const allowedPages = new Set(parsePageNumbersFromPosition(c.position));
       const chunkText = filterChunkTableBlocksToPages(c.text, allowedPages);
-      return {
-        label: `[from ${c.sourceFileName} — ${c.position}]`,
-        body: enhanceTabularPlaintext(chunkText),
-      };
+      const block = `[from ${c.sourceFileName} — ${c.position}]\n${enhanceTabularPlaintext(chunkText)}`;
+      if (!blocksByFile.has(c.sourceFileName)) {
+        blocksByFile.set(c.sourceFileName, []);
+        fileOrder.push(c.sourceFileName);
+      }
+      blocksByFile.get(c.sourceFileName)!.push(block);
+    }
+
+    if (fileOrder.length <= 1) {
+      const joined = enhanceTabularPlaintext(
+        (blocksByFile.get(fileOrder[0]!) ?? []).join("\n\n")
+      );
+      return truncateMaterial(joined, cap);
+    }
+
+    const total = fileOrder.length;
+    const sections = fileOrder.map((file, i) => {
+      const marker = combinedSourceMarker(i + 1, total, file);
+      return `${marker}\n${blocksByFile.get(file)!.join("\n\n")}`;
     });
-    return joinChunksFairly(blocks, cap);
+    return truncateMaterial(sections.join("\n\n"), cap);
   });
 }
 
@@ -2174,7 +2065,7 @@ function outlineMaxModules(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_MAX_MODULES", 3), 1, 6);
   }
   if (profile === "balanced") {
-    return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 3), 2, 4);
+    return clampInt(envInt("COURSE_BALANCED_MAX_MODULES", 7), 4, 7);
   }
   return clampInt(envInt("COURSE_FULL_MAX_MODULES", 18), 4, 24);
 }
@@ -2312,14 +2203,15 @@ function moduleMaxTokens(profile: CourseBuildProfile): number {
     return clampInt(envInt("COURSE_FAST_MODULE_MAX_TOKENS", 12_288), 6144, 24_576);
   }
   if (profile === "full") return 30_720;
-  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 4_096), 2048, 6_144);
+  return clampInt(envInt("COURSE_BALANCED_MODULE_MAX_TOKENS", 12_288), 8192, 30_720);
 }
 
 /**
  * Escalating output budgets when the first pass truncates mid-JSON. Balanced
- * may step from 4,096 to at most 6,144. It must not jump to a 20k-token retry:
- * that second call is most of the bill. The escalation only fires on detected
- * truncation, so a module that fits pays for one call.
+ * gets one escalation too (fidelity): a table-heavy module that truncates at
+ * the base budget retries with more room instead of falling straight into the
+ * JSON-repair path. The escalation call only fires on detected truncation, so
+ * healthy builds pay nothing extra.
  */
 function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
   const base = moduleMaxTokens(profile);
@@ -2329,7 +2221,7 @@ function moduleMaxTokenBudgets(profile: CourseBuildProfile): number[] {
       : profile === "fast"
         ? [Math.min(24_576, Math.round(base * 1.5))]
         : profile === "balanced"
-          ? [Math.min(6_144, Math.max(base, Math.round(base * 1.25)))]
+          ? [Math.min(30_720, Math.max(20_480, Math.round(base * 1.4)))]
           : [Math.min(30_720, Math.round(base * 1.4))];
   return [...new Set([base, ...extra])].sort((a, b) => a - b);
 }
