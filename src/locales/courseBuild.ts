@@ -18,6 +18,9 @@ const en = {
   reviewTranscript: "Review transcript",
   reviewTranscriptDetail:
     "Fix transcription errors below, then continue to course generation.",
+  preparingNotes: "Preparing your notes…",
+  preparingNotesDetail:
+    "Turning the confirmed notes, transcript, and slides into a course outline. Large lectures can take a minute.",
   transcribing: "Transcribing…",
   transcribingDetail: "Speech-to-text can take several minutes for long recordings.",
   processingFiles: "Processing files…",
@@ -158,6 +161,9 @@ const ko: typeof en = {
   reviewTranscript: "대본 검토",
   reviewTranscriptDetail:
     "아래 전사 오류를 수정한 뒤 코스 생성을 계속하세요.",
+  preparingNotes: "노트를 준비하는 중…",
+  preparingNotesDetail:
+    "확인한 노트, 대본, 슬라이드로 코스 개요를 만들고 있어요. 긴 강의는 1분 정도 걸릴 수 있어요.",
   transcribing: "전사 중…",
   transcribingDetail: "긴 녹음은 음성-텍스트 변환에 몇 분 걸릴 수 있어요.",
   processingFiles: "파일 처리 중…",

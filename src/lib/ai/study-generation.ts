@@ -19,7 +19,6 @@ import type {
   IngestChunkSummary,
 } from "@/lib/study-ingest/chunking";
 import { parsePageNumbersFromPosition } from "@/lib/study-ingest/chunk-position";
-import { combinedSourceMarker } from "@/lib/study-ingest/combine";
 import { filterChunkTableBlocksToPages } from "@/lib/study-ingest/enrich-chunks-with-page-tables";
 import {
   enhanceTabularPlaintext,
@@ -29,6 +28,7 @@ import {
 import {
   buildDeterministicStructurePlan,
   normalizeStructurePlanTitles,
+  rebalanceStructurePlanByCharBudget,
   structurePlanCoveragePromptBlock,
   structurePlanTargets,
   validateStructurePlanCoverage,
@@ -56,7 +56,12 @@ import {
   inferCourseLanguageFromText,
   type CourseOutputLanguage,
 } from "@/lib/course-output-language";
+import {
+  formatLiveLectureGenerationBlock,
+  isLiveLectureStudyContext,
+} from "@/lib/live-notes/notes-emphasis";
 import { formatSelfStudyGenerationBlock } from "@/lib/self-study-context";
+import { splitCombinedSourceBlocks } from "@/lib/study-ingest/combine";
 import { getPdfAnthropicTimeoutMs } from "@/lib/pdf-route-duration";
 import { acquireClaudeBudget } from "@/lib/ai/anthropic-rate-limit";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
@@ -218,9 +223,13 @@ const DIGEST_CHUNK_CHARS = 22_000;
 const MAX_DIGEST_CHUNKS = 40;
 
 /**
- * Turn full extracted PDF text into a single string that fits `materialCharLimit`.
+ * Turn full extracted PDF/text into a single string that fits `materialCharLimit`.
  * Short inputs return truncated raw text (no extra model calls). Long inputs are
- * chunked and summarized so later outline/module steps can use the whole deck.
+ * chunked and summarized so later outline/module steps can use the whole source.
+ *
+ * Combined multi-source blobs (live lecture notes+transcript+slides, or several
+ * uploads) are digested per source with a fair share of the cap so one class
+ * cannot crowd out another.
  */
 export async function buildMaterialDigestFromFullPdfText(
   fullText: string,
@@ -252,63 +261,118 @@ export async function buildMaterialDigestFromFullPdfText(
     typeof options?.studyContext === "string" && options.studyContext.trim().length > 0
       ? options.studyContext.trim().slice(0, 2_500)
       : "";
+  const liveLecture =
+    typeof options?.studyContext === "string" &&
+    isLiveLectureStudyContext(options.studyContext);
 
-  const chunks: string[] = [];
-  for (
-    let i = 0;
-    i < compact.length && chunks.length < MAX_DIGEST_CHUNKS;
-    i += DIGEST_CHUNK_CHARS
-  ) {
-    chunks.push(compact.slice(i, i + DIGEST_CHUNK_CHARS));
-  }
+  const digestMax =
+    profile === "express"
+      ? 3072
+      : profile === "fast"
+        ? 4096
+        : profile === "balanced"
+          ? 4096
+          : 6144;
+  const maxAttempts =
+    profile === "express"
+      ? 1
+      : profile === "fast"
+        ? 2
+        : profile === "balanced"
+          ? 2
+          : 3;
 
-  const summaries: string[] = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i]!;
-    const prompt = `You are compressing slice ${i + 1} of ${chunks.length} from a long PDF transcript into dense study notes. Another step will turn the merged digest into a course.
-
-RULES:
+  const digestRules = `RULES:
 - Preserve **facts**: definitions, formulas, theorems, numbered steps, dates, names, terminology.
 - Preserve **tables, matrices, and enumerated lists VERBATIM**: reproduce any table (e.g. drug tables with names, dosages, half-lives, MAC values, blood/gas partition coefficients, potency ratios, onset/duration, side-effects, contraindications) as a GitHub-flavored **markdown table** (header row + \`|---|\` separator). Keep every proper noun and every number exactly, in the same row/column. NEVER collapse a table into prose or into category names, and never drop, round, or regroup values. Keep each item under the exact category it appears in, and keep mixed-language terms in full, both languages (e.g. "디아제팜(diazepam)").
 - Preserve **structure hints**: chapter/section titles visible in this slice.
-- No JSON, no roleplay.
+- No JSON, no roleplay.${
+    liveLecture
+      ? `
+- This slice may be notes, a speech transcript, slides, on-screen extracts, or a handout — treat it as one source among several. Keep unique content even if you suspect another source repeats it; later steps de-duplicate.`
+      : ""
+  }`;
+
+  async function digestOneBody(
+    body: string,
+    maxChunks: number
+  ): Promise<string> {
+    const chunks: string[] = [];
+    for (
+      let i = 0;
+      i < body.length && chunks.length < maxChunks;
+      i += DIGEST_CHUNK_CHARS
+    ) {
+      chunks.push(body.slice(i, i + DIGEST_CHUNK_CHARS));
+    }
+    const summaries: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i]!;
+      const prompt = `You are compressing slice ${i + 1} of ${chunks.length} from a long source document into dense study notes. Another step will turn the merged digest into a course.
+
+${digestRules}
 
 ${studySnippet ? `Learner context (optional emphasis):\n${studySnippet}\n\n` : ""}--- SLICE ${i + 1}/${chunks.length} ---
 ${chunk}`;
 
-    const digestMax =
-      profile === "express"
-        ? 3072
-        : profile === "fast"
-          ? 4096
-          : profile === "balanced"
-            ? 4096
-            : 6144;
-
-    const msg = await createMessageWithRetries(
-      anthropic,
-      {
-        model,
-        max_tokens: digestMax,
-        temperature: 0.12,
-        messages: [{ role: "user", content: prompt }],
-      },
-      {
-        maxAttempts:
-          profile === "express"
-            ? 1
-            : profile === "fast"
-              ? 2
-              : profile === "balanced"
-                ? 2
-                : 3,
-      }
-    );
-    summaries.push(extractTextBlock(msg));
-    await options?.onChunkDone?.();
+      const msg = await createMessageWithRetries(
+        anthropic,
+        {
+          model,
+          max_tokens: digestMax,
+          temperature: 0.12,
+          messages: [{ role: "user", content: prompt }],
+        },
+        { maxAttempts }
+      );
+      summaries.push(extractTextBlock(msg));
+      await options?.onChunkDone?.();
+    }
+    return summaries.join("\n\n---\n\n");
   }
 
-  const merged = `=== FULL DOCUMENT DIGEST (${chunks.length} slices) ===\n\n${summaries.join("\n\n---\n\n")}`;
+  const { preamble, blocks } = splitCombinedSourceBlocks(compact);
+  if (blocks.length >= 2) {
+    const markerOverhead =
+      blocks.reduce((n, b) => n + b.marker.length + 2, 0) +
+      (preamble.length > 0 ? preamble.length + 2 : 0) +
+      8;
+    const bodyBudget = Math.max(2_000, cap - markerOverhead);
+    const alloc = allocateBudgetAcrossSources(
+      blocks.map((b) => b.body.length),
+      bodyBudget
+    );
+    let chunksLeft = MAX_DIGEST_CHUNKS;
+    const digested: string[] = [];
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i]!;
+      const share = Math.max(800, alloc[i]!);
+      let body: string;
+      if (b.body.length <= share) {
+        body = b.body;
+      } else if (chunksLeft <= 0) {
+        body = truncateMaterial(b.body, share);
+      } else {
+        const maxChunks = Math.max(
+          1,
+          Math.min(
+            chunksLeft,
+            Math.ceil(b.body.length / DIGEST_CHUNK_CHARS)
+          )
+        );
+        const summary = await digestOneBody(b.body, maxChunks);
+        chunksLeft -= maxChunks;
+        body = truncateMaterial(summary, share);
+      }
+      digested.push(`${b.marker}\n${body}`);
+    }
+    return truncateMaterial(
+      [preamble, digested.join("\n\n")].filter((s) => s.length > 0).join("\n\n"),
+      cap
+    );
+  }
+
+  const merged = `=== FULL DOCUMENT DIGEST ===\n\n${await digestOneBody(compact, MAX_DIGEST_CHUNKS)}`;
   return truncateMaterial(merged, cap);
 }
 
@@ -385,16 +449,16 @@ function materialCharLimit(profile: CourseBuildProfile): number {
 }
 
 /**
- * True when a source is too large for the shared head/tail excerpt every
- * module writer sees (`truncateMaterial` drops the MIDDLE of the document past
- * `materialCharLimit`). The ingest runner uses this to route large single-file
- * uploads through structure planning, where each module gets its own
- * chunk-aligned source text instead — so middle chapters actually reach the
- * module writer. Disable via `STRUCTURE_PLAN_LARGE_SOURCE=0`.
+ * True when a source is too large for the shared head/tail excerpt used by the
+ * plain outline path. Uses the *outline* budget (smaller than the module
+ * budget) so medium condensed slide PDFs that still fit the module cap — but
+ * would lose their middle on the outline excerpt — get structure planning with
+ * chunk-aligned per-module sources. Disable via `STRUCTURE_PLAN_LARGE_SOURCE=0`.
  */
 export function sourceExceedsSharedMaterialBudget(totalChars: number): boolean {
   if (process.env.STRUCTURE_PLAN_LARGE_SOURCE?.trim() === "0") return false;
-  return totalChars > materialCharLimit(resolveCourseBuildProfile());
+  const profile = resolveCourseBuildProfile();
+  return totalChars > outlineMaterialCharLimit(profile);
 }
 
 /**
@@ -435,17 +499,6 @@ const PRESERVE_MARKER_RE =
   /--- (?:TABLES|FIGURES) FROM ORIGINAL PDF[\s\S]*?(?=(?:\n\n--- (?:TABLES|FIGURES) FROM ORIGINAL PDF)|(?:\n\n\[from )|$)/g;
 const PIPE_TABLE_RE = /(\|[^\n]+\|\n\|[\s\-:|]+\|(?:\n\|[^\n]+\|)*)/g;
 const MD_IMAGE_RE = /!\[[^\]]*\]\([^)]+\)/g;
-
-/**
- * Matches the per-source delimiter emitted by `combinedSourceMarker`
- * (`src/lib/study-ingest/combine.ts`) and by `assembleModuleSourcesFromPlan`
- * below. When a combined multi-source material exceeds the char budget we split
- * on these markers and allocate the budget FAIRLY across sources instead of
- * first-come-first-served, so a long PDF/transcript that follows an image is
- * never silently dropped. Keep the format in sync with `combinedSourceMarker`.
- */
-const SOURCE_BLOCK_MARKER_RE =
-  /^===== SOURCE \d+\/\d+ — FILE: .+? =====$/gm;
 
 /**
  * Round-robin fair allocation of `bodyBudget` characters across N source bodies:
@@ -500,25 +553,8 @@ function truncateMaterialFairlyAcrossSources(
   text: string,
   maxChars: number
 ): string | null {
-  SOURCE_BLOCK_MARKER_RE.lastIndex = 0;
-  const markers: { index: number; line: string }[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = SOURCE_BLOCK_MARKER_RE.exec(text)) !== null) {
-    markers.push({ index: m.index, line: m[0] });
-  }
-  if (markers.length < 2) return null;
-
-  const preamble = text.slice(0, markers[0]!.index).trim();
-  const blocks: { marker: string; body: string }[] = [];
-  for (let i = 0; i < markers.length; i++) {
-    const start = markers[i]!.index;
-    const end = i + 1 < markers.length ? markers[i + 1]!.index : text.length;
-    const segment = text.slice(start, end);
-    const nl = segment.indexOf("\n");
-    const marker = (nl >= 0 ? segment.slice(0, nl) : segment).trim();
-    const body = (nl >= 0 ? segment.slice(nl + 1) : "").trim();
-    blocks.push({ marker, body });
-  }
+  const { preamble, blocks } = splitCombinedSourceBlocks(text);
+  if (blocks.length < 2) return null;
 
   const markerOverhead =
     blocks.reduce((n, b) => n + b.marker.length + 2, 0) +
@@ -1285,6 +1321,8 @@ function generationContextSuffix(
   if (studyContext) {
     const block = selfStudyBlock(studyContext);
     if (block.trim()) parts.push(block.trim());
+    const live = formatLiveLectureGenerationBlock(studyContext);
+    if (live.trim()) parts.push(live.trim());
   }
   return `\n${parts.join("\n\n")}\n`;
 }
@@ -1870,8 +1908,10 @@ export async function planCourseStructureFromChunks(
     console.info("[study-generation] deterministic structure plan", {
       chunks: normalizedSummaries.length,
     });
-    return normalizeStructurePlanTitles(
-      buildDeterministicStructurePlan(normalizedSummaries, profile)
+    return finalizeStructurePlan(
+      buildDeterministicStructurePlan(normalizedSummaries, profile),
+      normalizedSummaries,
+      profile
     );
   }
 
@@ -1943,7 +1983,7 @@ export async function planCourseStructureFromChunks(
           modules: plan.modules.length,
         });
       }
-      return normalizeStructurePlanTitles(plan);
+      return finalizeStructurePlan(plan, normalizedSummaries, profile);
     }
 
     lastCoverageError = coverageError;
@@ -1957,9 +1997,34 @@ export async function planCourseStructureFromChunks(
     "[study-generation] using deterministic structure plan (full chunk coverage)",
     { chunks: chunkSummaries.length, lastError: lastCoverageError }
   );
-  return normalizeStructurePlanTitles(
-    buildDeterministicStructurePlan(normalizedSummaries, profile)
+  return finalizeStructurePlan(
+    buildDeterministicStructurePlan(normalizedSummaries, profile),
+    normalizedSummaries,
+    profile
   );
+}
+
+/** Rebalance fat modules by char budget, then polish titles. */
+function finalizeStructurePlan(
+  plan: CourseStructurePlan,
+  chunkSummaries: IngestChunkSummary[],
+  profile: CourseBuildProfile
+): CourseStructurePlan {
+  const targets = structurePlanTargets(chunkSummaries.length, profile);
+  const rebalanced = rebalanceStructurePlanByCharBudget(
+    plan,
+    chunkSummaries,
+    materialCharLimit(profile),
+    targets.maxModules
+  );
+  if (rebalanced.modules.length !== plan.modules.length) {
+    console.info("[study-generation] rebalanced fat modules by char budget", {
+      before: plan.modules.length,
+      after: rebalanced.modules.length,
+      maxModules: targets.maxModules,
+    });
+  }
+  return normalizeStructurePlanTitles(rebalanced);
 }
 
 /** Convert a structure plan into the existing outline shape (expand/finalize unchanged). */
@@ -1987,9 +2052,66 @@ export function structurePlanToOutline(
 }
 
 /**
+ * Join labeled chunk bodies into a module source without silently dropping
+ * middle chunks when over budget. Each chunk gets a fair share of the char
+ * budget; over-budget chunks are truncated individually (tables/figures still
+ * protected by `truncateMaterial`). Classic head+tail on the joined blob used
+ * to erase whole assigned chunks from condensed slide decks.
+ */
+function joinChunksFairly(
+  blocks: { label: string; body: string }[],
+  maxChars: number
+): string {
+  if (blocks.length === 0) return "";
+
+  const renderedFull = blocks.map((b) => `${b.label}\n${b.body}`);
+  const fullJoined = enhanceTabularPlaintext(renderedFull.join("\n\n"));
+  if (fullJoined.length <= maxChars) return fullJoined;
+
+  if (blocks.length === 1) {
+    return truncateMaterial(fullJoined, maxChars);
+  }
+
+  const labelOverhead = blocks.reduce(
+    (n, b) => n + b.label.length + 1 /*newline*/ + 2 /*join*/,
+    0
+  );
+  const bodyBudget = Math.max(2_000, maxChars - labelOverhead);
+  const lengths = blocks.map((b) => b.body.length);
+  const alloc = allocateBudgetAcrossSources(lengths, bodyBudget);
+  const parts = blocks.map((b, i) => {
+    const budget = Math.max(400, alloc[i]!);
+    const body =
+      budget >= b.body.length
+        ? b.body
+        : truncateMaterial(b.body, budget);
+    return `${b.label}\n${body}`;
+  });
+  const out = enhanceTabularPlaintext(parts.join("\n\n"));
+  if (out.length <= maxChars) return out;
+
+  // Last resort: tighten body budgets proportionally rather than head+tail
+  // the joined text (which would re-introduce silent middle-chunk drops).
+  const scale = Math.max(0.35, (maxChars - labelOverhead) / Math.max(1, out.length - labelOverhead));
+  const tight = blocks.map((b, i) => {
+    const budget = Math.max(320, Math.floor(alloc[i]! * scale));
+    const body =
+      budget >= b.body.length
+        ? b.body
+        : truncateMaterial(b.body, budget);
+    return `${b.label}\n${body}`;
+  });
+  const tightened = enhanceTabularPlaintext(tight.join("\n\n"));
+  return tightened.length <= maxChars
+    ? tightened
+    : tightened.slice(0, maxChars);
+}
+
+/**
  * Assemble index-aligned per-module source text from each module's lessons'
  * source_chunk_ids. A module's text is the concatenation (in chunk order) of
- * every chunk its lessons reference, truncated to the module char budget.
+ * every chunk its lessons reference, with a fair per-chunk budget so middle
+ * chunks are never wholly omitted when the module exceeds the char cap.
  * Modules with no resolvable chunk ids get an empty string (caller falls back
  * to the whole combined source text).
  */
@@ -2014,38 +2136,16 @@ export function assembleModuleSourcesFromPlan(
       .sort((a, b) => (orderOf.get(a) ?? 0) - (orderOf.get(b) ?? 0));
     if (ordered.length === 0) return "";
 
-    // Group this module's chunks by their originating FILE (preserving first-seen
-    // order) so a module that mixes sources (e.g. an image + a PDF) is labeled
-    // per source and gets a FAIR share of the char budget — `truncateMaterial`
-    // splits on the SOURCE marker below and allocates the budget round-robin
-    // across sources instead of letting whichever file comes first win.
-    const fileOrder: string[] = [];
-    const blocksByFile = new Map<string, string[]>();
-    for (const id of ordered) {
+    const blocks = ordered.map((id) => {
       const c = byId.get(id)!;
       const allowedPages = new Set(parsePageNumbersFromPosition(c.position));
       const chunkText = filterChunkTableBlocksToPages(c.text, allowedPages);
-      const block = `[from ${c.sourceFileName} — ${c.position}]\n${enhanceTabularPlaintext(chunkText)}`;
-      if (!blocksByFile.has(c.sourceFileName)) {
-        blocksByFile.set(c.sourceFileName, []);
-        fileOrder.push(c.sourceFileName);
-      }
-      blocksByFile.get(c.sourceFileName)!.push(block);
-    }
-
-    if (fileOrder.length <= 1) {
-      const joined = enhanceTabularPlaintext(
-        (blocksByFile.get(fileOrder[0]!) ?? []).join("\n\n")
-      );
-      return truncateMaterial(joined, cap);
-    }
-
-    const total = fileOrder.length;
-    const sections = fileOrder.map((file, i) => {
-      const marker = combinedSourceMarker(i + 1, total, file);
-      return `${marker}\n${blocksByFile.get(file)!.join("\n\n")}`;
+      return {
+        label: `[from ${c.sourceFileName} — ${c.position}]`,
+        body: enhanceTabularPlaintext(chunkText),
+      };
     });
-    return truncateMaterial(sections.join("\n\n"), cap);
+    return joinChunksFairly(blocks, cap);
   });
 }
 

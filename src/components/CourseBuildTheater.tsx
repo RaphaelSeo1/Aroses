@@ -109,6 +109,12 @@ function tabStatusLine(
       detail: t.livePreviewStream,
     };
   }
+  if (snap?.ingestPhase === "digesting_full_pdf") {
+    return {
+      line: t.preparingNotes,
+      detail: t.preparingNotesDetail,
+    };
+  }
   if (snap?.ingestPhase === "planning_outline") {
     return {
       line: t.planningOutline,
@@ -294,6 +300,11 @@ export function CourseBuildTheater({
   const [streamByJob, setStreamByJob] = useState<Record<string, string | null>>(
     {}
   );
+  const [confirmedJobIds, setConfirmedJobIds] = useState<Record<string, boolean>>(
+    {}
+  );
+  const confirmedJobIdsRef = useRef(confirmedJobIds);
+  confirmedJobIdsRef.current = confirmedJobIds;
 
   const courseHome = `/dashboard/courses/${courseId}`;
   const courseHomeWithSection =
@@ -374,7 +385,14 @@ export function CourseBuildTheater({
 
   const onJobSnapshot = useCallback(
     (id: string, snap: PollPdfIngestJobSnapshot) => {
-      setSnapshotByJob((prev) => ({ ...prev, [id]: snap }));
+      setSnapshotByJob((prev) => {
+        const next =
+          confirmedJobIdsRef.current[id] &&
+          snap.ingestPhase === "reviewing_transcript"
+            ? { ...snap, ingestPhase: "digesting_full_pdf" as const }
+            : snap;
+        return { ...prev, [id]: next };
+      });
     },
     []
   );
@@ -983,11 +1001,37 @@ export function CourseBuildTheater({
           )}
 
           {snapshotByJob[activeJob]?.ingestPhase === "reviewing_transcript" &&
-          snapshotByJob[activeJob]?.ingestTranscript ? (
+          snapshotByJob[activeJob]?.ingestTranscript &&
+          !confirmedJobIds[activeJob] ? (
             <div className="mb-8">
               <TranscriptReviewPanel
                 jobId={activeJob}
                 initialTranscript={snapshotByJob[activeJob]!.ingestTranscript!}
+                onConfirmed={() => {
+                  setConfirmedJobIds((prev) => ({
+                    ...prev,
+                    [activeJob]: true,
+                  }));
+                  setSnapshotByJob((prev) => {
+                    const cur = prev[activeJob];
+                    if (!cur) return prev;
+                    return {
+                      ...prev,
+                      [activeJob]: {
+                        ...cur,
+                        ingestPhase: "digesting_full_pdf",
+                      },
+                    };
+                  });
+                  void fetch("/api/process-pdf/expand", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      jobId: activeJob,
+                      resumeTranscript: true,
+                    }),
+                  }).catch(() => {});
+                }}
               />
             </div>
           ) : null}

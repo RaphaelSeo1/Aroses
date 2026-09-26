@@ -228,7 +228,120 @@ export function structurePlanCoveragePromptBlock(
 - Map chunks in source order; each lesson should cover a coherent slice of the deck.
 - Do NOT collapse **unrelated** major topics into one lesson (e.g. homonuclear vs heteronuclear vs conjugation stay separate when they are distinct topics).
 - Supplementary chunks (short examples) may attach to the nearest related lesson — but never drop teaching chunks.
+- Spread source mass across modules: do not pack most of the deck into one module when later modules would be thin — uneven packing causes silent truncation of middle sections.
 - The later writing step will teach **only** what you assign here; missing chunks = missing course content.`;
+}
+
+function lessonApproxChars(
+  lesson: CourseStructurePlanLesson,
+  charById: Map<string, number>
+): number {
+  return lesson.source_chunk_ids.reduce(
+    (n, id) => n + (charById.get(id) ?? 0),
+    0
+  );
+}
+
+/**
+ * After the planner assigns every chunk, re-pack lessons into modules so no
+ * module's assigned source mass wildly exceeds the writer char budget.
+ * Prevents condensed slide PDFs from stuffing half the deck into one module
+ * (where middle chunks used to be head+tail dropped). Preserves lesson order
+ * and every source_chunk_id.
+ */
+export function rebalanceStructurePlanByCharBudget(
+  plan: CourseStructurePlan,
+  chunkSummaries: IngestChunkSummary[],
+  maxCharsPerModule: number,
+  maxModules: number
+): CourseStructurePlan {
+  if (plan.modules.length === 0 || maxModules < 1) return plan;
+  const softCap = Math.max(4_000, Math.floor(maxCharsPerModule * 0.92));
+  const charById = new Map<string, number>();
+  for (const c of chunkSummaries) {
+    charById.set(c.id, c.approxChars > 0 ? c.approxChars : 0);
+  }
+
+  const allLessons = plan.modules.flatMap((m) => m.lessons);
+  if (allLessons.length === 0) return plan;
+
+  const totalChars = allLessons.reduce(
+    (n, l) => n + lessonApproxChars(l, charById),
+    0
+  );
+  const alreadyBalanced = plan.modules.every((m) => {
+    const chars = m.lessons.reduce(
+      (n, l) => n + lessonApproxChars(l, charById),
+      0
+    );
+    return chars <= softCap;
+  });
+  if (alreadyBalanced) return plan;
+
+  // Ideal module count from source mass, capped by profile max.
+  const idealModules = clampInt(
+    Math.ceil(totalChars / softCap),
+    Math.min(plan.modules.length, maxModules),
+    maxModules
+  );
+
+  const packed: CourseStructurePlanLesson[][] = [];
+  let current: CourseStructurePlanLesson[] = [];
+  let currentChars = 0;
+
+  for (const lesson of allLessons) {
+    const lc = Math.max(1, lessonApproxChars(lesson, charById));
+    const wouldExceed = current.length > 0 && currentChars + lc > softCap;
+    const canOpenNew = packed.length + 1 < idealModules;
+    if (wouldExceed && canOpenNew) {
+      packed.push(current);
+      current = [lesson];
+      currentChars = lc;
+      continue;
+    }
+    current.push(lesson);
+    currentChars += lc;
+  }
+  if (current.length > 0) packed.push(current);
+
+  // If still over maxModules (shouldn't), merge smallest adjacent pairs.
+  while (packed.length > maxModules && packed.length > 1) {
+    let mergeAt = 0;
+    let smallest = Infinity;
+    for (let i = 0; i < packed.length - 1; i++) {
+      const size =
+        packed[i]!.reduce((n, l) => n + lessonApproxChars(l, charById), 0) +
+        packed[i + 1]!.reduce((n, l) => n + lessonApproxChars(l, charById), 0);
+      if (size < smallest) {
+        smallest = size;
+        mergeAt = i;
+      }
+    }
+    packed.splice(mergeAt, 2, [
+      ...packed[mergeAt]!,
+      ...packed[mergeAt + 1]!,
+    ]);
+  }
+
+  if (packed.length === plan.modules.length) {
+    // Same count — only rewrite if any module still wildly over and we can
+    // redistribute (already packed). Fall through to rebuild titles.
+  }
+
+  const modules: CourseStructurePlanModule[] = packed.map((lessons, i) => {
+    const prior = plan.modules[Math.min(i, plan.modules.length - 1)];
+    const title =
+      prior && packed.length === plan.modules.length
+        ? prior.title
+        : moduleTitleFromLessonTitles(lessons.map((l) => l.title));
+    return {
+      title,
+      summary: prior?.summary ?? "",
+      lessons,
+    };
+  });
+
+  return { ...plan, modules };
 }
 
 function partTitleFromChunkPosition(position: string): string | null {
