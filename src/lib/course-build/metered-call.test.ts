@@ -1,0 +1,229 @@
+import assert from "node:assert/strict";
+import { after, before, test } from "node:test";
+import type Anthropic from "@anthropic-ai/sdk";
+import { readCourseBuildConfig } from "./config.ts";
+import {
+  AiCallError,
+  BudgetUnavailableError,
+  CourseBuildDisabledError,
+  RateLimitedError,
+  SpendRefusedError,
+} from "./errors.ts";
+import { meteredClaudeCall, type MessagesClient, type MeteredRequest } from "./metered-call.ts";
+import { createTestDb, type TestDb } from "./testing/pglite-db.ts";
+
+let t: TestDb;
+before(async () => {
+  t = await createTestDb();
+});
+after(async () => {
+  await t.close();
+});
+
+const ON = readCourseBuildConfig({ COURSE_BUILD_ENABLED: "1" });
+
+function reply(usage: Partial<Anthropic.Usage>): Anthropic.Message {
+  return {
+    id: "msg_1",
+    type: "message",
+    role: "assistant",
+    model: "claude-haiku-4-5",
+    content: [{ type: "text", text: "ok", citations: null }],
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      ...usage,
+    } as Anthropic.Usage,
+  } as Anthropic.Message;
+}
+
+type Call = { body: Anthropic.MessageCreateParamsNonStreaming; options: unknown };
+
+function fakeClient(impl: () => Promise<Anthropic.Message>): MessagesClient & { calls: Call[] } {
+  const calls: Call[] = [];
+  return {
+    calls,
+    messages: {
+      create: (body, options) => {
+        calls.push({ body, options });
+        return impl();
+      },
+    },
+  };
+}
+
+function httpError(status: number, headers: Record<string, string> = {}) {
+  return Object.assign(new Error(`HTTP ${status}`), { status, headers: new Headers(headers) });
+}
+
+const REQ: MeteredRequest = {
+  max_tokens: 1000,
+  system: "Write lessons.",
+  messages: [{ role: "user", content: "Page 1: supply and demand." }],
+};
+
+async function ctx(opts: { spendCapUsd?: number; dailyCapUsd?: number } = {}) {
+  const userId = await t.createUser();
+  const buildId = await t.createBuild({ userId, ...opts });
+  return { userId, buildId, stepId: null, purpose: "module:0" };
+}
+
+test("disabled switch refuses before any ledger write or API call", async () => {
+  const c = await ctx();
+  const client = fakeClient(async () => reply({}));
+  await assert.rejects(
+    meteredClaudeCall({ store: t.store, client, config: readCourseBuildConfig({}) }, c, REQ),
+    CourseBuildDisabledError
+  );
+  assert.equal(client.calls.length, 0);
+  assert.equal((await t.ledger(c.buildId)).length, 0);
+});
+
+test("a successful call reserves the worst case, then settles the real cost", async () => {
+  const c = await ctx();
+  const client = fakeClient(async () => reply({ input_tokens: 2000, output_tokens: 500 }));
+  const res = await meteredClaudeCall({ store: t.store, client, config: ON }, c, REQ);
+
+  assert.equal(res.costUsd, 0.0045); // 2000 × $1/M + 500 × $5/M
+  assert.ok(res.estCostUsd >= 0.005, "estimate includes max_tokens of output");
+  assert.equal(client.calls.length, 1);
+  assert.equal(client.calls[0].body.model, "claude-haiku-4-5");
+  assert.equal((client.calls[0].options as { maxRetries: number }).maxRetries, 0);
+
+  const [row] = await t.ledger(c.buildId);
+  assert.equal(row.status, "settled");
+  assert.equal(Number(row.cost_usd), 0.0045);
+  assert.equal(row.input_tokens, 2000);
+  assert.equal(row.output_tokens, 500);
+  assert.equal(row.purpose, "module:0");
+});
+
+test("the build cap refuses the call before it is sent", async () => {
+  const c = await ctx({ spendCapUsd: 0.02 });
+  const client = fakeClient(async () => reply({ input_tokens: 100, output_tokens: 3000 }));
+  const big: MeteredRequest = { ...REQ, max_tokens: 5000 }; // $0.025 of output alone
+
+  await assert.rejects(meteredClaudeCall({ store: t.store, client, config: ON }, c, big), (err) => {
+    assert.ok(err instanceof SpendRefusedError);
+    assert.equal(err.code, "build_cap");
+    return true;
+  });
+  assert.equal(client.calls.length, 0);
+  assert.equal((await t.ledger(c.buildId))[0].status, "refused");
+});
+
+test("spend accumulates across calls until the cap stops them", async () => {
+  const c = await ctx({ spendCapUsd: 0.02 });
+  const client = fakeClient(async () => reply({ input_tokens: 1000, output_tokens: 1000 })); // $0.006 each
+  let ok = 0;
+  let refused = 0;
+  for (let i = 0; i < 10; i += 1) {
+    try {
+      await meteredClaudeCall({ store: t.store, client, config: ON }, c, REQ);
+      ok += 1;
+    } catch (err) {
+      assert.ok(err instanceof SpendRefusedError);
+      refused += 1;
+    }
+  }
+  assert.equal(ok, 3);
+  assert.equal(refused, 7);
+  const settled = (await t.ledger(c.buildId)).filter((r) => r.status === "settled");
+  const total = settled.reduce((s, r) => s + Number(r.cost_usd), 0);
+  assert.ok(total <= 0.02, `settled ${total} stays under the cap`);
+});
+
+test("the daily cap refuses across builds", async () => {
+  const userId = await t.createUser();
+  const b1 = await t.createBuild({ userId, dailyCapUsd: 0.01 });
+  const b2 = await t.createBuild({ userId, dailyCapUsd: 0.01 });
+  const client = fakeClient(async () => reply({ input_tokens: 1000, output_tokens: 1000 }));
+  const deps = { store: t.store, client, config: ON };
+
+  await meteredClaudeCall(deps, { userId, buildId: b1, stepId: null, purpose: "plan" }, REQ);
+  await assert.rejects(
+    meteredClaudeCall(deps, { userId, buildId: b2, stepId: null, purpose: "plan" }, REQ),
+    (err) => err instanceof SpendRefusedError && err.code === "daily_cap"
+  );
+  assert.equal(client.calls.length, 1);
+});
+
+test("if the cap check cannot run, the call is refused", async () => {
+  const c = await ctx();
+  const client = fakeClient(async () => reply({}));
+  t.breakRpc(true);
+  try {
+    await assert.rejects(meteredClaudeCall({ store: t.store, client, config: ON }, c, REQ), BudgetUnavailableError);
+  } finally {
+    t.breakRpc(false);
+  }
+  assert.equal(client.calls.length, 0);
+});
+
+test("an unpriced model is refused", async () => {
+  const c = await ctx();
+  const client = fakeClient(async () => reply({}));
+  const config = readCourseBuildConfig({ COURSE_BUILD_ENABLED: "1", COURSE_BUILD_MODEL: "claude-opus-9" });
+  await assert.rejects(meteredClaudeCall({ store: t.store, client, config }, c, REQ), BudgetUnavailableError);
+  assert.equal(client.calls.length, 0);
+});
+
+test("429 and 529 become RateLimitedError with the server's retry-after; not billed", async () => {
+  for (const status of [429, 529]) {
+    const c = await ctx();
+    const client = fakeClient(async () => {
+      throw httpError(status, { "retry-after": "7" });
+    });
+    await assert.rejects(meteredClaudeCall({ store: t.store, client, config: ON }, c, REQ), (err) => {
+      assert.ok(err instanceof RateLimitedError);
+      assert.equal(err.retryAfterMs, 7000);
+      return true;
+    });
+    const [row] = await t.ledger(c.buildId);
+    assert.equal(row.status, "failed");
+    assert.equal(Number(row.cost_usd), 0);
+  }
+});
+
+test("an HTTP 400 is not retryable and not billed; a dropped connection keeps its worst-case cost", async () => {
+  const bad = await ctx();
+  await assert.rejects(
+    meteredClaudeCall(
+      { store: t.store, client: fakeClient(async () => { throw httpError(400); }), config: ON },
+      bad,
+      REQ
+    ),
+    (err) => err instanceof AiCallError && err.retryable === false && err.status === 400
+  );
+  assert.equal(Number((await t.ledger(bad.buildId))[0].cost_usd), 0);
+
+  const dropped = await ctx();
+  await assert.rejects(
+    meteredClaudeCall(
+      { store: t.store, client: fakeClient(async () => { throw new Error("socket hang up"); }), config: ON },
+      dropped,
+      REQ
+    ),
+    (err) => err instanceof AiCallError && err.retryable === true
+  );
+  const [row] = await t.ledger(dropped.buildId);
+  assert.equal(row.status, "failed");
+  assert.equal(Number(row.cost_usd), Number(row.est_cost_usd));
+});
+
+test("an already-aborted signal refuses without sending", async () => {
+  const c = await ctx();
+  const client = fakeClient(async () => reply({}));
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(
+    meteredClaudeCall({ store: t.store, client, config: ON }, c, REQ, { signal: ac.signal }),
+    AiCallError
+  );
+  assert.equal(client.calls.length, 0);
+  assert.equal(Number((await t.ledger(c.buildId))[0].cost_usd), 0);
+});

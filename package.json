@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:course-build": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/course-build/*.test.ts",
+    "test:course-build": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/course-build/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.1",
@@ -56,6 +58,7 @@
     "tippy.js": "^6.3.7"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4",
     "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^20",
