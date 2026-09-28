@@ -1,7 +1,7 @@
 import type { CourseModule } from "@/types/course";
 import type { ModulePreview } from "./handlers.ts";
 
-export type BuildStage = "reading" | "planning" | "writing" | "finishing" | "done" | "failed" | "canceled";
+export type BuildStage = "reading" | "planning" | "figures" | "writing" | "finishing" | "done" | "failed" | "canceled";
 
 export type StepView = {
   kind: string;
@@ -56,6 +56,8 @@ export type BuildStatus = {
   modules: CourseModule[];
   sources: Array<{ label: string; kind: string; pages: number | null }>;
   sourcePages: number;
+  /** Null when the build doesn't look for figures (no PDFs). */
+  figures: { done: boolean; found: number } | null;
   canceling: boolean;
   error: { code: string | null; message: string } | null;
   createdAt: string;
@@ -87,6 +89,7 @@ function stageOf(status: string, steps: StepView[]): BuildStage {
   const open = (kind: string) => steps.some((s) => s.kind === kind && s.status !== "done");
   if (open("extract")) return "reading";
   if (!steps.some((s) => s.kind === "plan" && s.status === "done")) return "planning";
+  if (open("figures")) return "figures";
   if (open("module")) return "writing";
   return "finishing";
 }
@@ -106,12 +109,14 @@ export function buildStatusView(input: {
   sources: Array<{ label: string; kind: string; page_count: number | null }>;
   materialTitle: string | null;
   modules: CourseModule[];
+  figuresFound?: number;
   now?: number;
 }): BuildStatus {
   const { build, steps } = input;
   const now = input.now ?? Date.now();
   const plan = planView(build.plan);
   const moduleSteps = steps.filter((s) => s.kind === "module").sort((a, b) => a.ordinal - b.ordinal);
+  const figureSteps = steps.filter((s) => s.kind === "figures");
   const progress = moduleSteps.map((s) => {
     const status = moduleStatus(s, now);
     return { id: s.ordinal + 1, status, preview: status === "done" ? null : s.preview };
@@ -141,6 +146,9 @@ export function buildStatusView(input: {
     modules: build.status === "failed" || build.status === "canceled" ? [] : input.modules,
     sources: input.sources.map((s) => ({ label: s.label, kind: s.kind, pages: s.page_count })),
     sourcePages: build.source_pages ?? 0,
+    figures: figureSteps.length
+      ? { done: figureSteps.every((s) => s.status === "done"), found: input.figuresFound ?? 0 }
+      : null,
     canceling: !terminal && !!build.cancel_requested_at,
     error:
       build.status === "failed"

@@ -89,6 +89,18 @@ export async function createCourseBuild(
     },
   }));
   steps.push({ build_id: buildId, kind: "plan", ordinal: 0, wave: 1, max_attempts: config.maxStepAttempts, input: {} as never });
+  // Figures run beside the plan so module writers know which figures exist.
+  input.sources.forEach((s, position) => {
+    if (s.kind !== "pdf") return;
+    steps.push({
+      build_id: buildId,
+      kind: "figures",
+      ordinal: position,
+      wave: 1,
+      max_attempts: 1,
+      input: { sourceId: byPosition.get(position) } as never,
+    });
+  });
   const { error: stepErr } = await admin.from("course_build_steps").insert(steps);
   if (stepErr) throw new Error(`create build steps: ${stepErr.message}`);
 

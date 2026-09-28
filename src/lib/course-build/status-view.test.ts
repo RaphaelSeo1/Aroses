@@ -50,6 +50,25 @@ test("stages follow the steps: reading, planning, writing, finishing, done", () 
   assert.equal(view(build("complete"), []).stage, "done");
 });
 
+test("figures: a stage only for builds that look for them, with the count once found", () => {
+  const steps = [step("extract", "done"), step("plan", "done"), step("figures", "running"), step("module", "pending")];
+  const running = view(build("running"), steps);
+  assert.equal(running.stage, "figures");
+  assert.deepEqual(running.figures, { done: false, found: 0 });
+  const done = buildStatusView({
+    build: build("running"),
+    steps: [step("plan", "done"), step("figures", "done"), step("module", "running")],
+    sources: [],
+    materialTitle: null,
+    modules: [],
+    figuresFound: 4,
+    now: NOW,
+  });
+  assert.equal(done.stage, "writing");
+  assert.deepEqual(done.figures, { done: true, found: 4 });
+  assert.equal(view(build("running"), [step("plan", "done"), step("module", "running")]).figures, null);
+});
+
 test("module progress: writing shows its preview, a retry or backoff says retrying, done drops the preview", () => {
   const preview = { lessons: [{ title: "Hexokinase", content: "Traps glucose" }], quiz: 0 };
   const plan = { title: "Glycolysis", description: "", modules: [1, 2, 3, 4].map((id) => ({ id, title: `M${id}`, lessons: ["a"] })) };

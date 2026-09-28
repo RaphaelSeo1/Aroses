@@ -3,6 +3,21 @@ import type { CourseModule, CoursePayload } from "@/types/course";
 import { cleanPages, paginateText, type SourcePage } from "./clean.ts";
 import type { CourseBuildConfig } from "./config.ts";
 import { AiCallError, StepFatalError } from "./errors.ts";
+import { stripFigureMarkers } from "./figure-markers.ts";
+import { reviewFigures, type ReviewVerdict, type SheetMaker } from "./figure-review.ts";
+import {
+  MAX_FIGURES_PER_BUILD,
+  acceptFigures,
+  dropRepeatedImages,
+  figuresForPages,
+  globalPage,
+  rankCandidates,
+  splitForReview,
+  type Box,
+  type FigureAsset,
+  type FigureCandidate,
+  type FiguresStepOutput,
+} from "./figures.ts";
 import { meteredClaudeCall, type MessagesClient } from "./metered-call.ts";
 import {
   ModuleOutputError,
@@ -99,7 +114,17 @@ export interface BuildData {
    * call. Throws StepFatalError when the student's plan can't cover the pages.
    */
   reservePages?(build: BuildRecord, pages: number): Promise<void>;
+  /** Stores a figure image and returns its public URL. */
+  saveFigure?(build: BuildRecord, figureId: string, image: Buffer, mime: string): Promise<string>;
+  /** Figures from the build's finished figures steps. */
+  listFigures?(buildId: string): Promise<FigureAsset[]>;
 }
+
+/** Finds figure crops in a stored PDF without any AI. */
+export type FindFiguresFn = (
+  source: SourceRecord,
+  signal?: AbortSignal
+) => Promise<{ candidates: FigureCandidate[]; repeated: Box[]; pagesRendered?: number; truncated?: boolean }>;
 
 export type ModulePreview = {
   title?: string;
@@ -117,7 +142,10 @@ export function previewFromSnapshot(snapshot: unknown): ModulePreview | null {
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   const lessons = (Array.isArray(s.lessons) ? s.lessons : [])
     .filter((l): l is Record<string, unknown> => !!l && typeof l === "object")
-    .map((l) => ({ title: str(l.title).slice(0, 200), content: str(l.content).slice(0, PREVIEW_LESSON_CHARS) }))
+    .map((l) => ({
+      title: str(l.title).slice(0, 200),
+      content: stripFigureMarkers(str(l.content)).slice(0, PREVIEW_LESSON_CHARS),
+    }))
     .filter((l) => l.title || l.content);
   const preview: ModulePreview = { lessons, quiz: Array.isArray(s.quiz) ? s.quiz.length : 0 };
   if (str(s.title)) preview.title = str(s.title).slice(0, 140);
@@ -186,6 +214,10 @@ export type HandlerDeps = {
   config: CourseBuildConfig;
   data: BuildData;
   extract: ExtractFn;
+  /** Without it (or without data.saveFigure) the figures step finds nothing. */
+  findFigures?: FindFiguresFn;
+  /** Tiles review thumbnails into contact sheets; without it each crop is its own image. */
+  makeContactSheet?: SheetMaker;
   /** Final gate: the payload must parse exactly as the viewers parse it. */
   validatePayload: (payload: unknown) => CoursePayload;
   log?: (msg: string, extra?: Record<string, unknown>) => void;
@@ -193,6 +225,11 @@ export type HandlerDeps = {
 
 type ExtractInput = { sourceId: string; text?: string };
 type ModuleInput = { moduleId: number };
+type FiguresInput = { sourceId: string };
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 function toolInput(message: Anthropic.Message, name: string): unknown {
   if (message.stop_reason === "max_tokens") {
@@ -319,12 +356,90 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
     return { output: result, newSteps };
   };
 
+  /**
+   * Optional by design: any failure here leaves the course without figures
+   * rather than failing the build. Only a cancel propagates.
+   */
+  const figures: StepHandler = async (step, ctx) => {
+    const { sourceId } = (step.input ?? {}) as FiguresInput;
+    const out: FiguresStepOutput = { figures: [], candidates: 0, checked: 0, costUsd: 0 };
+    const findFigures = deps.findFigures;
+    const saveFigure = data.saveFigure?.bind(data);
+    if (!findFigures || !saveFigure) return { output: out };
+    try {
+      const [build, all] = await Promise.all([data.getBuild(step.buildId), data.listSources(step.buildId)]);
+      const source = all.find((s) => s.id === sourceId);
+      if (!source || source.kind !== "pdf") return { output: out };
+      const pages = numberPages(sourceInfos(all));
+      const text = (n: number) => source.pages?.find((p) => p.n === n)?.text ?? "";
+
+      const t0 = Date.now();
+      const found = await findFigures(source, ctx.signal);
+      out.candidates = found.candidates.length;
+      log("course-build figures scanned", {
+        buildId: step.buildId,
+        candidates: found.candidates.length,
+        pagesRendered: found.pagesRendered,
+        truncated: found.truncated,
+        ms: Date.now() - t0,
+      });
+      const ranked = dropRepeatedImages(rankCandidates(found.candidates, text, found.repeated));
+      const split = splitForReview(ranked, config.visionMaxCrops);
+      let verdicts: Array<ReviewVerdict | null> | null = null;
+      if (split.review.length > 0) {
+        try {
+          const r = await reviewFigures(
+            metered,
+            { buildId: step.buildId, stepId: step.id, userId: build.userId, purpose: "vision:figures" },
+            split.review,
+            { signal: ctx.signal, makeSheet: deps.makeContactSheet }
+          );
+          verdicts = r.verdicts;
+          out.costUsd = r.costUsd;
+          out.checked = split.review.length;
+        } catch (err) {
+          if (ctx.signal.aborted) throw err;
+          log("course-build figure review skipped", { buildId: step.buildId, error: errText(err) });
+        }
+      }
+
+      for (const [i, a] of acceptFigures(split, verdicts).slice(0, MAX_FIGURES_PER_BUILD).entries()) {
+        const c = a.r.candidate;
+        const g = globalPage(pages, source.position, c.page);
+        if (g == null) continue;
+        const id = `F${source.position * 100 + i + 1}`;
+        try {
+          const url = await saveFigure(build, id, c.image, c.mime);
+          out.figures.push({
+            id,
+            g,
+            sourceIndex: source.position,
+            page: c.page,
+            kind: a.kind,
+            url,
+            label: a.r.label,
+            description: a.description,
+            width: c.width,
+            height: c.height,
+          });
+        } catch (err) {
+          log("course-build figure upload failed", { buildId: step.buildId, id, error: errText(err) });
+        }
+      }
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
+      log("course-build figures skipped", { buildId: step.buildId, error: errText(err) });
+    }
+    return { output: out };
+  };
+
   const writeModule: StepHandler = async (step, ctx) => {
     const { moduleId } = (step.input ?? {}) as ModuleInput;
-    const [build, planned, loaded] = await Promise.all([
+    const [build, planned, loaded, allFigures] = await Promise.all([
       data.getBuild(step.buildId),
       data.getPlan(step.buildId),
       loadPages(step.buildId),
+      data.listFigures ? data.listFigures(step.buildId).catch(() => []) : Promise.resolve([]),
     ]);
     if (!planned) throw new StepFatalError("plan_missing", "The course plan for this build is missing.");
     const mod = planned.modules.find((m) => m.id === moduleId);
@@ -338,6 +453,8 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
       studyGoal: build.studyGoal,
       outputLanguage: build.outputLanguage,
       attempt: step.attempts,
+      figures: figuresForPages(allFigures, mod.pages),
+      assetPrefix: `${step.buildId.slice(0, 8)}-`,
     };
     const single = !planned.planned;
     const tool = single ? "submit_course" : "submit_module";
@@ -428,5 +545,5 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
     return { output: { materialId, modules: payload.modules.length } };
   };
 
-  return { extract, plan, module: writeModule, finalize };
+  return { extract, plan, figures, module: writeModule, finalize };
 }

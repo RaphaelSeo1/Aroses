@@ -4,6 +4,7 @@ import { memo, type ReactNode } from "react";
 import { GlassPanel } from "@/components/immersive/GlassPanel";
 import { LessonRichContent } from "@/components/LessonRichContent";
 import { LessonSourceAttribution } from "@/components/LessonSourceAttribution";
+import { builderFigures } from "@/lib/course-build/figure-markers";
 import type { CourseLesson } from "@/types/course";
 
 function SourceLessonPanelImpl({
@@ -40,7 +41,7 @@ function SourceLessonPanelImpl({
       ) : null}
       <div className="source-lesson-body mt-3 max-h-72 overflow-y-auto pr-1 text-sm leading-relaxed text-zinc-800">
         {lessonContent ? (
-          <LessonRichContent markdown={lessonContent} />
+          <LessonRichContent markdown={lessonContent} figures={builderFigures(lesson.visual_assets)} />
         ) : (
           <span className="text-zinc-500 italic">
             No source text available for this section.

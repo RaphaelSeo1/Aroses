@@ -8,7 +8,11 @@ import type {
   PublishInput,
   SourceRecord,
 } from "./handlers.ts";
+import type { FiguresStepOutput } from "./figures.ts";
 import type { BuildPlan } from "./plan.ts";
+
+/** Public bucket the lesson viewers already load figure images from. */
+const FIGURE_BUCKET = "study-material-images";
 
 function fail(what: string, error: { message: string } | null): never {
   throw new Error(`${what}: ${error?.message ?? "not found"}`);
@@ -151,6 +155,29 @@ export function createSupabaseBuildData(admin: SupabaseClient): BuildData {
       return data
         .map((r) => r.output as ModuleStepOutput | null)
         .filter((o): o is ModuleStepOutput => !!o && !!o.module);
+    },
+
+    async saveFigure(build, figureId, image, mime) {
+      const ext = mime === "image/jpeg" ? "jpg" : "png";
+      const path = `${build.userId}/course-build/${build.id}/${figureId}.${ext}`;
+      const { error } = await admin.storage
+        .from(FIGURE_BUCKET)
+        .upload(path, image, { contentType: mime, upsert: true, cacheControl: "31536000" });
+      if (error) fail("upload figure", error);
+      const url = admin.storage.from(FIGURE_BUCKET).getPublicUrl(path).data?.publicUrl?.trim();
+      if (!url) fail("figure url", null);
+      return url;
+    },
+
+    async listFigures(buildId) {
+      const { data, error } = await admin
+        .from("course_build_steps")
+        .select("output")
+        .eq("build_id", buildId)
+        .eq("kind", "figures")
+        .eq("status", "done");
+      if (error || !data) fail("read figures", error);
+      return data.flatMap((r) => (r.output as FiguresStepOutput | null)?.figures ?? []);
     },
 
     async publish({ build, payload, final, courseInfo }: PublishInput) {

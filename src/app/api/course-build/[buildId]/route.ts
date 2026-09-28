@@ -40,8 +40,14 @@ export async function GET(request: Request, ctx: { params: Promise<{ buildId: st
     return supabase.from("course_build_steps").select("kind, ordinal, status, attempts, run_after").eq("build_id", buildId);
   };
 
-  const [{ data: steps }, { data: sources }, material] = await Promise.all([
+  const [{ data: steps }, { data: figureSteps }, { data: sources }, material] = await Promise.all([
     loadSteps(),
+    supabase
+      .from("course_build_steps")
+      .select("figures:output->figures")
+      .eq("build_id", buildId)
+      .eq("kind", "figures")
+      .eq("status", "done"),
     supabase.from("course_build_sources").select("label, kind, page_count").eq("build_id", buildId).order("position"),
     build.material_id
       ? supabase.from("study_materials").select("id, file_name, course_payload").eq("id", build.material_id).maybeSingle()
@@ -66,6 +72,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ buildId: st
       sources: sources ?? [],
       materialTitle: payload?.title ?? material.data?.file_name ?? null,
       modules: (payload?.modules ?? []).filter((m) => !have.has(m.id)),
+      figuresFound: ((figureSteps ?? []) as Array<{ figures: unknown }>).reduce(
+        (n, s) => n + (Array.isArray(s.figures) ? s.figures.length : 0),
+        0
+      ),
     }),
     { headers: { "Cache-Control": "no-store" } }
   );

@@ -6,7 +6,9 @@ import {
   splitMarkdownBeforeFirstTable,
   stripMarkdownFigures,
 } from "@/lib/lesson-content-layout";
+import { splitParagraphs } from "@/lib/course-build/figure-markers";
 import { escapeCurrencyDollars } from "@/lib/markdown-math";
+import type { LessonVisualAsset } from "@/types/course";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -133,8 +135,71 @@ function MarkdownBlock({ markdown }: { markdown: string }) {
 const textLockClass =
   "lesson-text-lock w-full min-w-0 text-[15px] leading-relaxed text-zinc-700 [text-size-adjust:100%] [-webkit-text-size-adjust:100%] dark:text-zinc-300 [&_.katex-display]:my-4 [&_.katex]:text-[1.05em]";
 
-/** Lesson body: opening text, then prose, then tables — no generated figures. */
-export function LessonRichContent({ markdown }: { markdown: string }) {
+function LessonFigure({ asset }: { asset: LessonVisualAsset }) {
+  const caption = asset.caption || asset.title;
+  return (
+    <figure className="my-2 overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900/40">
+      <a href={asset.imageUrl} target="_blank" rel="noreferrer" className="block bg-white p-2">
+        {/* Figures are user-file crops on Supabase storage; next/image adds nothing here. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={asset.imageUrl}
+          alt={caption || "Figure from your file"}
+          loading="lazy"
+          className="mx-auto max-h-[28rem] w-auto max-w-full object-contain"
+        />
+      </a>
+      {caption ? (
+        <figcaption className="border-t border-zinc-100 px-3 py-2 text-[13px] leading-snug text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
+          {caption}
+        </figcaption>
+      ) : null}
+    </figure>
+  );
+}
+
+/** Text runs with each figure after the paragraph the writer placed it under. */
+function ContentWithFigures({ markdown, figures }: { markdown: string; figures: LessonVisualAsset[] }) {
+  const paragraphs = splitParagraphs(markdown);
+  const at = (f: LessonVisualAsset) =>
+    Math.min(paragraphs.length, Math.max(0, f.placementAfterParagraph ?? paragraphs.length));
+  const sorted = figures.slice().sort((a, b) => at(a) - at(b));
+  const parts: React.ReactNode[] = [];
+  let from = 0;
+  for (const [i, f] of sorted.entries()) {
+    const to = at(f);
+    if (to > from) {
+      parts.push(
+        <div key={`t${i}`} className={textLockClass}>
+          <MarkdownBlock markdown={paragraphs.slice(from, to).join("\n\n")} />
+        </div>
+      );
+      from = to;
+    }
+    parts.push(<LessonFigure key={`f${f.assetId}`} asset={f} />);
+  }
+  if (from < paragraphs.length) {
+    parts.push(
+      <div key="rest" className={textLockClass}>
+        <MarkdownBlock markdown={paragraphs.slice(from).join("\n\n")} />
+      </div>
+    );
+  }
+  return <div className="space-y-4">{parts}</div>;
+}
+
+/** Lesson body: opening text, then prose, then tables, with source figures where the writer placed them. */
+export function LessonRichContent({
+  markdown,
+  figures,
+}: {
+  markdown: string;
+  figures?: LessonVisualAsset[];
+}) {
+  const placed = (figures ?? []).filter((f) => f.imageUrl?.trim() && f.type !== "page_snapshot");
+  if (markdown.trim() && placed.length > 0) {
+    return <ContentWithFigures markdown={stripMarkdownFigures(markdown)} figures={placed} />;
+  }
   if (!markdown.trim()) {
     return (
       <p className="text-sm italic text-zinc-500 dark:text-zinc-400">

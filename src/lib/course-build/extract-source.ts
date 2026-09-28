@@ -5,7 +5,8 @@ import { extractPptxSlides } from "@/lib/study-ingest/pptx";
 import { rtfToPlainText } from "@/lib/study-ingest/rtf";
 import { paginateText, type SourcePage } from "./clean.ts";
 import { StepFatalError } from "./errors.ts";
-import type { ExtractFn, SourceRecord } from "./handlers.ts";
+import { findPdfFigures } from "./figures-pdf.ts";
+import type { ExtractFn, FindFiguresFn, SourceRecord } from "./handlers.ts";
 import { transcribeMediaUrl } from "./transcribe.ts";
 
 export const COURSE_BUILD_UPLOAD_BUCKET = "study-pdf-ingest";
@@ -30,6 +31,16 @@ function unreadable(source: SourceRecord): StepFatalError {
 }
 
 const SIGNED_URL_SECONDS = 60 * 60;
+
+export function createFigureFinder(
+  admin: SupabaseClient,
+  opts: { maxRenderPages: number; timeBudgetMs: number }
+): FindFiguresFn {
+  return async (source, signal) => {
+    const buf = await download(admin, source);
+    return findPdfFigures(buf, { ...opts, signal });
+  };
+}
 
 /** Raw page text per file type. Cleaning happens in the extract step. */
 export function createSourceExtractor(admin: SupabaseClient): ExtractFn {

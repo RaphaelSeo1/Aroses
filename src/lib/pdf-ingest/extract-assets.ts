@@ -124,27 +124,6 @@ function imageUnitSquareUserRect(ctm: Matrix6): UserRect | null {
   return userRectFromPoints(corners);
 }
 
-async function resolveImageObject(
-  page: {
-    objs: { get: (name: string, cb: (obj: unknown) => void) => void };
-  },
-  name: string
-): Promise<{ width: number; height: number } | null> {
-  return new Promise((resolve) => {
-    page.objs.get(name, (obj: unknown) => {
-      if (!obj || typeof obj !== "object") {
-        resolve(null);
-        return;
-      }
-      const o = obj as { width?: number; height?: number };
-      resolve({
-        width: typeof o.width === "number" ? o.width : 1,
-        height: typeof o.height === "number" ? o.height : 1,
-      });
-    });
-  });
-}
-
 /**
  * 1a. Raster assets from paintImage* ops + CTM → pixel crop.
  */
@@ -196,7 +175,6 @@ export async function extractStructuralRasterCandidates(input: {
 
     if (seenImageObjectIds.has(name)) continue;
 
-    const imgMeta = await resolveImageObject(page, name);
     const unit = imageUnitSquareUserRect(ctm);
     if (!unit) continue;
 
@@ -220,7 +198,6 @@ export async function extractStructuralRasterCandidates(input: {
       cropBuffer,
       imageObjectId: name,
     });
-    void imgMeta;
   }
 
   return out;

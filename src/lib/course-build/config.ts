@@ -8,6 +8,11 @@ export type CourseBuildConfig = {
   minCapUsd: number;
   defaultDailyCapUsd: number;
   visionMaxCrops: number;
+  figuresEnabled: boolean;
+  /** Most PDF pages rendered per file when looking for figures. */
+  figureMaxPages: number;
+  /** Wall-clock budget for finding figures in one file; later pages are skipped. */
+  figureTimeBudgetMs: number;
   maxStepAttempts: number;
 };
 
@@ -32,7 +37,10 @@ export function readCourseBuildConfig(env: Env = process.env): CourseBuildConfig
     capUsdPerPage: positiveNumber(env.COURSE_BUILD_CAP_USD_PER_PAGE, 0.0025),
     minCapUsd: positiveNumber(env.COURSE_BUILD_MIN_CAP_USD, 0.02),
     defaultDailyCapUsd: positiveNumber(env.COURSE_BUILD_DAILY_CAP_USD, 1),
-    visionMaxCrops: nonNegativeInt(env.COURSE_BUILD_VISION_MAX_CROPS, 6),
+    visionMaxCrops: nonNegativeInt(env.COURSE_BUILD_VISION_MAX_CROPS, 24),
+    figuresEnabled: !["0", "false", "off"].includes(env.COURSE_BUILD_FIGURES?.trim().toLowerCase() ?? ""),
+    figureMaxPages: nonNegativeInt(env.COURSE_BUILD_FIGURE_MAX_PAGES, 20),
+    figureTimeBudgetMs: Math.max(5_000, nonNegativeInt(env.COURSE_BUILD_FIGURE_TIME_MS, 40_000)),
     maxStepAttempts: Math.min(10, Math.max(1, nonNegativeInt(env.COURSE_BUILD_MAX_STEP_ATTEMPTS, 3))),
   };
 }

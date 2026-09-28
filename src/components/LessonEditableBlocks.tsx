@@ -7,6 +7,7 @@ import { LessonMarkdownEditor } from "@/components/LessonMarkdownEditor";
 import { LessonQuoteCaptureRegion } from "@/components/LessonQuoteCaptureRegion";
 import { LessonSourceAttribution } from "@/components/LessonSourceAttribution";
 import { LessonRichContent } from "@/components/LessonRichContent";
+import { builderFigures } from "@/lib/course-build/figure-markers";
 import { TypewriterText, useTypewriterString } from "@/components/TypewriterText";
 import type { ArosesCourseRefinePreviewEdit } from "@/lib/refine-course-events";
 import type { CourseLesson, KeyTerm } from "@/types/course";
@@ -189,6 +190,7 @@ export function LessonEditableBlocks({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const figures = builderFigures(lesson.visual_assets);
   const [draftTitle, setDraftTitle] = useState(lesson.title);
   const [draftContent, setDraftContent] = useState(lesson.content);
   const [draftTerms, setDraftTerms] = useState<KeyTerm[]>(() =>
@@ -312,7 +314,7 @@ export function LessonEditableBlocks({
       </div>
     ) : (
       <div className="mt-1.5">
-        <LessonRichContent markdown={lesson.content} />
+        <LessonRichContent markdown={lesson.content} figures={figures} />
       </div>
     );
 
@@ -487,7 +489,7 @@ export function LessonEditableBlocks({
               spans={contentPreviewSpans}
             />
           ) : (
-            <LessonRichContent markdown={lesson.content} />
+            <LessonRichContent markdown={lesson.content} figures={figures} />
           )
         }
         edit={

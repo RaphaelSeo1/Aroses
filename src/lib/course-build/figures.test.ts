@@ -1,0 +1,451 @@
+import assert from "node:assert/strict";
+import { after, before, test } from "node:test";
+import type Anthropic from "@anthropic-ai/sdk";
+import type { CoursePayload } from "@/types/course";
+import type { SourcePage } from "./clean.ts";
+import { readCourseBuildConfig } from "./config.ts";
+import { extractFigureMarkers, stripFigureMarkers } from "./figure-markers.ts";
+import { parseReview } from "./figure-review.ts";
+import {
+  acceptFigures,
+  autoPlaceFigures,
+  captionLines,
+  dropRepeatedImages,
+  placeChosenFigures,
+  figureManifest,
+  placeFigures,
+  rankCandidates,
+  rejectReason,
+  repeatedBoxes,
+  splitForReview,
+  type Box,
+  type FigureAsset,
+  type FigureCandidate,
+  type PlacedLesson,
+} from "./figures.ts";
+import {
+  createStepHandlers,
+  previewFromSnapshot,
+  type BuildData,
+  type FindFiguresFn,
+  type ModuleStepOutput,
+  type PublishInput,
+  type SourceRecord,
+} from "./handlers.ts";
+import type { MessagesClient } from "./metered-call.ts";
+import type { BuildPlan } from "./plan.ts";
+import { driveBuild } from "./runner.ts";
+import { createTestDb, type TestDb } from "./testing/pglite-db.ts";
+
+let t: TestDb;
+before(async () => {
+  t = await createTestDb();
+});
+after(async () => {
+  await t.close();
+});
+
+const config = readCourseBuildConfig({ COURSE_BUILD_ENABLED: "1" });
+
+function cand(page: number, box: Box, over: Partial<FigureCandidate> = {}): FigureCandidate {
+  return {
+    page,
+    origin: "raster",
+    box,
+    width: Math.round(box.w * 1100),
+    height: Math.round(box.h * 1400),
+    image: Buffer.from(`img-${page}-${box.y}`),
+    mime: "image/jpeg",
+    thumb: Buffer.from(`thumb-${page}-${box.y}`),
+    quality: 0.8,
+    tableGrid: false,
+    ...over,
+  };
+}
+
+const mid: Box = { x: 0.1, y: 0.3, w: 0.6, h: 0.4 };
+
+test("markers: pulled out of the text with the paragraph count before them", () => {
+  const { text, markers } = extractFigureMarkers(
+    "Glycolysis has two phases.\n\n[[F2: The ten steps of glycolysis]]\n\nThe payoff phase makes ATP.\n[[F5]]\n\nLast."
+  );
+  assert.equal(text, "Glycolysis has two phases.\n\nThe payoff phase makes ATP.\n\nLast.");
+  assert.deepEqual(markers, [
+    { id: "F2", caption: "The ten steps of glycolysis", afterParagraph: 1 },
+    { id: "F5", caption: "", afterParagraph: 2 },
+  ]);
+  assert.equal(stripFigureMarkers("Text.\n\n[[F1: a]]\n\nMore [[F2"), "Text.\n\nMore");
+});
+
+test("captions: printed figure and table labels, not in-text references", () => {
+  const lines = captionLines("Intro text\nFigure 3. The Krebs cycle\nFigure 4 shows the rest\n표 2: 환율\nTable 1 – Costs");
+  assert.deepEqual(lines, [
+    { text: "Figure 3. The Krebs cycle", table: false },
+    { text: "표 2: 환율", table: true },
+    { text: "Table 1 – Costs", table: true },
+  ]);
+});
+
+test("deterministic rejects: headers, logos repeated across pages, backgrounds, strips, text tables", () => {
+  const logo: Box = { x: 0.85, y: 0.02, w: 0.1, h: 0.06 };
+  const repeated = repeatedBoxes(
+    new Map([1, 2, 3, 4, 5].map((p) => [p, [{ ...logo, x: logo.x + p * 0.002 }]])),
+    10
+  );
+  assert.equal(repeated.length, 1);
+  assert.equal(rejectReason(cand(2, { x: 0.3, y: 0.005, w: 0.4, h: 0.09 }), []), "header");
+  assert.equal(rejectReason(cand(2, { x: 0.3, y: 0.4, w: 0.2, h: 0.2 }), [{ x: 0.3, y: 0.4, w: 0.2, h: 0.2 }]), "repeated");
+  assert.equal(rejectReason(cand(2, { x: 0, y: 0, w: 1, h: 0.95 }), []), "background");
+  assert.equal(rejectReason(cand(2, { x: 0.1, y: 0.4, w: 0.8, h: 0.06 }), []), "strip");
+  assert.equal(rejectReason(cand(2, mid, { origin: "vector", tableGrid: true }), []), "table_text");
+  assert.equal(rejectReason(cand(2, mid, { quality: 0 }), []), "unusable");
+  assert.equal(rejectReason(cand(2, mid), []), null);
+});
+
+test("ranking: captioned or large embedded crops are confident; drawn regions and small images are not", () => {
+  const text = (p: number) => (p === 2 ? "Figure 1. Cell membrane" : p === 3 ? "Table 2. Rates" : "");
+  const ranked = rankCandidates(
+    [
+      cand(2, mid),
+      cand(2, { x: 0.12, y: 0.32, w: 0.55, h: 0.35 }, { quality: 0.5 }),
+      cand(3, mid, { origin: "vector" }),
+      cand(4, mid, { origin: "vector", quality: 0.9 }),
+      cand(5, { x: 0.1, y: 0.2, w: 0.2, h: 0.2 }),
+      cand(6, mid),
+    ],
+    text,
+    []
+  );
+  assert.deepEqual(ranked.map((r) => [r.candidate.page, r.confident, r.label]), [
+    [2, true, "Figure 1. Cell membrane"],
+    [4, false, ""],
+    [5, false, ""],
+    [6, true, ""],
+  ]);
+  const split = splitForReview(ranked, 3);
+  assert.deepEqual(split.review.map((r) => r.candidate.page), [2, 4, 6], "confident and large crops first, in page order");
+  assert.deepEqual(split.unreviewed.map((r) => r.candidate.page), [5]);
+});
+
+test("acceptance: vision verdicts decide reviewed crops; without them only confident crops stay", () => {
+  const ranked = rankCandidates([cand(2, mid), cand(3, mid, { origin: "vector" }), cand(4, mid)], () => "", []);
+  const split = splitForReview(ranked, 3);
+  const kept = acceptFigures(split, [
+    { keep: false, kind: "image", description: "" },
+    { keep: true, kind: "chart", description: "Growth curve" },
+    null,
+  ]);
+  assert.deepEqual(kept.map((k) => [k.r.candidate.page, k.kind, k.description]), [[3, "chart", "Growth curve"]]);
+  assert.deepEqual(acceptFigures(split, null).map((k) => k.r.candidate.page), [2, 4], "review failed: confident only");
+  const over = acceptFigures(splitForReview(ranked, 1), [{ keep: true, kind: "image", description: "" }]);
+  assert.equal(over.length, 1, "crops over the review budget are dropped once the review ran");
+});
+
+test("placement: only listed IDs, each once per module, captions fall back to the printed label", () => {
+  const fig = (id: string, label = ""): FigureAsset => ({
+    id,
+    g: 3,
+    sourceIndex: 0,
+    page: 3,
+    kind: "diagram",
+    url: `https://x/course-build/b/${id}.png`,
+    label,
+    description: "",
+    width: 600,
+    height: 400,
+  });
+  const figures = new Map([
+    ["F1", fig("F1", "Figure 1. Membrane")],
+    ["F2", fig("F2")],
+  ]);
+  const used = new Set<string>();
+  const a = placeFigures("One.\n\n[[F1]]\n\nTwo.\n\n[[F9: invented]]", figures, used, "abc-");
+  assert.equal(a.content, "One.\n\nTwo.");
+  assert.deepEqual(a.dropped, ["F9"]);
+  assert.equal(a.assets.length, 1);
+  assert.equal(a.assets[0].assetId, "abc-F1");
+  assert.equal(a.assets[0].caption, "Figure 1. Membrane");
+  assert.equal(a.assets[0].placementAfterParagraph, 1);
+  const b = placeFigures("Three.\n\n[[F1: again]]\n\n[[F2: Second figure]]", figures, used, "abc-");
+  assert.deepEqual(b.dropped, ["F1"]);
+  assert.equal(b.assets[0].caption, "Second figure");
+  assert.match(figureManifest([fig("F1", "Figure 1. Membrane")]), /^\[figure F1\] diagram: "Figure 1\. Membrane"$/);
+});
+
+test("figures the writer skipped go into the lesson covering their page, after the best-matching paragraph", () => {
+  const fig = (id: string, g: number, description: string): FigureAsset => ({
+    id,
+    g,
+    sourceIndex: 0,
+    page: g,
+    kind: "diagram",
+    url: `https://x/course-build/b/${id}.png`,
+    label: "",
+    description,
+    width: 600,
+    height: 400,
+  });
+  const lessons: PlacedLesson[] = [
+    { content: "Glucose enters the cell.\n\nHexokinase phosphorylates glucose.\n\nThe cell traps it.", firstPage: 1, lastPage: 3, assets: [] },
+    { content: "Pyruvate forms at the end.", firstPage: 4, lastPage: 5, assets: [] },
+  ];
+  const used = new Set(["F1"]);
+  const placed = autoPlaceFigures(
+    lessons,
+    [fig("F1", 2, "already placed"), fig("F2", 2, "hexokinase reaction"), fig("F3", 5, "pyruvate"), fig("F4", 9, "outside")],
+    used,
+    (g) => (g === 2 ? "Hexokinase phosphorylates glucose using ATP" : ""),
+    "p-"
+  );
+  assert.deepEqual(placed, ["F2", "F3"]);
+  assert.deepEqual(lessons[0].assets.map((a) => [a.assetId, a.placementAfterParagraph, a.caption]), [["p-F2", 2, "hexokinase reaction"]]);
+  assert.deepEqual(lessons[1].assets.map((a) => [a.assetId, a.placementAfterParagraph]), [["p-F3", 1]]);
+  assert.ok(!used.has("F4"), "a figure outside every lesson's pages stays out");
+
+  const lesson: PlacedLesson = { content: "Alpha text.\n\nBeta text about kinase.", firstPage: 1, lastPage: 2, assets: [] };
+  const map = new Map([["F5", fig("F5", 1, "kinase")]]);
+  const dropped = placeChosenFigures(lesson, [{ id: "f5", caption: "Kinase step" }, { id: "F9", caption: "x" }], map, new Set(), () => "", "p-");
+  assert.deepEqual(dropped, ["F9"]);
+  assert.deepEqual(lesson.assets.map((a) => [a.assetId, a.caption, a.placementAfterParagraph]), [["p-F5", "Kinase step", 2]]);
+});
+
+test("a picture repeated on later slides is kept once", () => {
+  const item = (page: number, hash: string, w = 552, h = 376) => ({ candidate: cand(page, mid, { hash, width: w, height: h }) });
+  const kept = dropRepeatedImages([
+    item(2, "ffff0000ffff0000"),
+    item(3, "ffff0000ffff0001"),
+    item(4, "ffff0000ffff0000", 300, 600),
+    item(5, "0f0f0f0f0f0f0f0f"),
+  ]);
+  assert.deepEqual(kept.map((k) => k.candidate.page), [2, 4, 5]);
+});
+
+test("vision review parser: missing or malformed verdicts mean drop", () => {
+  const v = parseReview(
+    { figures: [{ n: 2, keep: true, kind: "chart", description: " Sales  by year " }, { n: 9, keep: true }] },
+    3
+  );
+  assert.equal(v[0], null);
+  assert.deepEqual(v[1], { keep: true, kind: "chart", description: "Sales by year" });
+  assert.equal(v[2], null);
+  assert.deepEqual(parseReview("junk", 2), [null, null]);
+});
+
+test("preview never shows raw markers", () => {
+  const p = previewFromSnapshot({ lessons: [{ title: "A", content: "Text.\n\n[[F1: cap]]\n\nMore [[F" }] });
+  assert.equal(p?.lessons[0].content, "Text.\n\nMore");
+});
+
+function toolMessage(name: string, input: unknown): Anthropic.Message {
+  return {
+    id: "msg",
+    type: "message",
+    role: "assistant",
+    model: "claude-haiku-4-5",
+    stop_reason: "tool_use",
+    stop_sequence: null,
+    content: [{ type: "tool_use", id: "tu", name, input } as Anthropic.ToolUseBlock],
+    usage: { input_tokens: 800, output_tokens: 200 } as Anthropic.Usage,
+  } as Anthropic.Message;
+}
+
+const prose = (i: number) => `Concept ${i} is explained here with enough words to count as a real content page. `.repeat(3);
+
+function setup(pages: SourcePage[]) {
+  const sources: SourceRecord[] = [
+    { id: "s1", position: 0, kind: "pdf", label: "lec.pdf", storagePath: "x", sourceUrl: null, pages: null },
+  ];
+  const published: PublishInput[] = [];
+  const saved: string[] = [];
+  const doneOutputs = async (buildId: string, kind: string) =>
+    (await t.steps(buildId)).filter((s) => s.kind === kind && s.status === "done").map((s) => s.output);
+  const data = (buildId: string, userId: string): BuildData => ({
+    getBuild: async () => ({
+      id: buildId,
+      userId,
+      courseId: "c",
+      examGroupId: "g",
+      materialId: null,
+      outputLanguage: null,
+      studyGoal: null,
+    }),
+    listSources: async () => sources,
+    saveSourcePages: async (_id, p) => {
+      sources[0].pages = p;
+    },
+    setBuildSize: async () => {},
+    savePlan: async () => {},
+    getPlan: async () => ((await doneOutputs(buildId, "plan"))[0] as BuildPlan) ?? null,
+    listModuleOutputs: async () => (await doneOutputs(buildId, "module")) as ModuleStepOutput[],
+    publish: async (input) => {
+      published.push(structuredClone(input));
+      return "material-1";
+    },
+    saveFigure: async (build, id) => {
+      saved.push(id);
+      return `https://cdn.test/${build.userId}/course-build/${build.id}/${id}.png`;
+    },
+    listFigures: async () =>
+      (await doneOutputs(buildId, "figures")).flatMap((o) => (o as { figures: FigureAsset[] }).figures),
+  });
+  return { data, published, saved, extract: async () => pages };
+}
+
+async function newBuild() {
+  const userId = await t.createUser();
+  const buildId = await t.createBuild({ userId, spendCapUsd: 0.5 });
+  await t.addStep(buildId, { kind: "extract", wave: 0, input: { sourceId: "s1" } });
+  await t.addStep(buildId, { kind: "plan", wave: 1 });
+  await t.addStep(buildId, { kind: "figures", wave: 1, maxAttempts: 1, input: { sourceId: "s1" } });
+  return { userId, buildId };
+}
+
+const validate = (p: unknown) => p as CoursePayload;
+
+function quiz(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    kind: "multiple_choice",
+    difficulty: "easy",
+    question: `Which step ${i}?`,
+    choices: ["One", "Two", "Three", "Four"],
+    correct_choice: 1,
+    reference_answer: "",
+    explanation: "Step two.",
+  }));
+}
+
+test("pipeline: figures found before writing, reviewed in one low-res call, placed into lessons", async () => {
+  const { userId, buildId } = await newBuild();
+  const pages = Array.from({ length: 4 }, (_, i) => ({
+    n: i + 1,
+    text: i === 1 ? `Figure 1. Membrane structure\n${prose(2)}` : prose(i + 1),
+  }));
+  const mem = setup(pages);
+  const findFigures: FindFiguresFn = async () => ({
+    candidates: [
+      cand(2, mid),
+      cand(3, mid, { quality: 0.5 }),
+      cand(4, mid, { quality: 0.5 }),
+      cand(4, { x: 0.3, y: 0.01, w: 0.4, h: 0.07 }),
+    ],
+    repeated: [],
+  });
+  const calls: Anthropic.MessageCreateParamsNonStreaming[] = [];
+  const sheets: Array<[number, number]> = [];
+  const client: MessagesClient = {
+    messages: {
+      create: async (body) => {
+        calls.push(body);
+        const tool = (body.tool_choice as { name: string }).name;
+        if (tool === "review_figures") {
+          return toolMessage("review_figures", {
+            figures: [
+              { n: 1, keep: true, kind: "diagram", description: "Lipid bilayer" },
+              { n: 2, keep: true, kind: "chart", description: "Bar chart of ATP yield" },
+              { n: 3, keep: false, kind: "image", description: "" },
+            ],
+          });
+        }
+        const text = body.messages[0].content as string;
+        assert.match(text, /\[p2\][^[]*\n\[figure F1\] diagram: "Figure 1\. Membrane structure" — Lipid bilayer/);
+        assert.match(text, /\[p3\][^[]*\n\[figure F2\] chart: Bar chart of ATP yield/);
+        assert.match(text, /Figures: the pages list figures F1, F2 /, "the instruction comes after the pages");
+        assert.doesNotMatch(text, /\[figure F3\]/, "rejected crops are never offered to the writer");
+        return toolMessage("submit_course", {
+          title: "Membranes",
+          description: "How membranes work.",
+          module_title: "Membranes",
+          lessons: [
+            {
+              title: "Structure",
+              content: "Membranes are lipid bilayers with proteins embedded in them.\n\n[[F1: Lipid bilayer with proteins]]\n\nThey control what enters the cell.\n\n[[F7: made up]]",
+              key_terms: [],
+              examples: [],
+              first_page: 1,
+              last_page: 2,
+            },
+            {
+              title: "Energy",
+              content: "Cells make most ATP in mitochondria; the yield differs per stage.\n\nGlycolysis adds a little more.",
+              key_terms: [],
+              examples: [],
+              figures: [{ id: "F2", caption: "ATP yield per stage" }, { id: "F1", caption: "already used" }],
+              first_page: 3,
+              last_page: 4,
+            },
+          ],
+          quiz: quiz(6),
+        });
+      },
+    },
+  };
+  const handlers = createStepHandlers({
+    store: t.store,
+    client,
+    config,
+    data: mem.data(buildId, userId),
+    extract: mem.extract,
+    findFigures,
+    makeContactSheet: async (images, first) => {
+      sheets.push([first, images.length]);
+      return Buffer.from("sheet");
+    },
+    validatePayload: validate,
+  });
+  const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50, backoffSeconds: () => 0 });
+  assert.deepEqual(out, { outcome: "finished", status: "complete" }, String((await t.build(buildId)).error_message));
+
+  const review = calls.filter((c) => (c.tool_choice as { name: string }).name === "review_figures");
+  assert.equal(review.length, 1, "one vision call for all uncertain crops");
+  const images = (review[0].messages[0].content as Anthropic.ContentBlockParam[]).filter((b) => b.type === "image");
+  assert.equal(images.length, 1, "all crops share one contact sheet");
+  assert.deepEqual(sheets, [[1, 3]], "the header strip never reaches vision");
+  assert.deepEqual(mem.saved, ["F1", "F2"]);
+
+  const lessons = mem.published.find((p) => p.final)!.payload.modules[0].lessons;
+  assert.equal(lessons[0].content, "Membranes are lipid bilayers with proteins embedded in them.\n\nThey control what enters the cell.");
+  assert.deepEqual(
+    lessons[0].visual_assets?.map((a) => [a.assetId, a.caption, a.placementAfterParagraph, a.sourcePage]),
+    [[`${buildId.slice(0, 8)}-F1`, "Lipid bilayer with proteins", 1, 2]]
+  );
+  assert.deepEqual(
+    lessons[1].visual_assets?.map((a) => [a.assetId, a.caption, a.type, a.placementAfterParagraph]),
+    [[`${buildId.slice(0, 8)}-F2`, "ATP yield per stage", "chart", 1]],
+    "figures chosen in the lesson's field land after the paragraph matching their page"
+  );
+  const ledger = await t.ledger(buildId);
+  assert.ok(ledger.some((l) => l.purpose === "vision:figures" && l.status === "settled"), "vision is metered");
+});
+
+test("pipeline: a broken figure finder leaves the course without figures instead of failing", async () => {
+  const { userId, buildId } = await newBuild();
+  const mem = setup([{ n: 1, text: prose(1) }, { n: 2, text: prose(2) }]);
+  const client: MessagesClient = {
+    messages: {
+      create: async (body) => {
+        assert.doesNotMatch(body.messages[0].content as string, /\[figure |Figures: /);
+        return toolMessage("submit_course", {
+          title: "T",
+          description: "D.",
+          module_title: "M",
+          lessons: [{ title: "L", content: "A full lesson paragraph about the idea at hand.", key_terms: [], examples: [], first_page: 1, last_page: 2 }],
+          quiz: quiz(6),
+        });
+      },
+    },
+  };
+  const handlers = createStepHandlers({
+    store: t.store,
+    client,
+    config,
+    data: mem.data(buildId, userId),
+    extract: mem.extract,
+    findFigures: async () => {
+      throw new Error("canvas exploded");
+    },
+    validatePayload: validate,
+  });
+  const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50 });
+  assert.deepEqual(out, { outcome: "finished", status: "complete" });
+  assert.equal(mem.published.find((p) => p.final)!.payload.modules[0].lessons[0].visual_assets, undefined);
+});

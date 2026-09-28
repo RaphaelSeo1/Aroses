@@ -7,7 +7,7 @@ import { confirmDialog } from "@/components/AppDialogs";
 import { LessonRichContent } from "@/components/LessonRichContent";
 import type { BuildStage, BuildStatus, ModuleProgress } from "@/lib/course-build/status-view";
 import { unwatchBuild, watchBuild } from "@/lib/course-build/watch";
-import type { CourseModule } from "@/types/course";
+import type { CourseModule, LessonVisualAsset } from "@/types/course";
 
 const POLL_MS = 1200;
 const POLL_HIDDEN_MS = 6000;
@@ -68,15 +68,31 @@ function Typed({ text, animate, caret = false }: { text: string; animate: boolea
   );
 }
 
-const MemoMarkdown = memo(function MemoMarkdown({ markdown }: { markdown: string }) {
-  return <LessonRichContent markdown={markdown} />;
+const MemoMarkdown = memo(function MemoMarkdown({
+  markdown,
+  figures,
+}: {
+  markdown: string;
+  figures?: LessonVisualAsset[];
+}) {
+  return <LessonRichContent markdown={markdown} figures={figures} />;
 });
 
 /** Finished paragraphs render as markdown; the paragraph being written types out as plain text. */
-function StreamingLesson({ text, animate, writing }: { text: string; animate: boolean; writing: boolean }) {
+function StreamingLesson({
+  text,
+  figures,
+  animate,
+  writing,
+}: {
+  text: string;
+  figures?: LessonVisualAsset[];
+  animate: boolean;
+  writing: boolean;
+}) {
   const shown = useTypedText(text, animate);
   const typing = writing || shown.length < text.length;
-  if (!typing) return <MemoMarkdown markdown={shown} />;
+  if (!typing) return <MemoMarkdown markdown={shown} figures={figures} />;
   const cut = shown.lastIndexOf("\n\n");
   const head = cut > 0 ? shown.slice(0, cut) : "";
   const tail = cut > 0 ? shown.slice(cut + 2) : shown;
@@ -94,30 +110,42 @@ function StreamingLesson({ text, animate, writing }: { text: string; animate: bo
 const STAGES: Array<{ key: BuildStage; label: string }> = [
   { key: "reading", label: "Reading your files" },
   { key: "planning", label: "Planning the course" },
+  { key: "figures", label: "Finding figures" },
   { key: "writing", label: "Writing modules" },
   { key: "done", label: "Done" },
 ];
 
-function stageIndex(stage: BuildStage): number {
-  if (stage === "finishing") return 2;
-  const i = STAGES.findIndex((s) => s.key === stage);
+function stageIndex(stages: typeof STAGES, stage: BuildStage): number {
+  const i = stages.findIndex((s) => s.key === (stage === "finishing" ? "writing" : stage));
   return i < 0 ? 0 : i;
 }
 
 function Stepper({ status }: { status: BuildStatus }) {
   const stopped = status.stage === "failed" || status.stage === "canceled";
-  const current = stopped ? (status.plan ? 2 : status.sourcePages > 0 ? 1 : 0) : stageIndex(status.stage);
+  const stages = status.figures ? STAGES : STAGES.filter((s) => s.key !== "figures");
+  const reached: BuildStage = status.plan
+    ? status.figures && !status.figures.done
+      ? "figures"
+      : "writing"
+    : status.sourcePages > 0
+      ? "planning"
+      : "reading";
+  const current = stageIndex(stages, stopped ? reached : status.stage);
   return (
     <ol className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm">
-      {STAGES.map((s, i) => {
-        const done = status.stage === "done" || i < current;
-        const active = !stopped && status.stage !== "done" && i === current;
+      {stages.map((s, i) => {
+        const done = status.stage === "done" || i < current || (s.key === "figures" && !!status.figures?.done);
+        const active = !done && !stopped && i === current;
         const label =
           s.key === "writing" && status.modulesTotal > 0
             ? `Writing modules (${status.modulesDone} of ${status.modulesTotal} done)`
             : s.key === "writing" && status.stage === "finishing"
               ? "Finishing up"
-              : s.label;
+              : s.key === "figures" && status.figures?.done
+                ? status.figures.found === 1
+                  ? "1 figure found"
+                  : `${status.figures.found || "No"} figures found`
+                : s.label;
         return (
           <li key={s.key} className="flex items-center gap-2">
             <span
@@ -132,7 +160,7 @@ function Stepper({ status }: { status: BuildStatus }) {
               {done ? "✓" : active ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" /> : null}
               {label}
             </span>
-            {i < STAGES.length - 1 ? <span className="text-zinc-300 dark:text-zinc-700">→</span> : null}
+            {i < stages.length - 1 ? <span className="text-zinc-300 dark:text-zinc-700">→</span> : null}
           </li>
         );
       })}
@@ -460,8 +488,8 @@ function ModuleView({
   openHref: string | null;
 }) {
   const writing = !final && (progress?.status === "writing" || progress?.status === "retrying");
-  const lessons = final
-    ? final.lessons.map((l) => ({ title: l.title, content: l.content }))
+  const lessons: Array<{ title: string; content: string; figures?: LessonVisualAsset[] }> = final
+    ? final.lessons.map((l) => ({ title: l.title, content: l.content, figures: l.visual_assets }))
     : (progress?.preview?.lessons ?? []);
   const quizCount = final ? final.quiz.length : (progress?.preview?.quiz ?? 0);
 
@@ -500,7 +528,12 @@ function ModuleView({
                 <Typed text={l.title} animate={animate} />
               </h3>
               <div className="mt-2">
-                <StreamingLesson text={l.content} animate={animate} writing={writing && i === lessons.length - 1} />
+                <StreamingLesson
+                  text={l.content}
+                  figures={l.figures}
+                  animate={animate}
+                  writing={writing && i === lessons.length - 1}
+                />
               </div>
             </article>
           ))}

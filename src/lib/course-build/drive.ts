@@ -2,7 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { parseCoursePayload } from "@/lib/ai/course-payload";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { readCourseBuildConfig } from "./config.ts";
-import { createSourceExtractor } from "./extract-source.ts";
+import { createFigureFinder, createSourceExtractor } from "./extract-source.ts";
+import { makeContactSheet } from "./figures-pdf.ts";
 import { createStepHandlers, type BuildData } from "./handlers.ts";
 import { driveBuild, sweepBuilds, type DriveOptions, type DriveOutcome } from "./runner.ts";
 import { createSupabaseBuildData } from "./supabase-build-data.ts";
@@ -25,6 +26,8 @@ function setup({ log, reservePages }: RunOptions) {
     config,
     data: { ...createSupabaseBuildData(admin), reservePages },
     extract: createSourceExtractor(admin),
+    findFigures: config.figuresEnabled ? createFigureFinder(admin, { maxRenderPages: config.figureMaxPages, timeBudgetMs: config.figureTimeBudgetMs }) : undefined,
+    makeContactSheet,
     validatePayload: parseCoursePayload,
     log,
   });

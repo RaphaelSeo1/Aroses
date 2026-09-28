@@ -7,6 +7,14 @@ import type {
   KeyTerm,
   SourceRef,
 } from "@/types/course";
+import {
+  autoPlaceFigures,
+  figureManifest,
+  placeChosenFigures,
+  placeFigures,
+  type FigureAsset,
+  type PlacedLesson,
+} from "./figures.ts";
 import type { MeteredRequest } from "./metered-call.ts";
 import type { BuildPage, BuildSourceInfo } from "./outline.ts";
 import type { BuildPlan, PlanModule } from "./plan.ts";
@@ -23,7 +31,14 @@ export type WriterContext = {
   outputLanguage?: string | null;
   /** 1-based attempt; later attempts get more room in case the last one was cut off. */
   attempt: number;
+  /** Validated figures on this module's pages; the writer may only place these. */
+  figures?: FigureAsset[];
+  /** Makes asset IDs unique across materials. */
+  assetPrefix?: string;
 };
+
+/** Tokens a placed figure's marker line costs in the output. */
+const FIGURE_MARKER_TOKENS = 22;
 
 /** Measured on Haiku 4.5 output with the length limits in CONTENT_RULES. */
 const QUIZ_TOKENS_PER_ITEM = 105;
@@ -51,6 +66,11 @@ export function attemptMaxTokens(maxTokens: number, attempt: number): number {
   return Math.round(maxTokens * (1 + 0.3 * Math.max(0, attempt - 1)));
 }
 
+function writerMaxTokens(ctx: WriterContext): number {
+  const figs = ctx.figures?.length ?? 0;
+  return attemptMaxTokens(ctx.module.maxTokens + figs * FIGURE_MARKER_TOKENS, ctx.attempt);
+}
+
 function pagesBlock(ctx: WriterContext): string {
   const wanted = new Set(ctx.module.pages);
   const out: string[] = [];
@@ -62,9 +82,17 @@ function pagesBlock(ctx: WriterContext): string {
       out.push(`== ${s?.label ?? `Source ${p.sourceIndex + 1}`} ==`);
     }
     lastSource = p.sourceIndex;
-    out.push(`[p${p.g}]\n${p.text}`);
+    const figs = (ctx.figures ?? []).filter((f) => f.g === p.g);
+    out.push(`[p${p.g}]\n${p.text}${figs.length ? `\n${figureManifest(figs)}` : ""}`);
   }
   return out.join("\n\n");
+}
+
+function figuresBlock(ctx: WriterContext): string {
+  const figs = ctx.figures ?? [];
+  if (figs.length === 0) return "";
+  const ids = figs.map((f) => f.id).join(", ");
+  return `Figures: the pages list figures ${ids} (lines starting "[figure"). In each lesson's figures field, list the ones that illustrate that lesson, e.g. {"id": "${figs[0]!.id}", "caption": "..."}; the caption says what the figure shows in at most 15 words, only from the pages. Include every listed figure that fits a lesson, each ID at most once, never an ID not listed.`;
 }
 
 function languageLine(lang: string | null | undefined): string {
@@ -100,11 +128,13 @@ export function moduleRequest(ctx: WriterContext): MeteredRequest {
     taskLines(ctx),
     "",
     `Pages:\n${pagesBlock(ctx)}`,
+    "",
+    figuresBlock(ctx),
   ]
     .filter((l) => l !== "")
     .join("\n");
   return {
-    max_tokens: attemptMaxTokens(m.maxTokens, ctx.attempt),
+    max_tokens: writerMaxTokens(ctx),
     system: CONTENT_RULES,
     tools: [MODULE_TOOL],
     tool_choice: { type: "tool", name: MODULE_TOOL.name },
@@ -119,11 +149,13 @@ export function singleModuleRequest(ctx: WriterContext): MeteredRequest {
     taskLines(ctx),
     "",
     `Pages:\n${pagesBlock(ctx)}`,
+    "",
+    figuresBlock(ctx),
   ]
     .filter((l) => l !== "")
     .join("\n");
   return {
-    max_tokens: attemptMaxTokens(ctx.module.maxTokens, ctx.attempt),
+    max_tokens: writerMaxTokens(ctx),
     system: CONTENT_RULES,
     tools: [SINGLE_MODULE_TOOL],
     tool_choice: { type: "tool", name: SINGLE_MODULE_TOOL.name },
@@ -244,18 +276,24 @@ export type ConvertedModule = {
 /** Maps the writer's tool input onto the app's `CourseModule`. */
 export function toCourseModule(
   input: unknown,
-  ctx: Pick<WriterContext, "module" | "pages" | "sources">,
+  ctx: Pick<WriterContext, "module" | "pages" | "sources" | "figures" | "assetPrefix">,
   title: string
 ): ConvertedModule {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const notes: string[] = [];
+  const figures = new Map((ctx.figures ?? []).map((f) => [f.id, f]));
+  const usedFigures = new Set<string>();
+  const droppedFigures: string[] = [];
+  const pageText = (g: number) => ctx.pages.find((p) => p.g === g)?.text ?? "";
 
-  const ordered: Array<{ lesson: CourseLesson; start: number }> = [];
+  const ordered: Array<{ lesson: CourseLesson; start: number; placed: PlacedLesson }> = [];
   for (const raw of Array.isArray(o.lessons) ? o.lessons : []) {
     if (!raw || typeof raw !== "object") continue;
     const l = raw as Record<string, unknown>;
     const lessonTitle = fixShortText(s(l.title));
-    const content = fixLessonText(s(l.content));
+    const placed = placeFigures(fixLessonText(s(l.content)), figures, usedFigures, ctx.assetPrefix ?? "");
+    const content = placed.content;
+    droppedFigures.push(...placed.dropped);
     if (!lessonTitle || content.length < 40) continue;
     const examples = (Array.isArray(l.examples) ? l.examples : [])
       .map((e) => fixShortText(s(e)))
@@ -269,8 +307,21 @@ export function toCourseModule(
       ctx.sources
     );
     const start = Number(l.first_page);
+    const end = Number(l.last_page);
+    const lessonFigures: PlacedLesson = {
+      content,
+      firstPage: Number.isFinite(start) ? start : -1,
+      lastPage: Number.isFinite(end) ? Math.max(end, start) : Number.isFinite(start) ? start : -1,
+      assets: placed.assets,
+    };
+    const chosen = (Array.isArray(l.figures) ? l.figures : [])
+      .map((c) => (c && typeof c === "object" ? (c as Record<string, unknown>) : {}))
+      .map((c) => ({ id: s(c.id), caption: fixShortText(s(c.caption)) }))
+      .filter((c) => c.id);
+    droppedFigures.push(...placeChosenFigures(lessonFigures, chosen, figures, usedFigures, pageText, ctx.assetPrefix ?? ""));
     ordered.push({
       start: Number.isFinite(start) ? start : Number.MAX_SAFE_INTEGER,
+      placed: lessonFigures,
       lesson: {
         title: lessonTitle,
         content,
@@ -280,11 +331,20 @@ export function toCourseModule(
       },
     });
   }
+  if (droppedFigures.length) notes.push(`figures dropped ${droppedFigures.join(",")}`);
   // Lessons follow the source's order even when the writer reorders them.
-  const lessons = ordered
-    .map((x, i) => ({ ...x, i }))
-    .sort((a, b) => a.start - b.start || a.i - b.i)
-    .map((x) => x.lesson);
+  const sorted = ordered.map((x, i) => ({ ...x, i })).sort((a, b) => a.start - b.start || a.i - b.i);
+  const auto = autoPlaceFigures(
+    sorted.map((x) => x.placed),
+    ctx.figures ?? [],
+    usedFigures,
+    pageText,
+    ctx.assetPrefix ?? ""
+  );
+  if (auto.length) notes.push(`figures auto-placed ${auto.join(",")}`);
+  const lessons = sorted.map((x) =>
+    x.placed.assets.length ? { ...x.lesson, visual_assets: x.placed.assets } : x.lesson
+  );
   if (lessons.length === 0) throw new ModuleOutputError("The writer returned no usable lessons.");
 
   const quiz = (Array.isArray(o.quiz) ? o.quiz : []).map(toQuizItem).filter((q): q is CourseQuizItem => q != null);

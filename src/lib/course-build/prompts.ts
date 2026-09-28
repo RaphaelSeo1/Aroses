@@ -21,6 +21,7 @@ Lesson fields:
 - content: the teaching prose. Never empty, never just a list of terms.
 - key_terms: only terms the pages introduce that a student would study (0–4), each defined in at most 15 words.
 - examples: one short example, preferably the source's own (two only if the source gives two). If it has none, a short generic one with no invented source facts or numbers.
+- figures: [] unless the pages list figures; then see the figure instruction.
 - first_page, last_page: the pN numbers the lesson draws on.
 
 Quiz fields (keep them short; they share your length budget):
@@ -59,10 +60,19 @@ const LESSON_SCHEMA = {
       },
     },
     examples: { type: "array", items: str },
+    figures: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { id: str, caption: str },
+        required: ["id", "caption"],
+        additionalProperties: false,
+      },
+    },
     first_page: int,
     last_page: int,
   },
-  required: ["title", "content", "key_terms", "examples", "first_page", "last_page"],
+  required: ["title", "content", "key_terms", "examples", "figures", "first_page", "last_page"],
   additionalProperties: false,
 } as const;
 
