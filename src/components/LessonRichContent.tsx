@@ -136,7 +136,7 @@ const textLockClass =
   "lesson-text-lock w-full min-w-0 text-[15px] leading-relaxed text-zinc-700 [text-size-adjust:100%] [-webkit-text-size-adjust:100%] dark:text-zinc-300 [&_.katex-display]:my-4 [&_.katex]:text-[1.05em]";
 
 function LessonFigure({ asset }: { asset: LessonVisualAsset }) {
-  const caption = asset.caption || asset.title;
+  const caption = asset.caption || asset.title || (asset.sourcePage ? `From page ${asset.sourcePage} of your file` : "");
   return (
     <figure className="my-2 overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900/40">
       <a href={asset.imageUrl} target="_blank" rel="noreferrer" className="block bg-white p-2">

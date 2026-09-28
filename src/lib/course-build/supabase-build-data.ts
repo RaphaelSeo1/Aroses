@@ -18,6 +18,27 @@ function fail(what: string, error: { message: string } | null): never {
   throw new Error(`${what}: ${error?.message ?? "not found"}`);
 }
 
+const FIGURE_LIST_PAGE = 100;
+
+/** Deletes every figure image a build uploaded. Returns how many were removed. */
+export async function removeBuildFigures(admin: SupabaseClient, buildId: string): Promise<number> {
+  const { data: build, error } = await admin.from("course_builds").select("user_id").eq("id", buildId).maybeSingle();
+  if (error) fail("read build", error);
+  if (!build) return 0;
+  const folder = `${build.user_id}/course-build/${buildId}`;
+  const bucket = admin.storage.from(FIGURE_BUCKET);
+  let removed = 0;
+  for (;;) {
+    const { data: files, error: listError } = await bucket.list(folder, { limit: FIGURE_LIST_PAGE });
+    if (listError) fail("list figures", listError);
+    if (!files || files.length === 0) return removed;
+    const { error: removeError } = await bucket.remove(files.map((f) => `${folder}/${f.name}`));
+    if (removeError) fail("remove figures", removeError);
+    removed += files.length;
+    if (files.length < FIGURE_LIST_PAGE) return removed;
+  }
+}
+
 let previewColumnMissing = false;
 
 function baseLocale(text: string): "en" | "ko" {

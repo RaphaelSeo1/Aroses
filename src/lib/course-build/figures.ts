@@ -240,11 +240,12 @@ export function globalPage(pages: BuildPage[], sourceIndex: number, n: number): 
   return best?.g ?? null;
 }
 
-/** One line per figure for the writer: about 20 tokens each. */
-export function figureManifest(figures: FigureAsset[]): string {
+/** One line per figure for the writer: about 20 tokens each. Descriptions the page text doesn't back up are left out. */
+export function figureManifest(figures: FigureAsset[], pageText = ""): string {
   return figures
     .map((f) => {
-      const bits = [f.label && `"${f.label}"`, f.description].filter(Boolean).join(" — ");
+      const description = f.description && confirmedBy(f.description, `${pageText} ${f.label}`) ? f.description : "";
+      const bits = [f.label && `"${f.label}"`, description].filter(Boolean).join(" — ");
       return `[figure ${f.id}] ${f.kind}${bits ? `: ${bits}` : ""}`;
     })
     .join("\n");
@@ -262,9 +263,48 @@ const KIND_TO_TYPE: Record<FigureKind, LessonVisualAssetType> = {
   table: "table",
 };
 
-function cleanCaption(raw: string, f: FigureAsset): string {
-  const c = raw.replace(/\s+/g, " ").trim().slice(0, 200);
-  return c || f.label || f.description || "";
+/** Words that say what kind of picture it is, not what it shows. */
+const GENERIC_WORDS = new Set(
+  "diagram diagrams chart charts graph graphs table tables image images figure figures photo picture illustration showing shows shown labeled labelled multiple various including example examples with their between from this that these into data".split(
+    " "
+  )
+);
+
+function contentStems(text: string): string[] {
+  const out = new Set<string>();
+  for (const w of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    if (w.length >= 4 && !GENERIC_WORDS.has(w)) out.add(w.slice(0, 5));
+  }
+  return [...out];
+}
+
+/** At least half the caption's meaningful words appear in the source text. */
+export function confirmedBy(caption: string, sourceText: string): boolean {
+  const words = contentStems(caption);
+  if (words.length === 0) return false;
+  const source = new Set(contentStems(sourceText));
+  const hits = words.filter((w) => source.has(w)).length;
+  return hits >= Math.ceil(words.length / 2);
+}
+
+/** "Figure 14-2 part 1" names a figure; "Figure 3. Lipid bilayer" describes it. */
+function descriptiveLabel(label: string): boolean {
+  const rest = label.replace(CAPTION_RE, "$3").replace(/^[\d\s.\-–:)]*(part\s*\d+)?/i, "");
+  return contentStems(rest).length >= 2;
+}
+
+/**
+ * The source's own caption wins. Otherwise the writer's caption, then the
+ * vision description, but only when the page text backs its words up; a
+ * caption nothing confirms is dropped rather than risk naming the wrong thing.
+ */
+export function figureCaption(f: FigureAsset, writerCaption: string, pageText: string): string {
+  const writer = writerCaption.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (f.label && descriptiveLabel(f.label)) return f.label;
+  const source = `${pageText} ${f.label}`;
+  if (writer && confirmedBy(writer, source)) return writer;
+  if (f.description && confirmedBy(f.description, source)) return f.description;
+  return f.label;
 }
 
 function toVisualAsset(f: FigureAsset, caption: string, afterParagraph: number, assetPrefix: string): LessonVisualAsset {
@@ -273,7 +313,7 @@ function toVisualAsset(f: FigureAsset, caption: string, afterParagraph: number, 
     imageUrl: f.url,
     type: KIND_TO_TYPE[f.kind],
     sourcePage: f.page,
-    title: (f.label || caption).slice(0, 80),
+    title: caption.slice(0, 80),
     caption,
     whyRelevant: "",
     placementAfterParagraph: afterParagraph,
@@ -288,6 +328,7 @@ export function placeFigures(
   content: string,
   figures: Map<string, FigureAsset>,
   used: Set<string>,
+  pageText: (g: number) => string,
   assetPrefix: string
 ): { content: string; assets: LessonVisualAsset[]; dropped: string[] } {
   const { text, markers } = extractFigureMarkers(content);
@@ -300,7 +341,7 @@ export function placeFigures(
       continue;
     }
     used.add(m.id);
-    assets.push(toVisualAsset(f, cleanCaption(m.caption, f), m.afterParagraph, assetPrefix));
+    assets.push(toVisualAsset(f, figureCaption(f, m.caption, pageText(f.g)), m.afterParagraph, assetPrefix));
   }
   return { content: text, assets, dropped };
 }
@@ -329,27 +370,40 @@ function overlap(a: Set<string>, b: Set<string>): number {
   return n;
 }
 
-/** Paragraphs before the figure: it goes after the paragraph sharing the most words with its page. */
-function matchingParagraph(content: string, f: FigureAsset, caption: string, pageText: (g: number) => string): number {
-  const paras = splitParagraphs(content);
-  const target = words(`${pageText(f.g)} ${f.label} ${f.description} ${caption}`);
-  let best = paras.length - 1;
+/**
+ * Paragraphs before the figure: it goes after the free paragraph sharing the
+ * most words with its page, one figure per paragraph. With no word overlap it
+ * goes where its page falls in the lesson's page range. Null when every
+ * paragraph already has a figure.
+ */
+function matchingParagraph(lesson: PlacedLesson, f: FigureAsset, caption: string, pageText: (g: number) => string): number | null {
+  const paras = splitParagraphs(lesson.content);
+  const taken = new Set(lesson.assets.map((a) => a.placementAfterParagraph ?? 0));
+  const free = paras.map((_, i) => i).filter((i) => !taken.has(i + 1));
+  if (free.length === 0) return null;
+  const target = words(`${pageText(f.g)} ${f.label} ${caption}`);
+  let best = -1;
   let bestScore = 0;
-  paras.forEach((p, i) => {
-    const s = overlap(words(p), target);
+  for (const i of free) {
+    const s = overlap(words(paras[i]!), target);
     if (s > bestScore) {
       bestScore = s;
       best = i;
     }
-  });
-  return Math.max(0, best + 1);
+  }
+  if (best < 0) {
+    const span = Math.max(1, lesson.lastPage - lesson.firstPage + 1);
+    const want = Math.min(paras.length - 1, Math.floor(((f.g - lesson.firstPage) / span) * paras.length));
+    best = free.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
+  }
+  return best + 1;
 }
 
 function sortAssets(lesson: PlacedLesson) {
   lesson.assets.sort((a, b) => (a.placementAfterParagraph ?? 0) - (b.placementAfterParagraph ?? 0));
 }
 
-/** The figures the writer listed for a lesson. Returns IDs that were unknown, repeated or over the cap. */
+/** The figures the writer listed for a lesson. Returns IDs that were unknown, repeated, over the cap or left without a free paragraph. */
 export function placeChosenFigures(
   lesson: PlacedLesson,
   chosen: Array<{ id: string; caption: string }>,
@@ -366,9 +420,14 @@ export function placeChosenFigures(
       dropped.push(id);
       continue;
     }
+    const caption = figureCaption(f, c.caption, pageText(f.g));
+    const after = matchingParagraph(lesson, f, caption, pageText);
+    if (after == null) {
+      dropped.push(id);
+      continue;
+    }
     used.add(id);
-    const caption = cleanCaption(c.caption, f);
-    lesson.assets.push(toVisualAsset(f, caption, matchingParagraph(lesson.content, f, caption, pageText), assetPrefix));
+    lesson.assets.push(toVisualAsset(f, caption, after, assetPrefix));
   }
   sortAssets(lesson);
   return dropped;
@@ -391,9 +450,12 @@ export function autoPlaceFigures(
     const lesson = lessons.find(
       (l) => f.g >= l.firstPage && f.g <= l.lastPage && l.assets.length < MAX_FIGURES_PER_LESSON
     );
-    if (!lesson || splitParagraphs(lesson.content).length === 0) continue;
+    if (!lesson) continue;
+    const caption = figureCaption(f, "", pageText(f.g));
+    const after = matchingParagraph(lesson, f, caption, pageText);
+    if (after == null) continue;
     used.add(f.id);
-    lesson.assets.push(toVisualAsset(f, cleanCaption("", f), matchingParagraph(lesson.content, f, "", pageText), assetPrefix));
+    lesson.assets.push(toVisualAsset(f, caption, after, assetPrefix));
     placed.push(f.id);
   }
   for (const l of lessons) sortAssets(l);

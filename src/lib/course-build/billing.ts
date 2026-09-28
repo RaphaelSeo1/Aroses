@@ -12,6 +12,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { StepFatalError } from "./errors.ts";
 import type { BuildRecord } from "./handlers.ts";
 import type { TerminalEvent } from "./runner.ts";
+import { removeBuildFigures } from "./supabase-build-data.ts";
 
 /** Postgres int max: the RPC's "no cap" for unlimited accounts. */
 const NO_PAGE_CAP = 2_147_483_647;
@@ -43,8 +44,9 @@ export async function reserveBuildPages(build: BuildRecord, pages: number): Prom
 }
 
 /**
- * Charges a finished build; a failed or canceled one is released and its
- * half-written material is removed so the course never shows a partial.
+ * Charges a finished build; a failed or canceled one is released, and its
+ * half-written material and uploaded figures are removed so the course never
+ * shows a partial.
  */
 export async function settleBuildUsage(event: TerminalEvent): Promise<void> {
   if (event.status === "complete") {
@@ -60,6 +62,9 @@ export async function settleBuildUsage(event: TerminalEvent): Promise<void> {
     .eq("build_id", event.buildId)
     .is("deleted_at", null);
   if (error) console.error("[course-build] hide partial material", event.buildId, error);
+  await removeBuildFigures(admin, event.buildId).catch((err) =>
+    console.error("[course-build] remove figures", event.buildId, err)
+  );
 }
 
 export const buildRunOptions = {

@@ -365,7 +365,11 @@ export type MentoredTurnRequest = {
    * student may still be answering the session-opening welcome.
    */
   chunkTeachingStarted?: boolean;
+  /** Figures from the student's file in this chunk's lesson (course builder courses only). */
+  figures?: MentoredTurnFigure[];
 };
+
+export type MentoredTurnFigure = { assetId: string; caption: string; page?: number };
 
 export type MentoredTurnResponse = {
   intent: MentoredIntent;

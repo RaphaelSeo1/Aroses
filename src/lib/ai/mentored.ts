@@ -23,6 +23,7 @@ import type {
   MentoredLessonChunk,
   MentoredLessonPlan,
   MentoredPersonalization,
+  MentoredTurnFigure,
   WhiteboardAction,
   WhiteboardActionColor,
   WhiteboardPoint,
@@ -622,6 +623,8 @@ export type TurnInput = {
    * graded as check-question answers.
    */
   chunkTeachingStarted?: boolean;
+  /** Figures from the student's file in this lesson; lets Rose put one on the board. */
+  figures?: MentoredTurnFigure[];
 };
 
 export type TurnOutput = {
@@ -750,6 +753,18 @@ CHECK QUESTION STATUS: The student has NOT yet answered the check question for t
     input.outputLanguage ?? "auto"
   );
 
+  const figures = input.figures ?? [];
+  const figuresBlock = figures.length
+    ? `
+
+FIGURES FROM THE STUDENT'S FILE (this lesson):
+${figures
+  .map((f) => `- ${f.assetId}: ${f.caption || "(no caption)"}${f.page ? ` (page ${f.page})` : ""}`)
+  .join("\n")}
+When the student asks to see a figure, or one would help right now, put it on the board with a show_asset action using one of these ids. Never invent an id.`
+    : "";
+  const assetActionType = figures.length ? `, show_asset {assetId}` : "";
+
   return `You are an AI tutor mid-lesson. The student is on this CHUNK:
 
 ${languageBlock}
@@ -761,7 +776,7 @@ CHECK QUESTION YOU JUST ASKED: ${input.chunk.checkQuestion}
 REFERENCE ANSWER (internal — never read this aloud verbatim): ${input.chunk.referenceAnswer}
 KEY POINTS THE ANSWER SHOULD HIT: ${input.chunk.keyPoints.join("; ")}
 ATTEMPT NUMBER FOR THIS CHUNK: ${input.attempts + 1}
-STUDENT LEVEL: ${input.knowledgeLevel}${personalizationBlock ? `\n\n${personalizationBlock}` : ""}${checkStatusBlock}${interruptedBlock}${pacingBlock}
+STUDENT LEVEL: ${input.knowledgeLevel}${personalizationBlock ? `\n\n${personalizationBlock}` : ""}${checkStatusBlock}${interruptedBlock}${pacingBlock}${figuresBlock}
 
 STUDENT JUST SAID: """
 ${input.studentUtterance.trim().slice(0, 2000)}
@@ -775,7 +790,7 @@ Output format (STRICT):
    - Once you HAVE posed the formal check question, keep ending on it until they answer it substantively (don't swap in a softer substitute mid-check).
    - Use the PACING SIGNALS to avoid piling questions back-to-back; don't ask a brand-new check right after one you already asked.
    - Do NOT say "you nailed it", "exactly right", or "you've got it" unless the student actually demonstrated understanding OR you are advancing.
-2. WHITEBOARD (optional, mid-reply): When you draw on the board WHILE explaining, insert inline markers at the moment you would draw — NOT all at the end. Format: on its own line write ${TURN_WB_SENTINEL} then a JSON array of 1–2 actions. Action types: show_table (anchor source table), highlight_bbox {bbox:[x,y,w,h]}, draw_arrow {from:{x,y},to:{x,y}}, add_label {text,position:{x,y}}, clear, clear_except {keepIds:[]}. Coords 0–100. Colors: excitatory|inhibitory|highlight. Each action should include a short "cue" phrase you just said (for sync). Place markers BETWEEN sentences at the teaching moment. Do NOT dump all overlays at once.
+2. WHITEBOARD (optional, mid-reply): When you draw on the board WHILE explaining, insert inline markers at the moment you would draw — NOT all at the end. Format: on its own line write ${TURN_WB_SENTINEL} then a JSON array of 1–2 actions. Action types: show_table (anchor source table), highlight_bbox {bbox:[x,y,w,h]}, draw_arrow {from:{x,y},to:{x,y}}, add_label {text,position:{x,y}}, clear, clear_except {keepIds:[]}${assetActionType}. Coords 0–100. Colors: excitatory|inhibitory|highlight. Each action should include a short "cue" phrase you just said (for sync). Place markers BETWEEN sentences at the teaching moment. Do NOT dump all overlays at once.
 3. Then on a new line write exactly: ${TURN_META_SENTINEL}
 4. Then on a new line emit a JSON object with classification + any remaining whiteboard actions not yet streamed:
 {"intent":"answer_correct|...|other","advance":true|false,"addToFocusedReview":true|false,"whiteboardActions":[...]|[]}

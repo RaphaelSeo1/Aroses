@@ -8,6 +8,7 @@ import type {
   KnowledgeLevel,
   MentoredLessonChunk,
   MentoredPersonalization,
+  MentoredTurnFigure,
   MentoredTurnRequest,
 } from "@/types/mentored";
 
@@ -52,6 +53,24 @@ function isChunk(v: unknown): v is MentoredLessonChunk {
     typeof c.checkQuestion === "string" &&
     typeof c.referenceAnswer === "string"
   );
+}
+
+const MAX_TURN_FIGURES = 8;
+
+function parseFigures(v: unknown): MentoredTurnFigure[] {
+  if (!Array.isArray(v)) return [];
+  const out: MentoredTurnFigure[] = [];
+  for (const f of v.slice(0, MAX_TURN_FIGURES)) {
+    if (!f || typeof f !== "object") continue;
+    const { assetId, caption, page } = f as Record<string, unknown>;
+    if (typeof assetId !== "string" || !/^[\w-]{1,80}$/.test(assetId)) continue;
+    out.push({
+      assetId,
+      caption: typeof caption === "string" ? caption.replace(/\s+/g, " ").trim().slice(0, 200) : "",
+      ...(typeof page === "number" && Number.isInteger(page) && page > 0 ? { page } : {}),
+    });
+  }
+  return out;
 }
 
 function sseLine(event: string, data: unknown): string {
@@ -120,6 +139,7 @@ export async function POST(request: Request) {
       ? body.secondsSinceStudentSpoke
       : null;
   const chunkTeachingStarted = body.chunkTeachingStarted !== false;
+  const figures = parseFigures(body.figures);
 
   const supabase = await createClient();
   const {
@@ -188,6 +208,7 @@ export async function POST(request: Request) {
           personalization,
           outputLanguage,
           chunkTeachingStarted,
+          figures,
         })) {
           if (evt.type === "text") {
             send("text", { delta: evt.delta });

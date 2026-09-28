@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type Anthropic from "@anthropic-ai/sdk";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CoursePayload } from "@/types/course";
 import type { SourcePage } from "./clean.ts";
 import { readCourseBuildConfig } from "./config.ts";
+import { StepFatalError } from "./errors.ts";
 import { extractFigureMarkers, stripFigureMarkers } from "./figure-markers.ts";
 import { parseReview } from "./figure-review.ts";
 import {
   acceptFigures,
   autoPlaceFigures,
   captionLines,
+  confirmedBy,
   dropRepeatedImages,
+  figureCaption,
   placeChosenFigures,
   figureManifest,
   placeFigures,
@@ -35,6 +39,7 @@ import {
 import type { MessagesClient } from "./metered-call.ts";
 import type { BuildPlan } from "./plan.ts";
 import { driveBuild } from "./runner.ts";
+import { removeBuildFigures } from "./supabase-build-data.ts";
 import { createTestDb, type TestDb } from "./testing/pglite-db.ts";
 
 let t: TestDb;
@@ -159,14 +164,15 @@ test("placement: only listed IDs, each once per module, captions fall back to th
     ["F2", fig("F2")],
   ]);
   const used = new Set<string>();
-  const a = placeFigures("One.\n\n[[F1]]\n\nTwo.\n\n[[F9: invented]]", figures, used, "abc-");
+  const page = () => "The second stage of the membrane";
+  const a = placeFigures("One.\n\n[[F1]]\n\nTwo.\n\n[[F9: invented]]", figures, used, page, "abc-");
   assert.equal(a.content, "One.\n\nTwo.");
   assert.deepEqual(a.dropped, ["F9"]);
   assert.equal(a.assets.length, 1);
   assert.equal(a.assets[0].assetId, "abc-F1");
   assert.equal(a.assets[0].caption, "Figure 1. Membrane");
   assert.equal(a.assets[0].placementAfterParagraph, 1);
-  const b = placeFigures("Three.\n\n[[F1: again]]\n\n[[F2: Second figure]]", figures, used, "abc-");
+  const b = placeFigures("Three.\n\n[[F1: again]]\n\n[[F2: Second figure]]", figures, used, page, "abc-");
   assert.deepEqual(b.dropped, ["F1"]);
   assert.equal(b.assets[0].caption, "Second figure");
   assert.match(figureManifest([fig("F1", "Figure 1. Membrane")]), /^\[figure F1\] diagram: "Figure 1\. Membrane"$/);
@@ -204,7 +210,14 @@ test("figures the writer skipped go into the lesson covering their page, after t
 
   const lesson: PlacedLesson = { content: "Alpha text.\n\nBeta text about kinase.", firstPage: 1, lastPage: 2, assets: [] };
   const map = new Map([["F5", fig("F5", 1, "kinase")]]);
-  const dropped = placeChosenFigures(lesson, [{ id: "f5", caption: "Kinase step" }, { id: "F9", caption: "x" }], map, new Set(), () => "", "p-");
+  const dropped = placeChosenFigures(
+    lesson,
+    [{ id: "f5", caption: "Kinase step" }, { id: "F9", caption: "x" }],
+    map,
+    new Set(),
+    () => "The kinase step adds a phosphate",
+    "p-"
+  );
   assert.deepEqual(dropped, ["F9"]);
   assert.deepEqual(lesson.assets.map((a) => [a.assetId, a.caption, a.placementAfterParagraph]), [["p-F5", "Kinase step", 2]]);
 });
@@ -218,6 +231,68 @@ test("a picture repeated on later slides is kept once", () => {
     item(5, "0f0f0f0f0f0f0f0f"),
   ]);
   assert.deepEqual(kept.map((k) => k.candidate.page), [2, 4, 5]);
+});
+
+test("captions: the file's caption, then a writer or vision caption the page backs up, else none", () => {
+  const fig = (label: string, description: string): FigureAsset => ({
+    id: "F1",
+    g: 7,
+    sourceIndex: 0,
+    page: 7,
+    kind: "diagram",
+    url: "https://x/course-build/b/F1.png",
+    label,
+    description,
+    width: 600,
+    height: 400,
+  });
+  // Real miscaptions from lecture slides: the vision model named the wrong picture.
+  const polarSlide = "examples of polar, non-polar and amphipathic biomolecules at pH 7";
+  assert.equal(figureCaption(fig("", "DNA base pairing with hydrogen bonding interactions"), "DNA base pairing with hydrogen bonding interactions.", polarSlide), "");
+  assert.equal(figureCaption(fig("", "Diagram of protein structure hierarchy"), "", "pH of some common liquids"), "");
+  assert.equal(
+    figureCaption(fig("", "Multiple pKa curves"), "Titration curves for common weak acids showing pKa and buffering regions.", "titration curves of weak acids, buffering regions, pKa"),
+    "Titration curves for common weak acids showing pKa and buffering regions."
+  );
+  assert.equal(figureCaption(fig("", "pKa of acetic acid in dioxane-water mixture"), "", "pKa of acetic acid in dioxane/water"), "pKa of acetic acid in dioxane-water mixture");
+  assert.equal(figureCaption(fig("Figure 3. Lipid bilayer structure", "Cell wall"), "Membrane", "anything"), "Figure 3. Lipid bilayer structure");
+  assert.equal(figureCaption(fig("Figure 14-2 part 1", ""), "", "glycolysis"), "Figure 14-2 part 1", "a bare figure number is kept only as a last resort");
+  assert.equal(confirmedBy("Bar chart", "a bar chart"), false, "picture-kind words alone confirm nothing");
+});
+
+test("placement: at most one figure per paragraph, spread by page when nothing matches", () => {
+  const fig = (id: string, g: number): FigureAsset => ({
+    id,
+    g,
+    sourceIndex: 0,
+    page: g,
+    kind: "diagram",
+    url: `https://x/course-build/b/${id}.png`,
+    label: "",
+    description: "",
+    width: 600,
+    height: 400,
+  });
+  const lesson: PlacedLesson = {
+    content: "Glycolysis splits glucose.\n\nIt makes pyruvate.\n\nThe cell keeps the ATP.",
+    firstPage: 1,
+    lastPage: 3,
+    assets: [],
+  };
+  const text = (g: number) => (g <= 2 ? "Glycolysis splits glucose" : "");
+  const placed = autoPlaceFigures([lesson], [fig("F1", 1), fig("F2", 2), fig("F3", 3)], new Set(), text, "p-");
+  assert.deepEqual(placed, ["F1", "F2", "F3"]);
+  assert.deepEqual(
+    lesson.assets.map((a) => [a.assetId, a.placementAfterParagraph]),
+    [["p-F1", 1], ["p-F2", 2], ["p-F3", 3]],
+    "two figures citing the same paragraph never stack"
+  );
+
+  const full: PlacedLesson = { content: "One paragraph only about glycolysis.", firstPage: 1, lastPage: 1, assets: [] };
+  const map = new Map([["F4", fig("F4", 1)], ["F5", fig("F5", 1)]]);
+  const dropped = placeChosenFigures(full, [{ id: "F4", caption: "" }, { id: "F5", caption: "" }], map, new Set(), text, "p-");
+  assert.deepEqual(dropped, ["F5"], "no free paragraph left");
+  assert.deepEqual(full.assets.map((a) => a.assetId), ["p-F4"]);
 });
 
 test("vision review parser: missing or malformed verdicts mean drop", () => {
@@ -318,7 +393,7 @@ test("pipeline: figures found before writing, reviewed in one low-res call, plac
   const { userId, buildId } = await newBuild();
   const pages = Array.from({ length: 4 }, (_, i) => ({
     n: i + 1,
-    text: i === 1 ? `Figure 1. Membrane structure\n${prose(2)}` : prose(i + 1),
+    text: i === 1 ? `Figure 1. Membrane structure\n${prose(2)}` : i === 2 ? `ATP yield per stage\n${prose(3)}` : prose(i + 1),
   }));
   const mem = setup(pages);
   const findFigures: FindFiguresFn = async () => ({
@@ -347,7 +422,7 @@ test("pipeline: figures found before writing, reviewed in one low-res call, plac
           });
         }
         const text = body.messages[0].content as string;
-        assert.match(text, /\[p2\][^[]*\n\[figure F1\] diagram: "Figure 1\. Membrane structure" — Lipid bilayer/);
+        assert.match(text, /\[p2\][^[]*\n\[figure F1\] diagram: "Figure 1\. Membrane structure"\n/, "an unconfirmed description is left out");
         assert.match(text, /\[p3\][^[]*\n\[figure F2\] chart: Bar chart of ATP yield/);
         assert.match(text, /Figures: the pages list figures F1, F2 /, "the instruction comes after the pages");
         assert.doesNotMatch(text, /\[figure F3\]/, "rejected crops are never offered to the writer");
@@ -406,7 +481,8 @@ test("pipeline: figures found before writing, reviewed in one low-res call, plac
   assert.equal(lessons[0].content, "Membranes are lipid bilayers with proteins embedded in them.\n\nThey control what enters the cell.");
   assert.deepEqual(
     lessons[0].visual_assets?.map((a) => [a.assetId, a.caption, a.placementAfterParagraph, a.sourcePage]),
-    [[`${buildId.slice(0, 8)}-F1`, "Lipid bilayer with proteins", 1, 2]]
+    [[`${buildId.slice(0, 8)}-F1`, "Figure 1. Membrane structure", 1, 2]],
+    "the file's own caption beats the writer's"
   );
   assert.deepEqual(
     lessons[1].visual_assets?.map((a) => [a.assetId, a.caption, a.type, a.placementAfterParagraph]),
@@ -448,4 +524,110 @@ test("pipeline: a broken figure finder leaves the course without figures instead
   const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50 });
   assert.deepEqual(out, { outcome: "finished", status: "complete" });
   assert.equal(mem.published.find((p) => p.final)!.payload.modules[0].lessons[0].visual_assets, undefined);
+});
+
+function reviewAndWriteClient(events: string[]): MessagesClient {
+  return {
+    messages: {
+      create: async (body) => {
+        const tool = (body.tool_choice as { name: string }).name;
+        if (tool === "review_figures") {
+          events.push("vision");
+          return toolMessage("review_figures", { figures: [{ n: 1, keep: true, kind: "diagram", description: "Cell" }] });
+        }
+        return toolMessage("submit_course", {
+          title: "T",
+          description: "D.",
+          module_title: "M",
+          lessons: [{ title: "L", content: "A full lesson paragraph about the idea at hand.", key_terms: [], examples: [], first_page: 1, last_page: 2 }],
+          quiz: quiz(6),
+        });
+      },
+    },
+  };
+}
+
+test("pipeline: the vision check waits until the plan step has reserved the pages", async () => {
+  const { userId, buildId } = await newBuild();
+  const mem = setup([{ n: 1, text: prose(1) }, { n: 2, text: prose(2) }]);
+  const events: string[] = [];
+  const handlers = createStepHandlers({
+    store: t.store,
+    client: reviewAndWriteClient(events),
+    config,
+    data: {
+      ...mem.data(buildId, userId),
+      reservePages: async () => {
+        await new Promise((r) => setTimeout(r, 300));
+        events.push("reserved");
+      },
+    },
+    extract: mem.extract,
+    findFigures: async () => {
+      events.push("scanned");
+      return { candidates: [cand(1, mid, { quality: 0.5 })], repeated: [] };
+    },
+    validatePayload: validate,
+  });
+  const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50 });
+  assert.deepEqual(out, { outcome: "finished", status: "complete" });
+  assert.deepEqual(events, ["scanned", "reserved", "vision"], "the free scan may run early; the paid check never does");
+});
+
+test("pipeline: a refused page reservation means no vision call and no stored figures", async () => {
+  const { userId, buildId } = await newBuild();
+  const mem = setup([{ n: 1, text: prose(1) }, { n: 2, text: prose(2) }]);
+  const events: string[] = [];
+  const handlers = createStepHandlers({
+    store: t.store,
+    client: reviewAndWriteClient(events),
+    config,
+    data: {
+      ...mem.data(buildId, userId),
+      reservePages: async () => {
+        await new Promise((r) => setTimeout(r, 200));
+        throw new StepFatalError("page_limit", "Not enough pages left.");
+      },
+    },
+    extract: mem.extract,
+    findFigures: async () => ({ candidates: [cand(1, mid), cand(2, mid, { quality: 0.5 })], repeated: [] }),
+    validatePayload: validate,
+  });
+  const started = Date.now();
+  const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50 });
+  assert.deepEqual(out, { outcome: "finished", status: "failed" });
+  assert.deepEqual(events, []);
+  assert.deepEqual(mem.saved, [], "even confident crops are not uploaded");
+  assert.ok(Date.now() - started < 10_000, "the figures step stops waiting once the build is failing");
+  assert.equal((await t.ledger(buildId)).length, 0);
+});
+
+test("a failed or canceled build's figure images are deleted", async () => {
+  const removed: string[][] = [];
+  const listed: string[] = [];
+  const files = Array.from({ length: 130 }, (_, i) => ({ name: `F${i + 1}.jpg` }));
+  const admin = {
+    from: () => ({
+      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { user_id: "u1" }, error: null }) }) }),
+    }),
+    storage: {
+      from: (bucket: string) => {
+        assert.equal(bucket, "study-material-images");
+        return {
+          list: async (folder: string, opts: { limit: number }) => {
+            listed.push(folder);
+            return { data: files.splice(0, opts.limit), error: null };
+          },
+          remove: async (paths: string[]) => {
+            removed.push(paths);
+            return { data: [], error: null };
+          },
+        };
+      },
+    },
+  } as unknown as SupabaseClient;
+  assert.equal(await removeBuildFigures(admin, "b1"), 130);
+  assert.deepEqual(listed, ["u1/course-build/b1", "u1/course-build/b1"]);
+  assert.equal(removed[0][0], "u1/course-build/b1/F1.jpg");
+  assert.deepEqual(removed.map((r) => r.length), [100, 30]);
 });

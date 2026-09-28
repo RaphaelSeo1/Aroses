@@ -134,6 +134,7 @@ export type ModulePreview = {
 };
 
 const PREVIEW_INTERVAL_MS = 1000;
+const RESERVE_POLL_MS = 1000;
 const PREVIEW_LESSON_CHARS = 12_000;
 
 export function previewFromSnapshot(snapshot: unknown): ModulePreview | null {
@@ -357,6 +358,31 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
   };
 
   /**
+   * The plan step reserves the student's pages before it finishes, so a saved
+   * plan means the build is paid for. False when it doesn't arrive in time or
+   * the build is already failing or canceled.
+   */
+  const planFinished = async (buildId: string, signal: AbortSignal): Promise<boolean> => {
+    const until = Date.now() + config.figureReserveWaitMs;
+    for (;;) {
+      if (await data.getPlan(buildId)) return true;
+      if (Date.now() >= until) return false;
+      const p = await store.progress(buildId);
+      if (!p || p.failed > 0 || p.cancelRequested) return false;
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", done);
+          resolve();
+        };
+        const timer = setTimeout(done, RESERVE_POLL_MS);
+        signal.addEventListener("abort", done, { once: true });
+      });
+      if (signal.aborted) throw new Error("Build canceled while waiting for the plan.");
+    }
+  };
+
+  /**
    * Optional by design: any failure here leaves the course without figures
    * rather than failing the build. Only a cancel propagates.
    */
@@ -384,6 +410,11 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
         ms: Date.now() - t0,
       });
       const ranked = dropRepeatedImages(rankCandidates(found.candidates, text, found.repeated));
+      if (ranked.length === 0) return { output: out };
+      if (!(await planFinished(step.buildId, ctx.signal))) {
+        log("course-build figures skipped", { buildId: step.buildId, error: "pages not reserved" });
+        return { output: out };
+      }
       const split = splitForReview(ranked, config.visionMaxCrops);
       let verdicts: Array<ReviewVerdict | null> | null = null;
       if (split.review.length > 0) {

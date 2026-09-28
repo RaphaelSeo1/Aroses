@@ -47,6 +47,7 @@ import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
 import { touchCourseProgress } from "@/lib/course-progress/touch-client";
 import { autoGenLog, autoGenLogError } from "@/lib/mentored/auto-generate-log";
 import { useMinWidth } from "@/hooks/use-min-width";
+import { builderFigures } from "@/lib/course-build/figure-markers";
 
 /**
  * Immersive version of MentoredLessonRunner.
@@ -1620,6 +1621,12 @@ export function ImmersiveLessonRunner({
             secondsSinceStudentSpoke,
             outputLanguage: teachingLanguageRef.current,
             chunkTeachingStarted,
+            figures:
+              typeof chunk.sourceLessonIndex === "number"
+                ? builderFigures(activeModule.lessons[chunk.sourceLessonIndex]?.visual_assets)
+                    .slice(0, 8)
+                    .map((a) => ({ assetId: a.assetId, caption: a.caption || a.title || "", page: a.sourcePage }))
+                : [],
           }),
           signal: streamAc.signal,
         });

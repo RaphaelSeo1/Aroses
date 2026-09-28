@@ -13,6 +13,8 @@ export type CourseBuildConfig = {
   figureMaxPages: number;
   /** Wall-clock budget for finding figures in one file; later pages are skipped. */
   figureTimeBudgetMs: number;
+  /** How long the figures step waits for the plan step's page reservation before skipping the vision check. */
+  figureReserveWaitMs: number;
   maxStepAttempts: number;
 };
 
@@ -41,6 +43,7 @@ export function readCourseBuildConfig(env: Env = process.env): CourseBuildConfig
     figuresEnabled: !["0", "false", "off"].includes(env.COURSE_BUILD_FIGURES?.trim().toLowerCase() ?? ""),
     figureMaxPages: nonNegativeInt(env.COURSE_BUILD_FIGURE_MAX_PAGES, 20),
     figureTimeBudgetMs: Math.max(5_000, nonNegativeInt(env.COURSE_BUILD_FIGURE_TIME_MS, 40_000)),
+    figureReserveWaitMs: 120_000,
     maxStepAttempts: Math.min(10, Math.max(1, nonNegativeInt(env.COURSE_BUILD_MAX_STEP_ATTEMPTS, 3))),
   };
 }

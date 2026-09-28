@@ -83,7 +83,7 @@ function pagesBlock(ctx: WriterContext): string {
     }
     lastSource = p.sourceIndex;
     const figs = (ctx.figures ?? []).filter((f) => f.g === p.g);
-    out.push(`[p${p.g}]\n${p.text}${figs.length ? `\n${figureManifest(figs)}` : ""}`);
+    out.push(`[p${p.g}]\n${p.text}${figs.length ? `\n${figureManifest(figs, p.text)}` : ""}`);
   }
   return out.join("\n\n");
 }
@@ -291,7 +291,7 @@ export function toCourseModule(
     if (!raw || typeof raw !== "object") continue;
     const l = raw as Record<string, unknown>;
     const lessonTitle = fixShortText(s(l.title));
-    const placed = placeFigures(fixLessonText(s(l.content)), figures, usedFigures, ctx.assetPrefix ?? "");
+    const placed = placeFigures(fixLessonText(s(l.content)), figures, usedFigures, pageText, ctx.assetPrefix ?? "");
     const content = placed.content;
     droppedFigures.push(...placed.dropped);
     if (!lessonTitle || content.length < 40) continue;
