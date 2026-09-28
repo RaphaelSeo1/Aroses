@@ -1252,6 +1252,23 @@ export function ExamGroupsPanel({
           <p className="mt-1 text-xs text-red-600 dark:text-red-400">{groupRenameError}</p>
         )}
 
+        {!readOnly && activeId ? (
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-zinc-300 bg-white/60 px-5 py-4 dark:border-zinc-700 dark:bg-zinc-950/40">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Add slides, readings, recordings or notes to{" "}
+              <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                {groups.find((g) => g.id === activeId)?.name ?? "this section"}
+              </span>
+              .
+            </p>
+            <Link
+              href={`/dashboard/courses/new?course=${courseId}&section=${activeId}`}
+              className="rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-violet-700 hover:to-fuchsia-700"
+            >
+              Add materials
+            </Link>
+          </div>
+        ) : null}
       </div>
 
       {materialsForActive.length > 0 && (

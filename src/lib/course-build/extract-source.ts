@@ -2,9 +2,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import mammoth from "mammoth";
 import { extractPdfPagesForIngest } from "@/lib/pdf-text-head-tail";
 import { extractPptxSlides } from "@/lib/study-ingest/pptx";
+import { rtfToPlainText } from "@/lib/study-ingest/rtf";
 import { paginateText, type SourcePage } from "./clean.ts";
 import { StepFatalError } from "./errors.ts";
 import type { ExtractFn, SourceRecord } from "./handlers.ts";
+import { transcribeMediaUrl } from "./transcribe.ts";
 
 export const COURSE_BUILD_UPLOAD_BUCKET = "study-pdf-ingest";
 
@@ -27,10 +29,25 @@ function unreadable(source: SourceRecord): StepFatalError {
   );
 }
 
+const SIGNED_URL_SECONDS = 60 * 60;
+
 /** Raw page text per file type. Cleaning happens in the extract step. */
 export function createSourceExtractor(admin: SupabaseClient): ExtractFn {
   return async (source) => {
+    if (source.kind === "audio" || source.kind === "video") {
+      if (!source.storagePath) throw new StepFatalError("source_missing", `${source.label} was not uploaded.`);
+      const { data, error } = await admin.storage
+        .from(COURSE_BUILD_UPLOAD_BUCKET)
+        .createSignedUrl(source.storagePath, SIGNED_URL_SECONDS);
+      if (error || !data?.signedUrl) throw new Error(`sign ${source.storagePath}: ${error?.message ?? "no url"}`);
+      return paginateText(await transcribeMediaUrl(data.signedUrl, source.label));
+    }
+
     const buf = await download(admin, source);
+    if (source.kind === "text") {
+      const raw = buf.toString("utf8");
+      return paginateText(/\.rtf$/i.test(source.storagePath ?? "") ? rtfToPlainText(raw) : raw);
+    }
     try {
       if (source.kind === "pdf") {
         const { pages } = await extractPdfPagesForIngest(buf);

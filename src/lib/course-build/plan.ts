@@ -74,7 +74,12 @@ function cleanTitle(v: unknown): string {
 type Draft = { title: string; lessons: string[]; start: number };
 
 function finishModules(drafts: Draft[], pages: BuildPage[], excluded: Set<number>, cfg: BudgetConfig): PlanModule[] {
-  const weights = new Map(pages.map((p) => [p.g, pageWeight(p.text)]));
+  // The spend cap is per source page, so dense pages may share out the
+  // budget differently but never add to it.
+  const included = pages.filter((p) => !excluded.has(p.g));
+  const rawTotal = included.reduce((sum, p) => sum + pageWeight(p.text), 0);
+  const scale = rawTotal > included.length ? included.length / rawTotal : 1;
+  const weights = new Map(pages.map((p) => [p.g, pageWeight(p.text) * scale]));
   const last = pages.length;
 
   type Span = { title: string; lessons: string[]; pages: number[]; weight: number };

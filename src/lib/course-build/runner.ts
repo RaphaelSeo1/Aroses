@@ -48,6 +48,12 @@ export type DriveOptions = {
   heartbeatMs?: number;
   /** Seconds to wait before retry N (1-based) of a failed step. */
   backoffSeconds?: (attempt: number) => number;
+  /**
+   * When every remaining step is scheduled for later, wait in-process for
+   * the next one if it is due within this many ms instead of yielding to cron.
+   */
+  maxIdleWaitMs?: number;
+  sleep?: (ms: number) => Promise<void>;
   log?: (msg: string, extra?: Record<string, unknown>) => void;
 };
 
@@ -58,6 +64,8 @@ export type DriveOutcome =
   /** Stopped early (deadline, or every remaining step is scheduled for later). */
   | { outcome: "yielded"; nextRunAfter: Date | null }
   | { outcome: "lease_lost" };
+
+const BUILD_CAP_RETRY_SECONDS = 3;
 
 const DEFAULT_BACKOFF = (attempt: number) => Math.min(60, 5 * 2 ** Math.max(0, attempt - 1));
 
@@ -106,6 +114,8 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
     stepLeaseSeconds = 180,
     heartbeatMs = 20_000,
     backoffSeconds = DEFAULT_BACKOFF,
+    maxIdleWaitMs = 0,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     log = () => {},
   } = opts;
   const owner = opts.owner ?? `cb-${randomUUID()}`;
@@ -190,6 +200,13 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
         }
         return;
       }
+      // Sibling calls hold worst-case reservations until they settle, which
+      // usually frees room under the build cap.
+      if (err instanceof SpendRefusedError && err.code === "build_cap" && inflight.size > 1) {
+        const out = await store.rescheduleStep(step.id, owner, BUILD_CAP_RETRY_SECONDS, detail);
+        if (out === "failed") fatal ??= { code: err.code, message: spendRefusalMessage(err.code) };
+        return;
+      }
       if (err instanceof SpendRefusedError) {
         await store.failStep(step.id, owner, detail, false, 0);
         fatal ??= { code: err.code, message: spendRefusalMessage(err.code) };
@@ -270,6 +287,12 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
       }
       if (p.ready > 0 && Date.now() < deadlineAt && emptyClaims < 3) {
         emptyClaims += 1;
+        continue;
+      }
+      const waitMs = p.ready === 0 && p.nextRunAfter ? p.nextRunAfter.getTime() - Date.now() : Number.POSITIVE_INFINITY;
+      if (waitMs <= maxIdleWaitMs && Date.now() + waitMs < deadlineAt) {
+        await sleep(Math.max(0, waitMs) + 100);
+        emptyClaims = 0;
         continue;
       }
       return { outcome: "yielded", nextRunAfter: p.nextRunAfter };

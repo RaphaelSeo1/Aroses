@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
+import { CourseBuildsBanner } from "@/components/course-build/CourseBuildsBanner";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseCreatorOverview } from "@/components/CourseCreatorOverview";
 import { CoursePublishingEntry } from "@/components/CoursePublishingEntry";
@@ -304,6 +305,7 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                     />
                   </div>
                 ) : null}
+                <CourseBuildsBanner supabase={supabase} courseId={course.id} userId={user.id} />
                 <div className="mt-5">
                   <ExamGroupsPanel
                     courseId={course.id}
@@ -365,6 +367,9 @@ export default async function CourseDetailPage({ params, searchParams }: Props) 
                 </div>
               ) : null}
 
+              {!readOnlyWorkspace ? (
+                <CourseBuildsBanner supabase={supabase} courseId={course.id} userId={user.id} />
+              ) : null}
               <div className={readOnlyWorkspace ? "mt-12" : "mt-5"}>
                 <ExamGroupsPanel
                   courseId={course.id}

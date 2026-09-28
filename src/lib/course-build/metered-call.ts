@@ -13,12 +13,18 @@ import type { CourseBuildStore } from "./store.ts";
 
 export type MeteredRequest = Omit<Anthropic.MessageCreateParamsNonStreaming, "model" | "stream">;
 
+type RequestOptions = { signal?: AbortSignal; maxRetries?: number; timeout?: number };
+
+/** The slice of the SDK's MessageStream the builder uses. */
+export type MessageStreamLike = {
+  on(event: "inputJson", listener: (partialJson: string, snapshot: unknown) => void): unknown;
+  finalMessage(): Promise<Anthropic.Message>;
+};
+
 export type MessagesClient = {
   messages: {
-    create(
-      body: Anthropic.MessageCreateParamsNonStreaming,
-      options?: { signal?: AbortSignal; maxRetries?: number; timeout?: number }
-    ): PromiseLike<Anthropic.Message>;
+    create(body: Anthropic.MessageCreateParamsNonStreaming, options?: RequestOptions): PromiseLike<Anthropic.Message>;
+    stream?(body: Anthropic.MessageCreateParamsNonStreaming, options?: RequestOptions): MessageStreamLike;
   };
 };
 
@@ -101,7 +107,12 @@ export async function meteredClaudeCall(
   deps: MeteredCallDeps,
   ctx: MeteredCallContext,
   request: MeteredRequest,
-  opts: { signal?: AbortSignal; timeoutMs?: number } = {}
+  opts: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    /** Streams the response and reports the tool input parsed so far. */
+    onToolInput?: (snapshot: unknown) => void;
+  } = {}
 ): Promise<MeteredCallResult> {
   const { store, client, config } = deps;
   if (!config.enabled) throw new CourseBuildDisabledError();
@@ -146,10 +157,22 @@ export async function meteredClaudeCall(
 
   let message: Anthropic.Message;
   try {
-    message = await client.messages.create(
-      { ...request, model, max_tokens: maxTokens, stream: false },
-      { signal: opts.signal, maxRetries: 0, timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS }
-    );
+    const body = { ...request, model, max_tokens: maxTokens, stream: false } as const;
+    const options = { signal: opts.signal, maxRetries: 0, timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS };
+    const onToolInput = opts.onToolInput;
+    if (onToolInput && client.messages.stream) {
+      const stream = client.messages.stream(body, options);
+      stream.on("inputJson", (_delta, snapshot) => {
+        try {
+          onToolInput(snapshot);
+        } catch {
+          // A preview problem must never fail the call.
+        }
+      });
+      message = await stream.finalMessage();
+    } else {
+      message = await client.messages.create(body, options);
+    }
   } catch (err) {
     const c = classify(err);
     await settleQuietly(deps, reservation.ledgerId, "failed", c.mayHaveBilled ? estCostUsd : 0, null);

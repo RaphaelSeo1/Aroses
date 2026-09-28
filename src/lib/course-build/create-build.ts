@@ -15,6 +15,8 @@ export type NewBuildSource = {
 };
 
 export type NewBuild = {
+  /** Chosen up front when billing needs the id before the row exists. */
+  id?: string;
   userId: string;
   courseId: string;
   examGroupId: string;
@@ -41,6 +43,7 @@ export async function createCourseBuild(
   const { data: build, error } = await admin
     .from("course_builds")
     .insert({
+      ...(input.id ? { id: input.id } : {}),
       user_id: input.userId,
       course_id: input.courseId,
       exam_group_id: input.examGroupId,
@@ -82,7 +85,7 @@ export async function createCourseBuild(
     max_attempts: config.maxStepAttempts,
     input: {
       sourceId: byPosition.get(position),
-      ...(TEXT_KINDS.has(s.kind) ? { text: s.text ?? "" } : {}),
+      ...(typeof s.text === "string" ? { text: s.text } : TEXT_KINDS.has(s.kind) && !s.storagePath ? { text: "" } : {}),
     },
   }));
   steps.push({ build_id: buildId, kind: "plan", ordinal: 0, wave: 1, max_attempts: config.maxStepAttempts, input: {} as never });

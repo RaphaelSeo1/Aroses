@@ -400,6 +400,13 @@ export function TutorRecapView({ sessionId, initial }: Props) {
                     {linkCopyState === "copied" ? "Link copied!" : "Copy link"}
                   </button>
                 ) : null}
+                <Link
+                  href={`/dashboard/courses/new?from=tutor:${sessionId}`}
+                  title="Build a structured course from this session"
+                  className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-800 transition hover:bg-rose-100"
+                >
+                  Turn into course
+                </Link>
               </>
             ) : null}
             {!editing && (status === "failed" || status === "ready") ? (

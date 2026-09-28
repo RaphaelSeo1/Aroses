@@ -1815,6 +1815,15 @@ export function LiveNotesSurface({
             )
           ) : null}
 
+          {alreadyCompleted ? (
+            <Link
+              href={`/dashboard/courses/new?from=live:${sessionId}`}
+              className="rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:from-violet-700 hover:to-fuchsia-700"
+            >
+              Turn into course
+            </Link>
+          ) : null}
+
           <button
             type="button"
             onClick={() => {

@@ -14,6 +14,8 @@ function fail(what: string, error: { message: string } | null): never {
   throw new Error(`${what}: ${error?.message ?? "not found"}`);
 }
 
+let previewColumnMissing = false;
+
 function baseLocale(text: string): "en" | "ko" {
   const hangul = (text.match(/[\uac00-\ud7af]/g) ?? []).length;
   const letters = (text.match(/[A-Za-z\uac00-\ud7af]/g) ?? []).length;
@@ -49,7 +51,7 @@ export function createSupabaseBuildData(admin: SupabaseClient): BuildData {
     async getBuild(buildId) {
       const { data, error } = await admin
         .from("course_builds")
-        .select("id, user_id, course_id, exam_group_id, material_id, output_language, study_goal")
+        .select("id, user_id, course_id, exam_group_id, material_id, output_language, study_goal, usage_reservation_id")
         .eq("id", buildId)
         .maybeSingle();
       if (error || !data) fail("course build", error);
@@ -61,7 +63,24 @@ export function createSupabaseBuildData(admin: SupabaseClient): BuildData {
         materialId: data.material_id,
         outputLanguage: data.output_language,
         studyGoal: data.study_goal,
+        usageReservationId: data.usage_reservation_id,
       };
+    },
+
+    async savePreview(stepId, owner, preview) {
+      if (previewColumnMissing) return;
+      const { error } = await admin
+        .from("course_build_steps")
+        .update({ preview, preview_at: new Date().toISOString() })
+        .eq("id", stepId)
+        .eq("claimed_by", owner)
+        .eq("status", "running");
+      // Until migration 116 is applied, lessons simply appear when each module finishes.
+      if (error && /preview/.test(error.message) && /column/.test(error.message)) {
+        previewColumnMissing = true;
+        return;
+      }
+      if (error) fail("save preview", error);
     },
 
     async listSources(buildId) {

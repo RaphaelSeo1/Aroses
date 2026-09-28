@@ -4,6 +4,7 @@ import { Geist, Geist_Mono, Noto_Sans_KR } from "next/font/google";
 import Script from "next/script";
 import { AppAdminNavGate } from "@/components/AppAdminNavGate";
 import { AppDialogs } from "@/components/AppDialogs";
+import { CourseBuildNotifier } from "@/components/course-build/CourseBuildNotifier";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 import { PaidFeatureGate } from "@/components/PaidFeatureGate";
 import { ProductTourHost } from "@/components/product-tour/ProductTourHost";
@@ -104,6 +105,7 @@ export default async function RootLayout({
             {children}
           </AppAdminNavGate>
           <AppDialogs />
+          <CourseBuildNotifier />
           <ProductTourHost />
           <PaidFeatureGate impersonationAccess={viewAs?.paidAccess ?? null} />
         </LocaleProvider>

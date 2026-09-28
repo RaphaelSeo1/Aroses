@@ -7,7 +7,6 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:course-build": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/course-build/*.test.ts",
     "test:course-build": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON src/lib/course-build/*.test.ts"
   },
   "dependencies": {

@@ -41,6 +41,8 @@ export type SourceKind =
   | "tutor_session";
 
 export const TEXT_KINDS: ReadonlySet<string> = new Set(["transcript", "text", "note", "live_session", "tutor_session"]);
+/** Running prose (transcripts, articles): no slide boilerplate to strip. */
+const PROSE_KINDS: ReadonlySet<string> = new Set(["audio", "video", "url", ...TEXT_KINDS]);
 
 export type BuildRecord = {
   id: string;
@@ -50,6 +52,7 @@ export type BuildRecord = {
   materialId: string | null;
   outputLanguage: string | null;
   studyGoal: string | null;
+  usageReservationId?: string | null;
 };
 
 export type SourceRecord = {
@@ -89,6 +92,80 @@ export interface BuildData {
   listModuleOutputs(buildId: string): Promise<ModuleStepOutput[]>;
   /** Creates or updates the build's material row. Returns its id. */
   publish(input: PublishInput): Promise<string>;
+  /** Saves the partial module text for the build screen. Only the step's owner may write. */
+  savePreview?(stepId: string, owner: string, preview: ModulePreview): Promise<void>;
+  /**
+   * Billing hook, called once the real page count is known and before any AI
+   * call. Throws StepFatalError when the student's plan can't cover the pages.
+   */
+  reservePages?(build: BuildRecord, pages: number): Promise<void>;
+}
+
+export type ModulePreview = {
+  title?: string;
+  moduleTitle?: string;
+  lessons: Array<{ title: string; content: string }>;
+  quiz: number;
+};
+
+const PREVIEW_INTERVAL_MS = 1000;
+const PREVIEW_LESSON_CHARS = 12_000;
+
+export function previewFromSnapshot(snapshot: unknown): ModulePreview | null {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const s = snapshot as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const lessons = (Array.isArray(s.lessons) ? s.lessons : [])
+    .filter((l): l is Record<string, unknown> => !!l && typeof l === "object")
+    .map((l) => ({ title: str(l.title).slice(0, 200), content: str(l.content).slice(0, PREVIEW_LESSON_CHARS) }))
+    .filter((l) => l.title || l.content);
+  const preview: ModulePreview = { lessons, quiz: Array.isArray(s.quiz) ? s.quiz.length : 0 };
+  if (str(s.title)) preview.title = str(s.title).slice(0, 140);
+  if (str(s.module_title)) preview.moduleTitle = str(s.module_title).slice(0, 140);
+  return preview.lessons.length > 0 || preview.title ? preview : null;
+}
+
+/** Saves at most one preview per interval, never two at once, always the newest. */
+function previewWriter(save: (p: ModulePreview) => Promise<void>, log: HandlerDeps["log"]) {
+  let latest: ModulePreview | null = null;
+  let lastAt = 0;
+  let writing = false;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const flush = async () => {
+    timer = null;
+    if (stopped || writing || !latest) return;
+    const next = latest;
+    latest = null;
+    writing = true;
+    lastAt = Date.now();
+    try {
+      await save(next);
+    } catch (err) {
+      log?.("course-build preview save failed", { error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      writing = false;
+      if (latest && !stopped) schedule();
+    }
+  };
+  const schedule = () => {
+    if (timer || stopped) return;
+    timer = setTimeout(() => void flush(), Math.max(0, lastAt + PREVIEW_INTERVAL_MS - Date.now()));
+    (timer as { unref?: () => void }).unref?.();
+  };
+  return {
+    push(snapshot: unknown) {
+      const p = previewFromSnapshot(snapshot);
+      if (!p || stopped) return;
+      latest = p;
+      schedule();
+    },
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
 }
 
 /** Turns a stored file into raw pages. Text sources skip this. */
@@ -179,13 +256,9 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
       return { output: { pages: source.pages.length, reused: true } };
     }
 
-    let raw: SourcePage[];
-    if (TEXT_KINDS.has(source.kind)) {
-      raw = paginateText(input.text ?? "");
-    } else {
-      raw = await deps.extract(source);
-    }
-    const pages = TEXT_KINDS.has(source.kind) ? raw : cleanPages(raw);
+    const inline = typeof input.text === "string";
+    const raw: SourcePage[] = inline ? paginateText(input.text ?? "") : await deps.extract(source);
+    const pages = inline || PROSE_KINDS.has(source.kind) ? raw : cleanPages(raw);
     await data.saveSourcePages(source.id, pages);
     return { output: { pages: pages.length } };
   };
@@ -201,6 +274,7 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
         "We couldn't find any readable text in these files. If a PDF is scanned, export it with selectable text and try again."
       );
     }
+    await data.reservePages?.(build, pages.length);
 
     let result: BuildPlan;
     if (pages.length < PLAN_MIN_PAGES) {
@@ -267,12 +341,20 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
     };
     const single = !planned.planned;
     const tool = single ? "submit_course" : "submit_module";
-    const { message, costUsd } = await meteredClaudeCall(
-      metered,
-      { buildId: step.buildId, stepId: step.id, userId: build.userId, purpose: `module:${mod.id}` },
-      single ? singleModuleRequest(writer) : moduleRequest(writer),
-      { signal: ctx.signal }
-    );
+    const savePreview = data.savePreview?.bind(data);
+    const preview = savePreview ? previewWriter((p) => savePreview(step.id, ctx.owner, p), log) : null;
+    let message: Anthropic.Message;
+    let costUsd: number;
+    try {
+      ({ message, costUsd } = await meteredClaudeCall(
+        metered,
+        { buildId: step.buildId, stepId: step.id, userId: build.userId, purpose: `module:${mod.id}` },
+        single ? singleModuleRequest(writer) : moduleRequest(writer),
+        { signal: ctx.signal, onToolInput: preview ? (s) => preview.push(s) : undefined }
+      ));
+    } finally {
+      preview?.stop();
+    }
     const input = toolInput(message, tool) as Record<string, unknown>;
     const moduleTitle = single ? String(input.module_title ?? "").trim() : mod.title;
     const converted = toCourseModule(input, writer, moduleTitle);

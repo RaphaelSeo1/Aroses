@@ -227,3 +227,67 @@ test("an already-aborted signal refuses without sending", async () => {
   assert.equal(client.calls.length, 0);
   assert.equal(Number((await t.ledger(c.buildId))[0].cost_usd), 0);
 });
+
+test("streaming reports partial tool input and settles like a normal call", async () => {
+  const c = await ctx();
+  const snapshots: unknown[] = [];
+  let streamed = 0;
+  const client: MessagesClient = {
+    messages: {
+      create: async () => {
+        throw new Error("create should not be used when streaming");
+      },
+      stream: () => {
+        streamed += 1;
+        let listener: ((d: string, s: unknown) => void) | null = null;
+        return {
+          on(_event, fn) {
+            listener = fn;
+            return this;
+          },
+          async finalMessage() {
+            listener?.('{"lessons":[{"title":"Sup', { lessons: [{ title: "Sup" }] });
+            listener?.('ply"}]}', { lessons: [{ title: "Supply" }] });
+            return reply({ input_tokens: 1000, output_tokens: 200 });
+          },
+        };
+      },
+    },
+  };
+  const res = await meteredClaudeCall({ store: t.store, client, config: ON }, c, REQ, {
+    onToolInput: (s) => snapshots.push(s),
+  });
+  assert.equal(streamed, 1);
+  assert.deepEqual(snapshots, [{ lessons: [{ title: "Sup" }] }, { lessons: [{ title: "Supply" }] }]);
+  assert.equal(res.costUsd, 0.002);
+  const [row] = await t.ledger(c.buildId);
+  assert.equal(row.status, "settled");
+});
+
+test("a throwing preview callback never fails the call", async () => {
+  const c = await ctx();
+  const client: MessagesClient = {
+    messages: {
+      create: async () => reply({}),
+      stream: () => {
+        let listener: ((d: string, s: unknown) => void) | null = null;
+        return {
+          on(_event, fn) {
+            listener = fn;
+            return this;
+          },
+          async finalMessage() {
+            listener?.("{", {});
+            return reply({ input_tokens: 10, output_tokens: 10 });
+          },
+        };
+      },
+    },
+  };
+  const res = await meteredClaudeCall({ store: t.store, client, config: ON }, c, REQ, {
+    onToolInput: () => {
+      throw new Error("preview broke");
+    },
+  });
+  assert.ok(res.costUsd > 0);
+});

@@ -200,6 +200,12 @@ export function StandaloneNoteEditor({
               {recording ? "Starting…" : "⏺ Record lecture"}
             </button>
           )}
+          <Link
+            href={`/dashboard/courses/new?from=note:${noteId}`}
+            className="rounded-full bg-gradient-to-br from-violet-600 to-fuchsia-600 px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:from-violet-700 hover:to-fuchsia-700"
+          >
+            Turn into course
+          </Link>
         </div>
       </div>
       {error ? (

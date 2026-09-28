@@ -4,7 +4,16 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { CoursePayload } from "@/types/course";
 import type { SourcePage } from "./clean.ts";
 import { readCourseBuildConfig } from "./config.ts";
-import { createStepHandlers, type BuildData, type ModuleStepOutput, type PublishInput, type SourceRecord } from "./handlers.ts";
+import {
+  createStepHandlers,
+  previewFromSnapshot,
+  type BuildData,
+  type ModulePreview,
+  type ModuleStepOutput,
+  type PublishInput,
+  type SourceRecord,
+} from "./handlers.ts";
+import { StepFatalError } from "./errors.ts";
 import type { MessagesClient } from "./metered-call.ts";
 import { lessonWordBudget, quizSplit, toCourseModule } from "./module.ts";
 import { numberPages } from "./outline.ts";
@@ -107,6 +116,23 @@ test("plan repair: never more modules than the budget can fill", () => {
     config
   );
   assert.equal(plan.modules.length, 3);
+  assert.deepEqual(plan.modules.flatMap((m) => m.pages), pages.map((p) => p.g));
+});
+
+test("plan repair: dense pages never earn more output than the page count allows", () => {
+  const dense = "A long paragraph of dense reading that keeps going. ".repeat(60);
+  const sources = [
+    { index: 0, label: "article", kind: "url", pages: Array.from({ length: 27 }, (_, i) => ({ n: i + 1, text: `${i} ${dense}` })) },
+  ];
+  const pages = numberPages(sources);
+  const plan = repairPlan(
+    { modules: Array.from({ length: 6 }, (_, i) => ({ title: `M${i + 1}`, first_page: i * 4 + 1, lessons: [] })) },
+    pages,
+    config
+  );
+  assert.equal(plan.modules.length, maxModulesFor(27));
+  const weight = plan.modules.reduce((sum, m) => sum + m.weight, 0);
+  assert.ok(Math.abs(weight - 27) < 1e-6, `total weight ${weight}`);
   assert.deepEqual(plan.modules.flatMap((m) => m.pages), pages.map((p) => p.g));
 });
 
@@ -349,4 +375,107 @@ test("a source with no text fails with a plain message and no AI call", async ()
   assert.equal(calls, 0);
   const b = await t.build(buildId);
   assert.equal(b.error_code, "no_text");
+});
+
+test("page reservation runs before any AI call and a refusal fails the build plainly", async () => {
+  const { userId, buildId } = await newBuild();
+  const mem = memoryData(pagesOf(24));
+  let calls = 0;
+  const reserved: number[] = [];
+  const client: MessagesClient = {
+    messages: {
+      create: async () => {
+        calls += 1;
+        throw new Error("should not be called");
+      },
+    },
+  };
+  const handlers = createStepHandlers({
+    store: t.store,
+    client,
+    config,
+    data: {
+      ...mem.data(buildId, userId),
+      reservePages: async (_build, pages) => {
+        reserved.push(pages);
+        throw new StepFatalError("source_page_cap_reached", "You have 10 source pages left this month; this upload has 24.");
+      },
+    },
+    extract: mem.extract,
+    validatePayload: validate,
+  });
+  const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50 });
+  assert.deepEqual(out, { outcome: "finished", status: "failed" });
+  assert.deepEqual(reserved, [24]);
+  assert.equal(calls, 0);
+  const b = await t.build(buildId);
+  assert.equal(b.error_code, "source_page_cap_reached");
+  assert.match(String(b.error_message), /24/);
+});
+
+test("preview snapshots keep only titles and text, and skip empty ones", () => {
+  assert.equal(previewFromSnapshot(null), null);
+  assert.equal(previewFromSnapshot({ lessons: [] }), null);
+  assert.deepEqual(
+    previewFromSnapshot({ lessons: [{ title: "Hexokinase", content: "Traps glucose", key_terms: [{}] }, {}], quiz: [{}, {}] }),
+    { lessons: [{ title: "Hexokinase", content: "Traps glucose" }], quiz: 2 }
+  );
+  assert.deepEqual(previewFromSnapshot({ title: "Redox", module_title: "Oxidation", lessons: [] }), {
+    title: "Redox",
+    moduleTitle: "Oxidation",
+    lessons: [],
+    quiz: 0,
+  });
+});
+
+test("a streaming writer saves throttled previews while the module is written", async () => {
+  const { userId, buildId } = await newBuild();
+  const mem = memoryData(pagesOf(4));
+  const previews: ModulePreview[] = [];
+  const client: MessagesClient = {
+    messages: {
+      create: async () => {
+        throw new Error("module calls should stream");
+      },
+      stream: (body) => {
+        const tool = (body.tool_choice as { name: string }).name;
+        const full = { title: "Redox", description: "Electron transfer.", module_title: "Oxidation and Reduction", ...moduleInput([1, 4]) };
+        let listener: ((d: string, s: unknown) => void) | null = null;
+        return {
+          on(_e, fn) {
+            listener = fn;
+            return this;
+          },
+          async finalMessage() {
+            const lessons = (full as { lessons: Array<{ title: string; content: string }> }).lessons;
+            listener?.("", { title: "Redox", lessons: [{ title: lessons[0].title, content: "Oxid" }] });
+            listener?.("", { title: "Redox", lessons: [{ title: lessons[0].title, content: "Oxidation is" }] });
+            await new Promise((r) => setTimeout(r, 1100));
+            listener?.("", { title: "Redox", lessons: [lessons[0], { title: "Second" }] });
+            await new Promise((r) => setTimeout(r, 1100));
+            return toolMessage(tool, full);
+          },
+        };
+      },
+    },
+  };
+  const handlers = createStepHandlers({
+    store: t.store,
+    client,
+    config,
+    data: {
+      ...mem.data(buildId, userId),
+      savePreview: async (_stepId, owner, p) => {
+        assert.ok(owner);
+        previews.push(p);
+      },
+    },
+    extract: mem.extract,
+    validatePayload: validate,
+  });
+  const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50 });
+  assert.deepEqual(out, { outcome: "finished", status: "complete" });
+  assert.equal(previews.length, 2, "two bursts a second apart give two saves");
+  assert.equal(previews[0].lessons[0].content, "Oxidation is", "a burst saves only its newest snapshot");
+  assert.equal(previews[1].lessons.length, 2);
 });

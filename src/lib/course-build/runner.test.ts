@@ -190,6 +190,54 @@ test("a spend refusal fails the build at once with no retries", async () => {
   assert.equal((await t.build(buildId)).error_code, "build_cap");
 });
 
+test("a build-cap refusal while sibling calls are in flight waits for them instead of failing", async () => {
+  const buildId = await newBuild();
+  const p = pipeline(3, 40);
+  let refused = 0;
+  const base = p.handlers.module!;
+  const handlers: StepHandlers = {
+    ...p.handlers,
+    module: async (s, ctx) => {
+      if (s.ordinal === 1 && refused === 0) {
+        refused += 1;
+        throw new SpendRefusedError("build_cap");
+      }
+      return base(s, ctx);
+    },
+  };
+  const waits: number[] = [];
+  const res = await driveBuild({
+    buildId,
+    store: t.store,
+    handlers,
+    maxIdleWaitMs: 15_000,
+    sleep: async (ms) => {
+      waits.push(ms);
+      await t.db.query("update public.course_build_steps set run_after = now() where build_id = $1", [buildId]);
+    },
+  });
+  assert.deepEqual(res, { outcome: "finished", status: "complete" });
+  assert.equal(refused, 1);
+  assert.equal(p.calls["module:1"], 1, "the refused module ran once it had room");
+  assert.ok(waits.length >= 1 && waits.every((ms) => ms <= 15_100), JSON.stringify(waits));
+});
+
+test("a build-cap refusal with nothing else in flight still fails at once", async () => {
+  const buildId = await newBuild();
+  const res = await driveBuild({
+    buildId,
+    store: t.store,
+    maxIdleWaitMs: 15_000,
+    handlers: {
+      extract: async () => {
+        throw new SpendRefusedError("build_cap");
+      },
+    },
+  });
+  assert.deepEqual(res, { outcome: "finished", status: "failed" });
+  assert.equal((await t.build(buildId)).error_code, "build_cap");
+});
+
 test("handler-declared fatal errors show their own message", async () => {
   const buildId = await newBuild();
   await driveBuild({
