@@ -311,12 +311,28 @@ function figureOf(it: TextItem, figures: Rect[]): number {
   return figures.findIndex((f) => inside(f, cx, cy));
 }
 
-/**
- * Text for one page. Items outside tables come out in the PDF's own order
- * (as the rest of the app extracts them); each table is written once, where
- * its first item appears, and each figure's labels once, on one line.
- */
+/** Text for one page; see `layoutPage`. */
 export function layoutPageText(rawItems: TextItem[], layout: PageLayout = {}): string {
+  return layoutPage(rawItems, layout).text;
+}
+
+/** Glyph extent of a set of items, in PDF units. */
+function extentOf(items: TextItem[]): Rect {
+  return {
+    x0: Math.min(...items.map((it) => it.x)),
+    x1: Math.max(...items.map((it) => it.x + Math.max(0, it.width))),
+    y0: Math.min(...items.map((it) => it.y - it.fontSize * 0.25)),
+    y1: Math.max(...items.map((it) => it.y + it.fontSize * 0.75)),
+  };
+}
+
+/**
+ * Text for one page, plus where each of its tables sits (in text order).
+ * Items outside tables come out in the PDF's own order (as the rest of the
+ * app extracts them); each table is written once, where its first item
+ * appears, and each figure's labels once, on one line.
+ */
+export function layoutPage(rawItems: TextItem[], layout: PageLayout = {}): { text: string; tables: Rect[] } {
   const items = dropOverprintedItems(rawItems);
   const figures = layout.figures ?? [];
   const figureIndex = items.map((it) => (figures.length && it.str.trim() ? figureOf(it, figures) : -1));
@@ -340,6 +356,7 @@ export function layoutPageText(rawItems: TextItem[], layout: PageLayout = {}): s
 
   let text = "";
   let last: TextItem | null = null;
+  const boxes: Rect[] = [];
   items.forEach((it, i) => {
     if (!it.str) return;
     const f = figureIndex[i]!;
@@ -357,6 +374,7 @@ export function layoutPageText(rawItems: TextItem[], layout: PageLayout = {}): s
       if (!written.has(t)) {
         written.add(t);
         text += `${text && !text.endsWith("\n") ? "\n" : ""}${t.markdown}\n`;
+        boxes.push(extentOf([...t.items].map((k) => items[k]!)));
       }
       last = null;
       return;
@@ -375,7 +393,7 @@ export function layoutPageText(rawItems: TextItem[], layout: PageLayout = {}): s
     }
     last = it;
   });
-  return text.trim();
+  return { text: text.trim(), tables: boxes };
 }
 
 /** True for a markdown table line, which cleanup must leave exactly as extracted. */

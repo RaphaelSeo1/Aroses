@@ -12,6 +12,8 @@ export type CourseBuildConfig = {
    */
   dailyCapCeilingUsd: number | null;
   visionMaxCrops: number;
+  /** Most PDF pages per file whose text-layer tables get a page-level vision check. */
+  visionMaxTablePages: number;
   figuresEnabled: boolean;
   /** Most PDF pages rendered per file when looking for figures. */
   figureMaxPages: number;
@@ -52,6 +54,7 @@ export function readCourseBuildConfig(env: Env = process.env): CourseBuildConfig
     minCapUsd: positiveNumber(env.COURSE_BUILD_MIN_CAP_USD, 0.06),
     dailyCapCeilingUsd: positiveNumberOrNull(env.COURSE_BUILD_DAILY_CAP_USD),
     visionMaxCrops: nonNegativeInt(env.COURSE_BUILD_VISION_MAX_CROPS, 24),
+    visionMaxTablePages: nonNegativeInt(env.COURSE_BUILD_VISION_MAX_TABLE_PAGES, 8),
     figuresEnabled: !["0", "false", "off"].includes(env.COURSE_BUILD_FIGURES?.trim().toLowerCase() ?? ""),
     figureMaxPages: nonNegativeInt(env.COURSE_BUILD_FIGURE_MAX_PAGES, 20),
     figureTimeBudgetMs: Math.max(5_000, nonNegativeInt(env.COURSE_BUILD_FIGURE_TIME_MS, 25_000)),

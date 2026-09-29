@@ -43,15 +43,19 @@ function pdfjsAssetDir(subdir: string): string {
   return path.join(process.cwd(), "node_modules/pdfjs-dist", subdir);
 }
 
-/** Load a PDF document (shared by extract + render). */
-export async function loadPdfDocument(buffer: Buffer) {
+/**
+ * Load a PDF document (shared by extract + render). `outlineFonts` draws
+ * glyphs from the font outlines instead of registering font faces, which
+ * Node has no API for; without it rendered text can come out as boxes.
+ */
+export async function loadPdfDocument(buffer: Buffer, opts: { outlineFonts?: boolean } = {}) {
   const pdfjsLib = await getPdfJs();
   // Always copy — legacy pdf-parse PDF.js may detach the source ArrayBuffer.
   const data = new Uint8Array(Buffer.from(buffer));
   const pdf = await pdfjsLib.getDocument({
     data,
     // Fonts enabled so exported slide PDFs render text and vector labels.
-    disableFontFace: false,
+    disableFontFace: opts.outlineFonts === true,
     useSystemFonts: true,
     // Standard 14 fonts + CJK cmaps — reduces □/☒ when PDF embeds are incomplete.
     standardFontDataUrl: pathToFileURL(

@@ -14,6 +14,7 @@ import {
   scoreCropQuality,
 } from "@/lib/pdf-ingest/filter-crop-quality";
 import { loadPdfDocument } from "@/lib/study-ingest/source-images/render-pdf-page";
+import type { PageBox } from "./clean.ts";
 import { FigureBudget, eachWithinBudget, spreadOrder, yieldToEventLoop } from "./figure-budget.ts";
 import { isChromeBox, repeatedBoxes, type Box, type FigureCandidate } from "./figures.ts";
 
@@ -35,7 +36,14 @@ export type FoundFigures = {
   pagesRendered: number;
   /** True when the time budget ran out and later pages were skipped. */
   truncated: boolean;
+  /** Small renders of the requested `tablePages`, for the page-level table check. */
+  pageImages?: Array<{ page: number; image: Buffer }>;
 };
+
+/** Page renders for the table check: legible layout at about 1,000 image tokens each. */
+const TABLE_PAGE_WIDTH_PX = 768;
+/** Share of the figure budget the table-page renders may use. */
+const TABLE_PAGE_BUDGET_SHARE = 0.2;
 
 
 // One scan per process at a time: each holds a parsed PDF and page canvases in memory.
@@ -197,7 +205,68 @@ export type FindFiguresOptions = {
    */
   deadlineAt?: number;
   signal?: AbortSignal;
+  /** Pages to render whole for the table check, in priority order. */
+  tablePages?: TablePageRequest[];
 };
+
+/** A page for the table check and where its text-layer tables sit. */
+export type TablePageRequest = { page: number; boxes?: PageBox[] };
+
+/** Whole-page renders with legible text, within a share of the figure budget; failures just skip the page. */
+async function renderTablePages(
+  buffer: Buffer,
+  pages: TablePageRequest[],
+  budget: FigureBudget,
+  signal: AbortSignal | undefined
+): Promise<Array<{ page: number; image: Buffer }>> {
+  const tableBudget = budget.portion(TABLE_PAGE_BUDGET_SHARE);
+  let pdf: Awaited<ReturnType<typeof loadPdfDocument>>["pdf"] | null = null;
+  try {
+    const doc = (await loadPdfDocument(buffer, { outlineFonts: true })).pdf;
+    pdf = doc;
+    const wanted = pages.filter((p) => Number.isInteger(p.page) && p.page >= 1 && p.page <= doc.numPages);
+    const done = await eachWithinBudget<TablePageRequest, { page: number; image: Buffer }>(wanted, tableBudget, signal, async (p, emit) => {
+      const page = await doc.getPage(p.page);
+      try {
+        emit({ page: p.page, image: await renderTablePage(page, p.boxes ?? [], tableBudget) });
+      } catch {
+        // An unrenderable page keeps its text-layer decision.
+      } finally {
+        page.cleanup();
+      }
+    });
+    return done.results;
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    return [];
+  } finally {
+    await pdf?.destroy().catch(() => {});
+  }
+}
+
+/** The page with each text-layer table outlined in red, so vision judges the right area. */
+async function renderTablePage(page: PdfPage, boxes: PageBox[], budget: FigureBudget): Promise<Buffer> {
+  const base = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: base.width > 0 ? Math.min(2, TABLE_PAGE_WIDTH_PX / base.width) : 1 });
+  const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  await budget.within(
+    page.render({
+      canvas: canvas as unknown as HTMLCanvasElement,
+      canvasContext: context as unknown as CanvasRenderingContext2D,
+      viewport,
+    })
+  );
+  const pad = 6;
+  context.strokeStyle = "#e0102f";
+  context.lineWidth = 3;
+  for (const b of boxes) {
+    context.strokeRect(b.x * canvas.width - pad, b.y * canvas.height - pad, b.w * canvas.width + 2 * pad, b.h * canvas.height + 2 * pad);
+  }
+  return canvas.toBuffer("image/jpeg", 75);
+}
 
 /**
  * Finds figure crops in a PDF without any AI. Every page's drawing commands
@@ -215,6 +284,7 @@ async function findPdfFiguresNow(buffer: Buffer, opts: FindFiguresOptions, budge
   if (budget.expired) return { candidates: [], repeated: [], pagesRendered: 0, truncated: true };
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const OPS = pdfjsLib.OPS as unknown as Record<string, number>;
+  const pageImages = opts.tablePages?.length ? await renderTablePages(buffer, opts.tablePages, budget, signal) : [];
   const { pdf } = await loadPdfDocument(buffer);
   try {
     const total = Math.min(pdf.numPages, MAX_SCAN_PAGES);
@@ -260,7 +330,13 @@ async function findPdfFiguresNow(buffer: Buffer, opts: FindFiguresOptions, budge
       { stopWhen: (found) => found.length >= MAX_CANDIDATES }
     );
     const candidates = render.results.slice(0, MAX_CANDIDATES).sort((a, b) => a.page - b.page);
-    return { candidates, repeated, pagesRendered: render.processed, truncated: scan.truncated || render.truncated };
+    return {
+      candidates,
+      repeated,
+      pagesRendered: render.processed,
+      truncated: scan.truncated || render.truncated,
+      pageImages,
+    };
   } finally {
     await pdf.destroy().catch(() => {});
   }

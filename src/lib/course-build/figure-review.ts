@@ -113,3 +113,85 @@ export async function reviewFigures(
   );
   return { verdicts: parseReview(block?.input, items.length), costUsd };
 }
+
+export const TABLE_PAGE_TOOL: Anthropic.Tool = {
+  name: "review_table_pages",
+  description: "Report which pages contain a real data table.",
+  strict: true,
+  input_schema: {
+    type: "object",
+    properties: {
+      pages: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { n: { type: "integer" }, table: { type: "boolean" } },
+          required: ["n", "table"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["pages"],
+    additionalProperties: false,
+  },
+};
+
+const TABLE_PAGE_RULES = `Each numbered image is one page of a student's file. A red outline marks where text extraction guessed there is a table (no outline: anywhere on the page). For every number, decide whether the outlined area really is a data table.
+table=true when it is a grid of records: a row of column headings and rows beneath it that each give a value under those same headings, with or without ruling lines. A table can be small (two columns, a few rows) and can sit among other text.
+table=false when it is labels on a diagram, flowchart or drawing; a chart's axes, ticks or legend; captions; a form with fields to fill in; page headers or footers; slide titles; a bullet or numbered list; or ordinary text set in columns. Rows with no column headings above them are not a table.
+Judge only by the layout you see. This holds for every subject and language.`;
+
+export type TablePageImage = { page: number; image: Buffer };
+
+/** true = vision saw a table, false = it saw none, null = no answer (keep the text-layer decision). */
+export function parseTablePages(input: unknown, count: number): Array<boolean | null> {
+  const out: Array<boolean | null> = Array.from({ length: count }, () => null);
+  const list = (input as { pages?: unknown })?.pages;
+  if (!Array.isArray(list)) return out;
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const i = Number(r.n) - 1;
+    if (!Number.isInteger(i) || i < 0 || i >= count || out[i] != null || typeof r.table !== "boolean") continue;
+    out[i] = r.table;
+  }
+  return out;
+}
+
+/** Table pages wait on this after the plan, so a slow answer gives up early. */
+const TABLE_REVIEW_TIMEOUT_MS = 20_000;
+
+/**
+ * One low-resolution vision call over every page whose text layer formed a
+ * table: does the page really show one? Metered like every other build call.
+ */
+export async function reviewTablePages(
+  metered: MeteredCallDeps,
+  ctx: MeteredCallContext,
+  pages: TablePageImage[],
+  opts: { signal?: AbortSignal } = {}
+): Promise<{ verdicts: Array<boolean | null>; costUsd: number }> {
+  if (pages.length === 0) return { verdicts: [], costUsd: 0 };
+  const content: Anthropic.ContentBlockParam[] = [];
+  pages.forEach((p, i) => {
+    content.push({ type: "text", text: `${i + 1}.` });
+    content.push(jpegBlock(p.image));
+  });
+  content.push({ type: "text", text: `Review all ${pages.length} pages.` });
+  const { message, costUsd } = await meteredClaudeCall(
+    metered,
+    ctx,
+    {
+      max_tokens: 40 + 16 * pages.length,
+      system: TABLE_PAGE_RULES,
+      tools: [TABLE_PAGE_TOOL],
+      tool_choice: { type: "tool", name: TABLE_PAGE_TOOL.name },
+      messages: [{ role: "user", content }],
+    },
+    { signal: opts.signal, timeoutMs: TABLE_REVIEW_TIMEOUT_MS }
+  );
+  const block = message.content.find(
+    (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === TABLE_PAGE_TOOL.name
+  );
+  return { verdicts: parseTablePages(block?.input, pages.length), costUsd };
+}

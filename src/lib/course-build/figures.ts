@@ -50,6 +50,8 @@ export type FiguresStepOutput = {
   candidates: number;
   checked: number;
   costUsd: number;
+  /** Pages whose text-layer tables vision was asked about, and those it found no table on. */
+  tablePages?: { checked: number[]; demoted: number[] };
 };
 
 export const MAX_FIGURES_PER_PAGE = 3;

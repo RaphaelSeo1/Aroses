@@ -75,7 +75,7 @@ const MemoMarkdown = memo(function MemoMarkdown({
   markdown: string;
   figures?: LessonVisualAsset[];
 }) {
-  return <LessonRichContent markdown={markdown} figures={figures} />;
+  return <LessonRichContent markdown={markdown} figures={figures} checkTables />;
 });
 
 /** Finished paragraphs render as markdown; the paragraph being written types out as plain text. */

@@ -1,10 +1,16 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { CourseModule, CoursePayload } from "@/types/course";
-import { cleanPages, paginateText, type SourcePage } from "./clean.ts";
+import { cleanPages, paginateText, type PageBox, type SourcePage } from "./clean.ts";
 import type { CourseBuildConfig } from "./config.ts";
 import { AiCallError, StepFatalError } from "./errors.ts";
 import { stripFigureMarkers } from "./figure-markers.ts";
-import { reviewFigures, type ReviewVerdict, type SheetMaker } from "./figure-review.ts";
+import {
+  reviewFigures,
+  reviewTablePages,
+  type ReviewVerdict,
+  type SheetMaker,
+  type TablePageImage,
+} from "./figure-review.ts";
 import {
   MAX_FIGURES_PER_BUILD,
   acceptFigures,
@@ -43,8 +49,10 @@ import {
 import { GAP_TOOL, PLAN_RULES, PLAN_TOOL } from "./prompts.ts";
 import { buildSpendCapUsd } from "./pricing.ts";
 import type { PlanStepInput } from "./create-build.ts";
+import type { TablePageRequest } from "./figures-pdf.ts";
 import type { StepHandler, StepHandlers } from "./runner.ts";
 import type { CourseBuildStore, NewStep } from "./store.ts";
+import { guardMarkdownTables, markdownTableBlocks } from "./table-quality.ts";
 
 export type SourceKind =
   | "pdf"
@@ -125,11 +133,18 @@ export interface BuildData {
   listFigures?(buildId: string): Promise<FigureAsset[]>;
 }
 
-/** Finds figure crops in a stored PDF without any AI. */
+/** Finds figure crops in a stored PDF without any AI, and renders `tablePages` whole for the table check. */
 export type FindFiguresFn = (
   source: SourceRecord,
-  signal?: AbortSignal
-) => Promise<{ candidates: FigureCandidate[]; repeated: Box[]; pagesRendered?: number; truncated?: boolean }>;
+  signal?: AbortSignal,
+  opts?: { tablePages?: TablePageRequest[] }
+) => Promise<{
+  candidates: FigureCandidate[];
+  repeated: Box[];
+  pagesRendered?: number;
+  truncated?: boolean;
+  pageImages?: TablePageImage[];
+}>;
 
 export type ModulePreview = {
   title?: string;
@@ -270,6 +285,13 @@ function unstringifyFields(input: unknown): unknown {
     }
   }
   return out;
+}
+
+/** At least half of the box lies inside the page. */
+function onPage(b: PageBox): boolean {
+  const w = Math.max(0, Math.min(1, b.x + b.w) - Math.max(0, b.x));
+  const h = Math.max(0, Math.min(1, b.y + b.h) - Math.max(0, b.y));
+  return b.w * b.h > 0 && (w * h) / (b.w * b.h) >= 0.5;
 }
 
 function sourceInfos(sources: SourceRecord[]): BuildSourceInfo[] {
@@ -505,41 +527,70 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
       if (!source || source.kind !== "pdf") return { output: out };
       const pages = numberPages(sourceInfos(all));
       const text = (n: number) => source.pages?.find((p) => p.n === n)?.text ?? "";
+      // Vision can only judge a table it can see; one drawn off the page keeps the structural decision.
+      const tablePages = (source.pages ?? [])
+        .filter((p) => markdownTableBlocks(p.text ?? "").length > 0 && (!p.tables?.length || p.tables.some(onPage)))
+        .map((p) => ({ page: p.n, boxes: p.tables?.filter(onPage) }))
+        .slice(0, config.visionMaxTablePages);
 
       const t0 = Date.now();
-      const found = await findFigures(source, ctx.signal);
+      const found = await findFigures(source, ctx.signal, tablePages.length > 0 ? { tablePages } : undefined);
+      const pageImages = found.pageImages ?? [];
       out.candidates = found.candidates.length;
       log("course-build figures scanned", {
         buildId: step.buildId,
         candidates: found.candidates.length,
         pagesRendered: found.pagesRendered,
+        tablePages: pageImages.length,
         truncated: found.truncated,
         ms: Date.now() - t0,
       });
       const ranked = dropRepeatedImages(rankCandidates(found.candidates, text, found.repeated));
-      if (ranked.length === 0) return { output: out };
+      if (ranked.length === 0 && pageImages.length === 0) return { output: out };
       if (!(await planFinished(step.buildId, ctx.signal))) {
         log("course-build figures skipped", { buildId: step.buildId, error: "pages not reserved" });
         return { output: out };
       }
+      const callCtx = (purpose: string) => ({ buildId: step.buildId, stepId: step.id, userId: build.userId, purpose });
+
+      /** Vision breaks the tie on text-layer tables; no answer keeps the structural decision. */
+      const checkTablePages = async () => {
+        if (pageImages.length === 0) return;
+        try {
+          const r = await reviewTablePages(metered, callCtx("vision:tables"), pageImages, { signal: ctx.signal });
+          out.costUsd += r.costUsd;
+          const demoted = pageImages.filter((_, i) => r.verdicts[i] === false).map((p) => p.page);
+          out.tablePages = { checked: pageImages.map((p) => p.page), demoted };
+          if (demoted.length === 0 || !source.pages) return;
+          await data.saveSourcePages(
+            source.id,
+            source.pages.map((p) => (demoted.includes(p.n) ? { ...p, text: guardMarkdownTables(p.text ?? "", { all: true }).text } : p))
+          );
+          log("course-build table pages demoted", { buildId: step.buildId, pages: demoted });
+        } catch (err) {
+          if (ctx.signal.aborted) throw err;
+          log("course-build table check skipped", { buildId: step.buildId, error: errText(err) });
+        }
+      };
+
       const split = splitForReview(ranked, config.visionMaxCrops);
       let verdicts: Array<ReviewVerdict | null> | null = null;
-      if (split.review.length > 0) {
+      const checkFigures = async () => {
+        if (split.review.length === 0) return;
         try {
-          const r = await reviewFigures(
-            metered,
-            { buildId: step.buildId, stepId: step.id, userId: build.userId, purpose: "vision:figures" },
-            split.review,
-            { signal: ctx.signal, makeSheet: deps.makeContactSheet }
-          );
+          const r = await reviewFigures(metered, callCtx("vision:figures"), split.review, {
+            signal: ctx.signal,
+            makeSheet: deps.makeContactSheet,
+          });
           verdicts = r.verdicts;
-          out.costUsd = r.costUsd;
+          out.costUsd += r.costUsd;
           out.checked = split.review.length;
         } catch (err) {
           if (ctx.signal.aborted) throw err;
           log("course-build figure review skipped", { buildId: step.buildId, error: errText(err) });
         }
-      }
+      };
+      await Promise.all([checkFigures(), checkTablePages()]);
 
       for (const [i, a] of acceptFigures(split, verdicts).slice(0, MAX_FIGURES_PER_BUILD).entries()) {
         const c = a.r.candidate;

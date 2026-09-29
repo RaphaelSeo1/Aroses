@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { cleanPages } from "./clean.ts";
 import { docxHtmlToText } from "./office-text.ts";
 import { layoutPageText, type TextItem } from "./pdf-layout.ts";
-import { guardMarkdownTables, judgeTable, parseMarkdownTable } from "./table-quality.ts";
+import { firstRealTable, guardMarkdownTables, judgeTable, parseMarkdownTable } from "./table-quality.ts";
 import { ensureTables, markdownTables } from "./tables.ts";
 
 const item = (str: string, x: number, y: number, fontSize = 10): TextItem => ({
@@ -213,4 +213,27 @@ test("office files: a table used only for layout becomes paragraphs", () => {
   const text = docxHtmlToText(html);
   assert.ok(!text.includes("|"), text);
   assert.ok(text.includes("how the cell membrane is organized"), text);
+});
+
+test("first real table skips label grids and fixes a missing separator; demoting all keeps every word", () => {
+  const md = [
+    "Intro line.",
+    "| Oxygen | Oxygen | Oxygen |",
+    "| --- | --- | --- |",
+    "| Oxygen | Oxygen | Oxygen |",
+    "",
+    "| Stage | ATP | NADH |",
+    "| Glycolysis | 2 | 2 |",
+    "| Krebs cycle | 2 | 6 |",
+    "",
+    "```",
+    "| a | b |",
+    "| --- | --- |",
+    "| 1 | 2 |",
+    "```",
+  ].join("\n");
+  assert.equal(firstRealTable(md), "| Stage | ATP | NADH |\n| --- | --- | --- |\n| Glycolysis | 2 | 2 |\n| Krebs cycle | 2 | 6 |");
+  assert.equal(firstRealTable("No tables here."), null);
+  const all = guardMarkdownTables("Before.\n| Stage | ATP |\n| --- | --- |\n| Glycolysis | 2 |\nAfter.", { all: true });
+  assert.deepEqual(all, { text: "Before.\nStage ATP\nGlycolysis 2\nAfter.", rejected: 1 });
 });

@@ -194,14 +194,47 @@ function isTableRow(line: string): boolean {
   return /^\|.*\|$/.test(line.trim());
 }
 
+/** Runs of table rows outside fenced code, header first; a missing `|---|` line is added. */
+export function markdownTableBlocks(markdown: string): string[] {
+  const out: string[] = [];
+  let fenced = false;
+  let run: string[] = [];
+  const flush = () => {
+    if (run.length >= 2) {
+      const sep = SEPARATOR_ROW.test(run[1]!.replace(/\s+/g, ""));
+      out.push(sep ? run.join("\n") : [run[0]!, `|${" --- |".repeat(rowCells(run[0]!).length)}`, ...run.slice(1)].join("\n"));
+    }
+    run = [];
+  };
+  for (const line of markdown.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      flush();
+      fenced = !fenced;
+    } else if (!fenced && isTableRow(line)) run.push(line.trim());
+    else flush();
+  }
+  flush();
+  return out;
+}
+
+/** The first table in `markdown` that passes `judgeTable`, or null. */
+export function firstRealTable(markdown: string): string | null {
+  for (const block of markdownTableBlocks(markdown)) {
+    const grid = parseMarkdownTable(block);
+    if (grid && judgeTable(grid).ok) return block;
+  }
+  return null;
+}
+
 /**
- * Every markdown table in `markdown` that fails `judgeTable` becomes plain
- * text. Tables inside fenced code are left alone, and so is a table the text
- * ends on when `streaming` (it may still be arriving row by row).
+ * Every markdown table in `markdown` that fails `judgeTable` (or every table,
+ * with `all`) becomes plain text. Tables inside fenced code are left alone,
+ * and so is a table the text ends on when `streaming` (it may still be
+ * arriving row by row).
  */
 export function guardMarkdownTables(
   markdown: string,
-  opts: { streaming?: boolean } = {}
+  opts: { streaming?: boolean; all?: boolean } = {}
 ): { text: string; rejected: number } {
   const lines = markdown.split("\n");
   const out: string[] = [];
@@ -223,7 +256,7 @@ export function guardMarkdownTables(
     const parsed = trailing ? null : parseMarkdownTable(block.join("\n"));
     // A header with no rows yet says nothing either way.
     const grid = parsed && parsed.slice(1).some((r) => r.some(Boolean)) ? parsed : null;
-    if (grid && !judgeTable(grid).ok) {
+    if (grid && (opts.all || !judgeTable(grid).ok)) {
       rejected++;
       const indent = line.match(/^\s*/)?.[0] ?? "";
       out.push(...tableAsText(grid).split("\n").map((l) => `${indent}${l}`));

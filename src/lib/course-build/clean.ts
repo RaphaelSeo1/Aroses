@@ -8,7 +8,15 @@ import { wordCount } from "./language.ts";
 import { isTableLine } from "./pdf-layout.ts";
 import { guardMarkdownTables } from "./table-quality.ts";
 
-export type SourcePage = { n: number; text: string };
+/** Share of the page, top-left origin; may reach outside 0–1 for text drawn off the page. */
+export type PageBox = { x: number; y: number; w: number; h: number };
+
+export type SourcePage = {
+  n: number;
+  text: string;
+  /** Where the page's text-layer tables sit (PDF only). */
+  tables?: PageBox[];
+};
 
 const BULLET_ONLY = /^[•◦▪▫●○■□►▸‣⁃\-–—*]$/;
 
@@ -96,7 +104,7 @@ export type CleanOptions = {
 
 export function cleanPages(pages: SourcePage[], opts: CleanOptions = {}): SourcePage[] {
   const repeatShare = opts.repeatShare ?? 0.2;
-  const split = pages.map((p) => ({ n: p.n, lines: splitLines(guardMarkdownTables(p.text ?? "").text) }));
+  const split = pages.map((p) => ({ n: p.n, tables: p.tables, lines: splitLines(guardMarkdownTables(p.text ?? "").text) }));
   const pagesWithKey = new Map<string, number>();
   for (const p of split) {
     const seen = new Set<string>();
@@ -129,7 +137,7 @@ export function cleanPages(pages: SourcePage[], opts: CleanOptions = {}): Source
       }
       kept.push(line);
     }
-    return { n: p.n, text: kept.join("\n") };
+    return { n: p.n, text: kept.join("\n"), ...(p.tables?.length ? { tables: p.tables } : {}) };
   });
   return dropRepeatedPages(cleaned);
 }

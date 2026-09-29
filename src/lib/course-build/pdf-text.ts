@@ -5,8 +5,8 @@ import {
   userRectFromPoints,
   type Matrix6,
 } from "@/lib/pdf-ingest/bbox-math";
-import { isTableLine, layoutPageText, type Rect, type TextItem } from "./pdf-layout.ts";
-import type { SourcePage } from "./clean.ts";
+import { layoutPage, type Rect, type TextItem } from "./pdf-layout.ts";
+import type { PageBox, SourcePage } from "./clean.ts";
 
 type RawItem = { str: string; transform: number[]; width?: number };
 type OperatorList = { fnArray: number[]; argsArray: unknown[] };
@@ -94,6 +94,19 @@ async function figureAreas(page: PdfPage): Promise<Rect[]> {
   return out;
 }
 
+/** A rectangle in PDF units as a share of the page, top-left origin like a render. */
+function pageBox(r: Rect, page: Rect): PageBox {
+  const w = page.x1 - page.x0;
+  const h = page.y1 - page.y0;
+  const round = (v: number) => Math.round(v * 1000) / 1000;
+  return {
+    x: round((r.x0 - page.x0) / w),
+    y: round((page.y1 - r.y1) / h),
+    w: round((r.x1 - r.x0) / w),
+    h: round((r.y1 - r.y0) / h),
+  };
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(fallback), ms);
@@ -128,18 +141,21 @@ export async function extractPdfPagesWithTables(buffer: Buffer): Promise<SourceP
           const items = tc.items.map(toItem);
           const [x0 = 0, y0 = 0, x1 = 0, y1 = 0] = page.view ?? [];
           const box = x1 > x0 && y1 > y0 ? { x0, y0, x1, y1 } : undefined;
-          let text = layoutPageText(items, { page: box });
+          let laid = layoutPage(items, { page: box });
           // Picture areas are read only where the text formed a table, to check it isn't a figure's labels.
-          if (scans < MAX_FIGURE_SCANS && text.split("\n").some(isTableLine)) {
+          if (scans < MAX_FIGURE_SCANS && laid.tables.length > 0) {
             scans++;
             const figures: Rect[] = await withTimeout(figureAreas(page), FIGURE_SCAN_MS, []);
-            if (figures.length) text = layoutPageText(items, { figures, page: box });
+            if (figures.length) laid = layoutPage(items, { figures, page: box });
           }
           page.cleanup?.();
-          return text;
+          return { text: laid.text, tables: box ? laid.tables.map((r) => pageBox(r, box)) : [] };
         })
       );
-      nums.forEach((n, i) => out.push({ n, text: texts[i]! }));
+      nums.forEach((n, i) => {
+        const { text, tables } = texts[i]!;
+        out.push(tables.length ? { n, text, tables } : { n, text });
+      });
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     return out;

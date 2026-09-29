@@ -38,10 +38,10 @@ export function createFigureFinder(
   admin: SupabaseClient,
   opts: { maxRenderPages: number; timeBudgetMs: number }
 ): FindFiguresFn {
-  return async (source, signal) => {
+  return async (source, signal, find) => {
     const deadlineAt = Date.now() + opts.timeBudgetMs;
     const buf = await download(admin, source);
-    return findPdfFigures(buf, { ...opts, deadlineAt, signal });
+    return findPdfFigures(buf, { ...opts, deadlineAt, signal, tablePages: find?.tablePages });
   };
 }
 

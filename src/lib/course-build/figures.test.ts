@@ -631,3 +631,117 @@ test("a failed or canceled build's figure images are deleted", async () => {
   assert.equal(removed[0][0], "u1/course-build/b1/F1.jpg");
   assert.deepEqual(removed.map((r) => r.length), [100, 30]);
 });
+
+const ENZYMES = [
+  "| Enzyme | Substrate | Product |",
+  "| --- | --- | --- |",
+  "| Hexokinase | Glucose | Glucose-6-phosphate |",
+  "| Aldolase | Fructose-1,6-bisphosphate | G3P and DHAP |",
+  "| Enolase | 2-Phosphoglycerate | Phosphoenolpyruvate |",
+].join("\n");
+const LABELS = [
+  "| Nucleus | Ribosome | Membrane |",
+  "| --- | --- | --- |",
+  "| Cytoplasm | Vacuole | Lysosome |",
+  "| Golgi | Mitochondrion | Chloroplast |",
+].join("\n");
+const tablePagesFixture = (): SourcePage[] => [
+  { n: 1, text: `Glycolysis splits glucose in ten steps, each run by its own enzyme in the cytosol.\n${ENZYMES}` },
+  { n: 2, text: `A drawing of the cell with every organelle named around the outside of the picture.\n${LABELS}` },
+];
+
+function tableCheckClient(tables: (body: Anthropic.MessageCreateParamsNonStreaming) => Anthropic.Message, writerSaw: string[]): MessagesClient {
+  return {
+    messages: {
+      create: async (body) => {
+        const tool = (body.tool_choice as { name: string }).name;
+        if (tool === "review_table_pages") return tables(body);
+        writerSaw.push(body.messages[0].content as string);
+        return toolMessage("submit_course", {
+          title: "Cells",
+          description: "Glycolysis and the cell.",
+          module_title: "Cells",
+          lessons: [
+            {
+              title: "Glycolysis and organelles",
+              content: "Glycolysis runs in the cytosol and splits glucose.\n\nThe cell holds many organelles, each with its own job.",
+              key_terms: [],
+              examples: [],
+              first_page: 1,
+              last_page: 2,
+            },
+          ],
+          quiz: quiz(6),
+        });
+      },
+    },
+  };
+}
+
+test("pipeline: a page vision finds no table on loses its text-layer table to plain text; a confirmed one stays", async () => {
+  const { userId, buildId } = await newBuild();
+  const mem = setup(tablePagesFixture());
+  const asked: Array<number[] | undefined> = [];
+  const writerSaw: string[] = [];
+  let images = 0;
+  const handlers = createStepHandlers({
+    store: t.store,
+    client: tableCheckClient((body) => {
+      images = (body.messages[0].content as Anthropic.ContentBlockParam[]).filter((b) => b.type === "image").length;
+      assert.match(body.system as string, /diagram/);
+      return toolMessage("review_table_pages", { pages: [{ n: 1, table: true }, { n: 2, table: false }] });
+    }, writerSaw),
+    config,
+    data: mem.data(buildId, userId),
+    extract: mem.extract,
+    findFigures: async (_source, _signal, opts) => {
+      asked.push(opts?.tablePages?.map((p) => p.page));
+      return {
+        candidates: [],
+        repeated: [],
+        pageImages: (opts?.tablePages ?? []).map(({ page }) => ({ page, image: Buffer.from(`page-${page}`) })),
+      };
+    },
+    validatePayload: validate,
+  });
+  const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50, backoffSeconds: () => 0 });
+  assert.deepEqual(out, { outcome: "finished", status: "complete" }, String((await t.build(buildId)).error_message));
+  assert.deepEqual(asked, [[1, 2]], "only pages whose text formed a table are rendered");
+  assert.equal(images, 2, "one call for both pages");
+
+  assert.doesNotMatch(writerSaw[0], /\| Nucleus \|/, "the writer never sees the rejected table");
+  assert.match(writerSaw[0], /Nucleus Ribosome Membrane\nCytoplasm Vacuole Lysosome/, "its text is kept as lines");
+  assert.match(writerSaw[0], /\| Hexokinase \| Glucose \|/);
+
+  const content = mem.published.find((p) => p.final)!.payload.modules[0].lessons[0].content;
+  assert.match(content, /\| Enzyme \| Substrate \| Product \|/, "the confirmed table still reaches the lesson");
+  assert.doesNotMatch(content, /\| Nucleus/);
+  const ledger = await t.ledger(buildId);
+  assert.ok(ledger.some((l) => l.purpose === "vision:tables" && l.status === "settled"), "the table check is metered");
+});
+
+test("pipeline: when the table check is unavailable the build completes and keeps the text-layer tables", async () => {
+  const { userId, buildId } = await newBuild();
+  const mem = setup(tablePagesFixture());
+  const writerSaw: string[] = [];
+  const handlers = createStepHandlers({
+    store: t.store,
+    client: tableCheckClient(() => {
+      throw new Error("vision overloaded");
+    }, writerSaw),
+    config,
+    data: mem.data(buildId, userId),
+    extract: mem.extract,
+    findFigures: async (_source, _signal, opts) => ({
+      candidates: [],
+      repeated: [],
+      pageImages: (opts?.tablePages ?? []).map(({ page }) => ({ page, image: Buffer.from(`page-${page}`) })),
+    }),
+    validatePayload: validate,
+  });
+  const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50, backoffSeconds: () => 0 });
+  assert.deepEqual(out, { outcome: "finished", status: "complete" }, String((await t.build(buildId)).error_message));
+  const content = mem.published.find((p) => p.final)!.payload.modules[0].lessons[0].content;
+  assert.match(content, /\| Enzyme \| Substrate \| Product \|/);
+  assert.match(content, /\| Nucleus \| Ribosome \| Membrane \|/, "no verdict keeps the structural decision");
+});
