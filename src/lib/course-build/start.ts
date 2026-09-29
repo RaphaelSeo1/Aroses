@@ -11,22 +11,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { buildRunOptions } from "./billing.ts";
 import { readCourseBuildConfig } from "./config.ts";
 import { createCourseBuild, type NewBuildSource } from "./create-build.ts";
+import { languageByCode } from "./language.ts";
 import { runCourseBuild } from "./drive.ts";
 
 /** The after() window of the route that starts a build (its maxDuration is 300 s). */
 const FIRST_RUN_MS = 270_000;
 
-const LANGUAGE_NAMES: Record<string, string> = {
-  en: "English",
-  ko: "Korean",
-  es: "Spanish",
-  fr: "French",
-  ja: "Japanese",
-  zh: "Chinese",
-};
-
+/** The Language menu's code as the name stored on the build; null for Match my files. */
 export function outputLanguageName(code: unknown): string | null {
-  return typeof code === "string" ? (LANGUAGE_NAMES[code] ?? null) : null;
+  return languageByCode(code)?.name ?? null;
 }
 
 export type StartResult =

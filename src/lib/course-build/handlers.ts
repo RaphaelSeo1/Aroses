@@ -18,7 +18,8 @@ import {
   type FigureCandidate,
   type FiguresStepOutput,
 } from "./figures.ts";
-import { meteredClaudeCall, type MessagesClient } from "./metered-call.ts";
+import { builderStrings, locatorKind, resolveBuildLanguage, type BuildLanguagePlan, type BuilderStrings } from "./language.ts";
+import { meteredClaudeCall, type MeteredCallDeps, type MessagesClient } from "./metered-call.ts";
 import {
   ModuleOutputError,
   moduleRequest,
@@ -255,16 +256,87 @@ function sourceInfos(sources: SourceRecord[]): BuildSourceInfo[] {
     .map((s) => ({ index: s.position, label: s.label, kind: s.kind, pages: s.pages ?? [] }));
 }
 
-function courseInfoFrom(plan: BuildPlan, pages: BuildPage[], sources: BuildSourceInfo[]): CourseInfoEntry[] {
+function courseInfoFrom(
+  plan: BuildPlan,
+  pages: BuildPage[],
+  sources: BuildSourceInfo[],
+  strings: Pick<BuilderStrings, "locator"> = builderStrings(null)
+): CourseInfoEntry[] {
   const out: CourseInfoEntry[] = [];
   for (const g of plan.infoPages) {
     const p = pages[g - 1];
     if (!p || !p.text.trim()) continue;
     const src = sources.find((s) => s.index === p.sourceIndex);
-    const noun = src?.kind === "pptx" ? "slide" : src?.kind === "pdf" ? "page" : "part";
-    out.push({ fileName: src?.label ?? "", locator: `${noun} ${p.n}`, text: p.text });
+    out.push({ fileName: src?.label ?? "", locator: strings.locator(locatorKind(src?.kind ?? ""), p.n, p.n), text: p.text });
   }
   return out;
+}
+
+export function buildLanguage(outputLanguage: string | null, pages: BuildPage[]): BuildLanguagePlan {
+  return resolveBuildLanguage(outputLanguage, pages.map((p) => p.text).join("\n"));
+}
+
+/** Planner instruction for the course's language; empty when the files decide. */
+export function planLanguageLine(lang: BuildLanguagePlan): string {
+  if (!lang.output) return "";
+  const name = lang.output.name;
+  return lang.converting
+    ? `Write the course title, description, module titles and lesson titles in ${name}, translating from the outline's language.\n`
+    : `Write the course title, description, module titles and lesson titles in ${name}.\n`;
+}
+
+const COURSE_INFO_TOOL = {
+  name: "submit_course_info",
+  description: "The translated course information, one entry per input entry, in the same order.",
+  input_schema: {
+    type: "object" as const,
+    properties: { texts: { type: "array", items: { type: "string" } } },
+    required: ["texts"],
+  },
+};
+
+const COURSE_INFO_MAX_CHARS = 4_000;
+
+/**
+ * Course info (syllabus, grading, contacts) is quoted from the files, so a
+ * build into another language translates it once at the end. On any failure
+ * the original text is kept rather than failing a finished course.
+ */
+async function translateCourseInfo(
+  metered: MeteredCallDeps,
+  ctx: { buildId: string; stepId: string; userId: string },
+  entries: CourseInfoEntry[],
+  lang: BuildLanguagePlan,
+  signal: AbortSignal,
+  log: (msg: string, extra?: Record<string, unknown>) => void
+): Promise<CourseInfoEntry[]> {
+  if (!lang.converting || !lang.output || entries.length === 0) return entries;
+  const texts = entries.map((e) => e.text.slice(0, COURSE_INFO_MAX_CHARS));
+  const chars = texts.reduce((n, t) => n + t.length, 0);
+  try {
+    const { message } = await meteredClaudeCall(
+      metered,
+      { ...ctx, purpose: "course-info" },
+      {
+        max_tokens: Math.min(6_000, Math.round(chars * 0.6 * lang.factor) + 300),
+        system: `Translate course information from a student's files into ${lang.output.name}. Translate faithfully and completely; keep every number, date, time, name, email address, URL, course code and percentage exactly as written. Keep line breaks.`,
+        tools: [COURSE_INFO_TOOL],
+        tool_choice: { type: "tool", name: COURSE_INFO_TOOL.name },
+        messages: [{ role: "user", content: JSON.stringify({ entries: texts }) }],
+      },
+      { signal }
+    );
+    const out = (toolInput(message, COURSE_INFO_TOOL.name) as { texts?: unknown }).texts;
+    if (!Array.isArray(out) || out.length !== entries.length || out.some((t) => typeof t !== "string" || !t.trim())) {
+      log("course-build course info kept", { buildId: ctx.buildId, reason: "bad translation shape" });
+      return entries;
+    }
+    return entries.map((e, i) => ({ ...e, text: String(out[i]).trim() }));
+  } catch (err) {
+    if (signal.aborted) throw err;
+    log("course-build course info kept", { buildId: ctx.buildId, error: errText(err) });
+    return entries;
+  }
 }
 
 export function createStepHandlers(deps: HandlerDeps): StepHandlers {
@@ -304,7 +376,9 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
   const plan: StepHandler = async (step, ctx) => {
     const build = await data.getBuild(step.buildId);
     const { sources, pages } = await loadPages(step.buildId);
-    await data.setBuildSize(step.buildId, pages.length, buildSpendCapUsd(pages.length, config));
+    const lang = buildLanguage(build.outputLanguage, pages);
+    const budget = { ...config, languageFactor: lang.factor, strings: lang.strings };
+    await data.setBuildSize(step.buildId, pages.length, buildSpendCapUsd(pages.length, config, lang.costFactor));
 
     if (pages.length === 0 || totalContentWeight(pages) === 0) {
       throw new StepFatalError(
@@ -316,7 +390,7 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
 
     let result: BuildPlan;
     if (pages.length < PLAN_MIN_PAGES) {
-      result = singleModulePlan(pages, config);
+      result = singleModulePlan(pages, budget);
     } else {
       const goal = build.studyGoal?.trim();
       const { message } = await meteredClaudeCall(
@@ -330,21 +404,21 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
           messages: [
             {
               role: "user",
-              content: `${goal ? `Student's goal (emphasis only): ${goal.slice(0, 300)}\n` : ""}${
-                build.outputLanguage ? `Write titles in ${build.outputLanguage}.\n` : ""
-              }Module limit: ${maxModulesFor(totalContentWeight(pages))}.\nOutline (${pages.length} pages):\n${compactOutline(pages, sources)}`,
+              content: `${goal ? `Student's goal (emphasis only): ${goal.slice(0, 300)}\n` : ""}${planLanguageLine(
+                lang
+              )}Module limit: ${maxModulesFor(totalContentWeight(pages))}.\nOutline (${pages.length} pages):\n${compactOutline(pages, sources)}`,
             },
           ],
         },
         { signal: ctx.signal }
       );
-      result = repairPlan(toolInput(message, PLAN_TOOL.name), pages, config);
+      result = repairPlan(toolInput(message, PLAN_TOOL.name), pages, budget);
     }
 
     if (result.modules.length === 0) {
       throw new StepFatalError("no_content", "These files don't contain enough teaching content to build a course from.");
     }
-    await data.savePlan(step.buildId, result, courseInfoFrom(result, pages, sources));
+    await data.savePlan(step.buildId, result, courseInfoFrom(result, pages, sources, lang.strings));
 
     const newSteps: NewStep[] = result.modules.map((m) => ({
       kind: "module",
@@ -483,6 +557,7 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
       sources: loaded.sources,
       studyGoal: build.studyGoal,
       outputLanguage: build.outputLanguage,
+      language: buildLanguage(build.outputLanguage, loaded.pages),
       attempt: step.attempts,
       figures: figuresForPages(allFigures, mod.pages),
       assetPrefix: `${step.buildId.slice(0, 8)}-`,
@@ -493,12 +568,18 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
     const preview = savePreview ? previewWriter((p) => savePreview(step.id, ctx.owner, p), log) : null;
     let message: Anthropic.Message;
     let costUsd: number;
+    const request = single ? singleModuleRequest(writer) : moduleRequest(writer);
     try {
       ({ message, costUsd } = await meteredClaudeCall(
         metered,
         { buildId: step.buildId, stepId: step.id, userId: build.userId, purpose: `module:${mod.id}` },
-        single ? singleModuleRequest(writer) : moduleRequest(writer),
-        { signal: ctx.signal, onToolInput: preview ? (s) => preview.push(s) : undefined }
+        request,
+        {
+          signal: ctx.signal,
+          onToolInput: preview ? (s) => preview.push(s) : undefined,
+          // Longer outputs (languages that need more tokens) get more time, at 60 tokens/s at worst.
+          timeoutMs: Math.max(120_000, Math.round((request.max_tokens / 60) * 1000)),
+        }
       ));
     } finally {
       preview?.stop();
@@ -532,7 +613,7 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
       await data.publish({
         build,
         payload: {
-          title: planned.title || output.title || "Untitled material",
+          title: planned.title || output.title || writer.language!.strings.untitled,
           description: planned.description || output.description || "",
           modules,
         },
@@ -542,7 +623,7 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
     return { output };
   };
 
-  const finalize: StepHandler = async (step) => {
+  const finalize: StepHandler = async (step, ctx) => {
     const [build, planned, outputs] = await Promise.all([
       data.getBuild(step.buildId),
       data.getPlan(step.buildId),
@@ -555,8 +636,10 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
       throw new StepFatalError("module_missing", `Module ${missing.join(", ")} did not finish.`);
     }
     const first = outputs.find((o) => o.title);
+    const { sources, pages } = await loadPages(step.buildId);
+    const lang = buildLanguage(build.outputLanguage, pages);
     const payload: CoursePayload = {
-      title: planned.title || first?.title || "Untitled material",
+      title: planned.title || first?.title || lang.strings.untitled,
       description: planned.description || first?.description || "",
       modules: planned.modules.map((m) => byId.get(m.id)!.module),
     };
@@ -569,9 +652,16 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
         `The finished course failed validation: ${err instanceof Error ? err.message : String(err)}`
       );
     }
-    const { sources, pages } = await loadPages(step.buildId);
+    const courseInfo = await translateCourseInfo(
+      metered,
+      { buildId: step.buildId, stepId: step.id, userId: build.userId },
+      courseInfoFrom(planned, pages, sources, lang.strings),
+      lang,
+      ctx.signal,
+      log
+    );
     const materialId = await serialized(step.buildId, () =>
-      data.publish({ build, payload, final: true, courseInfo: courseInfoFrom(planned, pages, sources) })
+      data.publish({ build, payload, final: true, courseInfo })
     );
     return { output: { materialId, modules: payload.modules.length } };
   };

@@ -469,7 +469,7 @@ export function ModuleQuiz({
       </div>
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <p className="text-lg font-medium leading-snug text-zinc-900 dark:text-zinc-100">
+        <p dir="auto" className="text-lg font-medium leading-snug text-zinc-900 dark:text-zinc-100">
           {q.question}
         </p>
 
@@ -500,12 +500,12 @@ export function ModuleQuiz({
                       type="button"
                       disabled={mcRevealed}
                       onClick={() => void onMcChoose(choice.id)}
-                      className={`transition-none flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm ${ring}`}
+                      className={`transition-none flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-start text-sm ${ring}`}
                     >
                       <span className="mt-0.5 font-mono text-xs text-zinc-500">
                         {letter}.
                       </span>
-                      <span className="flex-1">{choice.text}</span>
+                      <span dir="auto" className="flex-1">{choice.text}</span>
                     </button>
                   </li>
                 );
@@ -526,7 +526,7 @@ export function ModuleQuiz({
                     </span>
                   )}
                 </p>
-                <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                <p dir="auto" className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                   {q.explanation}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -557,6 +557,7 @@ export function ModuleQuiz({
                 {t.study.yourAnswer}
               </label>
               <textarea
+                dir="auto"
                 id={`free-${moduleId}-${originalQuizIndex}`}
                 value={frText}
                 onChange={(e) => setFrText(e.target.value)}

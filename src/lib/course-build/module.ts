@@ -15,6 +15,7 @@ import {
   type FigureAsset,
   type PlacedLesson,
 } from "./figures.ts";
+import { builderStrings, locatorKind, resolveBuildLanguage, visibleLength, type BuildLanguagePlan, type BuilderStrings } from "./language.ts";
 import type { MeteredRequest } from "./metered-call.ts";
 import type { BuildPage, BuildSourceInfo } from "./outline.ts";
 import type { BuildPlan, PlanModule } from "./plan.ts";
@@ -29,6 +30,8 @@ export type WriterContext = {
   sources: BuildSourceInfo[];
   studyGoal?: string | null;
   outputLanguage?: string | null;
+  /** Resolved from `outputLanguage` and the pages when not given. */
+  language?: BuildLanguagePlan;
   /** 1-based attempt; later attempts get more room in case the last one was cut off. */
   attempt: number;
   /** Validated figures on this module's pages; the writer may only place these. */
@@ -55,11 +58,31 @@ export function expectedLessonCount(weight: number): number {
   return Math.min(5, Math.max(2, Math.round(weight / 4)));
 }
 
-/** Words of lesson prose that fit in the module's output target. */
-export function lessonWordBudget(targetTokens: number, quizCount: number, lessons: number): number {
+export type LengthUnit = {
+  unit: "word" | "char";
+  /** Output tokens per word (or character) of prose. */
+  tokensPerUnit: number;
+  /** Tokens for the same text relative to English (1–2); quiz and extras scale by it. */
+  factor: number;
+};
+
+const ENGLISH_UNIT: LengthUnit = { unit: "word", tokensPerUnit: TOKENS_PER_WORD, factor: 1 };
+
+export function lengthUnit(lang: BuildLanguagePlan | null | undefined): LengthUnit {
+  const factor = lang?.factor ?? 1;
+  const out = lang?.output;
+  if (out) return { unit: out.unit, tokensPerUnit: out.tokensPerUnit, factor };
+  return { unit: "word", tokensPerUnit: TOKENS_PER_WORD * factor, factor };
+}
+
+/** Words (or characters, for Chinese and Japanese) of lesson prose that fit in the module's output target. */
+export function lessonWordBudget(targetTokens: number, quizCount: number, lessons: number, unit: LengthUnit = ENGLISH_UNIT): number {
   const prose =
-    targetTokens - quizCount * QUIZ_TOKENS_PER_ITEM - lessons * LESSON_EXTRAS_TOKENS - JSON_OVERHEAD_TOKENS;
-  return Math.max(120, Math.round(prose / TOKENS_PER_WORD / 10) * 10);
+    targetTokens -
+    (quizCount * QUIZ_TOKENS_PER_ITEM + lessons * LESSON_EXTRAS_TOKENS) * unit.factor -
+    JSON_OVERHEAD_TOKENS;
+  const min = unit.unit === "char" ? 240 : 120;
+  return Math.max(min, Math.round(prose / unit.tokensPerUnit / 10) * 10);
 }
 
 export function attemptMaxTokens(maxTokens: number, attempt: number): number {
@@ -95,8 +118,29 @@ function figuresBlock(ctx: WriterContext): string {
   return `Figures: the pages list figures ${ids} (lines starting "[figure"). In each lesson's figures field, list the ones that illustrate that lesson, e.g. {"id": "${figs[0]!.id}", "caption": "..."}; the caption says what the figure shows in at most 15 words, only from the pages. Include every listed figure that fits a lesson, each ID at most once, never an ID not listed.`;
 }
 
-function languageLine(lang: string | null | undefined): string {
-  return lang ? `Write in ${lang}.` : "Write in the language of the pages.";
+function languageOf(ctx: Pick<WriterContext, "module" | "pages" | "outputLanguage" | "language">): BuildLanguagePlan {
+  if (ctx.language) return ctx.language;
+  const wanted = new Set(ctx.module.pages);
+  const text = ctx.pages
+    .filter((p) => wanted.has(p.g))
+    .map((p) => p.text)
+    .join("\n");
+  return resolveBuildLanguage(ctx.outputLanguage, text);
+}
+
+export function languageLine(lang: BuildLanguagePlan): string {
+  const out = lang.output;
+  if (!out) return "Write in the language of the pages.";
+  const lines = [
+    `Write every student-facing string in ${out.name}: titles, lessons, key terms, quiz questions, choices, answers, explanations and figure captions.`,
+  ];
+  if (lang.converting) {
+    lines.push(
+      `The pages may be in another language: translate faithfully into ${out.name}. Keep every number, unit, formula, name and table value exactly; keep a technical term in its original form after the translation when the field uses it. Translating is not a reason to add anything: no facts, numbers or ranges the pages don't state, even well-known ones; a thin page stays a short passage.`
+    );
+  }
+  if (out.unit === "char") lines.push("Where a limit is given in words, count two characters as one word.");
+  return lines.join("\n");
 }
 
 function goalLine(goal: string | null | undefined): string {
@@ -107,12 +151,15 @@ function goalLine(goal: string | null | undefined): string {
 function taskLines(ctx: WriterContext): string {
   const { mcq, free } = quizSplit(ctx.module.quizCount);
   const lessons = expectedLessonCount(ctx.module.weight);
-  const words = lessonWordBudget(ctx.module.targetTokens, ctx.module.quizCount, lessons);
-  const perLesson = Math.max(60, Math.round(words / lessons / 10) * 10);
+  const lang = languageOf(ctx);
+  const unit = lengthUnit(lang);
+  const words = lessonWordBudget(ctx.module.targetTokens, ctx.module.quizCount, lessons, unit);
+  const perLesson = Math.max(unit.unit === "char" ? 120 : 60, Math.round(words / lessons / 10) * 10);
+  const noun = unit.unit === "char" ? "characters" : "words";
   return [
-    `Lessons: ${lessons} (use 2–5 only if the content clearly needs a different number). Each lesson's content is at most ${perLesson} words; stay under ${words} words across all lessons. Spend the words on explanation, not on key terms or examples.`,
+    `Lessons: ${lessons} (use 2–5 only if the content clearly needs a different number). Each lesson's content is at most ${perLesson} ${noun}; stay under ${words} ${noun} across all lessons. Spend them on explanation, not on key terms or examples.`,
     `Quiz: exactly ${ctx.module.quizCount} questions, ${mcq} multiple_choice then ${free} free_response.`,
-    languageLine(ctx.outputLanguage),
+    languageLine(lang),
   ].join("\n");
 }
 
@@ -175,11 +222,6 @@ function s(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
-function locatorFor(kind: string, a: number, b: number): string {
-  const noun =
-    kind === "pptx" ? ["slide", "slides"] : kind === "pdf" ? ["page", "pages"] : ["part", "parts"];
-  return a === b ? `${noun[0]} ${a}` : `${noun[1]} ${a}–${b}`;
-}
 
 /** "slides 12–17" per source file, from the lesson's global page range. */
 export function lessonSources(
@@ -187,7 +229,8 @@ export function lessonSources(
   last: number,
   modulePages: number[],
   pages: BuildPage[],
-  sources: BuildSourceInfo[]
+  sources: BuildSourceInfo[],
+  strings: Pick<BuilderStrings, "locator"> = builderStrings(null)
 ): SourceRef[] {
   const lo = Math.min(...modulePages);
   const hi = Math.max(...modulePages);
@@ -205,7 +248,7 @@ export function lessonSources(
   for (const [idx, ns] of bySource) {
     const src = sources.find((x) => x.index === idx);
     if (!src) continue;
-    refs.push({ fileName: src.label, locator: locatorFor(src.kind, Math.min(...ns), Math.max(...ns)) });
+    refs.push({ fileName: src.label, locator: strings.locator(locatorKind(src.kind), Math.min(...ns), Math.max(...ns)) });
   }
   return refs;
 }
@@ -217,12 +260,12 @@ function difficulty(v: unknown): Difficulty {
   return d === "easy" || d === "hard" ? d : "medium";
 }
 
-function toQuizItem(raw: unknown): CourseQuizItem | null {
+function toQuizItem(raw: unknown, fallbackExplanation: string): CourseQuizItem | null {
   if (!raw || typeof raw !== "object") return null;
   const q = raw as Record<string, unknown>;
   const question = fixShortText(s(q.question));
-  const explanation = fixShortText(s(q.explanation)) || "Review the module lessons for this idea.";
-  if (question.length < 4) return null;
+  const explanation = fixShortText(s(q.explanation)) || fallbackExplanation;
+  if (visibleLength(question) < 4) return null;
   const kind = s(q.kind).toLowerCase();
   const choices = Array.isArray(q.choices) ? q.choices.map((c) => fixShortText(s(c))) : [];
   if (kind === "multiple_choice" || (kind !== "free_response" && choices.length === 4)) {
@@ -241,7 +284,7 @@ function toQuizItem(raw: unknown): CourseQuizItem | null {
     return item;
   }
   const referenceAnswer = fixShortText(s(q.reference_answer));
-  if (referenceAnswer.length < 6) return null;
+  if (visibleLength(referenceAnswer) < 6) return null;
   const item: CourseQuizFreeItem = {
     type: "free_response",
     difficulty: difficulty(q.difficulty),
@@ -260,7 +303,7 @@ function toKeyTerms(raw: unknown): KeyTerm[] {
     if (!k || typeof k !== "object") continue;
     const term = fixShortText(s((k as Record<string, unknown>).term));
     const definition = fixShortText(s((k as Record<string, unknown>).definition));
-    if (term.length < 2 || definition.length < 4 || seen.has(term.toLowerCase())) continue;
+    if (visibleLength(term) < 2 || visibleLength(definition) < 4 || seen.has(term.toLowerCase())) continue;
     seen.add(term.toLowerCase());
     out.push({ term, definition });
   }
@@ -276,10 +319,12 @@ export type ConvertedModule = {
 /** Maps the writer's tool input onto the app's `CourseModule`. */
 export function toCourseModule(
   input: unknown,
-  ctx: Pick<WriterContext, "module" | "pages" | "sources" | "figures" | "assetPrefix">,
+  ctx: Pick<WriterContext, "module" | "pages" | "sources" | "figures" | "assetPrefix" | "outputLanguage" | "language">,
   title: string
 ): ConvertedModule {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const lang = languageOf(ctx);
+  const captions = { converting: lang.converting, fromPage: lang.strings.figureFromPage };
   const notes: string[] = [];
   const figures = new Map((ctx.figures ?? []).map((f) => [f.id, f]));
   const usedFigures = new Set<string>();
@@ -291,20 +336,21 @@ export function toCourseModule(
     if (!raw || typeof raw !== "object") continue;
     const l = raw as Record<string, unknown>;
     const lessonTitle = fixShortText(s(l.title));
-    const placed = placeFigures(fixLessonText(s(l.content)), figures, usedFigures, pageText, ctx.assetPrefix ?? "");
+    const placed = placeFigures(fixLessonText(s(l.content)), figures, usedFigures, pageText, ctx.assetPrefix ?? "", captions);
     const content = placed.content;
     droppedFigures.push(...placed.dropped);
-    if (!lessonTitle || content.length < 40) continue;
+    if (!lessonTitle || visibleLength(content) < 40) continue;
     const examples = (Array.isArray(l.examples) ? l.examples : [])
       .map((e) => fixShortText(s(e)))
-      .filter((e) => e.length >= 4)
+      .filter((e) => visibleLength(e) >= 4)
       .slice(0, 2);
     const sources = lessonSources(
       Number(l.first_page),
       Number(l.last_page),
       ctx.module.pages,
       ctx.pages,
-      ctx.sources
+      ctx.sources,
+      lang.strings
     );
     const start = Number(l.first_page);
     const end = Number(l.last_page);
@@ -318,7 +364,9 @@ export function toCourseModule(
       .map((c) => (c && typeof c === "object" ? (c as Record<string, unknown>) : {}))
       .map((c) => ({ id: s(c.id), caption: fixShortText(s(c.caption)) }))
       .filter((c) => c.id);
-    droppedFigures.push(...placeChosenFigures(lessonFigures, chosen, figures, usedFigures, pageText, ctx.assetPrefix ?? ""));
+    droppedFigures.push(
+      ...placeChosenFigures(lessonFigures, chosen, figures, usedFigures, pageText, ctx.assetPrefix ?? "", captions)
+    );
     ordered.push({
       start: Number.isFinite(start) ? start : Number.MAX_SAFE_INTEGER,
       placed: lessonFigures,
@@ -339,7 +387,8 @@ export function toCourseModule(
     ctx.figures ?? [],
     usedFigures,
     pageText,
-    ctx.assetPrefix ?? ""
+    ctx.assetPrefix ?? "",
+    captions
   );
   if (auto.length) notes.push(`figures auto-placed ${auto.join(",")}`);
   const lessons = sorted.map((x) =>
@@ -347,7 +396,9 @@ export function toCourseModule(
   );
   if (lessons.length === 0) throw new ModuleOutputError("The writer returned no usable lessons.");
 
-  const quiz = (Array.isArray(o.quiz) ? o.quiz : []).map(toQuizItem).filter((q): q is CourseQuizItem => q != null);
+  const quiz = (Array.isArray(o.quiz) ? o.quiz : [])
+    .map((q) => toQuizItem(q, lang.strings.quizFallback))
+    .filter((q): q is CourseQuizItem => q != null);
   const target = ctx.module.quizCount;
   if (quiz.length < Math.min(3, target)) {
     throw new ModuleOutputError(`The writer returned ${quiz.length} usable quiz questions.`);

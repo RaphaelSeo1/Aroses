@@ -28,10 +28,11 @@ GRADING STANDARD:
 - needs_work: The answer misses or contradicts a core idea, shows a material misconception, is too vague to establish understanding, or does not answer the question.
 - Do not require every detail in the reference unless the question explicitly asks for a list, multiple parts, steps, or specific examples.
 - Do not penalize grammar, spelling, style, or terminology when the intended concept is clear.
+- Accept an answer written in a different language from the question when the concept is right.
 - Judge only against the question and reference. Do not introduce outside requirements.
 
 FEEDBACK:
-- Write one or two brief, specific sentences.
+- Write one or two brief, specific sentences, in the language of the question.
 - Address the learner directly as "you," not as "the student."
 - Say what the answer demonstrates correctly.
 - For mostly_correct or needs_work, identify the single most important missing or mistaken idea and briefly state the correction.

@@ -1,5 +1,6 @@
 import type { LessonVisualAsset, LessonVisualAssetType } from "@/types/course";
 import { extractFigureMarkers, splitParagraphs, type FigureMarker } from "./figure-markers.ts";
+import { matchTokens } from "./language.ts";
 import type { BuildPage } from "./outline.ts";
 
 /** Page-relative box, all values 0–1. */
@@ -63,7 +64,8 @@ const CONFIDENT_QUALITY = 0.6;
 /** An embedded image this large is a whole picture, never a cut-off region. */
 const CONFIDENT_RASTER_AREA = 0.06;
 
-const CAPTION_RE = /^\s*((fig(?:ure)?|table|chart|diagram|exhibit|그림|표|도표)\s*\.?\s*\d+[a-z]?)\s*[.:)\-–]?\s*(.*)$/i;
+const CAPTION_RE =
+  /^\s*((fig(?:ure|ura)?|table|chart|diagram|exhibit|tabla|tableau|tabelle|tabella|tabela|abbildung|abb|gráfico|grafico|şekil|gambar|tabel|hình|bảng|рис(?:унок)?|таблица|चित्र|तालिका|شكل|جدول|그림|표|도표|図|表|图|圖)\s*\.?\s*\d+[a-z]?)\s*[.:)\-–]?\s*(.*)$/iu;
 
 export type CaptionLine = { text: string; table: boolean };
 
@@ -77,7 +79,7 @@ export function captionLines(pageText: string): CaptionLine[] {
     if (!m) continue;
     // "Figure 3 shows …" mid-sentence is a reference, not a caption.
     if (/^(shows|illustrates|depicts|is|are|was|in|of)\b/i.test(m[3] ?? "")) continue;
-    out.push({ text: line.slice(0, 160), table: /^(table|표|도표)/i.test(m[2]) });
+    out.push({ text: line.slice(0, 160), table: /^(table|tabla|tableau|tabelle|tabella|tabela|tabel|bảng|таблица|तालिका|جدول|표|도표|表)/iu.test(m[2]) });
   }
   return out;
 }
@@ -265,17 +267,13 @@ const KIND_TO_TYPE: Record<FigureKind, LessonVisualAssetType> = {
 
 /** Words that say what kind of picture it is, not what it shows. */
 const GENERIC_WORDS = new Set(
-  "diagram diagrams chart charts graph graphs table tables image images figure figures photo picture illustration showing shows shown labeled labelled multiple various including example examples with their between from this that these into data".split(
+  "diagram diagrams chart charts graph graphs table tables image images figure figures photo picture illustration showing shows shown labeled labelled multiple various including example examples with their between from this that these into data 그림 도표 사진 도식 図表 写真 画像 图表 图片 示意 圖表 圖片".split(
     " "
   )
 );
 
 function contentStems(text: string): string[] {
-  const out = new Set<string>();
-  for (const w of text.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
-    if (w.length >= 4 && !GENERIC_WORDS.has(w)) out.add(w.slice(0, 5));
-  }
-  return [...out];
+  return matchTokens(text, GENERIC_WORDS);
 }
 
 /** At least half the caption's meaningful words appear in the source text. */
@@ -293,28 +291,58 @@ function descriptiveLabel(label: string): boolean {
   return contentStems(rest).length >= 2;
 }
 
+export type CaptionOptions = {
+  /** The course is in a different language from the files. */
+  converting?: boolean;
+  /** Neutral caption in the course's language, for figures nothing names. */
+  fromPage?: (page: number) => string;
+};
+
+/** Every number in the caption appears in the source. */
+function numbersBacked(caption: string, sourceText: string): boolean {
+  const have = new Set(sourceText.match(/\d+(?:[.,]\d+)?/g) ?? []);
+  return (caption.match(/\d+(?:[.,]\d+)?/g) ?? []).every((n) => have.has(n));
+}
+
 /**
  * The source's own caption wins. Otherwise the writer's caption, then the
  * vision description, but only when the page text backs its words up; a
  * caption nothing confirms is dropped rather than risk naming the wrong thing.
+ *
+ * When converting to another language the source's words can't be shown and
+ * can't be compared, so the writer's caption is kept only if the writer was
+ * given something confirmed to translate (a descriptive source caption or a
+ * backed-up vision description) and its numbers match.
  */
-export function figureCaption(f: FigureAsset, writerCaption: string, pageText: string): string {
+export function figureCaption(f: FigureAsset, writerCaption: string, pageText: string, opts: CaptionOptions = {}): string {
   const writer = writerCaption.replace(/\s+/g, " ").trim().slice(0, 200);
-  if (f.label && descriptiveLabel(f.label)) return f.label;
   const source = `${pageText} ${f.label}`;
+  if (opts.converting) {
+    const labelled = Boolean(f.label && descriptiveLabel(f.label));
+    const described = Boolean(f.description && confirmedBy(f.description, source));
+    return writer && (labelled || described) && numbersBacked(writer, `${source} ${f.description}`) ? writer : "";
+  }
+  if (f.label && descriptiveLabel(f.label)) return f.label;
   if (writer && confirmedBy(writer, source)) return writer;
   if (f.description && confirmedBy(f.description, source)) return f.description;
   return f.label;
 }
 
-function toVisualAsset(f: FigureAsset, caption: string, afterParagraph: number, assetPrefix: string): LessonVisualAsset {
+function toVisualAsset(
+  f: FigureAsset,
+  caption: string,
+  afterParagraph: number,
+  assetPrefix: string,
+  opts: CaptionOptions
+): LessonVisualAsset {
+  const shown = caption || opts.fromPage?.(f.page) || "";
   return {
     assetId: `${assetPrefix}${f.id}`,
     imageUrl: f.url,
     type: KIND_TO_TYPE[f.kind],
     sourcePage: f.page,
-    title: caption.slice(0, 80),
-    caption,
+    title: shown.slice(0, 80),
+    caption: shown,
     whyRelevant: "",
     placementAfterParagraph: afterParagraph,
   };
@@ -329,7 +357,8 @@ export function placeFigures(
   figures: Map<string, FigureAsset>,
   used: Set<string>,
   pageText: (g: number) => string,
-  assetPrefix: string
+  assetPrefix: string,
+  opts: CaptionOptions = {}
 ): { content: string; assets: LessonVisualAsset[]; dropped: string[] } {
   const { text, markers } = extractFigureMarkers(content);
   const assets: LessonVisualAsset[] = [];
@@ -341,7 +370,7 @@ export function placeFigures(
       continue;
     }
     used.add(m.id);
-    assets.push(toVisualAsset(f, figureCaption(f, m.caption, pageText(f.g)), m.afterParagraph, assetPrefix));
+    assets.push(toVisualAsset(f, figureCaption(f, m.caption, pageText(f.g), opts), m.afterParagraph, assetPrefix, opts));
   }
   return { content: text, assets, dropped };
 }
@@ -356,12 +385,7 @@ export type PlacedLesson = {
 };
 
 function words(text: string): Set<string> {
-  return new Set(
-    text
-      .toLowerCase()
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter((w) => w.length >= 4)
-  );
+  return new Set(matchTokens(text));
 }
 
 function overlap(a: Set<string>, b: Set<string>): number {
@@ -410,7 +434,8 @@ export function placeChosenFigures(
   figures: Map<string, FigureAsset>,
   used: Set<string>,
   pageText: (g: number) => string,
-  assetPrefix: string
+  assetPrefix: string,
+  opts: CaptionOptions = {}
 ): string[] {
   const dropped: string[] = [];
   for (const c of chosen) {
@@ -420,14 +445,14 @@ export function placeChosenFigures(
       dropped.push(id);
       continue;
     }
-    const caption = figureCaption(f, c.caption, pageText(f.g));
+    const caption = figureCaption(f, c.caption, pageText(f.g), opts);
     const after = matchingParagraph(lesson, f, caption, pageText);
     if (after == null) {
       dropped.push(id);
       continue;
     }
     used.add(id);
-    lesson.assets.push(toVisualAsset(f, caption, after, assetPrefix));
+    lesson.assets.push(toVisualAsset(f, caption, after, assetPrefix, opts));
   }
   sortAssets(lesson);
   return dropped;
@@ -442,7 +467,8 @@ export function autoPlaceFigures(
   figures: FigureAsset[],
   used: Set<string>,
   pageText: (g: number) => string,
-  assetPrefix: string
+  assetPrefix: string,
+  opts: CaptionOptions = {}
 ): string[] {
   const placed: string[] = [];
   for (const f of [...figures].sort((a, b) => a.g - b.g)) {
@@ -451,11 +477,11 @@ export function autoPlaceFigures(
       (l) => f.g >= l.firstPage && f.g <= l.lastPage && l.assets.length < MAX_FIGURES_PER_LESSON
     );
     if (!lesson) continue;
-    const caption = figureCaption(f, "", pageText(f.g));
+    const caption = figureCaption(f, "", pageText(f.g), opts);
     const after = matchingParagraph(lesson, f, caption, pageText);
     if (after == null) continue;
     used.add(f.id);
-    lesson.assets.push(toVisualAsset(f, caption, after, assetPrefix));
+    lesson.assets.push(toVisualAsset(f, caption, after, assetPrefix, opts));
     placed.push(f.id);
   }
   for (const l of lessons) sortAssets(l);

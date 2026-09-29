@@ -17,33 +17,36 @@ import remarkMath from "remark-math";
 const markdownComponents = {
   h1: (props: React.ComponentProps<"h1">) => (
     <h1
+      dir="auto"
       className="mb-3 mt-6 text-2xl font-semibold text-zinc-900 first:mt-0 dark:text-zinc-50"
       {...props}
     />
   ),
   h2: (props: React.ComponentProps<"h2">) => (
     <h2
+      dir="auto"
       className="mb-2 mt-5 text-xl font-semibold text-zinc-900 first:mt-0 dark:text-zinc-100"
       {...props}
     />
   ),
   h3: (props: React.ComponentProps<"h3">) => (
     <h3
+      dir="auto"
       className="mb-2 mt-4 text-lg font-semibold text-zinc-900 first:mt-0 dark:text-zinc-100"
       {...props}
     />
   ),
   p: (props: React.ComponentProps<"p">) => (
-    <p className="mb-4 last:mb-0" {...props} />
+    <p dir="auto" className="mb-4 last:mb-0" {...props} />
   ),
   ul: (props: React.ComponentProps<"ul">) => (
-    <ul className="mb-4 list-disc space-y-1 pl-5 last:mb-0" {...props} />
+    <ul dir="auto" className="mb-4 list-disc space-y-1 ps-5 last:mb-0" {...props} />
   ),
   ol: (props: React.ComponentProps<"ol">) => (
-    <ol className="mb-4 list-decimal space-y-1 pl-5 last:mb-0" {...props} />
+    <ol dir="auto" className="mb-4 list-decimal space-y-1 ps-5 last:mb-0" {...props} />
   ),
   li: (props: React.ComponentProps<"li">) => (
-    <li className="pl-0.5" {...props} />
+    <li className="ps-0.5" {...props} />
   ),
   a: ({
     href,
@@ -62,7 +65,8 @@ const markdownComponents = {
   ),
   blockquote: (props: React.ComponentProps<"blockquote">) => (
     <blockquote
-      className="mb-4 border-l-4 border-zinc-200 pl-4 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+      dir="auto"
+      className="mb-4 border-s-4 border-zinc-200 ps-4 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
       {...props}
     />
   ),
@@ -75,6 +79,7 @@ const markdownComponents = {
   table: (props: React.ComponentProps<"table">) => (
     <div className="mb-4 w-full overflow-x-auto last:mb-0">
       <table
+        dir="auto"
         className="w-full min-w-[28rem] border-collapse text-sm text-zinc-800 dark:text-zinc-200"
         {...props}
       />
@@ -85,7 +90,7 @@ const markdownComponents = {
   ),
   th: (props: React.ComponentProps<"th">) => (
     <th
-      className="border border-zinc-200 px-3 py-2 text-left font-semibold dark:border-zinc-700"
+      className="border border-zinc-200 px-3 py-2 text-start font-semibold dark:border-zinc-700"
       {...props}
     />
   ),
@@ -150,7 +155,7 @@ function LessonFigure({ asset }: { asset: LessonVisualAsset }) {
         />
       </a>
       {caption ? (
-        <figcaption className="border-t border-zinc-100 px-3 py-2 text-[13px] leading-snug text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
+        <figcaption dir="auto" className="border-t border-zinc-100 px-3 py-2 text-[13px] leading-snug text-zinc-600 dark:border-zinc-800 dark:text-zinc-400">
           {caption}
         </figcaption>
       ) : null}

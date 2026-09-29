@@ -4,6 +4,8 @@
  * headers/footers, logo lines and duplicate lines.
  */
 
+import { wordCount } from "./language.ts";
+
 export type SourcePage = { n: number; text: string };
 
 const BULLET_ONLY = /^[•◦▪▫●○■□►▸‣⁃\-–—*]$/;
@@ -154,7 +156,8 @@ function dropRepeatedPages(pages: SourcePage[]): SourcePage[] {
 /**
  * Plain text (pasted text, transcripts, notes) cut into pseudo-pages of about
  * `wordsPerPage` words at paragraph or sentence boundaries, so budgets and
- * page ranges work the same as for a PDF.
+ * page ranges work the same as for a PDF. Chinese and Japanese are counted
+ * in English-word equivalents since they have no spaces.
  */
 export function paginateText(text: string, wordsPerPage = 500): SourcePage[] {
   const paragraphs = text
@@ -164,15 +167,15 @@ export function paginateText(text: string, wordsPerPage = 500): SourcePage[] {
     .filter(Boolean);
   const pieces: string[] = [];
   for (const para of paragraphs) {
-    const words = para.split(/\s+/).length;
+    const words = wordCount(para);
     if (words <= wordsPerPage) {
       pieces.push(para);
       continue;
     }
-    const sentences = para.match(/[^.!?。]+[.!?。]+["')\]]*\s*|[^.!?。]+$/g) ?? [para];
+    const sentences = para.match(/[^.!?。！？।؟]+[.!?。！？।؟]+["')\]」』）]*\s*|[^.!?。！？।؟]+$/gu) ?? [para];
     let buf = "";
     for (const s of sentences) {
-      if (buf && (buf + s).split(/\s+/).length > wordsPerPage) {
+      if (buf && wordCount(buf + s) > wordsPerPage) {
         pieces.push(buf.trim());
         buf = "";
       }
@@ -185,7 +188,7 @@ export function paginateText(text: string, wordsPerPage = 500): SourcePage[] {
   let cur: string[] = [];
   let curWords = 0;
   for (const piece of pieces) {
-    const w = piece.split(/\s+/).length;
+    const w = wordCount(piece);
     if (cur.length > 0 && curWords + w > wordsPerPage) {
       pages.push({ n: pages.length + 1, text: cur.join("\n\n") });
       cur = [];

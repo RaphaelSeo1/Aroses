@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
-import { COURSE_OUTPUT_LANGUAGE_OPTIONS, type CourseOutputLanguage } from "@/lib/course-output-language";
+import { BUILD_LANGUAGE_OPTIONS, MATCH_MY_FILES } from "@/lib/course-build/language";
 import { watchBuild } from "@/lib/course-build/watch";
 import { describePdfIngestUploadFailure } from "@/lib/storage-upload-errors";
 import { ingestStoragePathForFile } from "@/lib/study-ingest/client-upload";
@@ -105,7 +105,7 @@ export function CourseBuildUpload({ userId, enabled, courses, initialCourseId, i
   const [showLink, setShowLink] = useState(false);
   const [link, setLink] = useState("");
   const [separate, setSeparate] = useState(false);
-  const [language, setLanguage] = useState<CourseOutputLanguage>("auto");
+  const [language, setLanguage] = useState<string>(MATCH_MY_FILES);
   const [goal, setGoal] = useState("");
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState<null | "uploading" | "starting">(null);
@@ -438,8 +438,8 @@ export function CourseBuildUpload({ userId, enabled, courses, initialCourseId, i
       <section className="mt-8 grid gap-6 sm:grid-cols-2">
         <label className="space-y-2">
           <span className={labelClass}>Language</span>
-          <select className={inputClass} value={language} onChange={(e) => setLanguage(e.target.value as CourseOutputLanguage)}>
-            {COURSE_OUTPUT_LANGUAGE_OPTIONS.map((o) => (
+          <select className={inputClass} value={language} onChange={(e) => setLanguage(e.target.value)}>
+            {BUILD_LANGUAGE_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>

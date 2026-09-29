@@ -23,7 +23,7 @@ function KeyTermReadOnlyCard({
 }) {
   return (
     <div className="rounded-xl border border-zinc-200 bg-white/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/50">
-      <dt className="font-medium text-zinc-900 dark:text-zinc-100">
+      <dt dir="auto" className="font-medium text-zinc-900 dark:text-zinc-100">
         {animateReveal ? (
           <TypewriterText
             text={term}
@@ -35,7 +35,7 @@ function KeyTermReadOnlyCard({
           term
         )}
       </dt>
-      <dd className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+      <dd dir="auto" className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
         {animateReveal ? (
           <TypewriterText
             text={definition}
@@ -289,7 +289,7 @@ export function LessonEditableBlocks({
 
   if (readOnly) {
     const titleEl = animateReveal ? (
-      <h3 className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+      <h3 dir="auto" className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
         <TypewriterText
           text={lesson.title}
           instantBelow={0}
@@ -298,7 +298,7 @@ export function LessonEditableBlocks({
         />
       </h3>
     ) : (
-      <h3 className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+      <h3 dir="auto" className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
         {lesson.title}
       </h3>
     );
@@ -372,7 +372,7 @@ export function LessonEditableBlocks({
                   No examples for this lesson.
                 </p>
               ) : (
-                <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+                <ul dir="auto" className="list-disc space-y-2 ps-5 text-sm text-zinc-700 dark:text-zinc-300">
                   {lesson.examples.map((ex, ei) => (
                     <li key={`${lessonIndex}-ex-${ei}`}>
                       {animateReveal ? (
@@ -415,7 +415,7 @@ export function LessonEditableBlocks({
         onEdit={() => setSection("title")}
         onCancel={cancel}
         view={
-          <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+          <h3 dir="auto" className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
             {lesson.title}
           </h3>
         }
@@ -544,10 +544,10 @@ export function LessonEditableBlocks({
                             : "border-zinc-200 bg-white/90 dark:border-zinc-800 dark:bg-zinc-900/50"
                       }`}
                     >
-                      <dt className="font-medium text-zinc-900 dark:text-zinc-100">
+                      <dt dir="auto" className="font-medium text-zinc-900 dark:text-zinc-100">
                         {kt.term}
                       </dt>
-                      <dd className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                      <dd dir="auto" className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                         {replacing?.definition ?? kt.definition}
                       </dd>
                     </div>
@@ -586,10 +586,10 @@ export function LessonEditableBlocks({
                   key={ki}
                   className="rounded-xl border border-zinc-200 bg-white/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/50"
                 >
-                  <dt className="font-medium text-zinc-900 dark:text-zinc-100">
+                  <dt dir="auto" className="font-medium text-zinc-900 dark:text-zinc-100">
                     {kt.term}
                   </dt>
-                  <dd className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                  <dd dir="auto" className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                     {kt.definition}
                   </dd>
                 </div>
@@ -673,7 +673,7 @@ export function LessonEditableBlocks({
         view={
           examplePreviews.length > 0 ? (
             <StructuredPreviewBanner label="Rose will change examples — confirm to apply">
-              <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+              <ul dir="auto" className="list-disc space-y-2 ps-5 text-sm text-zinc-700 dark:text-zinc-300">
                 {lesson.examples.map((ex, ei) => {
                   const removing = examplePreviews.some(
                     (p) =>
@@ -714,7 +714,7 @@ export function LessonEditableBlocks({
               No examples yet — edit to add bullet-style examples.
             </p>
           ) : (
-            <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+            <ul dir="auto" className="list-disc space-y-2 ps-5 text-sm text-zinc-700 dark:text-zinc-300">
               {lesson.examples.map((ex, ei) => (
                 <li key={ei}>{ex}</li>
               ))}

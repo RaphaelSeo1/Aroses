@@ -233,7 +233,7 @@ export function ModuleQuizReview({
                       </span>
                     ) : null}
                   </span>
-                  <span className="mt-1.5 block text-sm font-medium leading-snug text-zinc-900 dark:text-zinc-100">
+                  <span dir="auto" className="mt-1.5 block text-start text-sm font-medium leading-snug text-zinc-900 dark:text-zinc-100">
                     {open ? item.question : truncate(item.question, 140)}
                   </span>
                 </span>
@@ -244,7 +244,7 @@ export function ModuleQuizReview({
 
               {open ? (
                 <div className="space-y-4 border-t border-zinc-200/80 bg-white/70 px-4 py-4 dark:border-zinc-800 dark:bg-zinc-950/60">
-                  <p className="text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
+                  <p dir="auto" className="text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
                     {item.question}
                   </p>
 
@@ -269,7 +269,7 @@ export function ModuleQuizReview({
                               <span className="font-mono text-xs text-zinc-500">
                                 {letter}.
                               </span>{" "}
-                              {stripChoiceLetterPrefix(c)}
+                              <bdi>{stripChoiceLetterPrefix(c)}</bdi>
                               {isAns ? (
                                 <span className="ml-2 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
                                   (correct)
@@ -299,7 +299,7 @@ export function ModuleQuizReview({
                       <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                         Model answer (rubric)
                       </p>
-                      <p className="mt-2 whitespace-pre-wrap rounded-lg border border-brand-border bg-brand-blush/80 px-3 py-2.5 text-sm text-brand-ink dark:border-brand-border/50 dark:bg-brand-blush/10 dark:text-brand-blush">
+                      <p dir="auto" className="mt-2 whitespace-pre-wrap rounded-lg border border-brand-border bg-brand-blush/80 px-3 py-2.5 text-sm text-brand-ink dark:border-brand-border/50 dark:bg-brand-blush/10 dark:text-brand-blush">
                         {item.referenceAnswer}
                       </p>
                       {status === "incorrect" ? (
@@ -320,7 +320,7 @@ export function ModuleQuizReview({
                         Explanation
                       </span>
                     </summary>
-                    <p className="border-t border-zinc-200 px-3 py-2 text-sm leading-relaxed text-zinc-700 dark:border-zinc-700 dark:text-zinc-300">
+                    <p dir="auto" className="border-t border-zinc-200 px-3 py-2 text-sm leading-relaxed text-zinc-700 dark:border-zinc-700 dark:text-zinc-300">
                       {item.explanation}
                     </p>
                   </details>

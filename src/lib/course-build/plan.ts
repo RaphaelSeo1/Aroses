@@ -1,3 +1,4 @@
+import type { BuilderStrings } from "./language.ts";
 import { pageWeight, type BuildPage } from "./outline.ts";
 
 export type PlanModule = {
@@ -27,7 +28,19 @@ export type BuildPlan = {
 
 export type BudgetConfig = {
   outputTokensPerPage: number;
+  /**
+   * 1–2: how many more tokens the course's language needs than English for
+   * the same content. Token targets grow by it; module boundaries don't, so
+   * thin pages stay folded into a module with real content to teach from.
+   */
+  languageFactor?: number;
+  strings?: Pick<BuilderStrings, "module" | "continued">;
 };
+
+function factorOf(cfg: BudgetConfig): number {
+  const f = cfg.languageFactor ?? 1;
+  return Number.isFinite(f) ? Math.min(2, Math.max(1, f)) : 1;
+}
 
 /** Sources shorter than this skip the planning call and become one module. */
 export const PLAN_MIN_PAGES = 8;
@@ -49,7 +62,10 @@ export function quizCountForWeight(weight: number): number {
 }
 
 export function moduleTargetTokens(weight: number, cfg: BudgetConfig): number {
-  return Math.min(MODULE_MAX_TARGET, Math.max(MODULE_MIN_TARGET, Math.round(weight * cfg.outputTokensPerPage)));
+  const f = factorOf(cfg);
+  return Math.round(
+    Math.min(MODULE_MAX_TARGET * f, Math.max(MODULE_MIN_TARGET * f, weight * cfg.outputTokensPerPage * f))
+  );
 }
 
 export function moduleMaxTokens(weight: number, cfg: BudgetConfig): number {
@@ -158,7 +174,7 @@ function finishModules(drafts: Draft[], pages: BuildPage[], excluded: Set<number
     chunks.forEach((chunk, i) => {
       const lessons = s.lessons.slice(i * per, (i + 1) * per);
       sized.push({
-        title: i === 0 ? s.title : lessons[0] || `${s.title}, continued`,
+        title: i === 0 ? s.title : lessons[0] || (cfg.strings?.continued ?? ((t: string) => `${t}, continued`))(s.title),
         lessons,
         pages: chunk,
         weight: chunk.reduce((sum, g) => sum + (weights.get(g) ?? 0), 0),
@@ -168,7 +184,7 @@ function finishModules(drafts: Draft[], pages: BuildPage[], excluded: Set<number
 
   return sized.map((s, i) => ({
     id: i + 1,
-    title: s.title || `Module ${i + 1}`,
+    title: s.title || (cfg.strings?.module ?? ((n: number) => `Module ${n}`))(i + 1),
     lessons: s.lessons,
     pages: s.pages,
     weight: s.weight,

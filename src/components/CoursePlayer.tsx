@@ -1616,12 +1616,13 @@ export function CoursePlayer({
                 </svg>
               </button>
             </div>
-            <h1 className="mt-1 text-xl font-semibold leading-snug tracking-tight text-zinc-900 dark:text-zinc-50">
+            <h1 dir="auto" className="mt-1 text-xl font-semibold leading-snug tracking-tight text-zinc-900 dark:text-zinc-50">
               {course.title}
             </h1>
             {course.description ? (
               <>
                 <p
+                  dir="auto"
                   className={`mt-2 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400 ${
                     isDescriptionLong && !descriptionExpanded
                       ? "line-clamp-3"
@@ -2121,7 +2122,7 @@ export function CoursePlayer({
                 <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
                   {tf(t.study.moduleLabel, { id: activeModule.id })}
                 </p>
-                <h2 className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+                <h2 dir="auto" className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                   {moduleDisplayTitle(activeModule)}
                 </h2>
               </header>
@@ -2259,7 +2260,7 @@ export function CoursePlayer({
                   <p className="text-xs font-semibold uppercase tracking-wider text-brand dark:text-brand-soft">
                     {tf(t.study.moduleLabel, { id: activeModule.id })}
                   </p>
-                  <h2 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+                  <h2 dir="auto" className="mt-3 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
                     {activeModule.title}
                   </h2>
                   <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
@@ -2504,7 +2505,7 @@ export function CoursePlayer({
                             <p className="text-xs font-semibold uppercase tracking-wide text-brand dark:text-brand-soft">
                               {t.study.moduleQuizRun}
                             </p>
-                            <p className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                            <p dir="auto" className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
                               {activeModule.title}
                             </p>
                           </div>

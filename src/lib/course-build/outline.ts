@@ -1,4 +1,5 @@
 import type { SourcePage } from "./clean.ts";
+import { contentLength } from "./language.ts";
 
 /** A page addressed by its position across every source in the build (1-based). */
 export type BuildPage = {
@@ -43,7 +44,8 @@ export function looksLikeTable(text: string): boolean {
   return numericRows >= 4 && numbers >= 10 && numericRows / Math.max(1, nonEmpty) >= 0.3;
 }
 
-const FIGURE_REF = /\b(fig(ure)?\.?\s*\d+|table\s+\d+)|(표|그림)\s*\d+/i;
+const FIGURE_REF =
+  /\b(fig(ure|ura)?\.?\s*\d+|table\s+\d+|tabla\s+\d+|tableau\s+\d+|tabelle\s+\d+|abbildung\s+\d+|abb\.\s*\d+|tabella\s+\d+|tabela\s+\d+)|(표|그림|図|表|图|圖)\s*\d+/iu;
 
 export function mentionsFigure(text: string): boolean {
   return FIGURE_REF.test(text);
@@ -51,10 +53,12 @@ export function mentionsFigure(text: string): boolean {
 
 /**
  * Share of the per-page output budget a page earns. Empty pages earn none,
- * thin ones half, dense prose one and a half, tables double.
+ * thin ones half, dense prose one and a half, tables double. Length is in
+ * Latin-character equivalents, so a dense Chinese page weighs like a dense
+ * English one.
  */
 export function pageWeight(text: string): number {
-  const chars = text.replace(/\s+/g, " ").trim().length;
+  const chars = contentLength(text.replace(/\s+/g, " ").trim());
   if (chars < 25) return 0;
   if (chars < 120) return 0.5;
   if (looksLikeTable(text)) return 2;

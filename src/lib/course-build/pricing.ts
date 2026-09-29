@@ -29,19 +29,24 @@ const MESSAGE_OVERHEAD_TOKENS = 16;
 /** Anthropic image cost is about (w*h)/750 tokens, capped near 1,600 for a resized image. */
 const IMAGE_TOKENS = 1_600;
 
+const DENSE_SCRIPT = /[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]/u;
+
 /**
  * Over-estimates input tokens without a network call. ASCII text is counted
- * at 3 chars/token (real English is ~4); every non-ASCII character (Korean,
- * math symbols) counts as one token, which is at or above the real rate.
+ * at 2.7 chars/token (real English is ~5, Indonesian ~2.9); Korean, Japanese
+ * and Chinese characters at 1.4 tokens (real: 1.1–1.3 per character); every other
+ * non-ASCII character at one (Hindi 0.74, Arabic 0.67, Cyrillic 0.37).
  */
 export function estimateTextTokens(text: string): number {
   let ascii = 0;
+  let dense = 0;
   let other = 0;
   for (const ch of text) {
     if (ch.charCodeAt(0) < 128) ascii += 1;
+    else if (DENSE_SCRIPT.test(ch)) dense += 1;
     else other += 1;
   }
-  return Math.ceil(ascii / 3) + other;
+  return Math.ceil(ascii / 2.7 + dense * 1.4) + other;
 }
 
 type ContentLike = unknown;
@@ -103,10 +108,15 @@ export function roundUsd(v: number): number {
   return Math.ceil(v * 1e8 - 1e-6) / 1e8;
 }
 
-/** Per-build hard ceiling: pages × per-page cap, never below the floor. */
-export function buildSpendCapUsd(sourcePages: number, cfg: CourseBuildConfig): number {
+/**
+ * Per-build hard ceiling: pages × per-page cap, never below the floor.
+ * `languageFactor` (1–2) raises it for languages that take more tokens to
+ * say the same thing, in step with their larger output budgets.
+ */
+export function buildSpendCapUsd(sourcePages: number, cfg: CourseBuildConfig, languageFactor = 1): number {
   const pages = Number.isFinite(sourcePages) && sourcePages > 0 ? sourcePages : 0;
-  return Math.max(cfg.minCapUsd, Math.round(pages * cfg.capUsdPerPage * 1e6) / 1e6);
+  const factor = Number.isFinite(languageFactor) ? Math.min(2, Math.max(1, languageFactor)) : 1;
+  return Math.max(cfg.minCapUsd, Math.round(pages * cfg.capUsdPerPage * factor * 1e6) / 1e6);
 }
 
 /**
