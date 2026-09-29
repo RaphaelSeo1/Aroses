@@ -42,6 +42,7 @@ import {
 } from "./plan.ts";
 import { GAP_TOOL, PLAN_RULES, PLAN_TOOL } from "./prompts.ts";
 import { buildSpendCapUsd } from "./pricing.ts";
+import type { PlanStepInput } from "./create-build.ts";
 import type { StepHandler, StepHandlers } from "./runner.ts";
 import type { CourseBuildStore, NewStep } from "./store.ts";
 
@@ -307,6 +308,13 @@ export function planLanguageLine(lang: BuildLanguagePlan): string {
     : `Write the course title, description, module titles and lesson titles in ${name}.\n`;
 }
 
+/** Planner note for a combined upload: one material from several files, in the student's order. */
+export function multiFileLine(sources: BuildSourceInfo[]): string {
+  const withPages = sources.filter((s) => s.pages.length > 0);
+  if (withPages.length < 2) return "";
+  return `These ${withPages.length} files (== headers) are one lecture, in the student's reading order. Plan one course across all of them; a module may run across a file boundary when the topic continues. The title covers the whole lecture, not the first file.\n`;
+}
+
 const COURSE_INFO_TOOL = {
   name: "submit_course_info",
   description: "The translated course information, one entry per input entry, in the same order.",
@@ -400,7 +408,8 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
     const { sources, pages } = await loadPages(step.buildId);
     const lang = buildLanguage(build.outputLanguage, pages);
     const budget = { ...config, languageFactor: lang.factor, strings: lang.strings };
-    await data.setBuildSize(step.buildId, pages.length, buildSpendCapUsd(pages.length, config, lang.costFactor));
+    const pdfs = sources.filter((s) => s.kind === "pdf").length;
+    await data.setBuildSize(step.buildId, pages.length, buildSpendCapUsd(pages.length, config, lang.costFactor, pdfs));
 
     if (pages.length === 0 || totalContentWeight(pages) === 0) {
       throw new StepFatalError(
@@ -428,7 +437,7 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
               role: "user",
               content: `${goal ? `Student's goal (emphasis only): ${goal.slice(0, 300)}\n` : ""}${planLanguageLine(
                 lang
-              )}Module limit: ${maxModulesFor(totalContentWeight(pages))}.\nOutline (${pages.length} pages):\n${compactOutline(pages, sources)}`,
+              )}${multiFileLine(sources)}Module limit: ${maxModulesFor(totalContentWeight(pages))}.\nOutline (${pages.length} pages):\n${compactOutline(pages, sources)}`,
             },
           ],
         },
@@ -436,6 +445,8 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
       );
       result = repairPlan(toolInput(message, PLAN_TOOL.name), pages, budget);
     }
+    const named = ((step.input ?? {}) as PlanStepInput).title?.trim();
+    if (named) result = { ...result, title: named };
 
     if (result.modules.length === 0) {
       throw new StepFatalError("no_content", "These files don't contain enough teaching content to build a course from.");

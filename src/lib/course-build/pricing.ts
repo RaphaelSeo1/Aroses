@@ -110,14 +110,24 @@ export function roundUsd(v: number): number {
 }
 
 /**
- * Per-build hard ceiling: pages × per-page cap, never below the floor.
+ * Each PDF gets its own figure review (two contact sheets, about $0.01 at
+ * worst), so a combined build of several small PDFs isn't left short for
+ * its modules by the floor alone.
+ */
+export const EXTRA_PDF_ALLOWANCE_USD = 0.02;
+
+/**
+ * Per-build hard ceiling: pages × per-page cap, never below the floor, plus
+ * a figure-review allowance for every PDF after the first.
  * `languageFactor` (1–2) raises it for languages that take more tokens to
  * say the same thing, in step with their larger output budgets.
  */
-export function buildSpendCapUsd(sourcePages: number, cfg: CourseBuildConfig, languageFactor = 1): number {
+export function buildSpendCapUsd(sourcePages: number, cfg: CourseBuildConfig, languageFactor = 1, pdfFiles = 1): number {
   const pages = Number.isFinite(sourcePages) && sourcePages > 0 ? sourcePages : 0;
   const factor = Number.isFinite(languageFactor) ? Math.min(2, Math.max(1, languageFactor)) : 1;
-  return Math.max(cfg.minCapUsd, Math.round(pages * cfg.capUsdPerPage * factor * 1e6) / 1e6);
+  const extraPdfs = Number.isFinite(pdfFiles) ? Math.max(0, Math.floor(pdfFiles) - 1) : 0;
+  const base = Math.max(cfg.minCapUsd, Math.round(pages * cfg.capUsdPerPage * factor * 1e6) / 1e6);
+  return Math.round((base + extraPdfs * EXTRA_PDF_ALLOWANCE_USD) * 1e6) / 1e6;
 }
 
 /** Rolling 24-hour spend guard for app admins, who have no plan limits. */

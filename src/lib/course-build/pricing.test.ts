@@ -32,6 +32,14 @@ test("build cap is pages × per-page cap with a floor", () => {
   assert.equal(buildSpendCapUsd(Number.NaN, c), 0.06);
 });
 
+test("a combined build's cap follows its total pages, plus a figure review for each extra PDF", () => {
+  const c = readCourseBuildConfig({});
+  assert.equal(buildSpendCapUsd(40, c, 1, 1), 0.1);
+  assert.equal(buildSpendCapUsd(40, c, 1, 3), 0.14);
+  assert.equal(buildSpendCapUsd(9, c, 1, 3), 0.1, "three small PDFs: the floor plus two reviews");
+  assert.equal(buildSpendCapUsd(9, c, 1, 0), 0.06);
+});
+
 test("daily build spend cap follows the tier; COURSE_BUILD_DAILY_CAP_USD is a ceiling", () => {
   const c = readCourseBuildConfig({});
   assert.equal(c.dailyCapCeilingUsd, null);

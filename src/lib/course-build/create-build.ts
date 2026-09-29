@@ -27,7 +27,13 @@ export type NewBuild = {
   outputLanguage?: string | null;
   studyGoal?: string | null;
   usageReservationId?: string | null;
+  /** The student's name for a combined material; replaces the planner's title. */
+  title?: string | null;
 };
+
+export const MAX_BUILD_TITLE_CHARS = 140;
+
+export type PlanStepInput = { title?: string };
 
 /**
  * Inserts the build, its sources and its first steps (one extract per source,
@@ -88,7 +94,9 @@ export async function createCourseBuild(
       ...(typeof s.text === "string" ? { text: s.text } : TEXT_KINDS.has(s.kind) && !s.storagePath ? { text: "" } : {}),
     },
   }));
-  steps.push({ build_id: buildId, kind: "plan", ordinal: 0, wave: 1, max_attempts: config.maxStepAttempts, input: {} as never });
+  const title = input.title?.replace(/\s+/g, " ").trim().slice(0, MAX_BUILD_TITLE_CHARS);
+  const planInput: PlanStepInput = title ? { title } : {};
+  steps.push({ build_id: buildId, kind: "plan", ordinal: 0, wave: 1, max_attempts: config.maxStepAttempts, input: planInput as never });
   // Figures run beside the plan so module writers know which figures exist.
   input.sources.forEach((s, position) => {
     if (s.kind !== "pdf") return;

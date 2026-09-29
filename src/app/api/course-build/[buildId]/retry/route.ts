@@ -38,7 +38,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ buildId: 
   }
   const admin = createAdminClient();
   if (!admin) return NextResponse.json({ error: "Try again in a moment." }, { status: 503 });
-  const sources = await sourcesForRetry(admin, buildId);
+  const { sources, title } = await sourcesForRetry(admin, buildId);
   if (sources.length === 0) return NextResponse.json({ error: "Nothing to rebuild from." }, { status: 409 });
 
   const started = await startCourseBuild({
@@ -49,6 +49,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ buildId: 
     sources,
     outputLanguage: old.output_language,
     studyGoal: old.study_goal,
+    title,
   });
   if (!started.ok) return NextResponse.json({ error: started.error, code: started.code }, { status: started.status });
   return NextResponse.json({ buildId: started.buildId, courseId: old.course_id }, { status: 202 });

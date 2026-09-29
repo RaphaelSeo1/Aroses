@@ -20,7 +20,7 @@ import { getUserSubscription } from "@/lib/billing/subscription";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { buildRunOptions } from "./billing.ts";
 import { readCourseBuildConfig } from "./config.ts";
-import { createCourseBuild, type NewBuildSource } from "./create-build.ts";
+import { createCourseBuild, type NewBuildSource, type PlanStepInput } from "./create-build.ts";
 import { languageByCode } from "./language.ts";
 import { runCourseBuild } from "./drive.ts";
 import { dailyCapUsdForTier } from "./pricing.ts";
@@ -45,6 +45,8 @@ export type StartInput = {
   sources: NewBuildSource[];
   outputLanguage: string | null;
   studyGoal: string | null;
+  /** Set for combined uploads: the material's name. */
+  title?: string | null;
 };
 
 const METERING_DOWN: StartResult = {
@@ -121,6 +123,7 @@ export async function startCourseBuild(input: StartInput): Promise<StartResult> 
         dailyCapUsd,
         outputLanguage: input.outputLanguage,
         studyGoal: input.studyGoal,
+        title: input.title ?? null,
         usageReservationId: reserved.reservationId,
       },
       config
@@ -147,27 +150,39 @@ export function kickCourseBuild(buildId: string) {
   });
 }
 
-/** The build's sources, re-created for a retry (files are kept in storage). */
-export async function sourcesForRetry(admin: SupabaseClient, buildId: string): Promise<NewBuildSource[]> {
+/** The build's sources and name, re-created for a retry (files are kept in storage). */
+export async function sourcesForRetry(
+  admin: SupabaseClient,
+  buildId: string
+): Promise<{ sources: NewBuildSource[]; title: string | null }> {
   const [{ data: sources }, { data: steps }] = await Promise.all([
     admin
       .from("course_build_sources")
       .select("id, position, kind, label, storage_path, source_url, ref_id")
       .eq("build_id", buildId)
       .order("position", { ascending: true }),
-    admin.from("course_build_steps").select("input").eq("build_id", buildId).eq("kind", "extract"),
+    admin.from("course_build_steps").select("kind, input").eq("build_id", buildId).in("kind", ["extract", "plan"]),
   ]);
   const textBySource = new Map<string, string>();
+  let title: string | null = null;
   for (const s of steps ?? []) {
+    if (s.kind === "plan") {
+      const t = ((s.input ?? {}) as PlanStepInput).title;
+      if (typeof t === "string" && t.trim()) title = t.trim();
+      continue;
+    }
     const inp = (s.input ?? {}) as { sourceId?: string; text?: unknown };
     if (inp.sourceId && typeof inp.text === "string") textBySource.set(inp.sourceId, inp.text);
   }
-  return (sources ?? []).map((s) => ({
-    kind: s.kind,
-    label: s.label,
-    storagePath: s.storage_path,
-    sourceUrl: s.source_url,
-    refId: s.ref_id,
-    text: textBySource.get(s.id) ?? null,
-  }));
+  return {
+    title,
+    sources: (sources ?? []).map((s) => ({
+      kind: s.kind,
+      label: s.label,
+      storagePath: s.storage_path,
+      sourceUrl: s.source_url,
+      refId: s.ref_id,
+      text: textBySource.get(s.id) ?? null,
+    })),
+  };
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasCourseEdit } from "@/lib/collaboration/api-guards";
 import { loadAppSource, type AppSourceKind } from "@/lib/course-build/app-sources";
-import type { NewBuildSource } from "@/lib/course-build/create-build";
+import { MAX_BUILD_TITLE_CHARS, type NewBuildSource } from "@/lib/course-build/create-build";
 import { checkCanBuild, outputLanguageName, startCourseBuild } from "@/lib/course-build/start";
 import { fetchReferenceUrl } from "@/lib/fetch-reference-url";
 import { detectIngestFormat, extensionOfFileName, MAX_INGEST_FILES_PER_BATCH } from "@/lib/study-ingest/formats";
@@ -31,6 +31,8 @@ type Body = {
   app?: unknown;
   outputLanguage?: unknown;
   studyGoal?: unknown;
+  sources?: unknown;
+  title?: unknown;
 };
 
 class InputError extends Error {
@@ -62,6 +64,37 @@ function fileSource(userId: string, raw: unknown): NewBuildSource {
   if (ext === "doc" || ext === "ppt") throw new InputError(`${name} is an old Office format. Save it as .${ext}x and upload it again.`);
   if (kind === "image") throw new InputError(`${name} is an image. Images can't be built into a course yet; upload a PDF or slides instead.`);
   throw new InputError(`${name} is a file type the course builder can't read.`);
+}
+
+function textSource(raw: unknown): NewBuildSource {
+  const t = (raw ?? {}) as { label?: unknown; text?: unknown };
+  const text = typeof t.text === "string" ? t.text.trim().slice(0, MAX_TEXT_CHARS) : "";
+  if (text.length < MIN_TEXT_CHARS) throw new InputError("Pasted text is too short to build from.");
+  return { kind: "text", label: str(t.label, 200) || "Pasted text", text };
+}
+
+async function appSource(supabase: SupabaseClient, userId: string, raw: unknown): Promise<NewBuildSource> {
+  const a = (raw ?? {}) as { kind?: unknown; id?: unknown };
+  const kind = a.kind as AppSourceKind;
+  const id = str(a.id, 64);
+  if (!APP_KINDS.has(kind) || !UUID_RE.test(id)) throw new InputError("Something you picked to build from is invalid.");
+  const loaded = await loadAppSource(supabase, userId, kind, id);
+  if (!loaded) throw new InputError("We couldn't find that item. It may have been deleted.", 404);
+  if (loaded.text.trim().length < MIN_TEXT_CHARS) {
+    throw new InputError(`${loaded.label} doesn't have enough content to build a course from yet.`);
+  }
+  return { kind, label: loaded.label, text: loaded.text, refId: loaded.refId };
+}
+
+async function urlSource(raw: unknown): Promise<NewBuildSource | null> {
+  const url = str((raw as { url?: unknown } | null)?.url, 2000);
+  if (!url) return null;
+  try {
+    const page = await fetchReferenceUrl(url);
+    return { kind: "url", label: page.title || page.hostname, text: page.text, sourceUrl: page.url };
+  } catch (err) {
+    throw new InputError(err instanceof Error ? err.message : "We couldn't read that link.");
+  }
 }
 
 async function resolveTarget(
@@ -202,44 +235,30 @@ export async function POST(request: Request) {
 
   let createdCourseId: string | null = null;
   try {
-    const files = list(body.files);
-    const texts = list(body.texts);
-    const urls = list(body.urls);
-    const app = list(body.app);
-    if (files.length > MAX_INGEST_FILES_PER_BATCH) throw new InputError(`Add at most ${MAX_INGEST_FILES_PER_BATCH} files at a time.`);
-    if (texts.length > MAX_TEXTS || urls.length > MAX_URLS) throw new InputError("That's too many pasted texts or links for one build.");
-
-    const sources: NewBuildSource[] = files.map((f) => fileSource(user.id, f));
-
-    for (const raw of texts) {
-      const t = (raw ?? {}) as { label?: unknown; text?: unknown };
-      const text = typeof t.text === "string" ? t.text.trim().slice(0, MAX_TEXT_CHARS) : "";
-      if (text.length < MIN_TEXT_CHARS) throw new InputError("Pasted text is too short to build from.");
-      sources.push({ kind: "text", label: str(t.label, 200) || "Pasted text", text });
+    // `sources` keeps the student's reading order across kinds; the separate lists are the older shape.
+    const ordered = Array.isArray(body.sources)
+      ? body.sources.map((raw) => (raw ?? {}) as { type?: unknown })
+      : [
+          ...list(body.files).map((f) => ({ ...(f as object), type: "file" })),
+          ...list(body.texts).map((t) => ({ ...(t as object), type: "text" })),
+          ...list(body.app).map((a) => ({ ...(a as object), type: "app" })),
+          ...list(body.urls).map((url) => ({ type: "url", url })),
+        ];
+    const count = (type: string) => ordered.filter((s) => s.type === type).length;
+    if (count("file") > MAX_INGEST_FILES_PER_BATCH) throw new InputError(`Add at most ${MAX_INGEST_FILES_PER_BATCH} files at a time.`);
+    if (count("text") > MAX_TEXTS || count("url") > MAX_URLS || count("app") > MAX_TEXTS) {
+      throw new InputError("That's too many pasted texts or links for one build.");
     }
 
-    for (const raw of app) {
-      const a = (raw ?? {}) as { kind?: unknown; id?: unknown };
-      const kind = a.kind as AppSourceKind;
-      const id = str(a.id, 64);
-      if (!APP_KINDS.has(kind) || !UUID_RE.test(id)) throw new InputError("Something you picked to build from is invalid.");
-      const loaded = await loadAppSource(supabase, user.id, kind, id);
-      if (!loaded) throw new InputError("We couldn't find that item. It may have been deleted.", 404);
-      if (loaded.text.trim().length < MIN_TEXT_CHARS) {
-        throw new InputError(`${loaded.label} doesn't have enough content to build a course from yet.`);
-      }
-      sources.push({ kind, label: loaded.label, text: loaded.text, refId: loaded.refId });
-    }
-
-    for (const raw of urls) {
-      const url = str(raw, 2000);
-      if (!url) continue;
-      try {
-        const page = await fetchReferenceUrl(url);
-        sources.push({ kind: "url", label: page.title || page.hostname, text: page.text, sourceUrl: page.url });
-      } catch (err) {
-        throw new InputError(err instanceof Error ? err.message : "We couldn't read that link.");
-      }
+    const sources: NewBuildSource[] = [];
+    for (const raw of ordered) {
+      if (raw.type === "file") sources.push(fileSource(user.id, raw));
+      else if (raw.type === "text") sources.push(textSource(raw));
+      else if (raw.type === "app") sources.push(await appSource(supabase, user.id, raw));
+      else if (raw.type === "url") {
+        const source = await urlSource(raw);
+        if (source) sources.push(source);
+      } else throw new InputError("Something you picked to build from is invalid.");
     }
 
     if (sources.length === 0) throw new InputError("Add at least one file, link, or text to build from.");
@@ -255,6 +274,7 @@ export async function POST(request: Request) {
       sources,
       outputLanguage: outputLanguageName(body.outputLanguage),
       studyGoal: str(body.studyGoal, 300) || null,
+      title: str(body.title, MAX_BUILD_TITLE_CHARS) || null,
     });
     if (!started.ok) {
       if (createdCourseId) await supabase.from("courses").delete().eq("id", createdCourseId);

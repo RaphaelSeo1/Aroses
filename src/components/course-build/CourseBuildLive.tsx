@@ -331,6 +331,23 @@ function BuildPanel({ buildId, courseId, onRetried }: { buildId: string; courseI
               <Typed text={status.plan.description} animate={animate} />
             </p>
           ) : null}
+          {status.sources.length > 1 ? (
+            <div className="mt-3">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">Combined from {status.sources.length} sources, in this order</p>
+              <ol className="mt-1.5 flex flex-wrap gap-1.5">
+                {status.sources.map((s, i) => (
+                  <li
+                    key={`${i}-${s.label}`}
+                    className="flex max-w-xs items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
+                  >
+                    <span className="tabular-nums text-violet-500">{i + 1}</span>
+                    <span className="truncate">{s.label}</span>
+                    {s.pages ? <span className="shrink-0 text-zinc-400">{s.pages} {s.pages === 1 ? "page" : "pages"}</span> : null}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {status.stage === "done" && openHref() ? (
