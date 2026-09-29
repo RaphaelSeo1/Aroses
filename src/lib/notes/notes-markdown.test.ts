@@ -8,7 +8,7 @@ import {
   parseInlineMarkdown,
   sanitizeIncompleteInlineMarkdown,
   type NoteNodeJson,
-} from "./notes-markdown";
+} from "./notes-markdown.ts";
 
 test("parses closed **bold** spans", () => {
   const nodes = parseInlineMarkdown("see **term** here");
@@ -27,6 +27,22 @@ test("round-trip still emits **term** as bold, not a highlight mark", () => {
   assert.match(noteNodesToMarkdown(nodes), /\*\*Aspirin\*\*/);
   const inline = parseInlineMarkdown("**Aspirin**");
   assert.deepEqual(inline[0]?.marks, [{ type: "bold" }]);
+});
+
+test("leaked @@ protocol lines never become note nodes", () => {
+  const nodes = markdownToNoteNodes(
+    [
+      "## Eukaryote classification",
+      "- Eukaryotes have a nucleus.",
+      "@@summary Microbial Eukaryotes I covers eukaryote classification and protists.",
+      "  - @@Summary covers protists",
+      "- Protists are diverse. @@summary Covered protists.",
+    ].join("\n"),
+    { sectionId: "s1", provenance: "ai" }
+  );
+  const md = noteNodesToMarkdown(nodes);
+  assert.doesNotMatch(md, /@@|Microbial Eukaryotes I covers|Covered protists/i);
+  assert.match(md, /Protists are diverse\./);
 });
 
 test("parses closed *italic* spans", () => {

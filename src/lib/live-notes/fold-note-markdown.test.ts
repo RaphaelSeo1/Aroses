@@ -8,7 +8,7 @@ import {
   uniqueIncomingNoteLines,
   applySurgicalNoteRevision,
   deleteExactNoteLines,
-} from "./fold-note-markdown";
+} from "./fold-note-markdown.ts";
 
 test("extractNoteHeading reads the first ATX heading", () => {
   assert.equal(

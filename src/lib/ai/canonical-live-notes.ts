@@ -1,4 +1,5 @@
 import "server-only";
+import { liveNotesFinalModel } from "@/lib/ai/live-notes-models";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
 import {
   buildCanonicalNotesUserPrompt,
@@ -7,8 +8,8 @@ import {
   type CanonicalDraftSection,
   type CanonicalNoteSourceBundle,
 } from "@/lib/live-notes/canonical-synthesis";
+import { stripProtocolLines } from "@/lib/live-notes/marker-protocol";
 
-const MODEL = "gpt-5.6-sol";
 const REQUEST_TIMEOUT_MS = 110_000;
 
 type OpenAiChatResponse = {
@@ -37,6 +38,7 @@ export async function synthesizeCanonicalLiveNotes(input: {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("Notes need OPENAI_API_KEY.");
 
+  const model = liveNotesFinalModel();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -48,7 +50,7 @@ export async function synthesizeCanonicalLiveNotes(input: {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        model: MODEL,
+        model,
         max_completion_tokens: 20_000,
         reasoning_effort: "none",
         messages: [
@@ -68,16 +70,19 @@ export async function synthesizeCanonicalLiveNotes(input: {
     }
     const parsed = JSON.parse(raw) as OpenAiChatResponse;
     recordAiUsage({
-      model: MODEL,
+      model,
       inputTokens: parsed.usage?.prompt_tokens,
       outputTokens: parsed.usage?.completion_tokens,
       feature: "live-notes-canonical-synthesis",
       userId: input.userId ?? null,
     });
-    const markdown = parsed.choices?.[0]?.message?.content
-      ?.replace(/^```(?:markdown|md)?\s*/i, "")
-      .replace(/```\s*$/i, "")
-      .trim();
+    const content = parsed.choices?.[0]?.message?.content;
+    const markdown = content
+      ? stripProtocolLines(content)
+          .replace(/^```(?:markdown|md)?\s*/i, "")
+          .replace(/```\s*$/i, "")
+          .trim()
+      : "";
     return markdown || null;
   } finally {
     clearTimeout(timer);

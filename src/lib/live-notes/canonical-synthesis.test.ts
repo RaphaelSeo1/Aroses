@@ -5,7 +5,7 @@ import {
   CANONICAL_NOTES_SYSTEM,
   hasCanonicalNoteSources,
   splitCanonicalMarkdown,
-} from "./canonical-synthesis";
+} from "./canonical-synthesis.ts";
 
 test("files-only synthesis is comprehensive but filters incidental noise", () => {
   const prompt = buildCanonicalNotesUserPrompt({
@@ -77,6 +77,21 @@ test("uploaded material is a first-class authoritative source", () => {
     true
   );
   assert.match(prompt, /UPLOADED MATERIAL \(reading\.md\)/);
+});
+
+test("leaked @@ lines in the live draft are not passed to the final build", () => {
+  const prompt = buildCanonicalNotesUserPrompt({
+    sources: { transcript: "Protists are mostly unicellular eukaryotes." },
+    existingSections: [
+      {
+        sectionId: "s1",
+        markdown:
+          "## Protists\n- Protists are mostly unicellular eukaryotes.\n@@summary Microbial Eukaryotes I covers protists.",
+      },
+    ],
+  });
+  assert.match(prompt, /Protists are mostly unicellular eukaryotes\./);
+  assert.doesNotMatch(prompt, /@@summary|Microbial Eukaryotes I covers/);
 });
 
 test("canonical markdown splits into one addressable H2 section", () => {

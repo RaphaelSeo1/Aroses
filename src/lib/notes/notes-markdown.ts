@@ -19,6 +19,8 @@
  * every rule here.
  */
 
+import { stripProtocolLines } from "../live-notes/marker-protocol.ts";
+
 /** Default yellow when the student or chat applies a highlight mark. */
 export const KEY_TERM_HIGHLIGHT_COLOR = "#fde68a";
 
@@ -396,7 +398,8 @@ export function markdownToNoteNodes(
     openList = null;
   };
 
-  const lines = markdown.split("\n");
+  // Model protocol directives (@@summary …) are never note content.
+  const lines = stripProtocolLines(markdown).split("\n");
   for (let i = 0; i < lines.length; i++) {
     const rawLine = lines[i]!;
 

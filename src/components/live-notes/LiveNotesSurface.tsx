@@ -35,6 +35,7 @@ import {
   applySurgicalNoteRevision,
   deleteExactNoteLines,
 } from "@/lib/live-notes/fold-note-markdown";
+import { stripProtocolLines } from "@/lib/live-notes/marker-protocol";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 import {
   chooseTypewriterSchedule,
@@ -956,8 +957,12 @@ export function LiveNotesSurface({
               queue.push({ kind: "delete", sectionId });
             }
           } else if (event === "text") {
-            if (typeof parsed.delta === "string" && parsed.delta) {
-              queue.push({ kind: "text", text: parsed.delta });
+            const delta =
+              typeof parsed.delta === "string"
+                ? stripProtocolLines(parsed.delta)
+                : "";
+            if (delta) {
+              queue.push({ kind: "text", text: delta });
             }
           } else if (event === "error") {
             pushAiActivity(

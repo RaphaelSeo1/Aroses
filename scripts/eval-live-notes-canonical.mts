@@ -7,8 +7,9 @@ import {
   type CanonicalDraftSection,
   type CanonicalNoteSourceBundle,
 } from "../src/lib/live-notes/canonical-synthesis.ts";
+import { liveNotesFinalModel } from "../src/lib/ai/live-notes-models.ts";
 
-const MODEL = "gpt-5.6-sol";
+const MODEL = liveNotesFinalModel();
 const apiKey = process.env.OPENAI_API_KEY?.trim();
 if (!apiKey) throw new Error("OPENAI_API_KEY is required for the live-notes eval.");
 

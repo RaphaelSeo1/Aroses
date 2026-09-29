@@ -1,3 +1,5 @@
+import { stripProtocolLines } from "./marker-protocol.ts";
+
 export type CanonicalNoteSourceBundle = {
   transcript?: string;
   deck?: string;
@@ -110,7 +112,9 @@ export function buildCanonicalNotesUserPrompt(input: {
   for (const section of input.existingSections ?? []) {
     const remaining = MAX_DRAFT_CHARS - draftChars;
     if (remaining <= 0) break;
-    const markdown = section.markdown.trim().slice(0, remaining);
+    const markdown = stripProtocolLines(section.markdown)
+      .trim()
+      .slice(0, remaining);
     if (!markdown) continue;
     draftChars += markdown.length;
     const entry = `[SECTION ${section.sectionId}]\n${markdown}`;

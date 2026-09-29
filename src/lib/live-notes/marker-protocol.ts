@@ -9,10 +9,12 @@
  *   @@summary              exactly once, LAST — rolling summary follows
  *                          (accumulated here, never forwarded)
  *
- * Pure and incremental: fed raw token deltas, emits typed events without
- * waiting for the full response. Lines starting with "@" are held until
- * their newline (markers are short) so a marker can never leak as text;
- * everything else forwards token-by-token with no added latency.
+ * Pure and incremental: fed raw token deltas, emits typed events as each
+ * line completes. Body text is forwarded one whole line at a time so a
+ * marker can never leak, wherever the model puts it: indented, after a
+ * bullet/number/quote prefix, wrapped in ** or backticks, in any casing,
+ * with its payload on the same line ("@@summary Lecture covers…"), or
+ * after note text on the same line.
  */
 
 export type LiveNotesStreamEvent =
@@ -34,6 +36,74 @@ export type MarkerParser = {
   summaryText: () => string;
 };
 
+export type ProtocolDirective = {
+  /** Note text before the directive on the same line ("" when none). */
+  before: string;
+  /** Lower-cased directive name, e.g. "summary". */
+  name: string;
+  /** Payload after the directive name on the same line. */
+  rest: string;
+};
+
+const DIRECTIVE_RE = /@@\s*([a-z][a-z_-]*)/i;
+/** Indentation, list/quote/heading prefixes and emphasis wrappers. */
+const DECORATION_ONLY_RE = /^(?:\s|[-*+>#`_~•]|\d{1,3}[.)])*$/;
+const CODE_FENCE_RE = /^\s*```[a-z]*\s*$/i;
+
+function cleanPayload(raw: string): string {
+  return raw
+    .replace(/^[\s:*`_—–-]+/, "")
+    .replace(/[\s*`_]+$/, "")
+    .trim();
+}
+
+/**
+ * Locate a protocol directive anywhere in one line. Returns null for normal
+ * note text. `before` keeps any real note text that preceded it.
+ */
+export function findProtocolDirective(line: string): ProtocolDirective | null {
+  const hit = DIRECTIVE_RE.exec(line);
+  if (!hit) return null;
+  const prefix = line.slice(0, hit.index);
+  const before = DECORATION_ONLY_RE.test(prefix)
+    ? ""
+    : prefix.replace(/[*_`]+$/, "").trimEnd();
+  return {
+    before,
+    name: hit[1]!.toLowerCase(),
+    rest: cleanPayload(line.slice(hit.index + hit[0].length)),
+  };
+}
+
+/**
+ * Remove every protocol directive (and its same-line payload) from finished
+ * markdown. Note text before a mid-line directive is kept.
+ */
+export function stripProtocolLines(markdown: string): string {
+  if (!markdown.includes("@@")) return markdown;
+  const out: string[] = [];
+  for (const line of markdown.split("\n")) {
+    const directive = findProtocolDirective(line);
+    if (!directive) {
+      out.push(line);
+    } else if (directive.before.trim()) {
+      out.push(directive.before);
+    }
+  }
+  return out.join("\n");
+}
+
+/** Section ids are bare tokens; models sometimes wrap them in [..] or `..`. */
+function directiveTarget(rest: string): string {
+  const first = rest.split(/\s+/)[0] ?? "";
+  return first.replace(/^[[(<`"'*]+|[\])>`"'*:.,]+$/g, "");
+}
+
+/** Same-line payload after @@append worth keeping (a real markdown block). */
+function appendPayloadLine(rest: string): string | null {
+  return /^(#{2,3}\s|[-*]\s|\d{1,2}\.\s|\|)/.test(rest) ? rest : null;
+}
+
 export function createMarkerParser(
   allowedReviseIds: Set<string>,
   appendSectionId: string
@@ -47,8 +117,6 @@ export function createMarkerParser(
     | "skip";
   let mode: Mode = "preamble";
   let line = "";
-  /** How many chars of the current partial line were already forwarded. */
-  let forwarded = 0;
   const summaryParts: string[] = [];
 
   const isBody = () =>
@@ -56,45 +124,55 @@ export function createMarkerParser(
     mode === "revise" ||
     mode === "delete";
 
-  const completeLine = (out: LiveNotesStreamEvent[]) => {
-    if (forwarded === 0 && line.startsWith("@@")) {
-      const trimmed = line.trim();
-      if (trimmed === "@@append") {
-        mode = "append";
-        out.push({ type: "op", op: "append", sectionId: appendSectionId });
-      } else if (trimmed.startsWith("@@revise")) {
-        const id = trimmed.slice("@@revise".length).trim();
-        if (id && allowedReviseIds.has(id)) {
-          mode = "revise";
-          out.push({ type: "op", op: "revise", sectionId: id });
-        } else {
-          // Unknown target — swallow its body entirely.
-          mode = "skip";
-        }
-      } else if (trimmed.startsWith("@@delete")) {
-        const id = trimmed.slice("@@delete".length).trim();
-        if (id && allowedReviseIds.has(id)) {
-          mode = "delete";
-          out.push({ type: "op", op: "delete", sectionId: id });
-        } else {
-          mode = "skip";
-        }
-      } else if (trimmed === "@@summary") {
-        mode = "summary";
-      } else if (trimmed.startsWith("@@thought")) {
-        const message = trimmed.slice("@@thought".length).trim();
-        if (message) out.push({ type: "thought", message });
+  const contentLine = (text: string, out: LiveNotesStreamEvent[]) => {
+    if (isBody()) {
+      if (CODE_FENCE_RE.test(text)) return;
+      out.push({ type: "text", delta: `${text}\n` });
+    } else if (mode === "summary") {
+      summaryParts.push(text);
+    }
+  };
+
+  const applyDirective = (
+    directive: ProtocolDirective,
+    out: LiveNotesStreamEvent[]
+  ) => {
+    const { name, rest } = directive;
+    if (name === "append") {
+      mode = "append";
+      out.push({ type: "op", op: "append", sectionId: appendSectionId });
+      const payload = appendPayloadLine(rest);
+      if (payload) contentLine(payload, out);
+    } else if (name === "revise" || name === "delete") {
+      const id = directiveTarget(rest);
+      if (id && allowedReviseIds.has(id)) {
+        mode = name;
+        out.push({ type: "op", op: name, sectionId: id });
       } else {
+        // Unknown target — swallow its body entirely.
         mode = "skip";
       }
-      // Any other @@ line is protocol noise — drop it.
-    } else if (isBody()) {
-      out.push({ type: "text", delta: `${line.slice(forwarded)}\n` });
-    } else if (mode === "summary") {
-      summaryParts.push(line);
+    } else if (name === "summary") {
+      mode = "summary";
+      if (rest) summaryParts.push(rest);
+    } else if (name === "thought") {
+      if (rest) out.push({ type: "thought", message: rest });
+    } else {
+      // Any other @@ directive is protocol noise — drop it and its body.
+      mode = "skip";
     }
+  };
+
+  const completeLine = (out: LiveNotesStreamEvent[]) => {
+    const raw = line.replace(/\r$/, "");
     line = "";
-    forwarded = 0;
+    const directive = findProtocolDirective(raw);
+    if (!directive) {
+      contentLine(raw, out);
+      return;
+    }
+    if (directive.before) contentLine(directive.before, out);
+    applyDirective(directive, out);
   };
 
   return {
@@ -103,23 +181,13 @@ export function createMarkerParser(
       let buf = deltaText;
       while (buf.length > 0) {
         const nl = buf.indexOf("\n");
-        if (nl >= 0) {
-          line += buf.slice(0, nl);
-          buf = buf.slice(nl + 1);
-          completeLine(out);
-          continue;
+        if (nl < 0) {
+          line += buf;
+          break;
         }
-        line += buf;
-        buf = "";
-        // Forward the partial body line unless it may still be a marker.
-        if (isBody()) {
-          const mayBeMarker =
-            forwarded === 0 && line.startsWith("@") && line.length < 64;
-          if (!mayBeMarker && line.length > forwarded) {
-            out.push({ type: "text", delta: line.slice(forwarded) });
-            forwarded = line.length;
-          }
-        }
+        line += buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        completeLine(out);
       }
       return out;
     },

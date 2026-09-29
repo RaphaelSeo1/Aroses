@@ -11,6 +11,8 @@ import {
   type LiveNotesStreamEvent,
 } from "@/lib/live-notes/marker-protocol";
 import { buildNoteInstructionModifier } from "@/lib/ai/note-instruction";
+import { liveNotesModel } from "@/lib/ai/live-notes-models";
+import { createNoteLineGuard } from "@/lib/live-notes/note-line-guard";
 import { DECK_DRAFT_EXCERPT } from "@/lib/live-notes/slide-pages";
 
 export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
@@ -19,7 +21,7 @@ export type { LiveNotesStreamEvent } from "@/lib/live-notes/marker-protocol";
  * Live Notes synthesis — streaming, grounded, with bounded self-revision.
  *
  * Every ~450 chars of fresh transcript (~30s of speech; the client runs a
- * 5s cadence heartbeat), one Sol call receives: the new slice, the
+ * 5s cadence heartbeat), one `liveNotesModel()` call receives: the new slice, the
  * rolling summary, and the last-N AI note sections WITH the raw transcript
  * excerpts they were written from. The model streams a tiny
  * line-marker protocol (parsed incrementally — no waiting for the full
@@ -46,9 +48,6 @@ const MODEL = process.env.ANTHROPIC_TUTOR_FAST_MODEL?.trim() || "claude-haiku-4-
 /** Same model as tutor-session recaps — lecture Finish recap should match that quality. */
 const RECAP_MODEL =
   process.env.ANTHROPIC_TUTOR_MODEL?.trim() || "claude-sonnet-4-6";
-/** Slide drafts and live speech both use this. Reasoning off so each call stays a note update. */
-const LIVE_NOTES_MODEL = "gpt-5.6-sol";
-
 /** Hard cap on the rolling summary we store + send back to the model. */
 export const ROLLING_SUMMARY_MAX_CHARS = 1_600;
 /** Max transcript slice per call (client triggers around ~700). */
@@ -75,6 +74,7 @@ Write the notes a student would get by pasting this source into ChatGPT and aski
 - Skip only filler, logistics, and a fact already written in the existing notes. A related heading is not a reason to omit new points. If a STUDENT NOTE STYLE asks for shorter notes, that request still wins.
 
 - Start a "## " heading whenever the lecturer moves to a distinct topic or concept (3–8 words naming the idea; never repeat an EXISTING NOTE HEADING — fold into that section instead).
+- One H2 = one concept. Headings name the specific concept taught (e.g. "Sickle cell trait and malaria"), never the broad lecture or course title (e.g. "Microbial Eukaryotes I"). A new named organism, process, disease, mechanism, experiment, or worked example is a new topic even when it belongs to the same chapter or broad subject — give it its own H2 instead of filing it under an unrelated heading. Expect a new H2 every few minutes of lecture.
 - Every non-empty @@append MUST begin with a "## " topic heading. Under it, use the normal outline: a framing paragraph when supported, then grouped top-level bullets with **bold lead-ins** and "  - " nested supporting details. Use "### " only for a real subtopic such as a worked example or comparison—not generic boilerplate. Never emit an unheaded run of flat bullets.
 - Under each heading, write enough that a student who missed the lecture still understands the point: definitions, key numbers/units, named studies/people/dates, cause→effect, examples, and the supporting detail that was actually taught. Prefer coherent prose plus grouped/nested bullets over one bullet per utterance.
 - Fold spoken filler into the note; do not transcribe it. Skip hedging, transitions, logistics, and a repeat of a fact already written. Do not fold away a distinct definition, example, number, name, list item, or step.
@@ -108,7 +108,13 @@ GROUNDING (critical — overrides everything else on conflict):
 - If you add clarifying context the lecturer did NOT say or show (an analogy, a definition they skipped), it MUST be on its own line formatted exactly as:
   > (AI) <one or two sentences>
   Never blend added context into normal notes.
-- If a passage is garbled or ambiguous in BOTH sources, omit it. Never guess.`;
+- If a passage is garbled or ambiguous in BOTH sources, omit it. Never guess.
+- Never state an answer, result, or conclusion the sources did not give. When the lecturer poses a question (quiz, poll, true/false, "what do you think?") without answering it, write the question only — no "Answer:" line. Add the answer later, only once the lecturer gives it.
+- The notes are about the subject, never about the sources: never write lines like "the lecture slice does not provide…", "not stated in the transcript", or other commentary on what you were or were not given.
+
+NO REPETITION:
+- Every fact appears ONCE in the whole note document. Before writing a line, check ALL existing sections: if the fact is already written anywhere — even in other words, even under another heading — do not write it again. Do not restate a concept to introduce, summarize, or conclude a section.
+- A later mention of an already-noted concept adds only the genuinely new detail (a new example, number, contrast, or consequence) to the section that owns that concept.`;
 
 const SYSTEM = `You are a meticulous note-taker sitting in a live lecture. You receive: the NEWEST slice of the lecture transcript (raw speech-to-text), optional ON-SCREEN CONTENT extracted from the shared display, optional DECK SLIDES (pre-uploaded pages matched to this slice), a rolling summary of everything covered before it, and YOUR RECENT NOTE SECTIONS with the raw transcript excerpts they were written from.
 
@@ -122,13 +128,15 @@ Existing AI-generated notes are an editable draft, not an authoritative source. 
 Before writing, check ALL EXISTING NOTE SECTIONS, not just recent live output. If the NEW TRANSCRIPT SLICE continues, completes, repeats, or is about the same topic as a section that is already written (same concept, same worked example, remaining items of an enumeration — match by meaning, not only exact heading text):
 
 - You MUST @@revise that sectionId. Under @@revise emit ONLY a structured Markdown fragment containing the new or corrected material—never repeat the "## " heading or the whole section. The client surgically folds your fragment into the existing section.
+- Before each @@revise line, reread the target section: if that point is already there in any wording (e.g. "persists for life" vs "lifelong infection"), leave it out. When the lecturer circles back to a point already written, emit nothing for it. A @@revise with no genuinely new fact should be omitted entirely.
+- If the new material is a different concept from the section's heading (e.g. pathogenesis or immune response arriving while the section is about disease burden), do not @@revise — @@append it under its own "## " heading.
 - A new slice omitting an older point is NOT evidence that the point is unimportant or unsupported. Never replace or remove a whole section during an incremental slice; use additive @@revise. The later all-source reconciliation pass performs global rewrites, merges, condensation, and deletions safely.
 - Preserve the section's organization. A single related fact can be one bullet; multiple supporting details should use a bold parent bullet with nested "  - " children, a short paragraph, or a meaningful "### " subtopic. Grouping is not a reason to drop points. Do not grow a long flat list one utterance at a time.
 - Do not emit generic "Key vocabulary" / "Self-check" subsections during a continuation unless the incoming lecture material itself makes them useful.
 - Do NOT @@append a new section that restates or continues that topic. A second copy at the bottom is always wrong when the notes already exist.
-- If you are unsure whether it is the same topic, @@revise the closest matching listed section rather than appending.
+- Same topic means the same concept, not the same chapter or broad subject. Test: would a student looking for this material look under that heading? If yes, @@revise it. If the slice moves to a different concept, @@append a new "## " section even when a broad existing heading could loosely hold it.
 
-Only @@append when the slice introduces a topic that has NO matching existing heading.
+Only @@append when the slice introduces a concept that has NO matching existing heading.
 
 - If the slice only REPEATS already-captured material → leave @@append empty (still emit the marker). Do NOT @@revise just to rephrase.
 - NEVER @@revise for grammar, punctuation, capitalization, filler words, or OCR/STT flicker.
@@ -151,7 +159,7 @@ NARRATION (@@thought — user-visible, optional but valuable):
 
 WHEN THE NEW SLICE HAS NO NEW TEACHING (small talk, logistics, repeats of the rolling summary): still emit @@append but put NOTHING after it. Never pad.
 
-OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
+OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line at column 0 (never inside a bullet, heading, or note line). Only @@thought and the ids after @@revise/@@delete share the marker's line; every other body, including the @@summary text, starts on the NEXT line:
 @@thought <optional one short sentence — skip if unnecessary>
 @@revise <sectionId>
 <ONLY a structured fragment of new/corrected material; no H2 and never a wipe/full restatement>
@@ -179,7 +187,7 @@ SEED RULES (override live-lecture habits):
 - @@thought: one short line that you are drafting from the uploaded slides (mention slide numbers if present).
 - @@summary: compressed record of topics drafted so far (previous summary + these slides).
 
-OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line:
+OUTPUT PROTOCOL — emit exactly this, nothing before the first marker, no code fences, each marker alone on its own line at column 0 (never inside a note line); the @@summary text starts on the NEXT line:
 @@thought <one short sentence>
 @@append
 <markdown study notes for these slides>
@@ -220,9 +228,10 @@ export type ExistingLiveNoteSection = {
 
 type OpenAiUsage = { inputTokens?: number; outputTokens?: number };
 
-/** Stream GPT-5.6 Sol text for the live add-or-skip call. Reasoning is off. */
-async function* streamGptSolText(input: {
+/** Stream the live add-or-skip call. Reasoning off so each call stays a note update. */
+async function* streamLiveNotesText(input: {
   apiKey: string;
+  model: string;
   system: string;
   user: string;
   maxTokens: number;
@@ -235,7 +244,7 @@ async function* streamGptSolText(input: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: LIVE_NOTES_MODEL,
+      model: input.model,
       stream: true,
       stream_options: { include_usage: true },
       max_completion_tokens: input.maxTokens,
@@ -434,8 +443,8 @@ export async function* streamLiveLectureNotes(input: {
             : null,
           `NEW TRANSCRIPT SLICE (raw speech-to-text — synthesize into study notes, never copy verbatim):\n${slice}`,
           hasDraft
-            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise every matching id with additive source-grounded material. Never replace or remove a whole section in this incremental call. Include every new teachable point from this slice, not a one-line summary. @@delete ONLY a line the lecturer clearly retracted or that both slides and transcript show is wrong. If slides and transcript disagree without a retraction, keep both and add a **Discrepancy:** line. @@append ONLY for a topic with no matching heading. Empty @@append when the slice was folded in or is a repeat."
-            : "\nEmit the protocol now. If notes already exist for the topics in this slice, @@revise every matching section with additive source-grounded material. Never replace or remove a whole section in this incremental call. Include every new teachable point. @@delete ONLY a line the lecturer clearly retracted or that is wrong with slides and speech in agreement. If slides and speech disagree without a retraction, keep both and add a **Discrepancy:** line. @@append ONLY for a genuinely new topic with no matching heading. Empty @@append when the slice was folded in or is a repeat.",
+            ? "\nEmit the protocol now. If this speech covers slide-drafted section(s), @@revise every matching id with additive source-grounded material. Never replace or remove a whole section in this incremental call. Include every new teachable point from this slice, not a one-line summary. @@delete ONLY a line the lecturer clearly retracted or that both slides and transcript show is wrong. If slides and transcript disagree without a retraction, keep both and add a **Discrepancy:** line. @@append ONLY for a topic with no matching heading, with its own specific \"## \" heading. Never write a fact that is already in the notes. Empty @@append when the slice was folded in or is a repeat."
+            : "\nEmit the protocol now. If notes already exist for the topics in this slice, @@revise every matching section with additive source-grounded material — only points that are not already in that section in any wording; skip what the lecturer is repeating. Never replace or remove a whole section in this incremental call. Include every new teachable point. @@delete ONLY a line the lecturer clearly retracted or that is wrong with slides and speech in agreement. If slides and speech disagree without a retraction, keep both and add a **Discrepancy:** line. @@append ONLY for a genuinely new concept with no matching heading, with its own specific \"## \" heading (one per new concept). Never write a fact that is already in the notes. Empty @@append when the slice was folded in or is a repeat.",
         ]
           .filter(Boolean)
           .join("\n\n");
@@ -448,23 +457,33 @@ export async function* streamLiveLectureNotes(input: {
     input.appendSectionId
   );
 
+  const guard = createNoteLineGuard([
+    ...revisable.map((s) => s.markdown),
+    ...existingSections
+      .filter((s) => !recentIds.has(s.sectionId))
+      .map((s) => s.markdown),
+  ]);
+
   const openaiKey = process.env.OPENAI_API_KEY?.trim();
   if (!openaiKey) {
     throw new Error("Notes need OPENAI_API_KEY.");
   }
+  const model = liveNotesModel();
   const usage: OpenAiUsage = {};
-  for await (const delta of streamGptSolText({
+  for await (const delta of streamLiveNotesText({
     apiKey: openaiKey,
+    model,
     system: liveNotesSystem(input.noteInstruction, mode),
     user: userPrompt,
     maxTokens: mode === "seed" ? 8_000 : 4_000,
     usage,
   })) {
-    for (const ev of parser.push(delta)) yield ev;
+    for (const ev of guard.push(parser.push(delta))) yield ev;
   }
-  for (const ev of parser.flush()) yield ev;
+  for (const ev of guard.push(parser.flush())) yield ev;
+  guard.flush();
   recordAiUsage({
-    model: LIVE_NOTES_MODEL,
+    model,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     feature: mode === "seed" ? "live-notes-seed" : "live-notes",
