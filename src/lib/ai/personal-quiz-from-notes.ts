@@ -3,7 +3,12 @@ import {
   normalizeQuizItemsLoose,
   stripJsonFence,
 } from "@/lib/ai/course-payload";
-import { ANTHROPIC_SONNET } from "@/lib/ai/anthropic-models";
+import {
+  EXTRA_QUESTION_MAX_TOKENS,
+  EXTRA_QUESTION_REPAIR_MAX_TOKENS,
+  extraQuestionModel,
+} from "@/lib/ai/extra-question-generation";
+import { recordAiUsage } from "@/lib/billing/ai-usage";
 import { quizDifficultyWordingRules } from "@/lib/ai/quiz-difficulty-wording";
 import { quizQuestionVolumeRules } from "@/lib/ai/quiz-question-volume";
 import type {
@@ -574,14 +579,21 @@ export async function generatePersonalQuizFromNotes(
   });
 
   const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 1 });
-  const model = ANTHROPIC_SONNET;
+  const model = extraQuestionModel();
+  const logUsage = (usage: { input_tokens?: number; output_tokens?: number } | undefined) =>
+    recordAiUsage({
+      model,
+      inputTokens: usage?.input_tokens,
+      outputTokens: usage?.output_tokens,
+    });
 
   const msg = await anthropic.messages.create({
     model,
-    max_tokens: 8192,
+    max_tokens: EXTRA_QUESTION_MAX_TOKENS,
     temperature: 0.42,
     messages: [{ role: "user", content: prompt }],
   });
+  logUsage(msg.usage);
 
   const block = msg.content.find((b) => b.type === "text");
   if (!block || block.type !== "text") {
@@ -596,7 +608,7 @@ export async function generatePersonalQuizFromNotes(
     const repairType = preferTypeWhenOne(existing);
     const repair = await anthropic.messages.create({
       model,
-      max_tokens: 4096,
+      max_tokens: EXTRA_QUESTION_REPAIR_MAX_TOKENS,
       temperature: 0,
       messages: [
         {
@@ -610,6 +622,7 @@ export async function generatePersonalQuizFromNotes(
         },
       ],
     });
+    logUsage(repair.usage);
     const repaired = repair.content.find((b) => b.type === "text");
     if (repaired && repaired.type === "text") {
       parsed = parsePersonalQuizModelText(repaired.text);

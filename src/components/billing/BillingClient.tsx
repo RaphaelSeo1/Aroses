@@ -6,6 +6,7 @@ import { PlanCardsRow, StudentPlanCornerBadge } from "@/components/billing/PlanC
 import { planCardCopy } from "@/lib/billing/plan-card-copy";
 import {
   CHECKOUT_PLAN_ORDER,
+  EXTRA_QUESTIONS_DAILY_CAP,
   formatUsdAmount,
   isPaidTier,
   type PlanLimits,
@@ -159,7 +160,7 @@ export function BillingClient({
           {t.billing.title}
         </h1>
         <p className="mt-3 max-w-2xl text-pretty text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-          {t.billing.subtitleLong}
+          {tf(t.billing.subtitleLong, { daily: EXTRA_QUESTIONS_DAILY_CAP })}
         </p>
       </header>
 

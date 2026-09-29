@@ -4,8 +4,10 @@ import {
   CHECKOUT_PLAN_ORDER,
   PLANS,
   TOP_PLAN_TIER,
+  EXTRA_QUESTIONS_DAILY_CAP,
   courseGenerationCap,
   extraQuestionCap,
+  extraQuestionDailyCap,
   hasEarlyAccess,
   isPaidTier,
   isTierCheckViolation,
@@ -34,11 +36,11 @@ const EXPECTED: Record<
     early: boolean;
   }
 > = {
-  lite: { price: 8.99, pages: 300, lectureHours: 2, voiceMin: 10, chat: 100, extra: 5, dailyUsd: 1, early: false },
-  student: { price: 14.99, pages: 600, lectureHours: 3, voiceMin: 20, chat: 200, extra: 15, dailyUsd: 1.5, early: false },
-  plus: { price: 29.99, pages: 1200, lectureHours: 8, voiceMin: 45, chat: 400, extra: 30, dailyUsd: 3, early: true },
-  pro: { price: 49.99, pages: 2400, lectureHours: 12, voiceMin: 90, chat: 600, extra: 50, dailyUsd: 5, early: true },
-  max: { price: 99.99, pages: 5000, lectureHours: 25, voiceMin: 150, chat: 1000, extra: 80, dailyUsd: 8, early: true },
+  lite: { price: 8.99, pages: 300, lectureHours: 2, voiceMin: 10, chat: 100, extra: 50, dailyUsd: 1, early: false },
+  student: { price: 14.99, pages: 600, lectureHours: 3, voiceMin: 20, chat: 200, extra: 120, dailyUsd: 1.5, early: false },
+  plus: { price: 29.99, pages: 1200, lectureHours: 8, voiceMin: 45, chat: 400, extra: 250, dailyUsd: 3, early: true },
+  pro: { price: 49.99, pages: 2400, lectureHours: 12, voiceMin: 90, chat: 600, extra: 500, dailyUsd: 5, early: true },
+  max: { price: 99.99, pages: 5000, lectureHours: 25, voiceMin: 150, chat: 1000, extra: 1000, dailyUsd: 8, early: true },
 };
 
 const NO_ENV = {};
@@ -103,6 +105,14 @@ test("PLAN_LIMIT_<TIER>_* env overrides apply per tier and ignore junk", () => {
   assert.equal(student.dailyCourseBuildUsd, 2.5);
   assert.equal(planLimits("pro", env).sourcePages, 2400);
   assert.equal(planLimits("plus", env).sourcePages, 1200);
+});
+
+test("extra questions: 60 clicks a day on every tier, overridable by env", () => {
+  assert.equal(EXTRA_QUESTIONS_DAILY_CAP, 60);
+  assert.equal(extraQuestionDailyCap({}), 60);
+  assert.equal(extraQuestionDailyCap({ EXTRA_QUESTIONS_DAILY_CAP: "25" }), 25);
+  assert.equal(extraQuestionDailyCap({ EXTRA_QUESTIONS_DAILY_CAP: "lots" }), 60);
+  assert.equal(extraQuestionCap("free", {}), 0);
 });
 
 test("old tier names read as the mapped new tier", () => {

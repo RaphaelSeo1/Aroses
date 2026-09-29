@@ -3,6 +3,7 @@ import {
   countPersonalQuizTypes,
   generatePersonalQuizFromNotes,
 } from "@/lib/ai/personal-quiz-from-notes";
+import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import {
   extraQuestionLimitResponse,
   reserveExtraQuestionClick,
@@ -89,6 +90,7 @@ export async function POST(request: Request) {
     console.error("[notes/focus-questions counts]", existingError);
   }
 
+  enterAiUsageContext({ userId: user.id, feature: "focus-questions" });
   const quota = await reserveExtraQuestionClick(user);
   if (!quota.allowed) return extraQuestionLimitResponse(quota);
 

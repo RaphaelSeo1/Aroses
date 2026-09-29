@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { parseCoursePayload } from "@/lib/ai/course-payload";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
+import { clampAppendQuizCount } from "@/lib/ai/extra-question-generation";
+import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import {
   extraQuestionLimitResponse,
   reserveExtraQuestionClick,
@@ -37,11 +39,7 @@ export async function POST(request: Request, ctx: Params) {
     /* empty body ok */
   }
 
-  const countRaw = body.count;
-  const count =
-    typeof countRaw === "number" && Number.isFinite(countRaw)
-      ? Math.floor(countRaw)
-      : 8;
+  const count = clampAppendQuizCount(body.count);
 
   const supabase = await createClient();
   const {
@@ -77,6 +75,7 @@ export async function POST(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Module not found." }, { status: 404 });
   }
 
+  enterAiUsageContext({ userId: user.id, feature: "append-quiz" });
   const quota = await reserveExtraQuestionClick(user);
   if (!quota.allowed) return extraQuestionLimitResponse(quota);
 

@@ -4,7 +4,12 @@
  */
 
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { PAID_PLAN_TIERS, PLANS, formatUsdAmount } from "@/lib/billing/plans";
+import {
+  EXTRA_QUESTIONS_DAILY_CAP,
+  PAID_PLAN_TIERS,
+  PLANS,
+  formatUsdAmount,
+} from "@/lib/billing/plans";
 import { salePriceMonthly } from "@/lib/billing/sale";
 import { tf } from "@/lib/i18n/format";
 import type { UiLocale } from "@/lib/i18n/config";
@@ -19,17 +24,19 @@ export type HonestFaqItem = {
 
 const BILLING_ONLY_FAQ_IDS = new Set(["why-pay", "cancel"]);
 
-/** `{litePrice}`, `{litePages}`, `{liteLecture}` … for every paid tier. */
+/** `{litePrice}`, `{litePages}`, `{liteLecture}`, `{liteExtra}` … for every paid tier. */
 function pricingVars(locale: UiLocale): Record<string, string> {
   const vars: Record<string, string> = {};
   for (const tier of PAID_PLAN_TIERS) {
-    const { sourcePages, lectureMinutes } = PLANS[tier].limits;
+    const { sourcePages, lectureMinutes, extraQuestionClicks } = PLANS[tier].limits;
     const hours = Math.round((lectureMinutes / 60) * 10) / 10;
     vars[`${tier}Price`] = formatUsdAmount(salePriceMonthly(tier));
     vars[`${tier}Pages`] = sourcePages.toLocaleString("en-US");
+    vars[`${tier}Extra`] = extraQuestionClicks.toLocaleString("en-US");
     vars[`${tier}Lecture`] =
       (locale as string) === "ko" ? `${hours}시간` : hours === 1 ? "1 hour" : `${hours} hours`;
   }
+  vars.dailyExtra = String(EXTRA_QUESTIONS_DAILY_CAP);
   return vars;
 }
 

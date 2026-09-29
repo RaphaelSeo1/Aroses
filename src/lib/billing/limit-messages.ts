@@ -83,5 +83,22 @@ export function extraQuestionsUsedUpMessage(opts: {
   if (!isPaidTier(opts.tier) || opts.cap <= 0) {
     return "Choose a plan to generate extra practice questions.";
   }
-  return `You've used all ${opts.cap} extra question sets in your ${PLANS[opts.tier].name} plan. They reset on ${resetDateLabel(opts.periodEnd)}.${upgradeHint(opts.tier, "more question sets")}`;
+  return `You've used all ${opts.cap.toLocaleString("en-US")} extra question sets in your ${PLANS[opts.tier].name} plan. They reset on ${resetDateLabel(opts.periodEnd)}.${upgradeHint(opts.tier, "more question sets")}`;
+}
+
+/** "about 5 hours", "about 1 hour", "about 20 minutes" until `resetsAt`. */
+export function timeUntilLabel(resetsAt: string, now: Date = new Date()): string {
+  const ms = Date.parse(resetsAt) - now.getTime();
+  const minutes = Math.max(1, Math.ceil((Number.isFinite(ms) ? ms : 0) / 60_000));
+  if (minutes < 60) return `about ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  return `about ${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
+export function extraQuestionsDailyLimitMessage(opts: {
+  cap: number;
+  resetsAt: string;
+  now?: Date;
+}): string {
+  return `You've made ${opts.cap} extra question sets today, which is the daily limit. You can make more in ${timeUntilLabel(opts.resetsAt, opts.now)}.`;
 }

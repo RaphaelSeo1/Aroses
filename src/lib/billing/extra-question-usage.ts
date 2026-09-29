@@ -1,6 +1,7 @@
 import "server-only";
 import { resolveBillingPeriod } from "@/lib/billing/billing-period";
 import {
+  EXTRA_QUESTIONS_DAILY_LIMIT_CODE,
   EXTRA_QUESTIONS_LIMIT_CODE,
   reserveExtraQuestionQuota,
   type ExtraQuestionQuota,
@@ -22,7 +23,8 @@ import { report } from "@/lib/report-error";
  *   if (!quota.allowed) return extraQuestionLimitResponse(quota);
  *   try { await generate() } catch (e) { await quota.refund(); throw e; }
  *
- * Fails open (unmetered) until migration 119 is applied.
+ * Also enforces the daily cap across both tools. Fails open (unmetered) until
+ * migration 119 (monthly) / 120 (daily) is applied.
  */
 export async function reserveExtraQuestionClick(user: {
   id: string;
@@ -38,9 +40,14 @@ export async function reserveExtraQuestionClick(user: {
     tier: sub.tier,
     period: { startIso: period.startIso, endIso: period.endIso },
     unlimited,
+    dailyStore: planCountMeterStore("extra_questions_daily"),
     onStoreError: (e) => {
       if (e instanceof MeterUnavailableError) {
-        warnPlanMeterMissing("extra_questions");
+        warnPlanMeterMissing(
+          /plan_meter_usage_meter_check/i.test(e.message)
+            ? "extra_questions_daily"
+            : "extra_questions"
+        );
         return;
       }
       void report("billing.extra_questions_meter_failed", e, { userId: user.id });
@@ -55,7 +62,10 @@ export function extraQuestionLimitResponse(
   return Response.json(
     {
       error: quota.message,
-      code: EXTRA_QUESTIONS_LIMIT_CODE,
+      code:
+        quota.reason === "daily"
+          ? EXTRA_QUESTIONS_DAILY_LIMIT_CODE
+          : EXTRA_QUESTIONS_LIMIT_CODE,
       limit: quota.cap,
       used: quota.used,
       resetsAt: quota.resetsAt,

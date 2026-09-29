@@ -3,6 +3,7 @@ import {
   countPersonalQuizTypes,
   generatePersonalQuizFromNotes,
 } from "@/lib/ai/personal-quiz-from-notes";
+import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import type { CourseQuizItem } from "@/types/course";
@@ -28,6 +29,8 @@ export async function POST(request: Request, ctx: Params) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  enterAiUsageContext({ userId: user.id, feature: "personal-quiz" });
 
   const ok = await canAccessStudyMaterial(supabase, user.id, materialId);
   if (!ok) {

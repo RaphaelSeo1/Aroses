@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveBillingPeriod } from "./billing-period.ts";
 import {
+  extraQuestionsDailyLimitMessage,
   extraQuestionsUsedUpMessage,
   formatLectureHours,
   lectureMinutesUsedUpMessage,
@@ -25,8 +26,19 @@ test("limit messages say what ran out, when it resets, and how to get more", () 
   assert.match(lecture, /reset on October 1/);
   assert.match(lecture, /more lecture hours/);
 
-  const extra = extraQuestionsUsedUpMessage({ tier: "lite", cap: 5, periodEnd: OCT_1 });
-  assert.match(extra, /all 5 extra question sets in your Lite plan/);
+  const extra = extraQuestionsUsedUpMessage({ tier: "lite", cap: 50, periodEnd: OCT_1 });
+  assert.match(extra, /all 50 extra question sets in your Lite plan/);
+  assert.match(
+    extraQuestionsUsedUpMessage({ tier: "max", cap: 1000, periodEnd: OCT_1 }),
+    /all 1,000 extra question sets/
+  );
+  const daily = extraQuestionsDailyLimitMessage({
+    cap: 60,
+    resetsAt: "2026-09-16T00:00:00.000Z",
+    now: new Date("2026-09-15T23:40:00.000Z"),
+  });
+  assert.match(daily, /60 extra question sets today, which is the daily limit/);
+  assert.match(daily, /in about 20 minutes/);
 
   const short = sourcePagesShortMessage({ tier: "plus", remaining: 40, needed: 120, periodEnd: OCT_1 });
   assert.match(short, /120 pages/);

@@ -35,7 +35,7 @@ test("a top-tier student gets Max quotas, not admin unlimited", () => {
   assert.equal(max.lectureCapSeconds, 25 * 3600);
   assert.equal(max.voiceCapSeconds, 150 * 60);
   assert.equal(max.chatMessagesCap, 1000);
-  assert.equal(max.extraQuestionsCap, 80);
+  assert.equal(max.extraQuestionsCap, 1000);
 });
 
 test("normal paid and free users keep their plan meters", () => {

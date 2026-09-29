@@ -4,15 +4,16 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
  * Supabase side of the per-period plan meters in `plan_meter_usage`
- * (migration 119): live lecture seconds and extra-question clicks. Same row
- * rules as the chat meter — a newer period resets the counter, an older one
- * keeps counting the stored period.
+ * (migration 119): live lecture seconds and extra-question clicks, plus the
+ * daily extra-question cap (migration 120; its "period" is the UTC day). Same
+ * row rules as the chat meter — a newer period resets the counter, an older
+ * one keeps counting the stored period.
  *
  * Every call throws `MeterUnavailableError` (or returns null) while the
  * migration is missing, so callers can fail open.
  */
 
-export type PlanMeter = "lecture_seconds" | "extra_questions";
+export type PlanMeter = "lecture_seconds" | "extra_questions" | "extra_questions_daily";
 
 type RpcError = { code?: string; message?: string } | null;
 
@@ -25,14 +26,24 @@ export function isMissingPlanMeter(error: RpcError): boolean {
   if (error.code === "PGRST202" || error.code === "42883" || error.code === "42P01") {
     return true;
   }
+  // Before migration 120 the meter check constraint rejects new meter names.
+  if (error.code === "23514" && /plan_meter_usage_meter_check/i.test(error.message ?? "")) {
+    return true;
+  }
   return /plan_meter_(reserve|refund|get|usage)|schema cache/i.test(error.message ?? "");
 }
+
+const METER_MIGRATION: Record<PlanMeter, string> = {
+  lecture_seconds: "119_plan_meter_usage.sql",
+  extra_questions: "119_plan_meter_usage.sql",
+  extra_questions_daily: "120_extra_questions_daily_meter.sql",
+};
 
 export function warnPlanMeterMissing(meter: PlanMeter): void {
   if (warned.has(meter)) return;
   warned.add(meter);
   console.warn(
-    `[billing] ${meter} meter unavailable (apply migration 119_plan_meter_usage.sql) — failing open`
+    `[billing] ${meter} meter unavailable (apply migration ${METER_MIGRATION[meter]}) — failing open`
   );
 }
 

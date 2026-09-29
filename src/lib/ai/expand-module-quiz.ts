@@ -4,13 +4,18 @@ import {
   stripJsonFence,
 } from "@/lib/ai/course-payload";
 import {
+  clampAppendQuizCount,
+  EXTRA_QUESTION_MAX_TOKENS,
+  extraQuestionModel,
+} from "@/lib/ai/extra-question-generation";
+import { salvageJsonArray } from "@/lib/ai/personal-quiz-from-notes";
+import { recordAiUsage } from "@/lib/billing/ai-usage";
+import {
   DEFAULT_COURSE_OUTPUT_LANGUAGE,
   formatOutputLanguageGenerationBlock,
   type CourseOutputLanguage,
 } from "@/lib/course-output-language";
 import type { CourseModule, CourseQuizItem } from "@/types/course";
-
-const MODEL = "claude-sonnet-4-6";
 
 const MAX_LESSON_CHARS = 28_000;
 
@@ -38,7 +43,7 @@ export async function generateAdditionalModuleQuizItems(
     throw new Error("Missing ANTHROPIC_API_KEY");
   }
 
-  const n = Math.min(16, Math.max(4, Math.floor(count)));
+  const n = clampAppendQuizCount(count);
   const stems = module.quiz.map((q) => q.question.trim()).filter(Boolean);
   const stemHint =
     stems.length > 0
@@ -65,11 +70,17 @@ Aim for roughly half MCQ and half free_response. Questions must test understandi
 
   const anthropic = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 0 });
 
+  const model = extraQuestionModel();
   const msg = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 8192,
+    model,
+    max_tokens: EXTRA_QUESTION_MAX_TOKENS,
     temperature: 0.35,
     messages: [{ role: "user", content: prompt }],
+  });
+  recordAiUsage({
+    model,
+    inputTokens: msg.usage?.input_tokens,
+    outputTokens: msg.usage?.output_tokens,
   });
 
   const block = msg.content.find((b) => b.type === "text");
@@ -81,7 +92,11 @@ Aim for roughly half MCQ and half free_response. Questions must test understandi
   try {
     parsed = JSON.parse(stripJsonFence(block.text));
   } catch {
-    throw new Error("Claude did not return valid JSON");
+    // A batch cut off at the token limit still has complete leading items.
+    parsed = salvageJsonArray(stripJsonFence(block.text));
+    if ((parsed as unknown[]).length === 0) {
+      throw new Error("Claude did not return valid JSON");
+    }
   }
 
   if (!Array.isArray(parsed)) {

@@ -9,6 +9,9 @@ import {
 
 type BillingCopy = Dictionary["billing"];
 
+/** Rough questions per extra question set, for student-facing copy only. */
+export const QUESTIONS_PER_EXTRA_SET = 8;
+
 export function planDisplayName(t: BillingCopy, tier: PlanTier): string {
   const names: Record<PlanTier, string> = {
     free: t.planFree,
@@ -65,7 +68,10 @@ export function planCardCopy(
     tf(t.planHighlightPages, { pages: limits.sourcePages.toLocaleString("en-US") }),
     tf(t.planHighlightLecture, { hours: hoursLabel(t, limits.lectureMinutes) }),
     tf(t.planHighlightVoice, { minutes: limits.voiceMinutes }),
-    tf(t.planHighlightExtraQuestions, { count: limits.extraQuestionClicks }),
+    tf(t.planHighlightExtraQuestions, {
+      count: limits.extraQuestionClicks.toLocaleString("en-US"),
+      questions: (limits.extraQuestionClicks * QUESTIONS_PER_EXTRA_SET).toLocaleString("en-US"),
+    }),
     tf(t.planHighlightPdfs, { count: limits.maxPdfsPerCourse }),
   ];
   if (tier === "lite") highlights.push(t.planHighlightCore);

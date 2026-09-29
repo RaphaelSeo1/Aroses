@@ -20,6 +20,7 @@
  *   PLAN_LIMIT_<TIER>_EXTRA_QUESTIONS  extra-question clicks per billing period
  *   PLAN_LIMIT_<TIER>_DAILY_BUILD_USD  rolling 24h course-build AI spend
  *   CHAT_LIMIT_<TIER>_MESSAGES / _SONNET  (see chat-limits.ts)
+ *   EXTRA_QUESTIONS_DAILY_CAP          extra-question clicks per UTC day (all tiers)
  * e.g. PLAN_LIMIT_STUDENT_PAGES=700. Overrides only apply on the server;
  * pricing cards show the defaults below.
  *
@@ -191,7 +192,7 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
       voiceMinutes: 10,
       chatMessages: 100,
       chatPremiumMessages: 50,
-      extraQuestionClicks: 5,
+      extraQuestionClicks: 50,
       dailyCourseBuildUsd: 1,
       courseGenerations: null,
       maxPdfsPerCourse: 3,
@@ -209,7 +210,7 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
       voiceMinutes: 20,
       chatMessages: 200,
       chatPremiumMessages: 50,
-      extraQuestionClicks: 15,
+      extraQuestionClicks: 120,
       dailyCourseBuildUsd: 1.5,
       courseGenerations: null,
       maxPdfsPerCourse: 5,
@@ -227,7 +228,7 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
       voiceMinutes: 45,
       chatMessages: 400,
       chatPremiumMessages: 50,
-      extraQuestionClicks: 30,
+      extraQuestionClicks: 250,
       dailyCourseBuildUsd: 3,
       courseGenerations: null,
       maxPdfsPerCourse: 10,
@@ -245,7 +246,7 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
       voiceMinutes: 90,
       chatMessages: 600,
       chatPremiumMessages: 50,
-      extraQuestionClicks: 50,
+      extraQuestionClicks: 500,
       dailyCourseBuildUsd: 5,
       courseGenerations: null,
       maxPdfsPerCourse: 12,
@@ -263,7 +264,7 @@ export const PLANS: Record<PlanTier, PlanConfig> = {
       voiceMinutes: 150,
       chatMessages: 1_000,
       chatPremiumMessages: 50,
-      extraQuestionClicks: 80,
+      extraQuestionClicks: 1_000,
       dailyCourseBuildUsd: 8,
       courseGenerations: null,
       maxPdfsPerCourse: 15,
@@ -413,6 +414,14 @@ export function sourcePageCap(tier: PlanTier, env?: Env): number {
 
 export function extraQuestionCap(tier: PlanTier, env?: Env): number {
   return Math.max(0, planLimits(tier, env).extraQuestionClicks);
+}
+
+/** Extra-question clicks per UTC day on every tier (abuse guard). */
+export const EXTRA_QUESTIONS_DAILY_CAP = 60;
+
+/** Daily extra-question clicks; `EXTRA_QUESTIONS_DAILY_CAP` overrides. */
+export function extraQuestionDailyCap(env: Env = process.env): number {
+  return envCount(env, "EXTRA_QUESTIONS_DAILY_CAP") ?? EXTRA_QUESTIONS_DAILY_CAP;
 }
 
 export function maxPdfsPerCourse(tier: PlanTier): number {

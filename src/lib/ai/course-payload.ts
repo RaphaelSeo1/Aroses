@@ -8,6 +8,10 @@ import type {
   KeyTerm,
   SourceRef,
 } from "@/types/course";
+import {
+  stripChoiceLetterPrefixes,
+  stripCorrectLetterPrefix,
+} from "@/lib/ai/quiz-choice-letters";
 import { stripStrikethroughCorrections } from "@/lib/ai/strip-strikethrough";
 
 export function stripJsonFence(raw: string): string {
@@ -52,15 +56,18 @@ function normalizeQuizMcq(raw: RawQuiz): CourseQuizMcqItem {
   ) {
     throw new Error("Invalid quiz item shape");
   }
-  const choices = raw.choices.map((c) =>
+  const rawChoices = raw.choices.map((c) =>
     typeof c === "string" ? c : String(c)
   ) as [string, string, string, string];
-  const correctIndex = resolveCorrectIndex(raw.correct, choices);
+  const choices = stripChoiceLetterPrefixes(rawChoices);
+  const correct =
+    choices === rawChoices ? raw.correct.trim() : stripCorrectLetterPrefix(raw.correct);
+  const correctIndex = resolveCorrectIndex(correct, choices);
   return {
     type: "mcq",
     question: raw.question,
     choices,
-    correct: raw.correct.trim(),
+    correct,
     correctIndex,
     explanation: raw.explanation,
   };
