@@ -15,12 +15,16 @@ import {
   type FigureAsset,
   type PlacedLesson,
 } from "./figures.ts";
-import { builderStrings, locatorKind, resolveBuildLanguage, visibleLength, type BuildLanguagePlan, type BuilderStrings } from "./language.ts";
+import { builderStrings, detectLanguage, locatorKind, resolveBuildLanguage, visibleLength, type BuildLanguagePlan, type BuilderStrings } from "./language.ts";
 import type { MeteredRequest } from "./metered-call.ts";
 import type { BuildPage, BuildSourceInfo } from "./outline.ts";
 import type { BuildPlan, PlanModule } from "./plan.ts";
 import { planSummary } from "./plan.ts";
-import { CONTENT_RULES, MODULE_TOOL, SINGLE_MODULE_TOOL } from "./prompts.ts";
+import { pageCoverage } from "./coverage.ts";
+import { numberBacking, stripUnbackedNumbers, unbackedNumbers, type NumberBacking } from "./numbers.ts";
+import { pageWeight } from "./outline.ts";
+import { CONTENT_RULES, GAP_TOOL, MODULE_TOOL, SINGLE_MODULE_TOOL } from "./prompts.ts";
+import { ensureTables } from "./tables.ts";
 import { fixLessonText, fixShortText } from "./text-rules.ts";
 
 export type WriterContext = {
@@ -158,9 +162,23 @@ function taskLines(ctx: WriterContext): string {
   const noun = unit.unit === "char" ? "characters" : "words";
   return [
     `Lessons: ${lessons} (use 2–5 only if the content clearly needs a different number). Each lesson's content is at most ${perLesson} ${noun}; stay under ${words} ${noun} across all lessons. Spend them on explanation, not on key terms or examples.`,
+    `Cover every page: together the lessons' first_page–last_page ranges include every page (${pageList(ctx.module.pages)}), and each page's facts, numbers and examples are taught.`,
     `Quiz: exactly ${ctx.module.quizCount} questions, ${mcq} multiple_choice then ${free} free_response.`,
     languageLine(lang),
   ].join("\n");
+}
+
+/** "p3–p9, p12" */
+export function pageList(pages: number[]): string {
+  const sorted = [...new Set(pages)].sort((a, b) => a - b);
+  const parts: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j]! + 1) j++;
+    parts.push(j > i ? `p${sorted[i]}–p${sorted[j]}` : `p${sorted[i]}`);
+    i = j;
+  }
+  return parts.join(", ");
 }
 
 export function moduleRequest(ctx: WriterContext): MeteredRequest {
@@ -316,46 +334,97 @@ export type ConvertedModule = {
   notes: string[];
 };
 
+type ConvertContext = Pick<WriterContext, "module" | "pages" | "sources" | "figures" | "assetPrefix" | "outputLanguage" | "language">;
+
+/** Numbers the source states: every page's text plus what its figures show. */
+function sourceBacking(ctx: Pick<WriterContext, "pages" | "figures">): NumberBacking {
+  const figureText = (ctx.figures ?? []).map((f) => `${f.label ?? ""} ${f.description ?? ""}`).join("\n");
+  return numberBacking(`${ctx.pages.map((p) => p.text).join("\n")}\n${figureText}`);
+}
+
+/**
+ * Stretches lesson page ranges so together they span every content page of
+ * the module: a page between two lessons joins the one before it, a page
+ * before the first lesson joins the first.
+ */
+export function spanModulePages(ranges: Array<{ first: number; last: number }>, modulePages: number[]): void {
+  if (ranges.length === 0) return;
+  const lo = Math.min(...modulePages);
+  const hi = Math.max(...modulePages);
+  for (const r of ranges) {
+    if (!Number.isFinite(r.first) || r.first < lo || r.first > hi) r.first = Number.isFinite(r.last) && r.last >= lo && r.last <= hi ? r.last : lo;
+    if (!Number.isFinite(r.last) || r.last < r.first || r.last > hi) r.last = r.first;
+  }
+  for (const g of modulePages) {
+    if (ranges.some((r) => g >= r.first && g <= r.last)) continue;
+    const before = ranges.filter((r) => r.last < g).sort((a, b) => b.last - a.last)[0];
+    if (before) before.last = g;
+    else ranges.reduce((a, b) => (a.first <= b.first ? a : b)).first = g;
+  }
+}
+
 /** Maps the writer's tool input onto the app's `CourseModule`. */
-export function toCourseModule(
-  input: unknown,
-  ctx: Pick<WriterContext, "module" | "pages" | "sources" | "figures" | "assetPrefix" | "outputLanguage" | "language">,
-  title: string
-): ConvertedModule {
+/**
+ * Labels in the language the writer actually used, for sources whose language
+ * wasn't recognised (the writer was told to match the pages).
+ */
+export function writtenStrings(input: Record<string, unknown>): BuilderStrings {
+  const lessons = Array.isArray(input.lessons) ? input.lessons : [];
+  const text = lessons
+    .map((l) => (l && typeof l === "object" ? `${(l as Record<string, unknown>).title ?? ""}\n${(l as Record<string, unknown>).content ?? ""}` : ""))
+    .join("\n");
+  return builderStrings(detectLanguage(text));
+}
+
+export function toCourseModule(input: unknown, ctx: ConvertContext, title: string): ConvertedModule {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const lang = languageOf(ctx);
-  const captions = { converting: lang.converting, fromPage: lang.strings.figureFromPage };
+  const strings = lang.output ? lang.strings : writtenStrings(o);
+  const captions = { converting: lang.converting, fromPage: strings.figureFromPage };
   const notes: string[] = [];
   const figures = new Map((ctx.figures ?? []).map((f) => [f.id, f]));
   const usedFigures = new Set<string>();
   const droppedFigures: string[] = [];
+  const invented: string[] = [];
   const pageText = (g: number) => ctx.pages.find((p) => p.g === g)?.text ?? "";
+  const backing = sourceBacking(ctx);
+  const clean = (text: string) => {
+    const r = stripUnbackedNumbers(text, backing);
+    invented.push(...r.removed);
+    return r.text;
+  };
+  const faithful = (text: string) => {
+    const bad = unbackedNumbers(text, backing);
+    invented.push(...bad);
+    return bad.length === 0;
+  };
 
-  const ordered: Array<{ lesson: CourseLesson; start: number; placed: PlacedLesson }> = [];
+  type Draft = {
+    title: string;
+    first: number;
+    last: number;
+    order: number;
+    placed: PlacedLesson;
+    keyTerms: KeyTerm[];
+    examples: string[];
+  };
+  const drafts: Draft[] = [];
   for (const raw of Array.isArray(o.lessons) ? o.lessons : []) {
     if (!raw || typeof raw !== "object") continue;
     const l = raw as Record<string, unknown>;
     const lessonTitle = fixShortText(s(l.title));
-    const placed = placeFigures(fixLessonText(s(l.content)), figures, usedFigures, pageText, ctx.assetPrefix ?? "", captions);
-    const content = placed.content;
+    const placed = placeFigures(clean(fixLessonText(s(l.content))), figures, usedFigures, pageText, ctx.assetPrefix ?? "", captions);
     droppedFigures.push(...placed.dropped);
-    if (!lessonTitle || visibleLength(content) < 40) continue;
+    if (!lessonTitle || visibleLength(placed.content) < 40) continue;
     const examples = (Array.isArray(l.examples) ? l.examples : [])
       .map((e) => fixShortText(s(e)))
-      .filter((e) => visibleLength(e) >= 4)
+      .filter((e) => visibleLength(e) >= 4 && faithful(e))
       .slice(0, 2);
-    const sources = lessonSources(
-      Number(l.first_page),
-      Number(l.last_page),
-      ctx.module.pages,
-      ctx.pages,
-      ctx.sources,
-      lang.strings
-    );
+    const keyTerms = toKeyTerms(l.key_terms).filter((k) => faithful(k.definition));
     const start = Number(l.first_page);
     const end = Number(l.last_page);
     const lessonFigures: PlacedLesson = {
-      content,
+      content: placed.content,
       firstPage: Number.isFinite(start) ? start : -1,
       lastPage: Number.isFinite(end) ? Math.max(end, start) : Number.isFinite(start) ? start : -1,
       assets: placed.assets,
@@ -367,23 +436,33 @@ export function toCourseModule(
     droppedFigures.push(
       ...placeChosenFigures(lessonFigures, chosen, figures, usedFigures, pageText, ctx.assetPrefix ?? "", captions)
     );
-    ordered.push({
-      start: Number.isFinite(start) ? start : Number.MAX_SAFE_INTEGER,
+    drafts.push({
+      title: lessonTitle,
+      first: start,
+      last: end,
+      order: Number.isFinite(start) ? start : Number.MAX_SAFE_INTEGER,
       placed: lessonFigures,
-      lesson: {
-        title: lessonTitle,
-        content,
-        key_terms: toKeyTerms(l.key_terms),
-        examples,
-        ...(sources.length ? { sources } : {}),
-      },
+      keyTerms,
+      examples,
     });
   }
   if (droppedFigures.length) notes.push(`figures dropped ${droppedFigures.join(",")}`);
   // Lessons follow the source's order even when the writer reorders them.
-  const sorted = ordered.map((x, i) => ({ ...x, i })).sort((a, b) => a.start - b.start || a.i - b.i);
+  const sorted = drafts.map((d, i) => ({ d, i })).sort((a, b) => a.d.order - b.d.order || a.i - b.i).map((x) => x.d);
+  const contentPages = ctx.module.pages.filter((g) => pageWeight(pageText(g)) > 0);
+  spanModulePages(sorted, contentPages.length ? contentPages : ctx.module.pages);
+  for (const d of sorted) {
+    d.placed.firstPage = d.first;
+    d.placed.lastPage = d.last;
+  }
+  const tableFixes = ensureTables(
+    sorted.map((d) => d.placed),
+    ctx.module.pages.map((g) => ({ g, text: pageText(g) })),
+    { converting: lang.converting }
+  );
+  if (tableFixes.length) notes.push(`tables ${tableFixes.map((f) => `${f.action} p${f.page}`).join(",")}`);
   const auto = autoPlaceFigures(
-    sorted.map((x) => x.placed),
+    sorted.map((d) => d.placed),
     ctx.figures ?? [],
     usedFigures,
     pageText,
@@ -391,15 +470,41 @@ export function toCourseModule(
     captions
   );
   if (auto.length) notes.push(`figures auto-placed ${auto.join(",")}`);
-  const lessons = sorted.map((x) =>
-    x.placed.assets.length ? { ...x.lesson, visual_assets: x.placed.assets } : x.lesson
-  );
+  const lessons: CourseLesson[] = sorted.map((d) => {
+    const sources = lessonSources(d.first, d.last, ctx.module.pages, ctx.pages, ctx.sources, strings);
+    return {
+      title: d.title,
+      content: d.placed.content,
+      key_terms: d.keyTerms,
+      examples: d.examples,
+      ...(sources.length ? { sources } : {}),
+      ...(d.placed.assets.length ? { visual_assets: d.placed.assets } : {}),
+    };
+  });
   if (lessons.length === 0) throw new ModuleOutputError("The writer returned no usable lessons.");
 
-  const quiz = (Array.isArray(o.quiz) ? o.quiz : [])
-    .map((q) => toQuizItem(q, lang.strings.quizFallback))
-    .filter((q): q is CourseQuizItem => q != null);
   const target = ctx.module.quizCount;
+  const keepAtLeast = Math.min(6, target);
+  const parsed = (Array.isArray(o.quiz) ? o.quiz : [])
+    .map((q) => toQuizItem(q, strings.quizFallback))
+    .filter((q): q is CourseQuizItem => q != null)
+    .map((q) => ({ ...q, explanation: clean(q.explanation) || strings.quizFallback }));
+  // Wrong choices may hold made-up numbers on purpose; the question and its answer may not.
+  const claims = (q: CourseQuizItem) =>
+    q.type === "free_response" ? `${q.question}\n${q.referenceAnswer}` : `${q.question}\n${q.choices[q.correctIndex]}`;
+  const quiz: CourseQuizItem[] = [];
+  let droppable = parsed.length - keepAtLeast;
+  for (const q of parsed) {
+    const bad = unbackedNumbers(claims(q), backing);
+    if (bad.length && droppable > 0) {
+      invented.push(...bad);
+      droppable -= 1;
+      continue;
+    }
+    if (bad.length) notes.push(`quiz kept with unsupported ${bad.join(",")}`);
+    quiz.push(q);
+  }
+  if (invented.length) notes.push(`numbers removed ${[...new Set(invented)].join(",")}`);
   if (quiz.length < Math.min(3, target)) {
     throw new ModuleOutputError(`The writer returned ${quiz.length} usable quiz questions.`);
   }
@@ -410,4 +515,79 @@ export function toCourseModule(
     module: { id: ctx.module.id, title: title || lessons[0].title, lessons, quiz: quiz.slice(0, 10) },
     notes,
   };
+}
+
+/** Module pages with content whose facts the lessons didn't teach. */
+export function uncoveredPages(module: CourseModule, ctx: Pick<WriterContext, "module" | "pages" | "outputLanguage" | "language">): number[] {
+  const lang = languageOf(ctx);
+  const written = module.lessons
+    .map((l) => [l.title, l.content, ...l.examples, ...l.key_terms.map((k) => `${k.term} ${k.definition}`)].join("\n"))
+    .join("\n");
+  const pages = ctx.pages.filter((p) => ctx.module.pages.includes(p.g) && pageWeight(p.text) > 0);
+  return pageCoverage(pages, ctx.pages, written, lang.converting)
+    .filter((c) => !c.covered)
+    .map((c) => c.g);
+}
+
+/** One extra call that writes lessons for pages the module's lessons missed. */
+export function gapRequest(ctx: WriterContext, missing: number[], existing: CourseModule): MeteredRequest {
+  const lang = languageOf(ctx);
+  const unit = lengthUnit(lang);
+  const weight = ctx.pages.filter((p) => missing.includes(p.g)).reduce((n, p) => n + pageWeight(p.text), 0);
+  const perPage = Math.max(1, ctx.module.targetTokens / Math.max(1, ctx.module.weight));
+  const target = Math.round(Math.max(500, weight * perPage));
+  const words = Math.max(unit.unit === "char" ? 160 : 80, Math.round(target / unit.tokensPerUnit / 10) * 10);
+  const noun = unit.unit === "char" ? "characters" : "words";
+  const text = [
+    `Module ${ctx.module.id}: "${ctx.module.title}". Its lessons so far: ${existing.lessons.map((l) => l.title).join("; ")}.`,
+    `They missed these pages (${pageList(missing)}). Write lessons that teach what these pages say: every fact, number, example and table on them. Don't repeat what the existing lessons already teach. At most ${words} ${noun} in total; one lesson per group of neighbouring pages. If the pages hold only logistics or unsolved activities, return no lessons.`,
+    languageLine(lang),
+    "",
+    `Pages:\n${pagesBlock({ ...ctx, module: { ...ctx.module, pages: missing }, figures: [] })}`,
+  ].join("\n");
+  return {
+    max_tokens: Math.round(target * 1.5 + 400),
+    system: CONTENT_RULES,
+    tools: [GAP_TOOL],
+    tool_choice: { type: "tool", name: GAP_TOOL.name },
+    messages: [{ role: "user", content: text }],
+  };
+}
+
+type RawLesson = Record<string, unknown>;
+
+function rawPages(l: RawLesson): [number, number] {
+  const a = Number(l.first_page);
+  const b = Number(l.last_page);
+  return [Number.isFinite(a) ? a : 0, Number.isFinite(b) ? b : Number.isFinite(a) ? a : 0];
+}
+
+/**
+ * The writer's module plus the gap lessons. A module keeps at most five
+ * lessons, so past that a gap lesson joins the lesson nearest its pages as
+ * a titled section.
+ */
+export function mergeGapLessons(input: unknown, gapLessons: unknown): Record<string, unknown> {
+  const o = { ...((input && typeof input === "object" ? input : {}) as Record<string, unknown>) };
+  const lessons = (Array.isArray(o.lessons) ? o.lessons : []).map((l) => ({ ...(l as RawLesson) }));
+  for (const raw of Array.isArray(gapLessons) ? gapLessons : []) {
+    if (!raw || typeof raw !== "object") continue;
+    const g = raw as RawLesson;
+    if (lessons.length < 5) {
+      lessons.push(g);
+      continue;
+    }
+    const [gf, gl] = rawPages(g);
+    const nearest = lessons.reduce((best, l) => {
+      const dist = (x: RawLesson) => Math.abs(rawPages(x)[1] - gf);
+      return dist(l) < dist(best) ? l : best;
+    });
+    const [nf, nl] = rawPages(nearest);
+    nearest.content = `${s(nearest.content).trimEnd()}\n\n### ${s(g.title)}\n\n${s(g.content).trim()}`;
+    nearest.first_page = Math.min(nf || gf, gf || nf);
+    nearest.last_page = Math.max(nl, gl);
+    nearest.key_terms = [...(Array.isArray(nearest.key_terms) ? nearest.key_terms : []), ...(Array.isArray(g.key_terms) ? g.key_terms : [])];
+  }
+  o.lessons = lessons;
+  return o;
 }

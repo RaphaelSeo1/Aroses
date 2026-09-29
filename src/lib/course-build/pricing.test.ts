@@ -10,13 +10,13 @@ import {
   worstCaseCostUsd,
 } from "./pricing.ts";
 
-test("config defaults: off, Haiku 4.5, 200 tokens/page, $0.0025/page, $0.02 floor", () => {
+test("config defaults: off, Haiku 4.5, 200 tokens/page, $0.0025/page, $0.06 floor", () => {
   const c = readCourseBuildConfig({});
   assert.equal(c.enabled, false);
   assert.equal(c.model, "claude-haiku-4-5");
   assert.equal(c.outputTokensPerPage, 200);
   assert.equal(c.capUsdPerPage, 0.0025);
-  assert.equal(c.minCapUsd, 0.02);
+  assert.equal(c.minCapUsd, 0.06);
   assert.equal(c.maxStepAttempts, 3);
   assert.equal(readCourseBuildConfig({ COURSE_BUILD_ENABLED: "true" }).enabled, true);
   assert.equal(readCourseBuildConfig({ COURSE_BUILD_ENABLED: "yes please" }).enabled, false);
@@ -26,9 +26,9 @@ test("config defaults: off, Haiku 4.5, 200 tokens/page, $0.0025/page, $0.02 floo
 test("build cap is pages × per-page cap with a floor", () => {
   const c = readCourseBuildConfig({});
   assert.equal(buildSpendCapUsd(40, c), 0.1);
-  assert.equal(buildSpendCapUsd(3, c), 0.02);
-  assert.equal(buildSpendCapUsd(0, c), 0.02);
-  assert.equal(buildSpendCapUsd(Number.NaN, c), 0.02);
+  assert.equal(buildSpendCapUsd(3, c), 0.06);
+  assert.equal(buildSpendCapUsd(0, c), 0.06);
+  assert.equal(buildSpendCapUsd(Number.NaN, c), 0.06);
 });
 
 test("model prices match Anthropic's published Haiku 4.5 rates", () => {

@@ -46,6 +46,11 @@ export type DriveOptions = {
   buildLeaseSeconds?: number;
   stepLeaseSeconds?: number;
   heartbeatMs?: number;
+  /**
+   * How often a cancel is checked while steps run, so a canceled build stops
+   * its paid AI calls within seconds instead of at the next heartbeat.
+   */
+  cancelPollMs?: number;
   /** Seconds to wait before retry N (1-based) of a failed step. */
   backoffSeconds?: (attempt: number) => number;
   /**
@@ -113,6 +118,7 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
     buildLeaseSeconds = 90,
     stepLeaseSeconds = 180,
     heartbeatMs = 20_000,
+    cancelPollMs = 3_000,
     backoffSeconds = DEFAULT_BACKOFF,
     maxIdleWaitMs = 0,
     sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
@@ -156,6 +162,26 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
     })();
   }, heartbeatMs);
   (heartbeat as { unref?: () => void }).unref?.();
+
+  // One light read, only while steps run; stops polling once a cancel is seen.
+  let polling = false;
+  const cancelPoll = setInterval(() => {
+    if (polling || canceled || leaseLost || inflight.size === 0) return;
+    polling = true;
+    void store
+      .progress(buildId)
+      .then((p) => {
+        if (p?.cancelRequested) {
+          canceled = true;
+          abortAll();
+        }
+      })
+      .catch((err) => log("course-build cancel check failed", { buildId, error: errMessage(err) }))
+      .finally(() => {
+        polling = false;
+      });
+  }, cancelPollMs);
+  (cancelPoll as { unref?: () => void }).unref?.();
 
   const finish = async (status: BuildTerminalStatus, code: string | null, message: string | null) => {
     const res = await store.finishBuild(buildId, owner, status, code, message);
@@ -299,6 +325,7 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
     }
   } finally {
     clearInterval(heartbeat);
+    clearInterval(cancelPoll);
     if (inflight.size > 0) {
       abortAll();
       await Promise.allSettled([...inflight.values()].map((x) => x.promise));

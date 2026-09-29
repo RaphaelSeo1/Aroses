@@ -22,9 +22,12 @@ import { builderStrings, locatorKind, resolveBuildLanguage, type BuildLanguagePl
 import { meteredClaudeCall, type MeteredCallDeps, type MessagesClient } from "./metered-call.ts";
 import {
   ModuleOutputError,
+  gapRequest,
+  mergeGapLessons,
   moduleRequest,
   singleModuleRequest,
   toCourseModule,
+  uncoveredPages,
   type WriterContext,
 } from "./module.ts";
 import { compactOutline, numberPages, type BuildPage, type BuildSourceInfo } from "./outline.ts";
@@ -37,7 +40,7 @@ import {
   totalContentWeight,
   type BuildPlan,
 } from "./plan.ts";
-import { PLAN_RULES, PLAN_TOOL } from "./prompts.ts";
+import { GAP_TOOL, PLAN_RULES, PLAN_TOOL } from "./prompts.ts";
 import { buildSpendCapUsd } from "./pricing.ts";
 import type { StepHandler, StepHandlers } from "./runner.ts";
 import type { CourseBuildStore, NewStep } from "./store.ts";
@@ -586,7 +589,27 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
     }
     const input = toolInput(message, tool) as Record<string, unknown>;
     const moduleTitle = single ? String(input.module_title ?? "").trim() : mod.title;
-    const converted = toCourseModule(input, writer, moduleTitle);
+    let converted = toCourseModule(input, writer, moduleTitle);
+    const missing = uncoveredPages(converted.module, writer);
+    if (missing.length > 0) {
+      // One bounded call for the pages the lessons skipped; on any failure the module stands as written.
+      try {
+        const gap = await meteredClaudeCall(
+          metered,
+          { buildId: step.buildId, stepId: step.id, userId: build.userId, purpose: `module:${mod.id}:gap` },
+          gapRequest(writer, missing, converted.module),
+          { signal: ctx.signal }
+        );
+        costUsd += gap.costUsd;
+        const extra = (toolInput(gap.message, GAP_TOOL.name) as { lessons?: unknown }).lessons;
+        const merged = toCourseModule(mergeGapLessons(input, extra), writer, moduleTitle);
+        const still = uncoveredPages(merged.module, writer);
+        converted = { ...merged, notes: [...merged.notes, `gap pages ${missing.join(",")}${still.length ? `, still ${still.join(",")}` : ""}`] };
+      } catch (err) {
+        if (ctx.signal.aborted) throw err;
+        converted.notes.push(`gap pages ${missing.join(",")} not filled: ${errText(err)}`);
+      }
+    }
     try {
       deps.validatePayload({ title: "check", description: "", modules: [converted.module] });
     } catch (err) {

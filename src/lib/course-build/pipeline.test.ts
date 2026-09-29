@@ -178,7 +178,8 @@ test("writer output maps onto CourseModule with sources, difficulty and text fix
   const { module } = toCourseModule(moduleInput([2, 5]), { module: plan.modules[0], pages, sources }, "Glycolysis");
   assert.equal(module.id, 1);
   assert.equal(module.lessons[0].content, "Glycolysis spends 2 ATP in steps 1–3 before any payoff.");
-  assert.deepEqual(module.lessons[0].sources, [{ fileName: "lec.pdf", locator: "pages 2–5" }]);
+  // The module's only lesson must span every content page, not just the ones the writer named.
+  assert.deepEqual(module.lessons[0].sources, [{ fileName: "lec.pdf", locator: "pages 1–10" }]);
   const mcq = module.quiz[0];
   assert.equal(mcq.type, "mcq");
   assert.equal((mcq as { correct: string }).correct, "B");
@@ -348,6 +349,46 @@ test("short sources skip the planning call and become one module", async () => {
   const final = mem.published.find((p) => p.final)!;
   assert.equal(final.payload.title, "Redox");
   assert.equal(final.payload.modules[0].title, "Oxidation and Reduction");
+});
+
+test("a page the writer skipped is written by one extra metered call and joins the course", async () => {
+  const { userId, buildId } = await newBuild();
+  const topics = [
+    "Oxidation is the loss of electrons; the species that is oxidised acts as the reducing agent in every redox reaction.",
+    "Reduction is the gain of electrons; oxidising agents such as permanganate accept electrons and are themselves reduced.",
+    "Oxidation numbers track electrons: assign hydrogen plus one and oxygen minus two, then balance the remaining atoms.",
+    "Galvanic cells separate the half reactions so electrons flow through a wire from the zinc anode to the copper cathode.",
+  ];
+  const mem = memoryData(topics.map((text, i) => ({ n: i + 1, text: `${text} ${text}` })));
+  const tools: string[] = [];
+  const client: MessagesClient = {
+    messages: {
+      create: async (body) => {
+        const tool = (body.tool_choice as { name: string }).name;
+        tools.push(tool);
+        if (tool === "submit_missing_lessons") {
+          assert.match(body.messages[0].content as string, /\[p4\]/);
+          assert.doesNotMatch(body.messages[0].content as string, /\[p1\]/);
+          return toolMessage(tool, {
+            lessons: [{ title: "Galvanic Cells", content: topics[3], key_terms: [], examples: [], first_page: 4, last_page: 4 }],
+          });
+        }
+        const lessons = [0, 1, 2].map((i) => ({ title: `Topic ${i + 1}`, content: topics[i], key_terms: [], examples: [], first_page: i + 1, last_page: i + 1 }));
+        return toolMessage(tool, { title: "Redox", description: "Electron transfer.", module_title: "Redox", ...moduleInput([1, 3]), lessons });
+      },
+    },
+  };
+  const handlers = createStepHandlers({ store: t.store, client, config, data: mem.data(buildId, userId), extract: mem.extract, validatePayload: validate });
+  const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50 });
+  assert.deepEqual(out, { outcome: "finished", status: "complete" });
+  assert.deepEqual(tools, ["submit_course", "submit_missing_lessons"]);
+  const lessons = mem.published.find((p) => p.final)!.payload.modules[0].lessons;
+  assert.deepEqual(lessons.map((l) => l.title), ["Topic 1", "Topic 2", "Topic 3", "Galvanic Cells"]);
+  assert.equal(lessons[3]?.sources?.[0]?.locator, "page 4");
+  const ledger = await t.ledger(buildId);
+  assert.equal(ledger.length, 2);
+  assert.ok(ledger.every((l) => l.status === "settled"));
+  assert.match(String(ledger[1]!.purpose), /:gap$/);
 });
 
 test("a source with no text fails with a plain message and no AI call", async () => {

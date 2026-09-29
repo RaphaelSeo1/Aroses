@@ -4,7 +4,7 @@
  */
 
 export type BuildLanguageCode =
-  | "en" | "es" | "fr" | "de" | "pt" | "it" | "ru" | "tr" | "vi" | "id" | "hi" | "ar" | "ko" | "ja" | "zh" | "zh-Hant";
+  | "en" | "es" | "fr" | "de" | "pt" | "it" | "ru" | "tr" | "vi" | "id" | "hi" | "ar" | "fa" | "ur" | "uk" | "ko" | "ja" | "zh" | "zh-Hant";
 
 export type BuildLanguage = {
   code: BuildLanguageCode;
@@ -34,6 +34,9 @@ export const BUILD_LANGUAGES: readonly BuildLanguage[] = [
   { code: "id", name: "Indonesian", native: "Bahasa Indonesia", dir: "ltr", tokenRatio: 1.75, unit: "word", tokensPerUnit: 2.65 },
   { code: "hi", name: "Hindi", native: "हिन्दी", dir: "ltr", tokenRatio: 3.96, unit: "word", tokensPerUnit: 4.45 },
   { code: "ar", name: "Arabic", native: "العربية", dir: "rtl", tokenRatio: 2.89, unit: "word", tokensPerUnit: 4.3 },
+  { code: "fa", name: "Persian", native: "فارسی", dir: "rtl", tokenRatio: 3.07, unit: "word", tokensPerUnit: 3.55 },
+  { code: "ur", name: "Urdu", native: "اردو", dir: "rtl", tokenRatio: 3.73, unit: "word", tokensPerUnit: 3.73 },
+  { code: "uk", name: "Ukrainian", native: "Українська", dir: "ltr", tokenRatio: 2.1, unit: "word", tokensPerUnit: 3.28 },
   { code: "ko", name: "Korean", native: "한국어", dir: "ltr", tokenRatio: 2.45, unit: "word", tokensPerUnit: 4.45 },
   { code: "ja", name: "Japanese", native: "日本語", dir: "ltr", tokenRatio: 1.8, unit: "char", tokensPerUnit: 1.1 },
   { code: "zh", name: "Chinese (Simplified)", native: "简体中文", dir: "ltr", tokenRatio: 1.62, unit: "char", tokensPerUnit: 1.18 },
@@ -181,8 +184,13 @@ const STOP_INDEX: Map<string, BuildLanguageCode> = (() => {
 })();
 
 const VIETNAMESE = /[ăđơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/giu;
-const PERSIAN_URDU = /[\u067e\u0686\u0698\u06af\u06a9\u06cc\u0679\u0688\u0691\u06ba\u06be\u06c1\u06d2]/gu;
-const UKRAINIAN_ETC = /[іїєґўђјљњћџ]/giu;
+/** Letters Urdu uses and Persian doesn't (ٹ ڈ ڑ ں ھ ہ ے). */
+const URDU = /[\u0679\u0688\u0691\u06ba\u06be\u06c1\u06d2]/gu;
+/** Letters Persian and Urdu share that Arabic lacks (پ چ ژ گ ک ی). */
+const PERSIAN = /[\u067e\u0686\u0698\u06af\u06a9\u06cc]/gu;
+const UKRAINIAN = /[іїєґ]/giu;
+/** Belarusian, Serbian, Macedonian: Cyrillic that is neither Russian nor Ukrainian. */
+const OTHER_CYRILLIC = /[ўђјљњћџѓќѕ]/giu;
 const HINDI_WORDS = /(^|\s)(है|हैं|के|में|की|और|से|को|का|एक|यह|होता|होती)(?=\s|[।,.]|$)/gu;
 const SIMPLIFIED = /[这们说为发会对经过还没关问题应该实际种类动时国来个样与产们书长门见现开么]/gu;
 const TRADITIONAL = /[這們說為發會對經過還沒關問題應該實際種類動時國來個樣與產們書長門見現開麼]/gu;
@@ -234,12 +242,16 @@ export function detectLanguage(text: string): BuildLanguage | null {
     }
     case "hangul":
       return languageByCode("ko");
-    case "arabic":
-      return count(sample, PERSIAN_URDU) > c.arabic * 0.02 ? null : languageByCode("ar");
+    case "arabic": {
+      if (count(sample, URDU) > c.arabic * 0.01) return languageByCode("ur");
+      return languageByCode(count(sample, PERSIAN) > c.arabic * 0.02 ? "fa" : "ar");
+    }
     case "devanagari":
       return count(sample, HINDI_WORDS) >= 3 ? languageByCode("hi") : null;
-    case "cyrillic":
-      return count(sample, UKRAINIAN_ETC) > c.cyrillic * 0.005 ? null : languageByCode("ru");
+    case "cyrillic": {
+      if (count(sample, OTHER_CYRILLIC) > c.cyrillic * 0.002) return null;
+      return languageByCode(count(sample, UKRAINIAN) > c.cyrillic * 0.005 ? "uk" : "ru");
+    }
     case "latin":
       return latinLanguage(sample);
     default:
@@ -390,6 +402,30 @@ const STRINGS: Record<BuildLanguageCode, BuilderStrings> = {
     module: (n) => `الوحدة ${n}`,
     continued: (t) => `${t} (تتمة)`,
     untitled: "مادة بلا عنوان",
+  },
+  fa: {
+    locator: nounFirst({ page: ["صفحه", "صفحات"], slide: ["اسلاید", "اسلایدهای"], part: ["بخش", "بخش‌های"] }),
+    figureFromPage: (n) => `از صفحه ${n} فایل شما`,
+    quizFallback: "درس‌های این بخش را درباره این مفهوم مرور کنید.",
+    module: (n) => `بخش ${n}`,
+    continued: (t) => `${t} (ادامه)`,
+    untitled: "مطلب بدون عنوان",
+  },
+  ur: {
+    locator: nounFirst({ page: ["صفحہ", "صفحات"], slide: ["سلائیڈ", "سلائیڈز"], part: ["حصہ", "حصے"] }),
+    figureFromPage: (n) => `آپ کی فائل کے صفحہ ${n} سے`,
+    quizFallback: "اس تصور کے لیے ماڈیول کے اسباق دوبارہ دیکھیں۔",
+    module: (n) => `ماڈیول ${n}`,
+    continued: (t) => `${t} (جاری)`,
+    untitled: "بے عنوان مواد",
+  },
+  uk: {
+    locator: nounFirst({ page: ["сторінка", "сторінки"], slide: ["слайд", "слайди"], part: ["частина", "частини"] }),
+    figureFromPage: (n) => `Зі сторінки ${n} вашого файлу`,
+    quizFallback: "Повторіть уроки модуля з цієї теми.",
+    module: (n) => `Модуль ${n}`,
+    continued: (t) => `${t} (продовження)`,
+    untitled: "Матеріал без назви",
   },
   ko: {
     locator: (kind, a, b) =>

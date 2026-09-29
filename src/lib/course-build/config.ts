@@ -37,7 +37,7 @@ export function readCourseBuildConfig(env: Env = process.env): CourseBuildConfig
     model: env.COURSE_BUILD_MODEL?.trim() || "claude-haiku-4-5",
     outputTokensPerPage: positiveNumber(env.COURSE_BUILD_OUTPUT_TOKENS_PER_PAGE, 200),
     capUsdPerPage: positiveNumber(env.COURSE_BUILD_CAP_USD_PER_PAGE, 0.0025),
-    minCapUsd: positiveNumber(env.COURSE_BUILD_MIN_CAP_USD, 0.02),
+    minCapUsd: positiveNumber(env.COURSE_BUILD_MIN_CAP_USD, 0.06),
     defaultDailyCapUsd: positiveNumber(env.COURSE_BUILD_DAILY_CAP_USD, 1),
     visionMaxCrops: nonNegativeInt(env.COURSE_BUILD_VISION_MAX_CROPS, 24),
     figuresEnabled: !["0", "false", "off"].includes(env.COURSE_BUILD_FIGURES?.trim().toLowerCase() ?? ""),

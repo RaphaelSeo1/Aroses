@@ -16,7 +16,7 @@ import {
   visibleLength,
   wordCount,
 } from "./language.ts";
-import { languageLine, lengthUnit, lessonWordBudget, toCourseModule } from "./module.ts";
+import { languageLine, lengthUnit, lessonWordBudget, toCourseModule, writtenStrings } from "./module.ts";
 import { pageWeight, type BuildPage } from "./outline.ts";
 import { moduleMaxTokens, moduleTargetTokens, repairPlan } from "./plan.ts";
 import { buildSpendCapUsd, estimateTextTokens } from "./pricing.ts";
@@ -35,6 +35,9 @@ const SAMPLES: Record<string, string> = {
   id: "Enzim mempercepat reaksi kimia dengan menurunkan energi aktivasi. Setiap enzim mengikat substrat tertentu di situs aktifnya. Suhu dan pH mengubah bentuk situs aktif, sehingga setiap enzim bekerja paling baik dalam rentang yang sempit. Inhibitor kompetitif menghalangi situs aktif, sedangkan inhibitor nonkompetitif berikatan di tempat lain dan mengubah bentuk enzim.",
   hi: "एंजाइम सक्रियण ऊर्जा को कम करके रासायनिक अभिक्रियाओं को तेज़ करते हैं। प्रत्येक एंजाइम अपने सक्रिय स्थल पर एक विशिष्ट सब्सट्रेट से जुड़ता है। तापमान और pH सक्रिय स्थल का आकार बदल देते हैं, इसलिए प्रत्येक एंजाइम एक संकीर्ण सीमा में सबसे अच्छा काम करता है।",
   ar: "تسرّع الإنزيمات التفاعلات الكيميائية عن طريق خفض طاقة التنشيط. يرتبط كل إنزيم بركيزة محددة في موقعه النشط. تغيّر درجة الحرارة ودرجة الحموضة شكل الموقع النشط، لذلك يعمل كل إنزيم بأفضل شكل ضمن نطاق ضيق.",
+  fa: "آنزیم‌ها واکنش‌های شیمیایی را با کاهش انرژی فعال‌سازی سرعت می‌بخشند. هر آنزیم به یک پیش‌ماده ویژه در جایگاه فعال خود متصل می‌شود. دما و pH شکل جایگاه فعال را تغییر می‌دهند، بنابراین هر آنزیم در محدوده‌ای باریک بهترین کار را می‌کند.",
+  ur: "خامرے فعال سازی کی توانائی کم کر کے کیمیائی تعاملات کو تیز کرتے ہیں۔ ہر خامرہ اپنی فعال جگہ پر ایک مخصوص مادے سے جڑتا ہے۔ درجہ حرارت اور pH فعال جگہ کی شکل بدل دیتے ہیں، اس لیے ہر خامرہ ایک تنگ حد میں بہترین کام کرتا ہے۔",
+  uk: "Ферменти прискорюють хімічні реакції, знижуючи енергію активації. Кожен фермент зв'язує певний субстрат у своєму активному центрі, і температура змінює його форму, тому кожен фермент найкраще працює у вузькому діапазоні.",
   ko: "효소는 활성화 에너지를 낮추어 화학 반응을 빠르게 한다. 각 효소는 활성 부위에서 특정 기질과 결합한다. 온도와 pH는 활성 부위의 모양을 바꾸므로 모든 효소는 좁은 범위에서 가장 잘 작용한다.",
   ja: "酵素は活性化エネルギーを下げることで化学反応を速める。各酵素は活性部位で特定の基質と結合する。温度とpHは活性部位の形を変えるため、どの酵素も狭い範囲で最もよく働く。",
   zh: "酶通过降低活化能来加快化学反应。每种酶在其活性位点与特定的底物结合。温度和pH会改变活性位点的形状，因此每种酶在狭窄的范围内效果最好。",
@@ -52,10 +55,8 @@ test("detection: English terms inside Korean notes stay Korean; unclear text is 
     "디아제팜(diazepam)은 벤조디아제핀(benzodiazepine) 계열로 GABA-A receptor에 결합하여 Cl- 유입을 증가시킨다. 로라제팜(lorazepam)과 미다졸람(midazolam)도 같은 기전으로 작용한다.";
   assert.equal(detectLanguage(mixed)?.code, "ko");
   assert.equal(detectLanguage("ATP ADP NADH FADH2 Krebs"), null);
-  const persian = "آنزیم‌ها واکنش‌های شیمیایی را با کاهش انرژی فعال‌سازی سرعت می‌بخشند. هر آنزیم به یک پیش‌ماده ویژه در جایگاه فعال خود متصل می‌شود.";
-  assert.equal(detectLanguage(persian), null);
-  const ukrainian = "Ферменти прискорюють хімічні реакції, знижуючи енергію активації. Кожен фермент зв'язує певний субстрат у своєму активному центрі, і температура змінює його форму.";
-  assert.equal(detectLanguage(ukrainian), null);
+  const serbian = "Ензими убрзавају хемијске реакције смањујући енергију активације. Сваки ензим везује одређени супстрат у свом активном центру, а температура мења његов облик. Његова структура је најважнија за функцију.";
+  assert.equal(detectLanguage(serbian), null);
 });
 
 test("the menu lists every language in its own script, Match my files first", () => {
@@ -70,6 +71,9 @@ test("the menu lists every language in its own script, Match my files first", ()
   assert.equal(findLanguage("Chinese")?.code, "zh", "names stored by older builds still resolve");
   assert.equal(findLanguage("Korean")?.code, "ko");
   assert.equal(languageByCode("ar")?.dir, "rtl");
+  assert.equal(languageByCode("fa")?.dir, "rtl");
+  assert.equal(languageByCode("ur")?.dir, "rtl");
+  for (const l of ["فارسی", "اردو", "Українська"]) assert.ok(labels.includes(l), l);
 });
 
 test("resolving a build: Match my files follows the files; a choice that differs is a conversion", () => {
@@ -90,6 +94,13 @@ test("resolving a build: Match my files follows the files; a choice that differs
   const unknown = resolveBuildLanguage(null, "ATP NADH FADH2");
   assert.equal(unknown.output, null);
   assert.equal(unknown.strings.untitled, "Untitled material");
+});
+
+test("a source in no recognised language gets labels in the language the writer wrote", () => {
+  const lesson = { lessons: [{ title: "Ензими", content: SAMPLES.uk }] };
+  assert.equal(writtenStrings(lesson).module(1), "Модуль 1");
+  assert.equal(writtenStrings({ lessons: [{ title: "ATP", content: "NADH FADH2" }] }).module(1), "Module 1");
+  assert.equal(writtenStrings({ lessons: [{ title: "", content: SAMPLES.fa }] }).locator("page", 2, 4), "صفحات 2–4");
 });
 
 test("language factor: measured token cost vs English, between 1 and 2", () => {
@@ -114,7 +125,7 @@ test("budgets: targets and caps grow with the language factor; English is unchan
   assert.equal(buildSpendCapUsd(40, c), 0.1);
   assert.equal(buildSpendCapUsd(40, c, 1.56), 0.156);
   assert.equal(buildSpendCapUsd(40, c, 9), 0.2, "never more than double");
-  assert.equal(buildSpendCapUsd(2, c, 2), 0.02, "floor still applies");
+  assert.equal(buildSpendCapUsd(2, c, 2), 0.06, "floor still applies");
 });
 
 test("module boundaries are the same in every language; only the token budget grows", () => {

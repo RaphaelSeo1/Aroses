@@ -5,6 +5,7 @@
  */
 
 import { wordCount } from "./language.ts";
+import { isTableLine } from "./pdf-layout.ts";
 
 export type SourcePage = { n: number; text: string };
 
@@ -50,6 +51,7 @@ function fixTabs(line: string): string {
 }
 
 export function normalizeLine(raw: string): string {
+  if (isTableLine(raw)) return raw.trim().replace(/[ \u00a0]{2,}/g, " ");
   let line = isLetterSpaced(raw) ? collapseLetterSpacing(raw) : fixTabs(raw);
   line = line
     .replace(/[ \u00a0]{2,}/g, " ")
@@ -99,7 +101,7 @@ export function cleanPages(pages: SourcePage[], opts: CleanOptions = {}): Source
   for (const p of split) {
     const seen = new Set<string>();
     for (const line of p.lines) {
-      if (line.length > 160) continue;
+      if (line.length > 160 || isTableLine(line)) continue;
       const k = boilerplateKey(line);
       if (seen.has(k)) continue;
       seen.add(k);
@@ -115,6 +117,10 @@ export function cleanPages(pages: SourcePage[], opts: CleanOptions = {}): Source
     const seen = new Set<string>();
     const kept: string[] = [];
     for (const line of p.lines) {
+      if (isTableLine(line)) {
+        kept.push(line);
+        continue;
+      }
       if (isPageNumberLine(line)) continue;
       if (line.length <= 160 && boilerplate.has(boilerplateKey(line))) continue;
       if (line.length >= 12) {
@@ -168,7 +174,7 @@ export function paginateText(text: string, wordsPerPage = 500): SourcePage[] {
   const pieces: string[] = [];
   for (const para of paragraphs) {
     const words = wordCount(para);
-    if (words <= wordsPerPage) {
+    if (words <= wordsPerPage || isTableLine(para.split("\n")[0] ?? "")) {
       pieces.push(para);
       continue;
     }

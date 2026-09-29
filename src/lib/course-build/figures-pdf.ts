@@ -1,7 +1,7 @@
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 import {
   IDENTITY_MATRIX,
-  multiplyMatrix,
+  concatTransform,
   transformPoint,
   userRectFromPoints,
   type Matrix6,
@@ -66,7 +66,14 @@ async function scanPage(page: PdfPage, pageNum: number, OPS: Record<string, numb
     else if (fn === OPS.restore) ctm = stack.pop() ?? ctm;
     else if (fn === OPS.transform && Array.isArray(args) && args.length >= 6) {
       const m = args.slice(0, 6).map(Number) as Matrix6;
-      if (m.every(Number.isFinite)) ctm = multiplyMatrix(ctm, m);
+      if (m.every(Number.isFinite)) ctm = concatTransform(ctm, m);
+    } else if (fn === OPS.paintFormXObjectBegin) {
+      stack.push([...ctm]);
+      const raw = Array.isArray(args) ? (args[0] as ArrayLike<number> | null) : null;
+      const m = raw && raw.length >= 6 ? (Array.from(raw).slice(0, 6).map(Number) as Matrix6) : null;
+      if (m?.every(Number.isFinite)) ctm = concatTransform(ctm, m);
+    } else if (fn === OPS.paintFormXObjectEnd) {
+      ctm = stack.pop() ?? ctm;
     } else if (commit.has(fn) || fn === OPS.constructPath) {
       paths++;
     } else if (paint.has(fn)) {

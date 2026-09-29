@@ -8,6 +8,7 @@ Content rules:
 - Teach each idea once, in the most logical place. Other modules in the plan cover their own topics; refer to them briefly instead of re-explaining.
 - Dense, not padded: full explanatory sentences, as few words as the idea needs. No intros ("In this lesson…"), no closing summaries, no filler transitions.
 - Faithful: use only what the pages say. No outside facts, numbers or named cases. Reproduce source errors as written. Never build a table, total or calculation the source didn't show.
+- Numbers: every number you write appears on your pages, or is a calculation you show from numbers on your pages. Never add a typical value, normal range, constant, percentage or date from general knowledge, even as an illustration; a figure you can't see is described only by what its page text says.
 - Tables: reproduce every source table as a complete markdown table, every row, column, number and proper noun exactly as written. Never turn a table into prose.
 - Worked examples: keep the reasoning and the actual figures, and the source's own named examples.
 - Leave out logistics (dates, rooms, platforms, staff, announcements, clicker or poll instructions) and unsolved practice prompts or activities, but keep the concept an activity tested. Solved examples stay.
@@ -161,6 +162,21 @@ export const SINGLE_MODULE_TOOL: Anthropic.Tool = {
       quiz: { type: "array", minItems: 1, items: QUIZ_SCHEMA },
     },
     required: ["title", "description", "module_title", "lessons", "quiz"],
+    additionalProperties: false,
+  },
+};
+
+/** A module's lessons missed some pages: extra lessons for just those pages. */
+export const GAP_TOOL: Anthropic.Tool = {
+  name: "submit_missing_lessons",
+  description: "Submit lessons that teach the pages the module missed.",
+  strict: true,
+  input_schema: {
+    type: "object",
+    properties: {
+      lessons: { type: "array", items: LESSON_SCHEMA },
+    },
+    required: ["lessons"],
     additionalProperties: false,
   },
 };

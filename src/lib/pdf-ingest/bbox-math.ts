@@ -21,6 +21,15 @@ export function multiplyMatrix(a: Matrix6, b: Matrix6): Matrix6 {
   ];
 }
 
+/**
+ * The transform after a PDF `cm` (or a form's matrix): `m` applies first,
+ * then the current one. Reversing the order misplaces everything on pages
+ * whose content starts with a scale or flip, as browser-printed PDFs do.
+ */
+export function concatTransform(ctm: Matrix6, m: Matrix6): Matrix6 {
+  return multiplyMatrix(m, ctm);
+}
+
 export function transformPoint(m: Matrix6, x: number, y: number): { x: number; y: number } {
   return {
     x: m[0] * x + m[2] * y + m[4],

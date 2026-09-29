@@ -1,7 +1,7 @@
 import {
+  concatTransform,
   expandPixelRect,
   IDENTITY_MATRIX,
-  multiplyMatrix,
   parseMinMaxBBox,
   transformPoint,
   unionUserRects,
@@ -114,6 +114,13 @@ function isPathCommitOp(ops: Record<string, number>, fn: number): boolean {
   );
 }
 
+function withFormMatrix(ctm: Matrix6, args: unknown): Matrix6 {
+  const raw = Array.isArray(args) ? args[0] : null;
+  if (!raw || typeof (raw as ArrayLike<number>).length !== "number" || (raw as ArrayLike<number>).length < 6) return ctm;
+  const m = Array.from(raw as ArrayLike<number>).slice(0, 6).map(Number) as Matrix6;
+  return m.every(Number.isFinite) ? concatTransform(ctm, m) : ctm;
+}
+
 function imageUnitSquareUserRect(ctm: Matrix6): UserRect | null {
   const corners = [
     transformPoint(ctm, 0, 0),
@@ -165,7 +172,16 @@ export async function extractStructuralRasterCandidates(input: {
         Number(args[4]),
         Number(args[5]),
       ];
-      if (m.every(Number.isFinite)) ctm = multiplyMatrix(ctm, m);
+      if (m.every(Number.isFinite)) ctm = concatTransform(ctm, m);
+      continue;
+    }
+    if (fn === OPS.paintFormXObjectBegin) {
+      ctmStack.push([...ctm]);
+      ctm = withFormMatrix(ctm, args);
+      continue;
+    }
+    if (fn === OPS.paintFormXObjectEnd) {
+      ctm = ctmStack.pop() ?? ctm;
       continue;
     }
 
@@ -237,7 +253,16 @@ async function collectVectorShapesFromOps(
       }
       if (fn === OPS.transform && Array.isArray(args) && args.length >= 6) {
         const m: Matrix6 = args.map(Number) as Matrix6;
-        if (m.every(Number.isFinite)) ctm = multiplyMatrix(ctm, m);
+        if (m.every(Number.isFinite)) ctm = concatTransform(ctm, m);
+        continue;
+      }
+      if (fn === OPS.paintFormXObjectBegin) {
+        ctmStack.push([...ctm]);
+        ctm = withFormMatrix(ctm, args);
+        continue;
+      }
+      if (fn === OPS.paintFormXObjectEnd) {
+        ctm = ctmStack.pop() ?? ctm;
         continue;
       }
 

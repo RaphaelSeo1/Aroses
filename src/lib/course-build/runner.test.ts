@@ -281,6 +281,34 @@ test("cancel aborts running steps and releases the build", async () => {
   assert.equal((await t.steps(buildId))[0].status, "canceled");
 });
 
+test("cancel reaches an in-flight step at the cancel check, long before the next heartbeat", async () => {
+  const buildId = await newBuild();
+  const rec = recorder();
+  let abortedAt = 0;
+  const drive = driveBuild({
+    buildId,
+    store: t.store,
+    onTerminal: rec.onTerminal,
+    heartbeatMs: 60_000,
+    cancelPollMs: 25,
+    handlers: {
+      extract: (_s, ctx) =>
+        new Promise((_resolve, reject) => {
+          ctx.signal.addEventListener("abort", () => {
+            abortedAt = Date.now();
+            reject(new Error("aborted"));
+          });
+        }),
+    },
+  });
+  await sleep(40);
+  const canceledAt = Date.now();
+  await t.db.query("update public.course_builds set cancel_requested_at = now() where id = $1", [buildId]);
+  assert.deepEqual(await drive, { outcome: "finished", status: "canceled" });
+  assert.ok(abortedAt > 0 && abortedAt - canceledAt < 1_000, `aborted ${abortedAt - canceledAt}ms after cancel`);
+  assert.equal(rec.events[0]?.status, "canceled");
+});
+
 test("a worker that loses its lease stops without finishing the build", async () => {
   const buildId = await newBuild();
   const drive = driveBuild({

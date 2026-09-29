@@ -1,12 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import mammoth from "mammoth";
 import { extractPdfPagesForIngest } from "@/lib/pdf-text-head-tail";
-import { extractPptxSlides } from "@/lib/study-ingest/pptx";
+import JSZip from "jszip";
 import { rtfToPlainText } from "@/lib/study-ingest/rtf";
 import { paginateText, type SourcePage } from "./clean.ts";
 import { StepFatalError } from "./errors.ts";
 import { findPdfFigures } from "./figures-pdf.ts";
 import type { ExtractFn, FindFiguresFn, SourceRecord } from "./handlers.ts";
+import { docxHtmlToText, slideXmlToText } from "./office-text.ts";
+import { extractPdfPagesWithTables } from "./pdf-text.ts";
 import { transcribeMediaUrl } from "./transcribe.ts";
 
 export const COURSE_BUILD_UPLOAD_BUCKET = "study-pdf-ingest";
@@ -42,6 +44,24 @@ export function createFigureFinder(
   };
 }
 
+/** One page per slide, in slide order, with speaker notes after the slide text. */
+async function pptxPages(buf: Buffer): Promise<SourcePage[]> {
+  const zip = await JSZip.loadAsync(buf);
+  const num = (name: string) => Number(name.match(/(\d+)\.xml$/)?.[1] ?? 0);
+  const names = Object.keys(zip.files)
+    .filter((n) => /^ppt\/slides\/slide\d+\.xml$/i.test(n))
+    .sort((a, b) => num(a) - num(b));
+  if (names.length === 0) throw new Error("no slides");
+  return Promise.all(
+    names.map(async (name, i): Promise<SourcePage> => {
+      const body = slideXmlToText((await zip.file(name)?.async("string")) ?? "");
+      const notesXml = await zip.file(`ppt/notesSlides/notesSlide${num(name)}.xml`)?.async("string");
+      const notes = notesXml ? slideXmlToText(notesXml).replace(/\n/g, " ").trim() : "";
+      return { n: i + 1, text: [body, notes ? `Speaker notes: ${notes}` : ""].filter(Boolean).join("\n") };
+    })
+  );
+}
+
 /** Raw page text per file type. Cleaning happens in the extract step. */
 export function createSourceExtractor(admin: SupabaseClient): ExtractFn {
   return async (source) => {
@@ -61,19 +81,17 @@ export function createSourceExtractor(admin: SupabaseClient): ExtractFn {
     }
     try {
       if (source.kind === "pdf") {
-        const { pages } = await extractPdfPagesForIngest(buf);
-        return pages.map((p): SourcePage => ({ n: p.pageNum, text: p.text }));
+        try {
+          return await extractPdfPagesWithTables(buf);
+        } catch {
+          const { pages } = await extractPdfPagesForIngest(buf);
+          return pages.map((p): SourcePage => ({ n: p.pageNum, text: p.text }));
+        }
       }
-      if (source.kind === "pptx") {
-        const { slides } = await extractPptxSlides(buf);
-        return slides.map((s): SourcePage => ({
-          n: s.index,
-          text: [s.body, s.notes ? `Speaker notes: ${s.notes}` : ""].filter(Boolean).join("\n"),
-        }));
-      }
+      if (source.kind === "pptx") return await pptxPages(buf);
       if (source.kind === "docx") {
-        const { value } = await mammoth.extractRawText({ buffer: buf });
-        return paginateText(value);
+        const { value } = await mammoth.convertToHtml({ buffer: buf });
+        return paginateText(docxHtmlToText(value));
       }
     } catch (err) {
       if (err instanceof StepFatalError) throw err;
