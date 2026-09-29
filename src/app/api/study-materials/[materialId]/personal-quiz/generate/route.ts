@@ -4,6 +4,10 @@ import {
   generatePersonalQuizFromNotes,
 } from "@/lib/ai/personal-quiz-from-notes";
 import { enterAiUsageContext } from "@/lib/billing/ai-usage";
+import {
+  extraQuestionLimitResponse,
+  reserveExtraQuestionClick,
+} from "@/lib/billing/extra-question-usage";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import type { CourseQuizItem } from "@/types/course";
@@ -13,6 +17,8 @@ export const maxDuration = 300;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const MIN_CORPUS = 20;
 
 type Params = { params: Promise<{ materialId: string }> };
 
@@ -89,6 +95,12 @@ export async function POST(request: Request, ctx: Params) {
   if (extra.length > 0) {
     corpus = corpus ? `${corpus}\n\n---\n\n${extra}` : extra;
   }
+  if (corpus.trim().length < MIN_CORPUS) {
+    return NextResponse.json(
+      { error: "Add a bit more text — paste a highlight or note first." },
+      { status: 400 }
+    );
+  }
 
   const { data: existingRows, error: existingError } = await supabase
     .from("user_personal_quiz_items")
@@ -98,12 +110,16 @@ export async function POST(request: Request, ctx: Params) {
     console.error("[personal-quiz generate counts]", existingError);
   }
 
+  const quota = await reserveExtraQuestionClick(user);
+  if (!quota.allowed) return extraQuestionLimitResponse(quota);
+
   let items: CourseQuizItem[];
   try {
     items = await generatePersonalQuizFromNotes(corpus, {
       existingCounts: countPersonalQuizTypes(existingRows ?? []),
     });
   } catch (e) {
+    await quota.refund();
     const msg = e instanceof Error ? e.message : "Generation failed.";
     return NextResponse.json({ error: msg }, { status: 400 });
   }
@@ -121,6 +137,7 @@ export async function POST(request: Request, ctx: Params) {
     .select("id, item, created_at");
 
   if (insErr) {
+    await quota.refund();
     console.error(insErr);
     return NextResponse.json({ error: "Could not save questions." }, { status: 500 });
   }
