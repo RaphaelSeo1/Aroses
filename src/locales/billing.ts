@@ -42,7 +42,6 @@ const en = {
   planHighlightPages: "{pages} pages of course material",
   planHighlightLecture: "{hours} of live lecture notes",
   planHighlightVoice: "{minutes} minutes of voice tutoring",
-  planHighlightChat: "{messages} Rose chat messages",
   planHighlightExtraQuestions: "{count} extra question sets",
   planHighlightPdfs: "Up to {count} PDFs per course",
   planHighlightEarlyAccess: "Early access to new features",
@@ -71,7 +70,7 @@ const en = {
   choosePlanToGenerate: "Choose a plan to generate an AI course.",
   perMonthLabel: "/ month",
   subtitleLong:
-    "Course material pages, live lecture hours, voice tutoring, chat messages, and extra question sets reset each month with your billing period. Quizzes, spaced repetition, Notes Hub, and Mentored Learning on courses you already built stay included on every paid plan. When voice minutes run out, voice switches to text mode — you're never blocked mid-study.",
+    "Course material pages, live lecture hours, voice tutoring, and extra question sets reset each month with your billing period. Quizzes, spaced repetition, Notes Hub, and Mentored Learning on courses you already built stay included on every paid plan. When voice minutes run out, voice switches to text mode — you're never blocked mid-study.",
   lectureCapBanner:
     "You've used your plan's live lecture time for this period ({used} of {cap} minutes). It resets on {date}. Upgrade for more lecture hours.",
   lectureCapBannerFree: "Choose a plan to take live lecture notes.",
@@ -147,7 +146,6 @@ const ko: typeof en = {
   planHighlightPages: "코스 자료 {pages}페이지",
   planHighlightLecture: "실시간 강의 노트 {hours}",
   planHighlightVoice: "음성 튜터링 {minutes}분",
-  planHighlightChat: "Rose 채팅 메시지 {messages}개",
   planHighlightExtraQuestions: "추가 문제 세트 {count}회",
   planHighlightPdfs: "코스당 PDF 최대 {count}개",
   planHighlightEarlyAccess: "신규 기능 얼리 액세스",
@@ -172,7 +170,7 @@ const ko: typeof en = {
   choosePlanToGenerate: "AI 코스를 만들려면 요금제를 선택하세요.",
   perMonthLabel: "/ 월",
   subtitleLong:
-    "코스 자료 페이지, 실시간 강의 시간, 음성 튜터링, 채팅 메시지, 추가 문제 세트는 매달 결제 주기마다 초기화돼요. 퀴즈·간격 반복·노트 허브와 이미 만든 코스의 멘토 학습은 모든 유료 요금제에 포함돼요. 음성을 다 쓰면 텍스트 모드로 전환돼요 — 학습이 중단되지는 않아요.",
+    "코스 자료 페이지, 실시간 강의 시간, 음성 튜터링, 추가 문제 세트는 매달 결제 주기마다 초기화돼요. 퀴즈·간격 반복·노트 허브와 이미 만든 코스의 멘토 학습은 모든 유료 요금제에 포함돼요. 음성을 다 쓰면 텍스트 모드로 전환돼요 — 학습이 중단되지는 않아요.",
   lectureCapBanner:
     "이번 기간 실시간 강의 시간을 모두 사용했어요 ({used} / {cap}분). {date}에 초기화돼요. 더 많은 강의 시간이 필요하면 업그레이드하세요.",
   lectureCapBannerFree: "실시간 강의 노트를 쓰려면 요금제를 선택하세요.",

@@ -17,9 +17,6 @@ export type PlanUsageSummary = {
   voiceUsedSeconds: number;
   voiceCapSeconds: number | null;
 
-  chatMessagesUsed: number;
-  chatMessagesCap: number | null;
-
   extraQuestionsUsed: number;
   extraQuestionsCap: number | null;
 

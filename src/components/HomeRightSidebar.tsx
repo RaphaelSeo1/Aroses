@@ -148,13 +148,6 @@ export function HomeRightSidebar({
           template: t.dashboard.planUsageMinutes,
         },
         {
-          key: "chat",
-          label: t.dashboard.planUsageChat,
-          used: planUsage.chatMessagesUsed,
-          cap: planUsage.chatMessagesCap,
-          template: t.dashboard.planUsageOf,
-        },
-        {
           key: "extra",
           label: t.dashboard.planUsageExtraQuestions,
           used: planUsage.extraQuestionsUsed,

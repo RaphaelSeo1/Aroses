@@ -65,7 +65,6 @@ export function planCardCopy(
     tf(t.planHighlightPages, { pages: limits.sourcePages.toLocaleString("en-US") }),
     tf(t.planHighlightLecture, { hours: hoursLabel(t, limits.lectureMinutes) }),
     tf(t.planHighlightVoice, { minutes: limits.voiceMinutes }),
-    tf(t.planHighlightChat, { messages: limits.chatMessages.toLocaleString("en-US") }),
     tf(t.planHighlightExtraQuestions, { count: limits.extraQuestionClicks }),
     tf(t.planHighlightPdfs, { count: limits.maxPdfsPerCourse }),
   ];
