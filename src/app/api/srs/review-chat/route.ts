@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { streamReviewChat } from "@/lib/ai/review-chat";
 import { ensureInlineYourNotesLink } from "@/lib/ai/review-chat-notes-link";
 import { buildReviewChatStudentNotes } from "@/lib/ai/review-chat-student-notes";
+import {
+  chatLimitResponse,
+  chatModelOverride,
+  reserveChatMessage,
+} from "@/lib/billing/chat-usage";
 import { lookAtAttachmentPrompt } from "@/lib/chat/chat-attachment-formats";
 import { parseChatAttachments } from "@/lib/chat/chat-attachment-parse";
 import { isNotesFocusBucketId, parseNotesFocusBucketNoteId } from "@/lib/notes/notes-focus-bucket";
@@ -322,6 +327,9 @@ export async function POST(request: Request) {
     }
   }
 
+  const quota = await reserveChatMessage(user);
+  if (!quota.allowed) return chatLimitResponse(quota);
+
   const encoder = new TextEncoder();
   const sseLine = (event: string, data: unknown): string =>
     `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -335,6 +343,7 @@ export async function POST(request: Request) {
           /* client went away */
         }
       };
+      let modelDone = false;
       try {
         let fullReply = "";
         for await (const delta of streamReviewChat({
@@ -348,10 +357,12 @@ export async function POST(request: Request) {
           voiceContinuation,
           notesLink:
             !b.voice && hadStudentNotes && notesLink ? notesLink : null,
+          model: chatModelOverride(quota),
         })) {
           fullReply += delta;
           send("text", { channel: "reply", delta });
         }
+        modelDone = true;
         if (!b.voice && hadStudentNotes && notesLink) {
           const patched = ensureInlineYourNotesLink(
             fullReply,
@@ -367,6 +378,7 @@ export async function POST(request: Request) {
           send("done", {});
         }
       } catch (e) {
+        if (!modelDone && !request.signal.aborted) await quota.refund();
         console.error("[srs/review-chat]", e);
         void report("srs.review_chat_failed", e, { userId: user.id });
         send("error", { message: "Could not answer just now. Try again." });

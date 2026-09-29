@@ -625,6 +625,8 @@ export type TurnInput = {
   chunkTeachingStarted?: boolean;
   /** Figures from the student's file in this lesson; lets Rose put one on the board. */
   figures?: MentoredTurnFigure[];
+  /** Overrides the default turn model (monthly chat allowance fallback). */
+  model?: string;
 };
 
 export type TurnOutput = {
@@ -881,7 +883,7 @@ export async function runMentoredTurn(input: TurnInput): Promise<TurnOutput> {
 
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
   const msg = await anthropic.messages.create({
-    model: FAST_MODEL,
+    model: input.model || FAST_MODEL,
     max_tokens: 700,
     temperature: 0.5,
     messages: [{ role: "user", content: buildTurnPrompt(input) }],
@@ -954,7 +956,7 @@ export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
 
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
   const stream = anthropic.messages.stream({
-    model: FAST_MODEL,
+    model: input.model || FAST_MODEL,
     max_tokens: 700,
     temperature: 0.5,
     messages: [{ role: "user", content: buildTurnPrompt(input) }],

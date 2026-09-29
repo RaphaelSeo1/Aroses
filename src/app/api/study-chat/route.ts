@@ -3,6 +3,11 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import {
+  chatLimitResponse,
+  chatModelOverride,
+  reserveChatMessage,
+} from "@/lib/billing/chat-usage";
+import {
   buildLegacyStudyContext,
   buildStudyContextText,
   runStudyChat,
@@ -397,11 +402,20 @@ export async function POST(request: Request) {
       supabase,
       b.materialId
     );
-    const out = await runStudyChat(
-      contextText,
-      messages,
-      studyContext ?? undefined
-    );
+    const quota = await reserveChatMessage(user);
+    if (!quota.allowed) return chatLimitResponse(quota);
+    let out: Awaited<ReturnType<typeof runStudyChat>>;
+    try {
+      out = await runStudyChat(
+        contextText,
+        messages,
+        studyContext ?? undefined,
+        { model: chatModelOverride(quota) }
+      );
+    } catch (e) {
+      await quota.refund();
+      throw e;
+    }
     let reply = sanitizeStudyChatReply(out.reply);
     let action = resolveNavigateAction(out.action, navMaterials);
     let options: StudyChatOption[] = [];

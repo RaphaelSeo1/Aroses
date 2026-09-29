@@ -1,6 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import { runMentoredTurnStream } from "@/lib/ai/mentored";
+import {
+  chatLimitResponse,
+  chatModelOverride,
+  reserveChatMessage,
+} from "@/lib/billing/chat-usage";
 import { resolveTeachingLanguage } from "@/lib/course-output-language";
 import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
 import { loadMentoredPersonalization } from "@/lib/mentored/load-personalization";
@@ -182,6 +187,9 @@ export async function POST(request: Request) {
     console.error("[mentored/turn-stream personalization-read]", e);
   }
 
+  const quota = await reserveChatMessage(user);
+  if (!quota.allowed) return chatLimitResponse(quota);
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -194,6 +202,7 @@ export async function POST(request: Request) {
       };
 
       let addToFocusedReview = false;
+      let modelDone = false;
 
       try {
         let finalIntent: string | undefined;
@@ -209,6 +218,7 @@ export async function POST(request: Request) {
           outputLanguage,
           chunkTeachingStarted,
           figures,
+          model: chatModelOverride(quota),
         })) {
           if (evt.type === "text") {
             send("text", { delta: evt.delta });
@@ -225,6 +235,7 @@ export async function POST(request: Request) {
             });
           }
         }
+        modelDone = true;
 
         // Mid-course pacing self-tuning. When the student explicitly
         // asks Rose to slow down OR speed up via natural language
@@ -295,6 +306,7 @@ export async function POST(request: Request) {
 
         send("done", {});
       } catch (e) {
+        if (!modelDone && !request.signal.aborted) await quota.refund();
         console.error("[mentored/turn-stream]", e);
         send("error", { message: "AI could not respond. Try again shortly." });
       } finally {

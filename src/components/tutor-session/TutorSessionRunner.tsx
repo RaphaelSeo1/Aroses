@@ -879,6 +879,7 @@ export function TutorSessionRunner({
       }
 
       let turnIntent = "other";
+      let limitMessage: string | null = null;
 
       const interruption = interruptedContextRef.current;
       if (interruption) interruptedContextRef.current = null;
@@ -919,6 +920,13 @@ export function TutorSessionRunner({
           }
         );
         if (!res.ok || !res.body) {
+          const errBody = (await res.json().catch(() => ({}))) as {
+            error?: unknown;
+            code?: unknown;
+          };
+          if (errBody.code === "chat_limit_reached" && typeof errBody.error === "string") {
+            limitMessage = errBody.error;
+          }
           throw new Error(`Turn failed (${res.status})`);
         }
         const reader = res.body.getReader();
@@ -1031,10 +1039,11 @@ export function TutorSessionRunner({
         // Fallback: if we never revealed anything (TTS never fired
         // either), show the raw buffer so the student isn't stuck.
         const fallback =
-          revealedSentencesRef.current.length === 0
+          limitMessage ??
+          (revealedSentencesRef.current.length === 0
             ? buffered.trim() ||
               "Sorry — I hit a snag. Try saying that again."
-            : revealedSentencesRef.current.join(" ");
+            : revealedSentencesRef.current.join(" "));
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId

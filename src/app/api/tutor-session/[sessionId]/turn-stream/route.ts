@@ -1,3 +1,8 @@
+import {
+  chatLimitResponse,
+  chatModelOverride,
+  reserveChatMessage,
+} from "@/lib/billing/chat-usage";
 import { createClient } from "@/lib/supabase/server";
 import {
   refreshDiscussionSummary,
@@ -128,6 +133,9 @@ export async function POST(request: Request, ctx: Params) {
     );
   }
 
+  const quota = await reserveChatMessage(user);
+  if (!quota.allowed) return chatLimitResponse(quota);
+
   let history: TutorSessionMessage[] = Array.isArray(
     sessionRow.conversation_transcript
   )
@@ -196,6 +204,7 @@ export async function POST(request: Request, ctx: Params) {
 
       let assistantText = "";
       let persisted = false;
+      let modelDone = false;
 
       // Append Rose's turn to the durable transcript. Used on normal
       // completion AND best-effort when the client disconnects mid-reply
@@ -279,6 +288,7 @@ export async function POST(request: Request, ctx: Params) {
           explicitNotesRequest,
           interruptedAfter,
           notYetSpoken,
+          model: chatModelOverride(quota),
         })) {
           if (evt.type === "text") {
             assistantText += evt.delta;
@@ -291,6 +301,7 @@ export async function POST(request: Request, ctx: Params) {
             });
           }
         }
+        modelDone = true;
 
         if (request.signal.aborted) {
           // Client went away (refresh/close) but Rose finished generating —
@@ -303,6 +314,7 @@ export async function POST(request: Request, ctx: Params) {
         await persistAssistantTurn(assistantText || "(no response)");
         send("done", { ok: true });
       } catch (e) {
+        if (!modelDone && !request.signal.aborted) await quota.refund();
         console.error("[tutor turn-stream]", e);
         // Best-effort: save the partial reply generated before the failure /
         // disconnect so leaving mid-answer doesn't punch a hole in the recap.

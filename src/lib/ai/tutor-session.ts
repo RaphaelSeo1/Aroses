@@ -150,6 +150,8 @@ export type TutorTurnInput = {
   interruptedAfter?: string;
   /** Generated text Rose had not spoken yet when interrupted. */
   notYetSpoken?: string;
+  /** Overrides the default turn model (monthly chat allowance fallback). */
+  model?: string;
 };
 
 export type TutorTurnImageRequest = {
@@ -307,7 +309,7 @@ export async function* runTutorTurnStream(
 
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
   const stream = await anthropic.messages.stream({
-    model: MODEL,
+    model: input.model || MODEL,
     max_tokens: 700,
     temperature: 0.6,
     system,

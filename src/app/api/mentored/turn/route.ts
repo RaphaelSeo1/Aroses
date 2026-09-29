@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import { runMentoredTurn } from "@/lib/ai/mentored";
+import {
+  chatLimitResponse,
+  chatModelOverride,
+  reserveChatMessage,
+} from "@/lib/billing/chat-usage";
 import { resolveTeachingLanguage } from "@/lib/course-output-language";
 import { loadCourseOutputLanguageForMaterial } from "@/lib/load-course-output-language";
 import { loadMentoredPersonalization } from "@/lib/mentored/load-personalization";
@@ -113,6 +118,9 @@ export async function POST(request: Request) {
     typeof body.lessonTitle === "string" && body.lessonTitle.trim()
       ? body.lessonTitle.trim()
       : body.chunk.concept;
+  const quota = await reserveChatMessage(user);
+  if (!quota.allowed) return chatLimitResponse(quota);
+
   let turn: MentoredTurnResponse;
   try {
     const result = await runMentoredTurn({
@@ -122,6 +130,7 @@ export async function POST(request: Request) {
       knowledgeLevel: level,
       personalization,
       outputLanguage,
+      model: chatModelOverride(quota),
     });
     turn = {
       intent: result.intent,
@@ -131,6 +140,7 @@ export async function POST(request: Request) {
       whiteboardActions: result.whiteboardActions,
     };
   } catch (e) {
+    await quota.refund();
     console.error("[mentored/turn]", e);
     return NextResponse.json(
       { error: "AI could not respond. Try again shortly." },

@@ -284,8 +284,10 @@ export async function* streamVoiceReply(
 export async function runStudyChat(
   contextText: string,
   messages: StudyChatTurn[],
-  studyContext?: string
+  studyContext?: string,
+  opts?: { model?: string }
 ): Promise<{ reply: string; action: unknown | null }> {
+  const model = opts?.model || MODEL;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("Missing ANTHROPIC_API_KEY");
@@ -325,7 +327,7 @@ ${contextText}
   const anthropic = new Anthropic({ apiKey });
 
   const msg = await anthropic.messages.create({
-    model: MODEL,
+    model,
     max_tokens: 2048,
     system,
     messages: messages.map((m) => ({
@@ -334,7 +336,7 @@ ${contextText}
     })),
   });
   recordAiUsage({
-    model: MODEL,
+    model,
     inputTokens: msg.usage?.input_tokens,
     outputTokens: msg.usage?.output_tokens,
     feature: "study-chat",

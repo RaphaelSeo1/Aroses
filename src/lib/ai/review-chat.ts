@@ -106,7 +106,10 @@ export async function* streamReviewChat(input: {
   voiceContinuation?: ReviewVoiceContinuation;
   /** Path like /notes/doc/{uuid} when student notes are available to cite. */
   notesLink?: string | null;
+  /** Overrides the default chat model (monthly allowance fallback). */
+  model?: string;
 }): AsyncGenerator<string, void, void> {
+  const model = input.model || MODEL;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("Missing ANTHROPIC_API_KEY");
@@ -145,7 +148,7 @@ export async function* streamReviewChat(input: {
 
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 1 });
   const stream = anthropic.messages.stream({
-    model: MODEL,
+    model,
     max_tokens: input.voice ? 700 : 2_400,
     temperature: 0.3,
     system: reviewChatSystem(
@@ -169,7 +172,7 @@ export async function* streamReviewChat(input: {
   try {
     const final = await stream.finalMessage();
     recordAiUsage({
-      model: MODEL,
+      model,
       inputTokens: final.usage?.input_tokens,
       outputTokens: final.usage?.output_tokens,
       feature: "review-chat",
