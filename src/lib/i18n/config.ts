@@ -21,6 +21,15 @@ export const UI_LOCALE_COOKIE = "ui_locale";
 /** One year — the preference should effectively never expire. */
 export const UI_LOCALE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
+/**
+ * The browser's IANA time zone, written by `TIME_ZONE_COOKIE_SCRIPT` on every
+ * page load so server-built text (e.g. plan-limit reset times) can use local
+ * time when the profile has no time zone.
+ */
+export const TIME_ZONE_COOKIE = "tz";
+
+export const TIME_ZONE_COOKIE_SCRIPT = `try{var z=Intl.DateTimeFormat().resolvedOptions().timeZone;if(z){var v=encodeURIComponent(z);if(document.cookie.indexOf("${TIME_ZONE_COOKIE}="+v)<0)document.cookie="${TIME_ZONE_COOKIE}="+v+";path=/;max-age=${UI_LOCALE_COOKIE_MAX_AGE};samesite=lax";}}catch(e){}`;
+
 export function isUiLocale(value: unknown): value is UiLocale {
   return (
     typeof value === "string" && (UI_LOCALES as readonly string[]).includes(value)

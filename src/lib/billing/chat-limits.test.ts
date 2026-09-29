@@ -260,3 +260,59 @@ test("limit message mentions upgrades only where they exist", () => {
     /Upgrade|Choose a plan/
   );
 });
+
+test("voice-mode turns charged as voice minutes are not counted as chat", async () => {
+  const store = new InMemoryChatMeterStore();
+  const cap = { CHAT_LIMIT_STUDENT_MESSAGES: "1", CHAT_LIMIT_STUDENT_SONNET: "0" };
+  const voice = await reserve(store, { voiceTurn: true, env: cap });
+  assert.equal(voice.allowed, true);
+  assert.equal(voice.allowed && voice.metered, false);
+  assert.equal(voice.allowed && voice.useFallbackModel, false, "normal model");
+  assert.equal(store.usedFor(USER), 0);
+
+  const text = await reserve(store, { env: cap });
+  assert.equal(text.allowed && text.metered, true);
+  assert.equal(store.usedFor(USER), 1);
+  // Text is capped now; voice turns keep going.
+  assert.equal((await reserve(store, { env: cap })).allowed, false);
+  assert.equal((await reserve(store, { voiceTurn: true, env: cap })).allowed, true);
+  assert.equal(store.usedFor(USER), 1);
+});
+
+test("blocked chat message is built in the student's language and time zone", async () => {
+  const store = new InMemoryChatMeterStore();
+  const env = { CHAT_LIMIT_STUDENT_MESSAGES: "0" };
+  let lookups = 0;
+  const copy = async () => {
+    lookups += 1;
+    return { locale: "ko", timeZone: "Asia/Seoul" };
+  };
+  const q = await reserve(store, { env, copy });
+  assert.equal(q.allowed, false);
+  if (q.allowed) return;
+  assert.equal(q.resetsAt, SEPT.endIso);
+  assert.match(q.message, /Rose 채팅이 포함되어 있지 않아요/);
+  assert.match(q.message, /10월 1일 오전 9:00에 초기화돼요/);
+  assert.match(q.message, /업그레이드/);
+
+  const la = chatLimitReachedMessage(
+    {
+      tier: "student",
+      limit: { monthlyMessages: 200, premiumMessages: 50 },
+      resetsAt: SEPT.endIso,
+      upgradeAvailable: true,
+    },
+    { locale: "en", timeZone: "America/Los_Angeles" }
+  );
+  assert.match(la, /resets on September 30 at 5:00\s?PM\./);
+
+  await reserve(store, { copy, env: NO_ENV });
+  assert.equal(lookups, 1, "language/time zone only looked up when blocked");
+  const failing = await reserve(store, {
+    env,
+    copy: async () => {
+      throw new Error("profile down");
+    },
+  });
+  assert.match(!failing.allowed ? failing.message : "", /resets on October 1 at 12:00\s?AM UTC/);
+});

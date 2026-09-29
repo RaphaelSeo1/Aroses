@@ -6,7 +6,11 @@ import {
   lectureMeterDelta,
   type LectureAllowanceNumbers,
 } from "@/lib/billing/lecture-minutes";
-import { lectureMinutesUsedUpMessage } from "@/lib/billing/limit-messages";
+import { getLimitCopy } from "@/lib/billing/limit-copy";
+import {
+  lectureMinutesUsedUpMessage,
+  type LimitCopy,
+} from "@/lib/billing/limit-messages";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import { planMeterConsume, planMeterGet } from "@/lib/billing/plan-meter-store";
 import { lectureCapSeconds, type PlanTier } from "@/lib/billing/plans";
@@ -80,13 +84,16 @@ export async function getLectureAllowance(
   };
 }
 
-export function lectureLimitBody(allowance: LectureAllowance) {
+export function lectureLimitBody(allowance: LectureAllowance, copy?: LimitCopy) {
   return {
-    error: lectureMinutesUsedUpMessage({
-      tier: allowance.tier,
-      capMinutes: Math.round(allowance.capSeconds / 60),
-      periodEnd: allowance.resetsAt,
-    }),
+    error: lectureMinutesUsedUpMessage(
+      {
+        tier: allowance.tier,
+        capMinutes: Math.round(allowance.capSeconds / 60),
+        periodEnd: allowance.resetsAt,
+      },
+      copy
+    ),
     code: LECTURE_RECORDING_CAP_CODE,
     used: Math.floor(allowance.usedSeconds / 60),
     cap: Math.round(allowance.capSeconds / 60),
@@ -127,7 +134,7 @@ export async function assertCanStartLectureRecording(
   const allowance = await getLectureAllowance(userId, opts);
   const used = Math.floor(allowance.usedSeconds / 60);
   if (!allowance.allowed) {
-    const body = lectureLimitBody(allowance);
+    const body = lectureLimitBody(allowance, await getLimitCopy(userId));
     return {
       ok: false,
       status: 402,

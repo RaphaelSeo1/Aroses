@@ -98,10 +98,7 @@ export async function runCalendarChat(input: {
   userId?: string;
   attachedPdfText?: string;
   attachedPdfName?: string;
-  /** Overrides the default chat model (monthly allowance fallback). */
-  model?: string;
 }): Promise<{ reply: string; actions: CalendarChatAction[] }> {
-  const model = input.model || MODEL;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return {
@@ -156,7 +153,7 @@ TOOLS:
 
   const anthropic = new Anthropic({ apiKey, timeout: 45_000, maxRetries: 1 });
   const msg = await anthropic.messages.create({
-    model,
+    model: MODEL,
     max_tokens: 2000,
     temperature: 0,
     system,
@@ -169,7 +166,7 @@ TOOLS:
   });
 
   recordAiUsage({
-    model,
+    model: MODEL,
     inputTokens: msg.usage?.input_tokens,
     outputTokens: msg.usage?.output_tokens,
     feature: "calendar-chat",

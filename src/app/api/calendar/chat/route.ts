@@ -2,11 +2,6 @@ import { NextResponse } from "next/server";
 import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import { runCalendarChat } from "@/lib/ai/calendar-chat";
 import {
-  chatLimitResponse,
-  chatModelOverride,
-  reserveChatMessage,
-} from "@/lib/billing/chat-usage";
-import {
   coerceActionTimestamps,
   resolveCalendarItemId,
 } from "@/lib/calendar/calendar-chat";
@@ -115,9 +110,6 @@ export async function POST(request: Request) {
       ? b.nowIso
       : new Date().toISOString();
 
-  const quota = await reserveChatMessage(user);
-  if (!quota.allowed) return chatLimitResponse(quota);
-
   let reply: string;
   let actions;
   try {
@@ -131,12 +123,10 @@ export async function POST(request: Request) {
       userId: user.id,
       attachedPdfText: attached.text || undefined,
       attachedPdfName: attached.name || undefined,
-      model: chatModelOverride(quota),
     });
     reply = result.reply;
     actions = result.actions.map((a) => coerceActionTimestamps(a, timeZone));
   } catch (e) {
-    await quota.refund();
     console.error("[calendar/chat]", e);
     return NextResponse.json(
       { error: "Could not answer just now. Try again." },

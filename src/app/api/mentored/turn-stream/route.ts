@@ -187,7 +187,9 @@ export async function POST(request: Request) {
     console.error("[mentored/turn-stream personalization-read]", e);
   }
 
-  const quota = await reserveChatMessage(user);
+  const quota = await reserveChatMessage(user, {
+    voiceMode: body.voiceMode === true,
+  });
   if (!quota.allowed) return chatLimitResponse(quota);
 
   const encoder = new TextEncoder();

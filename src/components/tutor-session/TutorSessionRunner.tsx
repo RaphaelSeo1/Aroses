@@ -915,6 +915,7 @@ export function TutorSessionRunner({
               interruptedAfter: interruption?.spokenBefore || undefined,
               notYetSpoken: interruption?.notYetSpoken || undefined,
               truncateLastAssistantTo: interruption?.spokenBefore || undefined,
+              voiceMode: interactionModeRef.current === "voice",
             }),
             signal: streamAc.signal,
           }

@@ -1621,6 +1621,7 @@ export function ImmersiveLessonRunner({
             secondsSinceStudentSpoke,
             outputLanguage: teachingLanguageRef.current,
             chunkTeachingStarted,
+            voiceMode: interactionModeRef.current === "voice",
             figures:
               typeof chunk.sourceLessonIndex === "number"
                 ? builderFigures(activeModule.lessons[chunk.sourceLessonIndex]?.visual_assets)

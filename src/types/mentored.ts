@@ -365,6 +365,11 @@ export type MentoredTurnRequest = {
    * student may still be answering the session-opening welcome.
    */
   chunkTeachingStarted?: boolean;
+  /**
+   * The runner is in voice mode, so the reply is spoken (and charged as voice
+   * minutes). The server verifies this before skipping the chat meter.
+   */
+  voiceMode?: boolean;
   /** Figures from the student's file in this chunk's lesson (course builder courses only). */
   figures?: MentoredTurnFigure[];
 };

@@ -1,12 +1,18 @@
-import { PLAN_ORDER, PLANS, TOP_PLAN_TIER, type PlanTier } from "./plans.ts";
+import {
+  chatLimitReachedMessage as chatLimitCopy,
+  type LimitCopy,
+} from "./limit-messages.ts";
+import { PLAN_ORDER, PLANS, type PlanTier } from "./plans.ts";
 
 /**
  * Monthly per-student chat message caps. The defaults live with every other
  * allowance in `plans.ts` (`chatMessages` / `chatPremiumMessages`).
  *
  * Covers every text chat turn that calls the model once per student message:
- * Rose study chat, review chat, Mentored Learning turns, tutor sessions and
- * calendar Ask Rose. The first `premiumMessages` each billing period run on
+ * Rose study chat, review chat, and Mentored Learning / tutor session turns in
+ * text mode. Voice-mode turns are metered as voice minutes instead (see
+ * `voice-turn.ts`) and calendar Ask Rose is not metered. The first
+ * `premiumMessages` each billing period run on
  * the surface's normal (Sonnet) model; after that the same prompt runs on
  * Haiku until `monthlyMessages`, then chat pauses until the period resets.
  *
@@ -87,26 +93,24 @@ export function chatLimitResetsAt(period: {
   return next.toISOString();
 }
 
-export function chatLimitReachedMessage(input: {
-  tier: PlanTier;
-  limit: ChatLimit;
-  resetsAt: string;
-  upgradeAvailable: boolean;
-}): string {
-  const date = new Date(input.resetsAt).toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-  const n = input.limit.monthlyMessages;
-  const head =
-    n > 0
-      ? `You've reached your monthly chat limit (${n} messages with Rose). It resets on ${date}.`
-      : `Chat with Rose isn't included right now. It resets on ${date}.`;
-  if (!input.upgradeAvailable || input.tier === TOP_PLAN_TIER) return head;
-  return input.tier === "free"
-    ? `${head} Choose a plan to get more messages each month.`
-    : `${head} Upgrade your plan for more messages each month.`;
+export function chatLimitReachedMessage(
+  input: {
+    tier: PlanTier;
+    limit: ChatLimit;
+    resetsAt: string;
+    upgradeAvailable: boolean;
+  },
+  copy?: LimitCopy
+): string {
+  return chatLimitCopy(
+    {
+      tier: input.tier,
+      monthlyMessages: input.limit.monthlyMessages,
+      resetsAt: input.resetsAt,
+      upgradeAvailable: input.upgradeAvailable,
+    },
+    copy
+  );
 }
 
 // ── Reservation flow ────────────────────────────────────────────────────────
@@ -152,6 +156,18 @@ export type ChatQuota = ChatQuotaAllowed | ChatQuotaBlocked;
 
 const noopRefund = async () => {};
 
+/** Resolve a lazy `LimitCopy`; a failed lookup falls back to English + UTC. */
+export async function resolveLimitCopy(
+  copy: LimitCopy | (() => Promise<LimitCopy>) | undefined
+): Promise<LimitCopy | undefined> {
+  if (typeof copy !== "function") return copy;
+  try {
+    return await copy();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function reserveChatQuota(
   store: ChatMeterStore | null,
   input: {
@@ -160,6 +176,13 @@ export async function reserveChatQuota(
     period: { startIso: string; endIso: string | null };
     unlimited: boolean;
     upgradeAvailable: boolean;
+    /**
+     * A voice-mode turn whose reply is charged as voice minutes (verified by
+     * the caller). Not counted as a chat message; runs on the normal model.
+     */
+    voiceTurn?: boolean;
+    /** Student language + time zone for the limit message (only read when blocked). */
+    copy?: LimitCopy | (() => Promise<LimitCopy>);
     env?: Env;
     onStoreError?: (error: unknown) => void;
   }
@@ -174,7 +197,9 @@ export async function reserveChatQuota(
     limit,
     refund: noopRefund,
   };
-  if (!chatLimitsEnabled(env) || input.unlimited || !store) return unmetered;
+  if (!chatLimitsEnabled(env) || input.unlimited || input.voiceTurn || !store) {
+    return unmetered;
+  }
 
   let result: ChatMeterReserveResult;
   try {
@@ -196,12 +221,15 @@ export async function reserveChatQuota(
       used: result.used,
       limit,
       resetsAt,
-      message: chatLimitReachedMessage({
-        tier: input.tier,
-        limit,
-        resetsAt,
-        upgradeAvailable: input.upgradeAvailable,
-      }),
+      message: chatLimitReachedMessage(
+        {
+          tier: input.tier,
+          limit,
+          resetsAt,
+          upgradeAvailable: input.upgradeAvailable,
+        },
+        await resolveLimitCopy(input.copy)
+      ),
     };
   }
 

@@ -60,6 +60,8 @@ export async function POST(request: Request, ctx: Params) {
     notYetSpoken?: unknown;
     /** When set, replace the last assistant transcript row before this turn. */
     truncateLastAssistantTo?: unknown;
+    /** Runner is in voice mode (Rose's reply is spoken and charged as voice). */
+    voiceMode?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -133,7 +135,9 @@ export async function POST(request: Request, ctx: Params) {
     );
   }
 
-  const quota = await reserveChatMessage(user);
+  const quota = await reserveChatMessage(user, {
+    voiceMode: body.voiceMode === true,
+  });
   if (!quota.allowed) return chatLimitResponse(quota);
 
   let history: TutorSessionMessage[] = Array.isArray(

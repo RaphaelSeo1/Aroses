@@ -1,4 +1,8 @@
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
+import {
+  voiceCapReachedMessage,
+  type LimitCopy,
+} from "@/lib/billing/limit-messages";
 
 /**
  * Shared contract for the voice-usage cap across server routes and the client.
@@ -9,17 +13,14 @@ import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
  */
 export const VOICE_CAP_CODE = "voice_cap_reached";
 
-export function voiceCapMessage(): string {
-  if (isBillingUiEnabled()) {
-    return "You've used all your voice time for this billing period. Switched to text — upgrade your plan for more voice minutes.";
-  }
-  return "You've used your voice allowance for this month. Switched to text — you can keep studying everything else.";
+export function voiceCapMessage(copy?: LimitCopy): string {
+  return voiceCapReachedMessage({ upgradeAvailable: isBillingUiEnabled() }, copy);
 }
 
 /** @deprecated Use voiceCapMessage() — kept for any external imports. */
 export const VOICE_CAP_MESSAGE = voiceCapMessage();
 
-/** Shared 402 JSON body for voice-cap responses. */
-export function voiceCapBody(): { error: string; code: string } {
-  return { error: voiceCapMessage(), code: VOICE_CAP_CODE };
+/** Shared 402 JSON body for voice-cap responses, in the student's language. */
+export function voiceCapBody(copy?: LimitCopy): { error: string; code: string } {
+  return { error: voiceCapMessage(copy), code: VOICE_CAP_CODE };
 }

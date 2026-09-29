@@ -12,6 +12,7 @@ import {
   estimateTtsSeconds,
   recordVoiceSeconds,
 } from "@/lib/billing/voice-usage";
+import { getLimitCopy } from "@/lib/billing/limit-copy";
 import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 
 export const runtime = "nodejs";
@@ -88,7 +89,7 @@ export async function POST(request: Request) {
   // Over the monthly allowance → 402 so the client falls back to text mode.
   const allowance = await checkVoiceAllowance(user.id, { email: user.email });
   if (!allowance.allowed) {
-    return NextResponse.json(voiceCapBody(), { status: 402 });
+    return NextResponse.json(voiceCapBody(await getLimitCopy(user.id)), { status: 402 });
   }
 
   let resolvedVoiceId: string;

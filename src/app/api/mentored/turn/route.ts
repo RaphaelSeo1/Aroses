@@ -118,7 +118,9 @@ export async function POST(request: Request) {
     typeof body.lessonTitle === "string" && body.lessonTitle.trim()
       ? body.lessonTitle.trim()
       : body.chunk.concept;
-  const quota = await reserveChatMessage(user);
+  const quota = await reserveChatMessage(user, {
+    voiceMode: body.voiceMode === true,
+  });
   if (!quota.allowed) return chatLimitResponse(quota);
 
   let turn: MentoredTurnResponse;

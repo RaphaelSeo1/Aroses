@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sessionLimitSeconds } from "@/lib/billing/lecture-minutes";
+import { getLimitCopy } from "@/lib/billing/limit-copy";
 import {
   getLectureAllowance,
   lectureLimitBody,
@@ -67,7 +68,10 @@ export async function POST(_request: Request, ctx: Params) {
 
     const allowance = await getLectureAllowance(user.id, { email: user.email });
     if (!allowance.allowed) {
-      return NextResponse.json(lectureLimitBody(allowance), { status: 402 });
+      return NextResponse.json(
+        lectureLimitBody(allowance, await getLimitCopy(user.id)),
+        { status: 402 }
+      );
     }
     const recorded = Math.max(
       Number(session.duration_seconds) || 0,

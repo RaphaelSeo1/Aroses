@@ -1,11 +1,13 @@
 import {
   chatLimitResetsAt,
+  resolveLimitCopy,
   type ChatMeterReserveResult,
   type ChatMeterStore,
 } from "./chat-limits.ts";
 import {
   extraQuestionsDailyLimitMessage,
   extraQuestionsUsedUpMessage,
+  type LimitCopy,
 } from "./limit-messages.ts";
 import { extraQuestionCap, extraQuestionDailyCap, type PlanTier } from "./plans.ts";
 
@@ -85,6 +87,8 @@ export async function reserveExtraQuestionQuota(
     unlimited: boolean;
     /** Daily abuse-cap store; null/omitted skips the daily cap. */
     dailyStore?: ChatMeterStore | null;
+    /** Student language + time zone for the limit message (only read when blocked). */
+    copy?: LimitCopy | (() => Promise<LimitCopy>);
     now?: Date;
     env?: Env;
     onStoreError?: (error: unknown) => void;
@@ -128,11 +132,10 @@ export async function reserveExtraQuestionQuota(
         used: result.used,
         cap,
         resetsAt,
-        message: extraQuestionsUsedUpMessage({
-          tier: input.tier,
-          cap,
-          periodEnd: resetsAt,
-        }),
+        message: extraQuestionsUsedUpMessage(
+          { tier: input.tier, cap, periodEnd: resetsAt },
+          await resolveLimitCopy(input.copy)
+        ),
       };
     }
     if (result) {
@@ -158,7 +161,10 @@ export async function reserveExtraQuestionQuota(
         used: result.used,
         cap: dailyCap,
         resetsAt,
-        message: extraQuestionsDailyLimitMessage({ cap: dailyCap, resetsAt, now }),
+        message: extraQuestionsDailyLimitMessage(
+          { cap: dailyCap, resetsAt, now },
+          await resolveLimitCopy(input.copy)
+        ),
       };
     }
     if (result) {

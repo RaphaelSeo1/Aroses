@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveBillingPeriod } from "./billing-period.ts";
 import {
+  buildChoosePlanMessage,
   extraQuestionsDailyLimitMessage,
   extraQuestionsUsedUpMessage,
   formatLectureHours,
+  lectureMinutesStoppedMessage,
   lectureMinutesUsedUpMessage,
   lectureMinutesWarningMessage,
   resetDateLabel,
   sourcePagesShortMessage,
   sourcePagesUsedUpMessage,
+  voiceCapReachedMessage,
 } from "./limit-messages.ts";
 
 const OCT_1 = "2026-10-01T00:00:00.000Z";
@@ -64,11 +67,63 @@ test("hour and date formatting", () => {
   assert.equal(formatLectureHours(120), "2 hours");
   assert.equal(formatLectureHours(90), "1.5 hours");
   assert.equal(formatLectureHours(45), "45 minutes");
-  assert.equal(resetDateLabel(OCT_1), "October 1");
+  assert.match(resetDateLabel(OCT_1), /^October 1 at 12:00\sAM UTC$/);
   assert.equal(resetDateLabel(null), "your next billing date");
   assert.equal(resetDateLabel("not a date"), "your next billing date");
   assert.match(lectureMinutesWarningMessage(240), /About 4 minutes/);
   assert.match(lectureMinutesWarningMessage(20), /About 1 minute of/);
+});
+
+test("reset times are shown in the student's local time zone", () => {
+  assert.match(
+    resetDateLabel(OCT_1, { timeZone: "America/Los_Angeles" }),
+    /^September 30 at 5:00\sPM$/
+  );
+  assert.match(resetDateLabel(OCT_1, { locale: "ko", timeZone: "Asia/Seoul" }), /^10월 1일 오전 9:00$/);
+  // Unknown zone → UTC, labeled.
+  assert.match(resetDateLabel(OCT_1, { timeZone: "Mars/Olympus" }), /UTC$/);
+  assert.match(
+    sourcePagesUsedUpMessage(
+      { tier: "student", cap: 600, periodEnd: OCT_1 },
+      { timeZone: "America/New_York" }
+    ),
+    /reset on September 30 at 8:00\sPM\./
+  );
+});
+
+test("every limit message renders in Korean", () => {
+  const ko = { locale: "ko", timeZone: "Asia/Seoul" } as const;
+  assert.equal(
+    sourcePagesUsedUpMessage({ tier: "student", cap: 600, periodEnd: OCT_1 }, ko),
+    "스튜던트 요금제의 코스 자료 600페이지를 모두 사용했어요. 10월 1일 오전 9:00에 초기화돼요. 더 많은 페이지가 필요하면 요금제를 업그레이드하세요."
+  );
+  assert.match(
+    sourcePagesShortMessage({ tier: "max", remaining: 1, needed: 2, periodEnd: OCT_1 }, ko),
+    /^이 파일들은 2페이지인데, 남은 코스 자료는 1페이지예요\./
+  );
+  assert.match(
+    lectureMinutesUsedUpMessage({ tier: "plus", capMinutes: 180, periodEnd: OCT_1 }, ko),
+    /^플러스 요금제의 실시간 강의 노트 3시간을 모두 사용했어요\./
+  );
+  assert.match(lectureMinutesWarningMessage(240, ko), /약 4분 남았어요/);
+  assert.match(lectureMinutesStoppedMessage(ko), /녹음이 멈췄어요/);
+  assert.match(
+    extraQuestionsUsedUpMessage({ tier: "max", cap: 1000, periodEnd: OCT_1 }, ko),
+    /^맥스 요금제의 추가 문제 세트 1,000회를 모두 사용했어요\. 10월 1일 오전 9:00에 초기화돼요\.$/
+  );
+  assert.equal(
+    extraQuestionsDailyLimitMessage(
+      { cap: 60, resetsAt: "2026-09-16T00:00:00.000Z", now: new Date("2026-09-15T23:40:00.000Z") },
+      ko
+    ),
+    "오늘 추가 문제 세트를 60회 만들어 하루 한도에 도달했어요. 약 20분 후에 더 만들 수 있어요."
+  );
+  assert.match(voiceCapReachedMessage({ upgradeAvailable: true }, ko), /텍스트 모드로 전환했어요/);
+  assert.equal(buildChoosePlanMessage(ko), "코스를 만들려면 요금제를 선택하세요.");
+  assert.equal(resetDateLabel(null, ko), "다음 결제일");
+  assert.equal(formatLectureHours(90, ko), "1.5시간");
+  // Unknown language → English.
+  assert.match(lectureMinutesStoppedMessage({ locale: "fr" }), /recording stopped/);
 });
 
 test("resets follow the Stripe period for paid users and the 1st of the month for free", () => {

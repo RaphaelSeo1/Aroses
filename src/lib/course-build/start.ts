@@ -8,7 +8,11 @@ import {
   reserveCourseGeneration,
   SOURCE_PAGE_CAP_CODE,
 } from "@/lib/billing/course-cap";
-import { sourcePagesUsedUpMessage } from "@/lib/billing/limit-messages";
+import { getLimitCopy } from "@/lib/billing/limit-copy";
+import {
+  buildChoosePlanMessage,
+  sourcePagesUsedUpMessage,
+} from "@/lib/billing/limit-messages";
 import { resolveBillingPeriod } from "@/lib/billing/billing-period";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import { isPaidTier, sourcePageCap } from "@/lib/billing/plans";
@@ -59,7 +63,12 @@ export async function checkCanBuild(userId: string, email: string | null): Promi
   const unlimited = await isUnlimitedPlanMeterUser(userId, email);
   if (unlimited) return null;
   if (!isPaidTier(sub.tier)) {
-    return { ok: false, status: 402, code: "paid_plan_required", error: "Choose a plan to build a course." };
+    return {
+      ok: false,
+      status: 402,
+      code: "paid_plan_required",
+      error: buildChoosePlanMessage(await getLimitCopy(userId)),
+    };
   }
   const period = resolveBillingPeriod(sub);
   const totals = await getGenerationUsageTotals(userId, period.startIso);
@@ -70,7 +79,10 @@ export async function checkCanBuild(userId: string, email: string | null): Promi
       ok: false,
       status: 402,
       code: SOURCE_PAGE_CAP_CODE,
-      error: sourcePagesUsedUpMessage({ tier: sub.tier, cap, periodEnd: period.endIso }),
+      error: sourcePagesUsedUpMessage(
+        { tier: sub.tier, cap, periodEnd: period.endIso },
+        await getLimitCopy(userId)
+      ),
     };
   }
   return null;

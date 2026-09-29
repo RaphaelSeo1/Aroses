@@ -47,7 +47,7 @@ import {
   isDocumentHidden,
 } from "@/lib/live-notes/typewriter-text";
 import { DismissibleInlineBanner } from "@/components/DismissibleInlineBanner";
-import { useT } from "@/lib/i18n/LocaleProvider";
+import { useLocale, useT } from "@/lib/i18n/LocaleProvider";
 
 /**
  * Live Notes — full-page live lecture capture surface.
@@ -238,6 +238,7 @@ export function LiveNotesSurface({
 }) {
   const router = useRouter();
   const t = useT();
+  const uiLocale = useLocale();
   const sessionId = session.id;
   const isStandalone = variant === "standalone";
   /** Hub list — standalone notes no longer use a separate "doc" editor page. */
@@ -1140,13 +1141,13 @@ export function LiveNotesSurface({
       void maybeSynthesize(false);
     },
     onCapped: (message) => {
-      setLectureLimitNotice(message || lectureMinutesStoppedMessage());
+      setLectureLimitNotice(message || lectureMinutesStoppedMessage({ locale: uiLocale }));
     },
     onLimitWarning: (secondsLeft) => {
-      setLectureLimitNotice(lectureMinutesWarningMessage(secondsLeft));
+      setLectureLimitNotice(lectureMinutesWarningMessage(secondsLeft, { locale: uiLocale }));
     },
     onLimitReached: () => {
-      setLectureLimitNotice(lectureMinutesStoppedMessage());
+      setLectureLimitNotice(lectureMinutesStoppedMessage({ locale: uiLocale }));
       setLectureLimitStops((n) => n + 1);
     },
     onError: (message) => {

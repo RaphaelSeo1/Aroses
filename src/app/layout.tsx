@@ -11,6 +11,7 @@ import { ProductTourHost } from "@/components/product-tour/ProductTourHost";
 import { ScrollRestoration } from "@/components/ScrollRestoration";
 import { ThemeHydration } from "@/components/ThemeHydration";
 import { APP_NAME } from "@/lib/brand";
+import { TIME_ZONE_COOKIE_SCRIPT } from "@/lib/i18n/config";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import { getUiLocale } from "@/lib/i18n/server";
 import { getDictionary } from "@/locales";
@@ -92,6 +93,9 @@ export default async function RootLayout({
         {viewAs ? <ImpersonationBanner email={viewAs.targetEmail} /> : null}
         <Script id="theme-init" strategy="beforeInteractive">
           {THEME_INLINE_SCRIPT}
+        </Script>
+        <Script id="tz-cookie-init" strategy="beforeInteractive">
+          {TIME_ZONE_COOKIE_SCRIPT}
         </Script>
         <Script id="scroll-restoration-init" strategy="beforeInteractive">
           {

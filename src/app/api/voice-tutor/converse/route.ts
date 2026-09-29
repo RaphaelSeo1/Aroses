@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
+import { getLimitCopy } from "@/lib/billing/limit-copy";
 import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 import {
   buildLegacyStudyContext,
@@ -104,7 +105,7 @@ export async function POST(request: Request) {
   // 402 → client falls back to text mode (same contract as the other routes).
   const allowance = await checkVoiceAllowance(user.id, { email: user.email });
   if (!allowance.allowed) {
-    return NextResponse.json(voiceCapBody(), { status: 402 });
+    return NextResponse.json(voiceCapBody(await getLimitCopy(user.id)), { status: 402 });
   }
 
   let body: unknown;

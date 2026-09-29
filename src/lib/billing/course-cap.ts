@@ -1,5 +1,6 @@
 import "server-only";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
+import { getLimitCopy } from "@/lib/billing/limit-copy";
 import { sourcePagesShortMessage } from "@/lib/billing/limit-messages";
 import {
   courseGenerationCap,
@@ -351,12 +352,15 @@ export async function reserveSourcePages(opts: {
         ok: false,
         status: 402,
         code: SOURCE_PAGE_CAP_CODE,
-        error: sourcePagesShortMessage({
-          tier: opts.tier,
-          remaining,
-          needed: opts.sourcePageUnits,
-          periodEnd: opts.periodEnd,
-        }),
+        error: sourcePagesShortMessage(
+          {
+            tier: opts.tier,
+            remaining,
+            needed: opts.sourcePageUnits,
+            periodEnd: opts.periodEnd,
+          },
+          await getLimitCopy(opts.userId)
+        ),
         remaining,
         needed: opts.sourcePageUnits,
       };

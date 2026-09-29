@@ -7,6 +7,7 @@ import {
   type ExtraQuestionQuota,
   type ExtraQuestionQuotaBlocked,
 } from "@/lib/billing/extra-questions";
+import { getLimitCopy } from "@/lib/billing/limit-copy";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import {
   MeterUnavailableError,
@@ -41,6 +42,7 @@ export async function reserveExtraQuestionClick(user: {
     period: { startIso: period.startIso, endIso: period.endIso },
     unlimited,
     dailyStore: planCountMeterStore("extra_questions_daily"),
+    copy: () => getLimitCopy(user.id),
     onStoreError: (e) => {
       if (e instanceof MeterUnavailableError) {
         warnPlanMeterMissing(

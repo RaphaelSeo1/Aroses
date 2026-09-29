@@ -4,6 +4,7 @@ import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import { resolveBillingPeriod } from "@/lib/billing/billing-period";
 import { getUserSubscription } from "@/lib/billing/subscription";
 import { voiceCapSeconds, type PlanTier } from "@/lib/billing/plans";
+import { isChargedVoiceTurn, voiceMeterSnapshot } from "@/lib/billing/voice-turn";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { report } from "@/lib/report-error";
 
@@ -126,6 +127,39 @@ export async function checkVoiceAllowance(
     periodEnd: end,
     unlimited: false,
   };
+}
+
+/**
+ * True when a turn the client says is in voice mode is really being charged as
+ * voice minutes (see `voice-turn.ts`). Any lookup failure → false, so the turn
+ * is simply counted as a chat message.
+ */
+export async function isVoiceMinutesTurn(
+  userId: string,
+  sub: {
+    tier: PlanTier;
+    currentPeriodStart: string | null;
+    currentPeriodEnd: string | null;
+  }
+): Promise<boolean> {
+  const admin = createAdminClient();
+  if (!admin) return false;
+  const { start } = resolvePeriod(sub);
+  const periodStartIso = start.toISOString();
+  const { data, error } = await admin
+    .from("voice_usage")
+    .select("period_start, seconds_used, bonus_seconds, updated_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) return false;
+  return isChargedVoiceTurn({
+    voiceMode: true,
+    meter: voiceMeterSnapshot({
+      row: data,
+      periodStartIso,
+      capSeconds: voiceCapSeconds(sub.tier),
+    }),
+  });
 }
 
 /**

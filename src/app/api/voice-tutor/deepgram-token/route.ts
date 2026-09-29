@@ -5,6 +5,7 @@ import { canReadStudyMaterial } from "@/lib/voice-tutor/material-access";
 import { getVoiceTutorGate } from "@/lib/voice-tutor/policy";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
+import { getLimitCopy } from "@/lib/billing/limit-copy";
 import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 
 export const runtime = "nodejs";
@@ -57,7 +58,7 @@ export async function POST(request: Request) {
   // Live (Deepgram) STT bypasses /transcribe, so enforce the voice cap here too.
   const allowance = await checkVoiceAllowance(user.id, { email: user.email });
   if (!allowance.allowed) {
-    return NextResponse.json(voiceCapBody(), { status: 402 });
+    return NextResponse.json(voiceCapBody(await getLimitCopy(user.id)), { status: 402 });
   }
 
   const token = await mintDeepgramToken();

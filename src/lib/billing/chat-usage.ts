@@ -9,8 +9,10 @@ import {
   type ChatQuotaBlocked,
 } from "@/lib/billing/chat-limits";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
+import { getLimitCopy } from "@/lib/billing/limit-copy";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import { getUserSubscription } from "@/lib/billing/subscription";
+import { isVoiceMinutesTurn } from "@/lib/billing/voice-usage";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { report } from "@/lib/report-error";
 
@@ -84,20 +86,36 @@ function supabaseChatMeterStore(): ChatMeterStore | null {
   };
 }
 
-export async function reserveChatMessage(user: {
-  id: string;
-  email?: string | null;
-}): Promise<ChatQuota> {
+export async function reserveChatMessage(
+  user: {
+    id: string;
+    email?: string | null;
+  },
+  opts?: {
+    /**
+     * The client says this Mentored Learning / tutor session turn is in voice
+     * mode. Skips the chat meter only if voice minutes are really being
+     * charged (`isVoiceMinutesTurn`).
+     */
+    voiceMode?: boolean;
+  }
+): Promise<ChatQuota> {
   const [sub, unlimited] = await Promise.all([
     getUserSubscription(user.id),
     isUnlimitedPlanMeterUser(user.id, user.email).catch(() => false),
   ]);
+  const voiceTurn =
+    opts?.voiceMode === true && !unlimited
+      ? await isVoiceMinutesTurn(user.id, sub).catch(() => false)
+      : false;
   const period = resolveBillingPeriod(sub);
   return reserveChatQuota(supabaseChatMeterStore(), {
     userId: user.id,
     tier: sub.tier,
     period: { startIso: period.startIso, endIso: period.endIso },
     unlimited,
+    voiceTurn,
+    copy: () => getLimitCopy(user.id),
     upgradeAvailable: isBillingUiEnabled(),
     onStoreError: (e) => {
       if (e instanceof MeterUnavailableError) {
@@ -121,7 +139,9 @@ export function chatModelOverride(quota: ChatQuota): string | undefined {
 
 /**
  * 429 JSON the chat UIs already render through their error path
- * (`body.error` becomes the banner / Rose bubble).
+ * (`body.error` becomes the banner / Rose bubble). `error` is already in the
+ * student's language and local time; `resetsAt` (ISO) lets a client format
+ * the reset itself.
  */
 export function chatLimitResponse(quota: ChatQuotaBlocked): Response {
   return new Response(
