@@ -104,7 +104,8 @@ export async function reviewFigures(
       tool_choice: { type: "tool", name: REVIEW_TOOL.name },
       messages: [{ role: "user", content }],
     },
-    { signal: opts.signal }
+    // Modules wait for the figures step, so a slow review gives up early.
+    { signal: opts.signal, timeoutMs: 45_000 }
   );
   const block = message.content.find(
     (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === REVIEW_TOOL.name

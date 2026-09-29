@@ -58,6 +58,11 @@ export type DriveOptions = {
    * the next one if it is due within this many ms instead of yielding to cron.
    */
   maxIdleWaitMs?: number;
+  /**
+   * While steps run, how often the worker looks for newly ready steps even if
+   * it scheduled no retry itself. A retry it scheduled wakes it on time.
+   */
+  claimPollMs?: number;
   sleep?: (ms: number) => Promise<void>;
   log?: (msg: string, extra?: Record<string, unknown>) => void;
 };
@@ -121,6 +126,7 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
     cancelPollMs = 3_000,
     backoffSeconds = DEFAULT_BACKOFF,
     maxIdleWaitMs = 0,
+    claimPollMs = 10_000,
     sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     log = () => {},
   } = opts;
@@ -135,6 +141,23 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
   let canceled = false;
   let fatal = null as Fatal | null;
   let finished = false;
+
+  // Earliest retry this worker scheduled. Steps in flight must not keep a due
+  // retry waiting: only this worker may claim while it holds the lease.
+  let retryDueAt = Number.POSITIVE_INFINITY;
+  let retryRechecked = false;
+  const noteRetry = (delaySeconds: number) => {
+    retryDueAt = Math.min(retryDueAt, Date.now() + delaySeconds * 1000 + 250);
+    retryRechecked = false;
+  };
+  /** Ms until the worker should look for ready steps again; one recheck covers DB clock skew. */
+  const nextWakeMs = () => {
+    if (Date.now() >= retryDueAt) {
+      retryDueAt = retryRechecked ? Number.POSITIVE_INFINITY : Date.now() + 1_000;
+      retryRechecked = !retryRechecked;
+    }
+    return Math.max(0, Math.min(claimPollMs, retryDueAt - Date.now()));
+  };
 
   const abortAll = () => {
     for (const { abort } of inflight.values()) abort.abort();
@@ -220,7 +243,9 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
         return;
       }
       if (err instanceof RateLimitedError) {
-        const out = await store.rescheduleStep(step.id, owner, err.retryAfterMs / 1000, detail);
+        const delay = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+        const out = await store.rescheduleStep(step.id, owner, delay, detail);
+        if (out === "rescheduled") noteRetry(delay);
         if (out === "failed") {
           fatal ??= { code: "rate_limited", message: "The AI service stayed busy for too long. Try again in a few minutes." };
         }
@@ -230,6 +255,7 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
       // usually frees room under the build cap.
       if (err instanceof SpendRefusedError && err.code === "build_cap" && inflight.size > 1) {
         const out = await store.rescheduleStep(step.id, owner, BUILD_CAP_RETRY_SECONDS, detail);
+        if (out === "rescheduled") noteRetry(BUILD_CAP_RETRY_SECONDS);
         if (out === "failed") fatal ??= { code: err.code, message: spendRefusalMessage(err.code) };
         return;
       }
@@ -249,7 +275,9 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
         return;
       }
       const retryable = err instanceof AiCallError ? err.retryable : true;
-      const out = await store.failStep(step.id, owner, detail, retryable, backoffSeconds(step.attempts));
+      const backoff = Math.max(0, Math.round(backoffSeconds(step.attempts)));
+      const out = await store.failStep(step.id, owner, detail, retryable, backoff);
+      if (out === "retry") noteRetry(backoff);
       if (out === "failed") {
         const code = err instanceof BudgetUnavailableError ? err.code : "step_failed";
         fatal ??= {
@@ -282,7 +310,14 @@ export async function driveBuild(opts: DriveOptions): Promise<DriveOutcome> {
       }
 
       if (inflight.size > 0) {
-        await Promise.race([...inflight.values()].map((x) => x.promise));
+        const wakeMs = nextWakeMs();
+        let wakeTimer: ReturnType<typeof setTimeout> | undefined;
+        const wake = new Promise<void>((resolve) => {
+          wakeTimer = setTimeout(resolve, wakeMs);
+          (wakeTimer as { unref?: () => void }).unref?.();
+        });
+        await Promise.race([wake, ...[...inflight.values()].map((x) => x.promise)]);
+        clearTimeout(wakeTimer);
         continue;
       }
 

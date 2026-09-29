@@ -10,6 +10,10 @@ export type StepView = {
   attempts: number;
   run_after: string | null;
   preview: ModulePreview | null;
+  /** Times the step was put back because the AI service was busy. */
+  rate_limited_count?: number | null;
+  /** Server-side only: never sent to the browser. */
+  last_error?: string | null;
 };
 
 type BuildRow = {
@@ -59,6 +63,8 @@ export type BuildStatus = {
   /** Null when the build doesn't look for figures (no PDFs). */
   figures: { done: boolean; found: number } | null;
   canceling: boolean;
+  /** A step is waiting to retry because the AI service turned it away. */
+  aiBusy: boolean;
   error: { code: string | null; message: string } | null;
   createdAt: string;
   firstModuleAt: string | null;
@@ -100,6 +106,15 @@ function moduleStatus(step: StepView, now: number): ModuleProgress["status"] {
   if (step.status === "running") return step.attempts > 1 ? "retrying" : "writing";
   const later = step.run_after ? Date.parse(step.run_after) > now : false;
   return step.attempts > 0 || later ? "retrying" : "waiting";
+}
+
+const BUSY_ERROR = /overloaded|rate.?limit|\b(429|503|529)\b|temporarily unavailable/i;
+
+/** Build-cap waits are rescheduled the same way, so the saved error decides. */
+function waitingOnBusyAi(step: StepView, now: number): boolean {
+  if (step.status !== "pending" || !step.rate_limited_count) return false;
+  if (!step.run_after || Date.parse(step.run_after) <= now - 5_000) return false;
+  return BUSY_ERROR.test(step.last_error ?? "");
 }
 
 /** What the build screen shows, derived from the saved build and steps only. */
@@ -150,6 +165,7 @@ export function buildStatusView(input: {
       ? { done: figureSteps.every((s) => s.status === "done"), found: input.figuresFound ?? 0 }
       : null,
     canceling: !terminal && !!build.cancel_requested_at,
+    aiBusy: !terminal && steps.some((s) => waitingOnBusyAi(s, now)),
     error:
       build.status === "failed"
         ? { code: build.error_code, message: build.error_message || "The build failed. Try again in a few minutes." }

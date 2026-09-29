@@ -343,6 +343,82 @@ test("the cron sweep resumes a build whose worker died mid-step", async () => {
   assert.equal(await t.store.completeStep(step!.id, "dead", {}), false, "the dead worker cannot overwrite");
 });
 
+/**
+ * The production stall: figures (wave 1) waits for the plan (wave 1) while
+ * the plan waits to retry. The worker must claim the retry while figures runs.
+ */
+function planWithFigures(planFailure: () => Error) {
+  let planCalls = 0;
+  let planDoneAt = 0;
+  let figuresSawPlan = false;
+  const handlers: StepHandlers = {
+    extract: async () => ({
+      output: {},
+      newSteps: [
+        { kind: "plan", ordinal: 0, wave: 1 },
+        { kind: "figures", ordinal: 0, wave: 1, maxAttempts: 1 },
+      ],
+    }),
+    plan: async () => {
+      planCalls += 1;
+      if (planCalls === 1) throw planFailure();
+      planDoneAt = Date.now();
+      return {
+        output: {},
+        newSteps: [
+          { kind: "module", ordinal: 0, wave: 2 },
+          { kind: "finalize", ordinal: 0, wave: 3 },
+        ],
+      };
+    },
+    figures: async (_s, ctx) => {
+      const until = Date.now() + 8_000;
+      while (Date.now() < until && !ctx.signal.aborted) {
+        if (planDoneAt) {
+          figuresSawPlan = true;
+          break;
+        }
+        await sleep(20);
+      }
+      return { output: { figures: [] } };
+    },
+    module: async () => ({ output: {} }),
+    finalize: async () => ({ output: {} }),
+  };
+  return { handlers, planCalls: () => planCalls, figuresSawPlan: () => figuresSawPlan };
+}
+
+test("a long figures step does not hold back a rate-limited plan's retry", async () => {
+  const buildId = await newBuild();
+  const p = planWithFigures(() => new RateLimitedError(1_000, "503 overloaded_error", "overloaded"));
+  const t0 = Date.now();
+  const res = await driveBuild({ buildId, store: t.store, handlers: p.handlers, claimPollMs: 60_000 });
+  const ms = Date.now() - t0;
+  assert.deepEqual(res, { outcome: "finished", status: "complete" });
+  assert.equal(p.planCalls(), 2);
+  assert.equal(p.figuresSawPlan(), true, "figures saw the retried plan finish instead of timing out");
+  assert.ok(ms < 5_000, `finished in ${ms}ms, not after the figures wait`);
+  const plan = (await t.steps(buildId)).find((s) => s.kind === "plan")!;
+  assert.equal(plan.attempts, 1, "the overload did not use up an attempt");
+});
+
+test("a long figures step does not hold back a failed plan's backoff retry", async () => {
+  const buildId = await newBuild();
+  const p = planWithFigures(() => new Error("socket hang up"));
+  const t0 = Date.now();
+  const res = await driveBuild({
+    buildId,
+    store: t.store,
+    handlers: p.handlers,
+    backoffSeconds: () => 1,
+    claimPollMs: 60_000,
+  });
+  assert.deepEqual(res, { outcome: "finished", status: "complete" });
+  assert.equal(p.planCalls(), 2);
+  assert.equal(p.figuresSawPlan(), true);
+  assert.ok(Date.now() - t0 < 5_000);
+});
+
 test("past the deadline no new steps start and the lease is released", async () => {
   const buildId = await newBuild();
   const p = pipeline(1);

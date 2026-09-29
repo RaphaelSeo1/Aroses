@@ -9,7 +9,13 @@ import {
   RateLimitedError,
   SpendRefusedError,
 } from "./errors.ts";
-import { meteredClaudeCall, type MessagesClient, type MeteredRequest } from "./metered-call.ts";
+import {
+  meteredClaudeCall,
+  resetStructuredOutputOutage,
+  structuredOutputOutage,
+  type MessagesClient,
+  type MeteredRequest,
+} from "./metered-call.ts";
 import { createTestDb, type TestDb } from "./testing/pglite-db.ts";
 
 let t: TestDb;
@@ -178,15 +184,116 @@ test("429 and 529 become RateLimitedError with the server's retry-after; not bil
     const client = fakeClient(async () => {
       throw httpError(status, { "retry-after": "7" });
     });
-    await assert.rejects(meteredClaudeCall({ store: t.store, client, config: ON }, c, REQ), (err) => {
+    await assert.rejects(meteredClaudeCall({ store: t.store, client, config: ON, sleep: noWait }, c, REQ), (err) => {
       assert.ok(err instanceof RateLimitedError);
       assert.equal(err.retryAfterMs, 7000);
+      assert.equal(err.reason, status === 429 ? "rate_limit" : "overloaded");
       return true;
     });
-    const [row] = await t.ledger(c.buildId);
-    assert.equal(row.status, "failed");
-    assert.equal(Number(row.cost_usd), 0);
+    assert.equal(client.calls.length, status === 429 ? 1 : 3, "only an overload is retried in place");
+    for (const row of await t.ledger(c.buildId)) {
+      assert.equal(row.status, "failed");
+      assert.equal(Number(row.cost_usd), 0);
+    }
   }
+});
+
+const noWait = async () => {};
+
+const STRICT_TOOL: Anthropic.Tool = {
+  name: "submit_plan",
+  strict: true,
+  input_schema: { type: "object", properties: { title: { type: "string" } }, required: ["title"], additionalProperties: false },
+};
+const TOOL_REQ: MeteredRequest = { ...REQ, tools: [STRICT_TOOL], tool_choice: { type: "tool", name: "submit_plan" } };
+
+function grammarError() {
+  return Object.assign(
+    new Error(
+      '503 {"type":"error","error":{"type":"overloaded_error","message":"Grammar compilation is temporarily unavailable. Please try again."}}'
+    ),
+    { status: 503, headers: new Headers() }
+  );
+}
+
+const isStrict = (body: Anthropic.MessageCreateParamsNonStreaming) =>
+  (body.tools ?? []).some((t) => (t as Anthropic.Tool).strict === true);
+
+test("structured output down (grammar 503): one quick retry without strict tools succeeds", async () => {
+  resetStructuredOutputOutage();
+  try {
+    const c = await ctx();
+    const calls: Anthropic.MessageCreateParamsNonStreaming[] = [];
+    const waits: number[] = [];
+    const client: MessagesClient = {
+      messages: {
+        create: async (body) => {
+          calls.push(body);
+          if (isStrict(body)) throw grammarError();
+          return reply({ input_tokens: 1000, output_tokens: 100 });
+        },
+      },
+    };
+    const deps = { store: t.store, client, config: ON, sleep: async (ms: number) => void waits.push(ms) };
+    const res = await meteredClaudeCall(deps, c, TOOL_REQ);
+    assert.ok(res.costUsd > 0);
+    assert.deepEqual(calls.map(isStrict), [true, false]);
+    assert.equal(calls[1].tools?.[0].name, "submit_plan", "same tool, schema kept, only strict dropped");
+    assert.ok(waits.length === 1 && waits[0] <= 1_500, `quick jittered wait, got ${waits}`);
+    assert.deepEqual((await t.ledger(c.buildId)).map((r) => [r.status, Number(r.cost_usd) > 0]), [
+      ["failed", false],
+      ["settled", true],
+    ]);
+
+    // Other calls skip strict for a while instead of waiting on the same failure.
+    assert.equal(structuredOutputOutage(), true);
+    await meteredClaudeCall(deps, c, TOOL_REQ);
+    assert.deepEqual(calls.map(isStrict), [true, false, false]);
+  } finally {
+    resetStructuredOutputOutage();
+  }
+});
+
+test("repeated overloads: retried quickly, then without strict, then handed to the reschedule path", async () => {
+  resetStructuredOutputOutage();
+  const c = await ctx();
+  const calls: Anthropic.MessageCreateParamsNonStreaming[] = [];
+  const waits: number[] = [];
+  const client: MessagesClient = {
+    messages: {
+      create: async (body) => {
+        calls.push(body);
+        throw Object.assign(new Error('529 {"type":"overloaded_error","message":"Overloaded"}'), { status: 529 });
+      },
+    },
+  };
+  const deps = { store: t.store, client, config: ON, sleep: async (ms: number) => void waits.push(ms), random: () => 1 };
+  await assert.rejects(meteredClaudeCall(deps, c, TOOL_REQ), (err) => {
+    assert.ok(err instanceof RateLimitedError);
+    assert.equal(err.reason, "overloaded");
+    assert.ok(err.retryAfterMs <= 8_000, `short reschedule, got ${err.retryAfterMs}`);
+    return true;
+  });
+  assert.deepEqual(calls.map(isStrict), [true, true, false]);
+  assert.deepEqual(waits, [1_500, 4_000]);
+  assert.equal(structuredOutputOutage(), false, "a plain overload doesn't switch strict off for everyone");
+});
+
+test("a cancel during the quick-retry wait stops without another call", async () => {
+  const c = await ctx();
+  const ac = new AbortController();
+  let n = 0;
+  const client: MessagesClient = {
+    messages: {
+      create: async () => {
+        n += 1;
+        throw Object.assign(new Error("529 overloaded"), { status: 529 });
+      },
+    },
+  };
+  const deps = { store: t.store, client, config: ON, sleep: async () => ac.abort() };
+  await assert.rejects(meteredClaudeCall(deps, c, REQ, { signal: ac.signal }), AiCallError);
+  assert.equal(n, 1);
 });
 
 test("an HTTP 400 is not retryable and not billed; a dropped connection keeps its worst-case cost", async () => {

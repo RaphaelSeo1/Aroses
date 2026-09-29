@@ -28,14 +28,22 @@ export class BudgetUnavailableError extends Error {
   }
 }
 
-/** Anthropic rate limit / overload. The step is rescheduled, not retried in place. */
+/**
+ * Why the AI service turned a call away: our rate limit, a general overload,
+ * or its structured-output (strict tool schema) service being down.
+ */
+export type BusyReason = "rate_limit" | "overloaded" | "structured_output";
+
+/** Anthropic rate limit / overload. The step is rescheduled without using up an attempt. */
 export class RateLimitedError extends Error {
   readonly code = "rate_limited";
   readonly retryAfterMs: number;
-  constructor(retryAfterMs: number, detail: string) {
+  readonly reason: BusyReason;
+  constructor(retryAfterMs: number, detail: string, reason: BusyReason = "rate_limit") {
     super(detail);
     this.name = "RateLimitedError";
     this.retryAfterMs = retryAfterMs;
+    this.reason = reason;
   }
 }
 

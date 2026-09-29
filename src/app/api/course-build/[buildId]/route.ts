@@ -33,7 +33,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ buildId: st
   const loadSteps = async () => {
     const withPreview = await supabase
       .from("course_build_steps")
-      .select("kind, ordinal, status, attempts, run_after, preview")
+      .select("kind, ordinal, status, attempts, run_after, rate_limited_count, last_error, preview")
       .eq("build_id", buildId);
     if (!withPreview.error) return withPreview;
     // Before migration 116 there is no live preview column.

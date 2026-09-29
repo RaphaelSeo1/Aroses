@@ -39,8 +39,9 @@ export function createFigureFinder(
   opts: { maxRenderPages: number; timeBudgetMs: number }
 ): FindFiguresFn {
   return async (source, signal) => {
+    const deadlineAt = Date.now() + opts.timeBudgetMs;
     const buf = await download(admin, source);
-    return findPdfFigures(buf, { ...opts, signal });
+    return findPdfFigures(buf, { ...opts, deadlineAt, signal });
   };
 }
 

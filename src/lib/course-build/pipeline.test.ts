@@ -14,7 +14,7 @@ import {
   type SourceRecord,
 } from "./handlers.ts";
 import { StepFatalError } from "./errors.ts";
-import type { MessagesClient } from "./metered-call.ts";
+import { resetStructuredOutputOutage, type MessagesClient } from "./metered-call.ts";
 import { lessonWordBudget, quizSplit, toCourseModule } from "./module.ts";
 import { numberPages } from "./outline.ts";
 import {
@@ -519,4 +519,64 @@ test("a streaming writer saves throttled previews while the module is written", 
   assert.equal(previews.length, 2, "two bursts a second apart give two saves");
   assert.equal(previews[0].lessons[0].content, "Oxidation is", "a burst saves only its newest snapshot");
   assert.equal(previews[1].lessons.length, 2);
+});
+
+test("during a structured-output outage the plan and modules still complete without strict schemas", async () => {
+  resetStructuredOutputOutage();
+  try {
+    const { userId, buildId } = await newBuild();
+    const mem = memoryData(pagesOf(24));
+    const sent: Array<{ tool: string; strict: boolean }> = [];
+    const client: MessagesClient = {
+      messages: {
+        create: async (body) => {
+          const tool = (body.tool_choice as { name: string }).name;
+          const strict = (body.tools ?? []).some((x) => (x as Anthropic.Tool).strict === true);
+          sent.push({ tool, strict });
+          if (strict) {
+            throw Object.assign(
+              new Error('503 {"type":"error","error":{"type":"overloaded_error","message":"Grammar compilation is temporarily unavailable. Please try again."}}'),
+              { status: 503 }
+            );
+          }
+          if (tool === "submit_plan") {
+            return toolMessage("submit_plan", {
+              title: "Glycolysis",
+              description: "How glucose is split.",
+              // Schema-free output sometimes arrives stringified.
+              modules: JSON.stringify([
+                { title: "Investment Phase", first_page: 1, last_page: 12, lessons: ["Hexokinase"] },
+                { title: "Payoff Phase", first_page: 13, last_page: 24, lessons: ["Substrate-level phosphorylation"] },
+              ]),
+              skip_pages: [],
+              info_pages: [],
+            });
+          }
+          const text = (body.messages[0].content as string) ?? "";
+          const pages = [...text.matchAll(/\[p(\d+)\]/g)].map((m) => Number(m[1]));
+          const input = moduleInput(pages);
+          return toolMessage("submit_module", { ...input, lessons: JSON.stringify(input.lessons) });
+        },
+      },
+    };
+    const handlers = createStepHandlers({
+      store: t.store,
+      client,
+      config,
+      data: mem.data(buildId, userId),
+      extract: mem.extract,
+      validatePayload: validate,
+    });
+    const out = await driveBuild({ buildId, store: t.store, handlers, heartbeatMs: 50 });
+    assert.deepEqual(out, { outcome: "finished", status: "complete" });
+    assert.deepEqual(sent[0], { tool: "submit_plan", strict: true });
+    assert.deepEqual(sent[1], { tool: "submit_plan", strict: false });
+    assert.ok(sent.slice(2).every((s) => !s.strict), "later calls skip strict while it is down");
+    const final = mem.published.find((p) => p.final)!;
+    assert.deepEqual(final.payload.modules.map((m) => m.title), ["Investment Phase", "Payoff Phase"]);
+    const plan = (await t.steps(buildId)).find((s) => s.kind === "plan")!;
+    assert.equal(plan.attempts, 1, "the outage cost no step attempts");
+  } finally {
+    resetStructuredOutputOutage();
+  }
 });

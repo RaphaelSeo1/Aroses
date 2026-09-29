@@ -108,3 +108,21 @@ test("a failed build hides its partial material and shows the saved message", ()
   assert.deepEqual(v.modules, []);
   assert.deepEqual(v.error, { code: "file_unreadable", message: "We couldn't read lec.pdf." });
 });
+
+test("a step waiting out a busy AI service says so; build-cap waits and other retries don't", () => {
+  const later = "2026-09-27T12:00:06Z";
+  const overloaded = '503 {"type":"error","error":{"type":"overloaded_error","message":"Grammar compilation is temporarily unavailable."}}';
+  const busy = (extra: Partial<StepView>) =>
+    view(build("running"), [step("extract", "done"), step("plan", "pending", { run_after: later, ...extra })]).aiBusy;
+  assert.equal(busy({ rate_limited_count: 1, last_error: overloaded }), true);
+  assert.equal(busy({ rate_limited_count: 2, last_error: "429 rate_limit_error" }), true);
+  assert.equal(busy({ rate_limited_count: 1, last_error: "AI call refused: build_cap" }), false);
+  assert.equal(busy({ attempts: 1, last_error: "socket hang up" }), false);
+  assert.equal(busy({ rate_limited_count: 1, last_error: overloaded, run_after: "2026-09-27T11:59:00Z" }), false, "long overdue");
+  assert.equal(
+    view(build("canceled"), [step("plan", "pending", { rate_limited_count: 1, last_error: overloaded, run_after: later })]).aiBusy,
+    false
+  );
+  const json = JSON.stringify(view(build("running"), [step("plan", "pending", { rate_limited_count: 1, last_error: overloaded, run_after: later })]));
+  assert.ok(!json.includes("Grammar"), "the saved error never reaches the browser");
+});

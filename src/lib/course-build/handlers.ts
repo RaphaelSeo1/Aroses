@@ -249,7 +249,26 @@ function toolInput(message: Anthropic.Message, name: string): unknown {
       status: null,
     });
   }
-  return block.input;
+  return unstringifyFields(block.input);
+}
+
+/**
+ * Without a strict schema the model sometimes sends an array or object field
+ * as a JSON string; parse those back so validation sees the real value.
+ */
+function unstringifyFields(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v !== "string" || !/^\s*[[{]/.test(v)) continue;
+    try {
+      const parsed: unknown = JSON.parse(v);
+      if (parsed && typeof parsed === "object") out[k] = parsed;
+    } catch {
+      // Plain text that happens to start with a bracket.
+    }
+  }
+  return out;
 }
 
 function sourceInfos(sources: SourceRecord[]): BuildSourceInfo[] {

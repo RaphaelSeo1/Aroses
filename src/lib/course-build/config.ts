@@ -15,7 +15,10 @@ export type CourseBuildConfig = {
   figuresEnabled: boolean;
   /** Most PDF pages rendered per file when looking for figures. */
   figureMaxPages: number;
-  /** Wall-clock budget for finding figures in one file; later pages are skipped. */
+  /**
+   * Wall-clock budget for finding figures in one file, from download to the
+   * last crop; the weakest pages are skipped when it runs out.
+   */
   figureTimeBudgetMs: number;
   /** How long the figures step waits for the plan step's page reservation before skipping the vision check. */
   figureReserveWaitMs: number;
@@ -51,7 +54,7 @@ export function readCourseBuildConfig(env: Env = process.env): CourseBuildConfig
     visionMaxCrops: nonNegativeInt(env.COURSE_BUILD_VISION_MAX_CROPS, 24),
     figuresEnabled: !["0", "false", "off"].includes(env.COURSE_BUILD_FIGURES?.trim().toLowerCase() ?? ""),
     figureMaxPages: nonNegativeInt(env.COURSE_BUILD_FIGURE_MAX_PAGES, 20),
-    figureTimeBudgetMs: Math.max(5_000, nonNegativeInt(env.COURSE_BUILD_FIGURE_TIME_MS, 40_000)),
+    figureTimeBudgetMs: Math.max(5_000, nonNegativeInt(env.COURSE_BUILD_FIGURE_TIME_MS, 25_000)),
     figureReserveWaitMs: 120_000,
     maxStepAttempts: Math.min(10, Math.max(1, nonNegativeInt(env.COURSE_BUILD_MAX_STEP_ATTEMPTS, 3))),
   };

@@ -14,6 +14,7 @@ import {
   scoreCropQuality,
 } from "@/lib/pdf-ingest/filter-crop-quality";
 import { loadPdfDocument } from "@/lib/study-ingest/source-images/render-pdf-page";
+import { FigureBudget, eachWithinBudget, spreadOrder, yieldToEventLoop } from "./figure-budget.ts";
 import { isChromeBox, repeatedBoxes, type Box, type FigureCandidate } from "./figures.ts";
 
 const RENDER_WIDTH_PX = 1100;
@@ -36,8 +37,6 @@ export type FoundFigures = {
   truncated: boolean;
 };
 
-/** pdfjs runs on the main thread here; yielding keeps the server answering requests. */
-const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 // One scan per process at a time: each holds a parsed PDF and page canvases in memory.
 let queue: Promise<unknown> = Promise.resolve();
@@ -189,130 +188,145 @@ async function rasterQuality(buffer: Buffer): Promise<number> {
   return Math.min(1, 0.6 + buckets.size / 60);
 }
 
+export type FindFiguresOptions = {
+  maxRenderPages: number;
+  timeBudgetMs: number;
+  /**
+   * Absolute end of the budget. Defaults to now + timeBudgetMs; set it
+   * earlier to count time spent before the call (download, queue).
+   */
+  deadlineAt?: number;
+  signal?: AbortSignal;
+};
+
 /**
  * Finds figure crops in a PDF without any AI. Every page's drawing commands
- * are scanned; only pages that draw a sizeable image or many paths are rendered.
+ * are scanned; only pages that draw a sizeable image or many paths are
+ * rendered. Stops at the deadline, including time spent queued behind another
+ * scan, and returns what it found so far.
  */
-export function findPdfFigures(
-  buffer: Buffer,
-  opts: { maxRenderPages: number; timeBudgetMs: number; signal?: AbortSignal }
-): Promise<FoundFigures> {
-  return exclusive(() => findPdfFiguresNow(buffer, opts));
+export function findPdfFigures(buffer: Buffer, opts: FindFiguresOptions): Promise<FoundFigures> {
+  const budget = new FigureBudget(opts.deadlineAt ?? Date.now() + opts.timeBudgetMs);
+  return exclusive(() => findPdfFiguresNow(buffer, opts, budget));
 }
 
-async function findPdfFiguresNow(
-  buffer: Buffer,
-  opts: { maxRenderPages: number; timeBudgetMs: number; signal?: AbortSignal }
-): Promise<FoundFigures> {
-  const deadline = Date.now() + opts.timeBudgetMs;
-  let truncated = false;
+async function findPdfFiguresNow(buffer: Buffer, opts: FindFiguresOptions, budget: FigureBudget): Promise<FoundFigures> {
+  const signal = opts.signal;
+  if (budget.expired) return { candidates: [], repeated: [], pagesRendered: 0, truncated: true };
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const OPS = pdfjsLib.OPS as unknown as Record<string, number>;
   const { pdf } = await loadPdfDocument(buffer);
   try {
-    const scans: PageScan[] = [];
     const total = Math.min(pdf.numPages, MAX_SCAN_PAGES);
-    // Scanning may use at most half the budget so rendering still gets time.
-    const scanDeadline = Date.now() + opts.timeBudgetMs / 2;
-    for (let n = 1; n <= total; n++) {
-      if (opts.signal?.aborted) throw new Error("aborted");
-      if (Date.now() > scanDeadline) {
-        truncated = true;
-        break;
-      }
+    // Scanning may use at most half the remaining budget so rendering still gets time.
+    const scan = await eachWithinBudget<number, PageScan>(spreadOrder(total), budget.portion(0.5), signal, async (n, emit) => {
       const page = await pdf.getPage(n);
       try {
-        scans.push(await scanPage(page, n, OPS));
+        emit(await scanPage(page, n, OPS));
       } catch {
         // One unreadable page doesn't stop the rest.
       } finally {
         page.cleanup();
       }
-      await yieldToEventLoop();
-    }
+    });
+    const scans = scan.results;
 
-    const repeated = repeatedBoxes(new Map(scans.map((s) => [s.page, s.images])), total);
+    const repeated = repeatedBoxes(new Map(scans.map((s) => [s.page, s.images])), scan.truncated ? scans.length : total);
     const score = (s: PageScan) => {
       const img = s.images.filter((b) => !isChromeBox(b, repeated) && b.w * b.h >= MIN_IMAGE_AREA && b.w * b.h <= 0.8);
       const imgArea = img.reduce((a, b) => a + b.w * b.h, 0);
       return imgArea > 0 ? 1 + imgArea : s.paths >= VECTOR_PAGE_PATHS ? Math.min(1, s.paths / 200) : 0;
     };
+    // Best pages first, so a render cut short by the budget loses the weakest ones.
     const toRender = scans
       .map((s) => ({ page: s.page, score: score(s) }))
       .filter((s) => s.score > 0)
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => b.score - a.score || a.page - b.page)
       .slice(0, Math.max(0, opts.maxRenderPages))
-      .map((s) => s.page)
-      .sort((a, b) => a - b);
+      .map((s) => s.page);
 
-    const candidates: FigureCandidate[] = [];
-    let pagesRendered = 0;
-    for (const n of toRender) {
-      if (opts.signal?.aborted) throw new Error("aborted");
-      if (Date.now() > deadline || candidates.length >= MAX_CANDIDATES) {
-        truncated = true;
-        break;
-      }
-      await yieldToEventLoop();
-      pagesRendered++;
-      const page = await pdf.getPage(n);
-      try {
-        const base = page.getViewport({ scale: 1 });
-        const scale = Math.min(MAX_SCALE, base.width > 0 ? RENDER_WIDTH_PX / base.width : MAX_SCALE);
-        const viewport = page.getViewport({ scale });
-        const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-        const context = canvas.getContext("2d");
-        context.fillStyle = "#ffffff";
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        await page.render({
-          canvas: canvas as unknown as HTMLCanvasElement,
-          canvasContext: context as unknown as CanvasRenderingContext2D,
-          viewport,
-        }).promise;
-        const pagePng = canvas.toBuffer("image/jpeg", 90);
-        const found = await extractStructuralCandidatesForPage({
-          page,
-          viewport: viewport as unknown as Parameters<typeof extractStructuralCandidatesForPage>[0]["viewport"],
-          pagePng,
-          pageNum: n,
-          seenImageObjectIds: new Set(),
-        });
-        const crops = [...found.raster, ...found.vector]
-          .sort((a, b) => b.pixelRect.w * b.pixelRect.h - a.pixelRect.w * a.pixelRect.h)
-          .slice(0, MAX_CROPS_PER_PAGE);
-        for (const c of crops) {
-          if (candidates.length >= MAX_CANDIDATES) break;
-          const crop = c.cropBuffer;
-          const r = c.pixelRect;
-          const origin = c.source === "structural_raster" ? "raster" : "vector";
-          // Font checks only mean something for drawn regions; an embedded
-          // image carries its own text as pixels.
-          if (origin === "vector" && ((await isLikelyTextOrIconCropPng(crop)) || (await isLikelyMissingGlyphCropPng(crop)))) {
-            continue;
-          }
-          const quality = origin === "raster" ? await rasterQuality(crop) : await scoreCropQuality(crop, { skipGlyphCheck: true });
-          if (quality <= 0) continue;
-          const mime = origin === "raster" ? "image/jpeg" : "image/png";
-          candidates.push({
-            page: n,
-            origin,
-            box: { x: r.x / canvas.width, y: r.y / canvas.height, w: r.w / canvas.width, h: r.h / canvas.height },
-            width: r.w,
-            height: r.h,
-            image: await encode(crop, MAX_UPLOAD_SIDE_PX, mime),
-            mime,
-            thumb: await encode(crop, THUMB_SIDE_PX, "image/jpeg"),
-            quality,
-            tableGrid: await isLikelyTableGridCropPng(crop),
-            hash: await differenceHash(crop),
-          });
+    const render = await eachWithinBudget<number, FigureCandidate>(
+      toRender,
+      budget,
+      signal,
+      async (n, emit) => {
+        const page = await pdf.getPage(n);
+        try {
+          await renderPageCrops(page, n, budget, signal, emit);
+        } finally {
+          page.cleanup();
         }
-      } finally {
-        page.cleanup();
-      }
-    }
-    return { candidates, repeated, pagesRendered, truncated };
+      },
+      { stopWhen: (found) => found.length >= MAX_CANDIDATES }
+    );
+    const candidates = render.results.slice(0, MAX_CANDIDATES).sort((a, b) => a.page - b.page);
+    return { candidates, repeated, pagesRendered: render.processed, truncated: scan.truncated || render.truncated };
   } finally {
     await pdf.destroy().catch(() => {});
+  }
+}
+
+/** Renders one page and emits its usable crops, largest first, checking the budget between each. */
+async function renderPageCrops(
+  page: PdfPage,
+  n: number,
+  budget: FigureBudget,
+  signal: AbortSignal | undefined,
+  emit: (c: FigureCandidate) => void
+): Promise<void> {
+  const base = page.getViewport({ scale: 1 });
+  const scale = Math.min(MAX_SCALE, base.width > 0 ? RENDER_WIDTH_PX / base.width : MAX_SCALE);
+  const viewport = page.getViewport({ scale });
+  const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  // A heavy page can take seconds to draw; the render is cancelled at the deadline.
+  await budget.within(
+    page.render({
+      canvas: canvas as unknown as HTMLCanvasElement,
+      canvasContext: context as unknown as CanvasRenderingContext2D,
+      viewport,
+    })
+  );
+  budget.check(signal);
+  const pagePng = canvas.toBuffer("image/jpeg", 90);
+  const found = await extractStructuralCandidatesForPage({
+    page,
+    viewport: viewport as unknown as Parameters<typeof extractStructuralCandidatesForPage>[0]["viewport"],
+    pagePng,
+    pageNum: n,
+    seenImageObjectIds: new Set(),
+  });
+  const crops = [...found.raster, ...found.vector]
+    .sort((a, b) => b.pixelRect.w * b.pixelRect.h - a.pixelRect.w * a.pixelRect.h)
+    .slice(0, MAX_CROPS_PER_PAGE);
+  for (const c of crops) {
+    budget.check(signal);
+    await yieldToEventLoop();
+    const crop = c.cropBuffer;
+    const r = c.pixelRect;
+    const origin = c.source === "structural_raster" ? "raster" : "vector";
+    // Font checks only mean something for drawn regions; an embedded
+    // image carries its own text as pixels.
+    if (origin === "vector" && ((await isLikelyTextOrIconCropPng(crop)) || (await isLikelyMissingGlyphCropPng(crop)))) {
+      continue;
+    }
+    const quality = origin === "raster" ? await rasterQuality(crop) : await scoreCropQuality(crop, { skipGlyphCheck: true });
+    if (quality <= 0) continue;
+    const mime = origin === "raster" ? "image/jpeg" : "image/png";
+    emit({
+      page: n,
+      origin,
+      box: { x: r.x / canvas.width, y: r.y / canvas.height, w: r.w / canvas.width, h: r.h / canvas.height },
+      width: r.w,
+      height: r.h,
+      image: await encode(crop, MAX_UPLOAD_SIDE_PX, mime),
+      mime,
+      thumb: await encode(crop, THUMB_SIDE_PX, "image/jpeg"),
+      quality,
+      tableGrid: await isLikelyTableGridCropPng(crop),
+      hash: await differenceHash(crop),
+    });
   }
 }

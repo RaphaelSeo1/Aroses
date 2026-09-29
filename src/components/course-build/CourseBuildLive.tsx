@@ -367,6 +367,9 @@ function BuildPanel({ buildId, courseId, onRetried }: { buildId: string; courseI
       <div className="mt-6">
         <Stepper status={status} />
       </div>
+      {running && status.aiBusy && !status.canceling ? (
+        <p className="mt-3 text-sm text-amber-700 dark:text-amber-300">The AI service is busy — retrying…</p>
+      ) : null}
 
       {status.error ? (
         <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
