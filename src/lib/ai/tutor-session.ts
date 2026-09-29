@@ -15,6 +15,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { tutorChatModel, tutorReplyModel } from "@/lib/ai/anthropic-models";
 import { TUTOR_NOTES_QUALITY_RULES } from "@/lib/ai/tutor-notes-quality";
+import { trimChatHistory } from "@/lib/ai/chat-history";
+import { cachedSystem, usageTokens, withCachedTail } from "@/lib/ai/prompt-cache";
+import { recordAiUsage } from "@/lib/billing/ai-usage";
 import type {
   TutorSessionMessage,
   TutorSessionModeTag,
@@ -48,7 +51,7 @@ export function buildTutorSystemPrompt(input: {
   interruptedAfter?: string;
   /** Remaining reply Rose had generated but not spoken yet. */
   notYetSpoken?: string;
-}): string {
+}): Anthropic.TextBlockParam[] {
   const modeBlock = input.modeTag ? MODE_INSTRUCTIONS[input.modeTag] : "";
   const topicBlock = input.topic.trim()
     ? `\n\nSTUDENT'S OPENING TOPIC: "${input.topic.trim().slice(0, 600)}"`
@@ -103,7 +106,9 @@ How to respond:
 3. Only offer to resume the NOT YET SPOKEN portion if they clearly want you to continue — never loop the same offer every turn.`
       : "";
 
-  return `You are Rose, running a one-on-one tutor session with a student. This is NOT a course — there is no pre-built lesson plan. Adapt to whatever the student wants to work on right now.
+  // Everything fixed for the session comes first and is cached; the summary
+  // (refreshed every few turns), notes flag and barge-in context follow it.
+  const stable = `You are Rose, running a one-on-one tutor session with a student. This is NOT a course — there is no pre-built lesson plan. Adapt to whatever the student wants to work on right now.
 
 CORE BEHAVIOR:
 - Talk like a real human tutor. Warm, focused, curious about the student's thinking. No corporate filler, no "as an AI", no apologizing.
@@ -118,7 +123,7 @@ CORE BEHAVIOR:
 QUESTION SCOPE RULES (strict):
 - Only ask about content YOU have just explained OR that's in the uploaded reference materials. Don't pop quiz on random adjacent topics.
 - Don't ask application questions unless you've walked through at least one applied example first.
-- Match question difficulty to what was actually covered.${topicBlock}${referenceBlock}${discussionBlock}${notesBlock}${interruptedBlock}${modeBlock ? `\n\n${modeBlock}` : ""}
+- Match question difficulty to what was actually covered.${topicBlock}${referenceBlock}${modeBlock ? `\n\n${modeBlock}` : ""}
 
 OUTPUT FORMAT (STRICT):
 1. First, your spoken reply as plain text. No markdown formatting.
@@ -128,6 +133,7 @@ OUTPUT FORMAT (STRICT):
 
 Set imageRequest sparingly — only when a visual would genuinely help OR the student explicitly asked. Never for grammar/abstract/math equations.
 Always set notesAppend to null (notes are synthesized server-side).`;
+  return cachedSystem(stable, `${discussionBlock}${notesBlock}${interruptedBlock}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +141,7 @@ Always set notesAppend to null (notes are synthesized server-side).`;
 // ---------------------------------------------------------------------------
 
 const TUTOR_META_SENTINEL = "<<<META>>>";
+const TUTOR_HISTORY_MAX = 32;
 
 export type TutorTurnInput = {
   modeTag: TutorSessionModeTag | null;
@@ -276,7 +283,9 @@ function parseTutorMeta(raw: string): {
  * Yields text deltas (no meta sentinel leakage), then a final meta event.
  *
  * Implementation notes:
- *   - Trims history to the last 20 turns to bound prompt size. Older
+ *   - Trims history (`trimChatHistory`, at most 32 messages; past that,
+ *     older ones are condensed and dropped in stable blocks so the prompt
+ *     cache keeps hitting). Older
  *     context lives in `discussionSummary` (refreshed periodically
  *     elsewhere).
  *   - Streams tokens via Anthropic's `stream:true` API.
@@ -298,23 +307,29 @@ export async function* runTutorTurnStream(
     notYetSpoken: input.notYetSpoken,
   });
 
-  const trimmedHistory = input.history.slice(-32);
-  const messages = [
-    ...trimmedHistory.map((m) => ({
-      role: m.role,
-      content: m.content,
-    })),
+  const trimmedHistory = trimChatHistory(
+    input.history.map((m) => ({ role: m.role, content: m.content })),
+    { maxMessages: TUTOR_HISTORY_MAX }
+  );
+  const messages = withCachedTail([
+    ...trimmedHistory,
     { role: "user" as const, content: input.studentUtterance },
-  ];
+  ]);
 
+  const model = input.model || MODEL;
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
   const stream = await anthropic.messages.stream({
-    model: input.model || MODEL,
+    model,
     max_tokens: 700,
     temperature: 0.6,
     system,
     messages,
   });
+  stream.finalMessage().then(
+    (final) =>
+      recordAiUsage({ model, ...usageTokens(final.usage), feature: "tutor-turn" }),
+    () => {}
+  );
 
   let buffered = "";
   let textForwardedUpTo = 0;

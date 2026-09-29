@@ -8,6 +8,7 @@ import {
   refreshDiscussionSummary,
   runTutorTurnStream,
 } from "@/lib/ai/tutor-session";
+import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import type {
   TutorSessionMessage,
   TutorSessionModeTag,
@@ -106,6 +107,7 @@ export async function POST(request: Request, ctx: Params) {
       headers: { "Content-Type": "application/json" },
     });
   }
+  enterAiUsageContext({ userId: user.id, feature: "tutor-turn" });
 
   const { data: sessionRow } = await supabase
     .from("tutor_sessions")

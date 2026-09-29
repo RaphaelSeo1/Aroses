@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { canAccessStudyMaterial } from "@/lib/supabase/study-material-access";
 import { runMentoredTurnStream } from "@/lib/ai/mentored";
+import { enterAiUsageContext } from "@/lib/billing/ai-usage";
 import {
   chatLimitResponse,
   chatModelOverride,
@@ -151,6 +152,7 @@ export async function POST(request: Request) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return jsonError("Not signed in", 401);
+  enterAiUsageContext({ userId: user.id, feature: "mentored-turn" });
 
   const ok = await canAccessStudyMaterial(supabase, user.id, body.materialId);
   if (!ok) return jsonError("Not found.", 404);

@@ -25,6 +25,7 @@ import {
 } from "@/lib/study-chat-nav";
 import { buildNavigationOptions } from "@/lib/study-chat-options";
 import { parseChatAttachments } from "@/lib/chat/chat-attachment-parse";
+import { trimChatHistory } from "@/lib/ai/chat-history";
 import type { StudyChatOption, StudyChatTurn } from "@/types/study-chat";
 import type { CoursePayload } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
@@ -36,22 +37,15 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const MAX_CONTENT_PER_MESSAGE = 8000;
-// Rolling context window (turns). Instead of hard-rejecting once a conversation
-// grows past this, we keep only the most recent turns so Ask Rose never stops
-// working mid-conversation. Bounds cost/latency while staying invisible to the
-// student.
-const MAX_MESSAGES = 40;
 
 /**
- * Keep only the most recent `max` turns and guarantee the window starts on a
- * user turn (Anthropic requires the first message in the array to be `user`).
- * This lets long conversations continue seamlessly rather than erroring out.
+ * Instead of hard-rejecting long conversations, keep a rolling window: up to
+ * 40 messages verbatim, then recent turns verbatim, older ones condensed and
+ * the oldest dropped (`trimChatHistory`). The window must start on a user
+ * turn (Anthropic requires the first message to be `user`).
  */
-function trimToConversationWindow(
-  messages: StudyChatTurn[],
-  max: number
-): StudyChatTurn[] {
-  let windowed = messages.length > max ? messages.slice(-max) : messages;
+function trimToConversationWindow(messages: StudyChatTurn[]): StudyChatTurn[] {
+  let windowed = trimChatHistory(messages);
   while (windowed.length > 0 && windowed[0].role !== "user") {
     windowed = windowed.slice(1);
   }
@@ -216,7 +210,7 @@ export async function POST(request: Request) {
 
   // Long conversations don't error — keep a rolling window of recent turns so
   // the newest question is always answered (the last turn is preserved below).
-  const messages = trimToConversationWindow(validated, MAX_MESSAGES);
+  const messages = trimToConversationWindow(validated);
 
   const last = messages[messages.length - 1];
   if (!last || last.role !== "user") {
@@ -294,8 +288,9 @@ export async function POST(request: Request) {
   }
 
   const attached = parseChatAttachments(b);
+  let attachmentText = "";
   if (attached.text) {
-    contextText += `\n\n=== ATTACHED FILE${attached.name ? ` (${attached.name})` : ""} ===\n${attached.text}\nPrefer this attached file when the student asks about it, a worksheet, or "this PDF" / "this doc" / "this image".\n`;
+    attachmentText = `\n\n=== ATTACHED FILE${attached.name ? ` (${attached.name})` : ""} ===\n${attached.text}\nPrefer this attached file when the student asks about it, a worksheet, or "this PDF" / "this doc" / "this image".\n`;
   }
 
   try {
@@ -410,7 +405,7 @@ export async function POST(request: Request) {
         contextText,
         messages,
         studyContext ?? undefined,
-        { model: chatModelOverride(quota) }
+        { model: chatModelOverride(quota), attachmentText }
       );
     } catch (e) {
       await quota.refund();

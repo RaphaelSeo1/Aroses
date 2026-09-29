@@ -36,10 +36,28 @@ export function enterAiUsageContext(ctx: AiUsageContext): void {
   }
 }
 
+let cacheColumnsMissing = false;
+
+function isMissingColumn(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return (
+    error.code === "PGRST204" ||
+    error.code === "42703" ||
+    /cache_(read|creation)_input_tokens/i.test(error.message ?? "")
+  );
+}
+
+/**
+ * `inputTokens` is Anthropic's uncached input only; prompt-cache reads and
+ * writes are separate (billed 0.1× and 1.25× input). They're stored in their
+ * own columns (migration 121) and dropped if that migration isn't applied yet.
+ */
 export function recordAiUsage(entry: {
   model: string;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
   feature?: string;
   userId?: string | null;
   jobId?: string | null;
@@ -48,18 +66,34 @@ export function recordAiUsage(entry: {
     const ctx = usageContext.getStore();
     const admin = createAdminClient();
     if (!admin) return;
+    const count = (v: number | null | undefined) => Math.max(0, Math.trunc(v ?? 0));
+    const row = {
+      user_id: entry.userId ?? ctx?.userId ?? null,
+      job_id: entry.jobId ?? ctx?.jobId ?? null,
+      feature: entry.feature ?? ctx?.feature ?? "unknown",
+      model: entry.model,
+      input_tokens: count(entry.inputTokens),
+      output_tokens: count(entry.outputTokens),
+    };
+    const cache = {
+      cache_read_input_tokens: count(entry.cacheReadTokens),
+      cache_creation_input_tokens: count(entry.cacheWriteTokens),
+    };
+    const withCache =
+      !cacheColumnsMissing &&
+      (cache.cache_read_input_tokens > 0 || cache.cache_creation_input_tokens > 0);
     void admin
       .from("ai_usage_events")
-      .insert({
-        user_id: entry.userId ?? ctx?.userId ?? null,
-        job_id: entry.jobId ?? ctx?.jobId ?? null,
-        feature: entry.feature ?? ctx?.feature ?? "unknown",
-        model: entry.model,
-        input_tokens: Math.max(0, Math.trunc(entry.inputTokens ?? 0)),
-        output_tokens: Math.max(0, Math.trunc(entry.outputTokens ?? 0)),
-      })
+      .insert(withCache ? { ...row, ...cache } : row)
       .then(
-        () => {},
+        ({ error }) => {
+          if (!withCache || !isMissingColumn(error)) return;
+          cacheColumnsMissing = true;
+          return admin.from("ai_usage_events").insert(row).then(
+            () => {},
+            () => {}
+          );
+        },
         () => {}
       );
   } catch {

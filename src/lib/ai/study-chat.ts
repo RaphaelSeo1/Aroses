@@ -4,6 +4,7 @@ import { recordAiUsage } from "@/lib/billing/ai-usage";
 import { formatSelfStudyTutorBlock } from "@/lib/self-study-context";
 import { AI_ASSISTANT_NAME, APP_NAME } from "@/lib/brand";
 import { parseStudyChatResponse } from "@/lib/ai/study-chat-parse";
+import { cachedSystem, usageTokens, withCachedTail } from "@/lib/ai/prompt-cache";
 import type { CoursePayload } from "@/types/course";
 import { isQuizMcq } from "@/types/course";
 import type { MCQuestion } from "@/types/study";
@@ -191,12 +192,12 @@ function buildVoiceSystem(
   studyContext?: string,
   interruption?: VoiceContinuationHint,
   voiceLanguage?: string
-): string {
+): Anthropic.TextBlockParam[] {
   const selfStudySection = studyContext
     ? `\n${formatSelfStudyTutorBlock(studyContext)}\n`
     : "";
   const languageSection = buildVoiceLanguageInstruction(voiceLanguage);
-  return `You are ${AI_ASSISTANT_NAME}, the student's voice tutor inside ${APP_NAME}. The student is TALKING TO YOU OUT LOUD and your reply will be SPOKEN BACK to them via text-to-speech. Write like a real person speaks — not like a written essay or chatbot.${selfStudySection}
+  const stable = `You are ${AI_ASSISTANT_NAME}, the student's voice tutor inside ${APP_NAME}. The student is TALKING TO YOU OUT LOUD and your reply will be SPOKEN BACK to them via text-to-speech. Write like a real person speaks — not like a written essay or chatbot.${selfStudySection}
 
 ${languageSection}
 
@@ -220,13 +221,14 @@ RULES:
 CONTEXT:
 ---
 ${contextText}
----${
+---`;
+  const interrupted =
     interruption &&
     (interruption.spokenBeforeInterrupt.trim() ||
       interruption.notYetSpoken.trim())
       ? voiceInterruptionAddendum(interruption)
-      : ""
-  }`;
+      : "";
+  return cachedSystem(stable, interrupted);
 }
 
 export async function* streamVoiceReply(
@@ -252,10 +254,7 @@ export async function* streamVoiceReply(
       interruption,
       voiceLanguage
     ),
-    messages: messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    })),
+    messages: withCachedTail(messages),
   });
 
   for await (const event of stream) {
@@ -272,8 +271,7 @@ export async function* streamVoiceReply(
     const final = await stream.finalMessage();
     recordAiUsage({
       model: MODEL,
-      inputTokens: final.usage?.input_tokens,
-      outputTokens: final.usage?.output_tokens,
+      ...usageTokens(final.usage),
       feature: "voice-converse",
     });
   } catch {
@@ -281,11 +279,16 @@ export async function* streamVoiceReply(
   }
 }
 
+/**
+ * `messages` should already be trimmed (`trimChatHistory`). `attachmentText`
+ * is this turn's attached file, kept after the cached course context so a
+ * one-off attachment doesn't invalidate it.
+ */
 export async function runStudyChat(
   contextText: string,
   messages: StudyChatTurn[],
   studyContext?: string,
-  opts?: { model?: string }
+  opts?: { model?: string; attachmentText?: string }
 ): Promise<{ reply: string; action: unknown | null }> {
   const model = opts?.model || MODEL;
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -297,7 +300,7 @@ export async function runStudyChat(
     ? `\n${formatSelfStudyTutorBlock(studyContext)}\n`
     : "";
 
-  const system = `You are ${AI_ASSISTANT_NAME}, an expert but friendly tutor. The student is working inside ${APP_NAME} on course material generated from their own uploaded files.${selfStudySection}
+  const stableSystem = `You are ${AI_ASSISTANT_NAME}, an expert but friendly tutor. The student is working inside ${APP_NAME} on course material generated from their own uploaded files.${selfStudySection}
 
 YOUR PRIMARY JOB IS TO ANSWER THE QUESTION:
 - When the student asks something, actually answer it — explain, teach, give intuition, work through examples, and connect ideas. This is your main job, every turn.
@@ -321,24 +324,19 @@ Output format (CRITICAL):
 
 CONTEXT:
 ---
-${contextText}
----`;
+${contextText}`;
 
   const anthropic = new Anthropic({ apiKey });
 
   const msg = await anthropic.messages.create({
     model,
     max_tokens: 2048,
-    system,
-    messages: messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    })),
+    system: cachedSystem(stableSystem, `${opts?.attachmentText ?? ""}\n---`),
+    messages: withCachedTail(messages),
   });
   recordAiUsage({
     model,
-    inputTokens: msg.usage?.input_tokens,
-    outputTokens: msg.usage?.output_tokens,
+    ...usageTokens(msg.usage),
     feature: "study-chat",
   });
 

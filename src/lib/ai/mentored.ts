@@ -16,6 +16,8 @@ import type {
   CoursePayload,
 } from "@/types/course";
 import { TURN_WB_SENTINEL } from "@/lib/mentored/whiteboard-utils";
+import { cachedSystem, EPHEMERAL, usageTokens } from "@/lib/ai/prompt-cache";
+import { recordAiUsage } from "@/lib/billing/ai-usage";
 import type {
   GoalsAnswer,
   KnowledgeLevel,
@@ -663,7 +665,10 @@ function isIntent(v: unknown): v is MentoredIntent {
 // aloud / displayed; anything after gets parsed as classification.
 const TURN_META_SENTINEL = "---META---";
 
-function buildTurnPrompt(input: TurnInput): string {
+function buildTurnPrompt(input: TurnInput): {
+  system: Anthropic.TextBlockParam[];
+  content: Anthropic.TextBlockParam[];
+} {
   // Personalization block — woven in BEFORE the chunk context so Rose
   // reads it as the lens through which she should approach this turn.
   // Empty / missing → block is skipped entirely (no noise in prompt).
@@ -765,9 +770,10 @@ ${figures
   .join("\n")}
 When the student asks to see a figure, or one would help right now, put it on the board with a show_asset action using one of these ids. Never invent an id.`
     : "";
-  const assetActionType = figures.length ? `, show_asset {assetId}` : "";
-
-  return `You are an AI tutor mid-lesson. The student is on this CHUNK:
+  // Prompt-cache layout: the fixed instructions are the system prompt, the
+  // chunk (same for every turn on it) ends the second cached prefix, and only
+  // the per-turn state and the student's words are new input each turn.
+  const chunkContext = `You are an AI tutor mid-lesson. The student is on this CHUNK:
 
 ${languageBlock}
 
@@ -777,18 +783,34 @@ ANALOGY (optional fallback): ${input.chunk.analogy ?? "(none)"}
 CHECK QUESTION YOU JUST ASKED: ${input.chunk.checkQuestion}
 REFERENCE ANSWER (internal — never read this aloud verbatim): ${input.chunk.referenceAnswer}
 KEY POINTS THE ANSWER SHOULD HIT: ${input.chunk.keyPoints.join("; ")}
-ATTEMPT NUMBER FOR THIS CHUNK: ${input.attempts + 1}
-STUDENT LEVEL: ${input.knowledgeLevel}${personalizationBlock ? `\n\n${personalizationBlock}` : ""}${checkStatusBlock}${interruptedBlock}${pacingBlock}${figuresBlock}
+STUDENT LEVEL: ${input.knowledgeLevel}${personalizationBlock ? `\n\n${personalizationBlock}` : ""}${figuresBlock}`;
+
+  const turnState = `
+
+ATTEMPT NUMBER FOR THIS CHUNK: ${input.attempts + 1}${checkStatusBlock}${interruptedBlock}${pacingBlock}
 
 STUDENT JUST SAID: """
 ${input.studentUtterance.trim().slice(0, 2000)}
-"""
+"""`;
+
+  return {
+    system: cachedSystem(turnInstructions(figures.length > 0)),
+    content: [
+      { type: "text", text: chunkContext, cache_control: EPHEMERAL },
+      { type: "text", text: turnState },
+    ],
+  };
+}
+
+function turnInstructions(hasFigures: boolean): string {
+  const assetActionType = hasFigures ? `, show_asset {assetId}` : "";
+  return `You are an AI tutor mid-lesson. Each message gives you the CHUNK the student is on (concept, explanation, check question, reference answer), this turn's state, and what the student just said. Reply in exactly this format.
 
 Output format (STRICT):
 1. First, write your spoken reply as plain text. Conversational tutor voice. No markdown, no "as an AI", no quotes around it.
    - Usually 2-5 sentences; stay concise unless a short example is needed.
    - TEACH LIKE A HUMAN TUTOR: you do NOT need to interrogate the student after every concept. For light or intuitive concepts, a soft check-in ("does that make sense so far?", "with me?") is enough — if they say yes, you may move on (intent check_in, advance:true).
-   - WHEN TO USE THE FORMAL CHECK QUESTION: reserve the CHECK QUESTION above for moments that matter — a genuinely KEY or tricky concept, a major-concept transition, when the student seems unsure/quiet, or when they gave a vague answer to a soft check-in on something important. When you ask it, ask THAT check question (light paraphrase OK) — not a different graded question.
+   - WHEN TO USE THE FORMAL CHECK QUESTION: reserve the CHECK QUESTION for moments that matter — a genuinely KEY or tricky concept, a major-concept transition, when the student seems unsure/quiet, or when they gave a vague answer to a soft check-in on something important. When you ask it, ask THAT check question (light paraphrase OK) — not a different graded question.
    - Once you HAVE posed the formal check question, keep ending on it until they answer it substantively (don't swap in a softer substitute mid-check).
    - Use the PACING SIGNALS to avoid piling questions back-to-back; don't ask a brand-new check right after one you already asked.
    - Do NOT say "you nailed it", "exactly right", or "you've got it" unless the student actually demonstrated understanding OR you are advancing.
@@ -882,12 +904,16 @@ export async function runMentoredTurn(input: TurnInput): Promise<TurnOutput> {
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
+  const model = input.model || FAST_MODEL;
+  const prompt = buildTurnPrompt(input);
   const msg = await anthropic.messages.create({
-    model: input.model || FAST_MODEL,
+    model,
     max_tokens: 700,
     temperature: 0.5,
-    messages: [{ role: "user", content: buildTurnPrompt(input) }],
+    system: prompt.system,
+    messages: [{ role: "user", content: prompt.content }],
   });
+  recordAiUsage({ model, ...usageTokens(msg.usage), feature: "mentored-turn" });
 
   const block = msg.content.find((b) => b.type === "text");
   if (!block || block.type !== "text") {
@@ -955,12 +981,20 @@ export async function* runMentoredTurnStream(input: TurnInput): AsyncGenerator<
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
   const anthropic = new Anthropic({ apiKey, timeout: 60_000, maxRetries: 0 });
+  const model = input.model || FAST_MODEL;
+  const prompt = buildTurnPrompt(input);
   const stream = anthropic.messages.stream({
-    model: input.model || FAST_MODEL,
+    model,
     max_tokens: 700,
     temperature: 0.5,
-    messages: [{ role: "user", content: buildTurnPrompt(input) }],
+    system: prompt.system,
+    messages: [{ role: "user", content: prompt.content }],
   });
+  stream.finalMessage().then(
+    (final) =>
+      recordAiUsage({ model, ...usageTokens(final.usage), feature: "mentored-turn" }),
+    () => {}
+  );
 
   let buffered = "";
   type StreamPhase = "reply" | "wb" | "meta";
