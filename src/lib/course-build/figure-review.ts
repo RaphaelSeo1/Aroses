@@ -32,6 +32,7 @@ export const REVIEW_TOOL: Anthropic.Tool = {
 const REVIEW_RULES = `The images are contact sheets of crops from a student's lecture file; each numbered cell is one crop. Decide for every number whether that crop belongs in a study course.
 keep=true only for a complete, legible teaching visual: a diagram, chart or graph, labeled figure, micrograph, photo of the subject being taught, or an image of a table.
 keep=false for logos, icons, decorations, page headers or footers, slide backgrounds, blank or nearly blank crops, crops cut off mid-figure, crops that are mostly plain text, screenshots of documents or articles, and asides such as memes, cartoons, TV or news screenshots and portraits.
+kind=table only for a grid of records: a header row naming the columns and several rows that each fill those same columns. Labels on a diagram, a chart's axis or legend text, captions, page headers or footers, a form, and text laid out in columns are not tables; a labeled drawing is a diagram and a plot is a chart. This holds for every subject and language.
 kind: diagram, chart, image or table. description: what it shows in at most 8 words, only what is clearly visible; empty when keep=false.`;
 
 /** Cells per contact sheet (4 × 3 at 256 px keeps a sheet near 1,000 image tokens). */

@@ -310,11 +310,11 @@ export function LessonEditableBlocks({
 
     const bodyEl = animateReveal ? (
       <div className="mt-1.5">
-        <LessonRichContent markdown={streamedBody} />
+        <LessonRichContent markdown={streamedBody} checkTables streaming />
       </div>
     ) : (
       <div className="mt-1.5">
-        <LessonRichContent markdown={lesson.content} figures={figures} />
+        <LessonRichContent markdown={lesson.content} figures={figures} checkTables />
       </div>
     );
 
@@ -475,7 +475,7 @@ export function LessonEditableBlocks({
                 </span>
                 Rose is editing…
               </p>
-              <LessonRichContent markdown={streamedBody} />
+              <LessonRichContent markdown={streamedBody} checkTables streaming />
               {streamedBody.length < (lesson.content ?? "").length ? (
                 <span
                   className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-brand align-text-bottom dark:bg-brand-soft"
@@ -489,7 +489,7 @@ export function LessonEditableBlocks({
               spans={contentPreviewSpans}
             />
           ) : (
-            <LessonRichContent markdown={lesson.content} figures={figures} />
+            <LessonRichContent markdown={lesson.content} figures={figures} checkTables />
           )
         }
         edit={

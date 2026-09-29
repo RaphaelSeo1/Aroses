@@ -7,6 +7,7 @@ import {
   stripMarkdownFigures,
 } from "@/lib/lesson-content-layout";
 import { splitParagraphs } from "@/lib/course-build/figure-markers";
+import { guardMarkdownTables } from "@/lib/course-build/table-quality";
 import { escapeCurrencyDollars } from "@/lib/markdown-math";
 import type { LessonVisualAsset } from "@/types/course";
 import ReactMarkdown from "react-markdown";
@@ -195,12 +196,19 @@ function ContentWithFigures({ markdown, figures }: { markdown: string; figures: 
 
 /** Lesson body: opening text, then prose, then tables, with source figures where the writer placed them. */
 export function LessonRichContent({
-  markdown,
+  markdown: raw,
   figures,
+  checkTables = false,
+  streaming = false,
 }: {
   markdown: string;
   figures?: LessonVisualAsset[];
+  /** Course lessons: a table that isn't really one (split sentences, diagram labels) shows as plain text. */
+  checkTables?: boolean;
+  /** The text is still arriving, so a table it ends on may be incomplete. */
+  streaming?: boolean;
 }) {
+  const markdown = checkTables ? guardMarkdownTables(raw ?? "", { streaming }).text : raw;
   const placed = (figures ?? []).filter((f) => f.imageUrl?.trim() && f.type !== "page_snapshot");
   if (markdown.trim() && placed.length > 0) {
     return <ContentWithFigures markdown={stripMarkdownFigures(markdown)} figures={placed} />;

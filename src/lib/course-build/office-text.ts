@@ -3,6 +3,7 @@
  * markdown, so a table in a .pptx or .docx reaches the writer row by row.
  */
 import { XMLParser } from "fast-xml-parser";
+import { judgeTable, tableAsText } from "./table-quality.ts";
 
 type OrderedNode = Record<string, unknown>;
 
@@ -66,8 +67,9 @@ function walkSlide(nodes: OrderedNode[], out: string[]): void {
     const kids = childrenOf(n, tag);
     if (tag === "tbl") {
       const rows = tableRows(kids);
-      if (rows.length > 0 && rows.some((r) => r.length >= 2)) out.push(markdownTable(rows));
-      else for (const r of rows) out.push(r.join(" ").trim());
+      // Slides often use a table only to lay out text; that stays plain lines.
+      if (rows.length > 0 && judgeTable(rows).ok) out.push(markdownTable(rows));
+      else out.push(...tableAsText(rows).split("\n").filter(Boolean));
     } else if (tag === "p") {
       const t = textOf(kids).replace(/\s+/g, " ").trim();
       if (t) out.push(t);
@@ -107,7 +109,9 @@ export function docxHtmlToText(html: string): string {
       )
     );
     const kept = rows.filter((r) => r.some((c) => c.trim()));
-    return kept.length ? `\n\n${markdownTable(kept)}\n\n` : "";
+    if (!kept.length) return "";
+    if (judgeTable(kept).ok) return `\n\n${markdownTable(kept)}\n\n`;
+    return `\n\n${tableAsText(kept).split("\n").join("\n\n")}\n\n`;
   });
   return withTables
     .replace(/<\/(p|h[1-6]|li)>/gi, "\n\n")

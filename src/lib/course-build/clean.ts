@@ -6,17 +6,18 @@
 
 import { wordCount } from "./language.ts";
 import { isTableLine } from "./pdf-layout.ts";
+import { guardMarkdownTables } from "./table-quality.ts";
 
 export type SourcePage = { n: number; text: string };
 
 const BULLET_ONLY = /^[•◦▪▫●○■□►▸‣⁃\-–—*]$/;
 
-const PAGE_NUMBER_PATTERNS = [
-  /^\d{1,4}$/,
-  /^(page|p\.?|slide)\s*\d{1,4}(\s*(of|\/)\s*\d{1,4})?$/i,
-  /^\d{1,4}\s*(\/|of)\s*\d{1,4}$/i,
-  /^-\s*\d{1,4}\s*-$/,
-];
+/**
+ * A bare page number in any decoration: "12", "- 12 -", "12 / 40". Worded
+ * counters ("Page 3 of 20", "페이지 3") repeat with only the digits changing,
+ * so the boilerplate check below removes them in any language.
+ */
+const PAGE_NUMBER_PATTERNS = [/^[-–—\s]*\d{1,4}[-–—\s]*$/, /^\d{1,4}\s*\/\s*\d{1,4}$/];
 
 function isLetterSpaced(line: string): boolean {
   const parts = line.replace(/\t/g, "   ").trim().split(" ").filter(Boolean);
@@ -95,8 +96,7 @@ export type CleanOptions = {
 
 export function cleanPages(pages: SourcePage[], opts: CleanOptions = {}): SourcePage[] {
   const repeatShare = opts.repeatShare ?? 0.2;
-  const split = pages.map((p) => ({ n: p.n, lines: splitLines(p.text ?? "") }));
-
+  const split = pages.map((p) => ({ n: p.n, lines: splitLines(guardMarkdownTables(p.text ?? "").text) }));
   const pagesWithKey = new Map<string, number>();
   for (const p of split) {
     const seen = new Set<string>();

@@ -6,6 +6,7 @@
  */
 import { isTableLine } from "./pdf-layout.ts";
 import { matchTokens } from "./language.ts";
+import { guardMarkdownTables, judgeTable, parseMarkdownTable } from "./table-quality.ts";
 
 /** Markdown tables in `text`, each as its exact lines (header, separator, rows). */
 export function markdownTables(text: string): string[] {
@@ -60,7 +61,7 @@ const MATCH = 0.5;
 
 export type TableLesson = { content: string; firstPage: number; lastPage: number };
 
-export type TableFix = { page: number; action: "replaced" | "inserted" };
+export type TableFix = { page: number; action: "replaced" | "inserted" | "demoted" };
 
 /** Index of the lesson that teaches page `g`: the one whose range holds it, else the nearest. */
 function lessonFor(lessons: TableLesson[], g: number): number {
@@ -99,7 +100,9 @@ function insertTable(content: string, table: string): string {
 
 /**
  * Makes every table on `pages` appear in `lessons` exactly (when converting,
- * the writer's translated table is kept if its numbers match). Returns what changed.
+ * the writer's translated table is kept if its numbers match). A table in a
+ * lesson or on a page that fails `judgeTable` is plain text instead, never
+ * carried as a table. Returns what changed.
  */
 export function ensureTables(
   lessons: TableLesson[],
@@ -108,8 +111,16 @@ export function ensureTables(
 ): TableFix[] {
   const fixes: TableFix[] = [];
   if (lessons.length === 0) return fixes;
+  for (const l of lessons) {
+    const guarded = guardMarkdownTables(l.content);
+    if (!guarded.rejected) continue;
+    l.content = guarded.text;
+    for (let i = 0; i < guarded.rejected; i++) fixes.push({ page: l.firstPage, action: "demoted" });
+  }
   for (const page of pages) {
     for (const table of markdownTables(page.text)) {
+      const grid = parseMarkdownTable(table);
+      if (!grid || !judgeTable(grid).ok) continue;
       const cells = cellsOf(table);
       let found: { lesson: number; table: string; score: number } | null = null;
       lessons.forEach((l, i) => {

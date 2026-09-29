@@ -41,7 +41,7 @@ function SourceLessonPanelImpl({
       ) : null}
       <div className="source-lesson-body mt-3 max-h-72 overflow-y-auto pr-1 text-sm leading-relaxed text-zinc-800">
         {lessonContent ? (
-          <LessonRichContent markdown={lessonContent} figures={builderFigures(lesson.visual_assets)} />
+          <LessonRichContent markdown={lessonContent} figures={builderFigures(lesson.visual_assets)} checkTables />
         ) : (
           <span className="text-zinc-500 italic">
             No source text available for this section.
