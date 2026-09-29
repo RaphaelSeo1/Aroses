@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { voiceHours, type PlanTier } from "@/lib/billing/plans";
+import { planDisplayName } from "@/lib/billing/plan-card-copy";
+import { TOP_PLAN_TIER } from "@/lib/billing/plans";
 import type { PlanUsageSummary } from "@/lib/billing/plan-usage-types";
 import { HomeCalendarWidget } from "@/components/calendar/HomeCalendarWidget";
 import { DailyCheckInCard } from "@/components/DailyCheckInCard";
@@ -39,21 +40,6 @@ function usageTone(pct: number): "ok" | "warn" | "hot" {
   if (pct >= 90) return "hot";
   if (pct >= 70) return "warn";
   return "ok";
-}
-
-function planDisplayName(
-  billing: {
-    planFree: string;
-    planStudent: string;
-    planAdvanced: string;
-    planPremium: string;
-  },
-  tier: PlanTier
-): string {
-  if (tier === "free") return billing.planFree;
-  if (tier === "student") return billing.planStudent;
-  if (tier === "advanced") return billing.planAdvanced;
-  return billing.planPremium;
 }
 
 function UsageMeter({
@@ -134,26 +120,49 @@ export function HomeRightSidebar({
     ? Math.floor(planUsage.voiceUsedSeconds / 60)
     : 0;
   const voiceUnlimited = planUsage?.voiceCapSeconds == null;
-  const recordingsUnlimited = planUsage?.recordingsCap == null;
   const voiceCapMin =
     planUsage && planUsage.voiceCapSeconds != null
       ? Math.round(planUsage.voiceCapSeconds / 60)
       : 0;
-  const coursesPct = planUsage
-    ? usagePct(
-        planUsage.courseGenerationsUsed,
-        planUsage.courseGenerationsCap
-      )
-    : 0;
-  const sourcePagesPct = planUsage
-    ? usagePct(planUsage.sourcePagesUsed, planUsage.sourcePagesCap)
-    : 0;
-  const voicePct = planUsage
-    ? usagePct(planUsage.voiceUsedSeconds, planUsage.voiceCapSeconds)
-    : 0;
-  const recordingsPct = planUsage
-    ? usagePct(planUsage.recordingsUsed, planUsage.recordingsCap)
-    : 0;
+  const meters = planUsage
+    ? [
+        {
+          key: "pages",
+          label: t.dashboard.planUsageSourcePages,
+          used: planUsage.sourcePagesUsed,
+          cap: planUsage.sourcePagesCap,
+          template: t.dashboard.planUsageOf,
+        },
+        {
+          key: "lecture",
+          label: t.dashboard.planUsageLecture,
+          used: planUsage.lectureMinutesUsed,
+          cap: planUsage.lectureMinutesCap,
+          template: t.dashboard.planUsageMinutes,
+        },
+        {
+          key: "voice",
+          label: t.dashboard.planUsageVoice,
+          used: voiceUsedMin,
+          cap: voiceUnlimited ? null : voiceCapMin,
+          template: t.dashboard.planUsageMinutes,
+        },
+        {
+          key: "chat",
+          label: t.dashboard.planUsageChat,
+          used: planUsage.chatMessagesUsed,
+          cap: planUsage.chatMessagesCap,
+          template: t.dashboard.planUsageOf,
+        },
+        {
+          key: "extra",
+          label: t.dashboard.planUsageExtraQuestions,
+          used: planUsage.extraQuestionsUsed,
+          cap: planUsage.extraQuestionsCap,
+          template: t.dashboard.planUsageOf,
+        },
+      ]
+    : [];
 
   return (
     <aside className="space-y-4 lg:sticky lg:top-[5.5rem]">
@@ -184,14 +193,12 @@ export function HomeRightSidebar({
                   <span className="text-zinc-400 dark:text-zinc-500">
                     {" "}
                     ·{" "}
-                    {tf(t.billing.voiceHoursMonth, {
-                      hours: String(voiceHours(planUsage.tier)),
-                    })}
+                    {tf(t.billing.voiceMinutesMonth, { minutes: voiceCapMin })}
                   </span>
                 ) : null}
               </p>
             </div>
-            {planUsage.tier !== "premium" ? (
+            {planUsage.tier !== TOP_PLAN_TIER ? (
               <Link
                 href="/dashboard/billing"
                 className="shrink-0 rounded-full bg-brand px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-brand-hover"
@@ -209,66 +216,19 @@ export function HomeRightSidebar({
           </div>
 
           <div className="relative mt-4 space-y-3.5">
-            <UsageMeter
-              label={t.dashboard.planUsageCourses}
-              valueLabel={
-                planUsage.courseGenerationsCap == null
-                  ? tf(t.dashboard.planUsageUnlimited, {
-                      used: planUsage.courseGenerationsUsed,
-                    })
-                  : tf(t.dashboard.planUsageOf, {
-                      used: planUsage.courseGenerationsUsed,
-                      cap: planUsage.courseGenerationsCap,
-                    })
-              }
-              pct={coursesPct}
-              unlimited={planUsage.courseGenerationsCap == null}
-            />
-            <UsageMeter
-              label={t.dashboard.planUsageSourcePages}
-              valueLabel={
-                planUsage.sourcePagesCap == null
-                  ? tf(t.dashboard.planUsageUnlimited, {
-                      used: planUsage.sourcePagesUsed,
-                    })
-                  : tf(t.dashboard.planUsageOf, {
-                      used: planUsage.sourcePagesUsed,
-                      cap: planUsage.sourcePagesCap,
-                    })
-              }
-              pct={sourcePagesPct}
-              unlimited={planUsage.sourcePagesCap == null}
-            />
-            <UsageMeter
-              label={t.dashboard.planUsageVoice}
-              valueLabel={
-                voiceUnlimited
-                  ? tf(t.dashboard.planUsageUnlimited, {
-                      used: voiceUsedMin,
-                    })
-                  : tf(t.dashboard.planUsageMinutes, {
-                      used: voiceUsedMin,
-                      cap: voiceCapMin,
-                    })
-              }
-              pct={voicePct}
-              unlimited={voiceUnlimited}
-            />
-            <UsageMeter
-              label={t.dashboard.planUsageRecordings}
-              valueLabel={
-                recordingsUnlimited
-                  ? tf(t.dashboard.planUsageUnlimited, {
-                      used: planUsage.recordingsUsed,
-                    })
-                  : tf(t.dashboard.planUsageOf, {
-                      used: planUsage.recordingsUsed,
-                      cap: planUsage.recordingsCap ?? 0,
-                    })
-              }
-              pct={recordingsPct}
-              unlimited={recordingsUnlimited}
-            />
+            {meters.map((m) => (
+              <UsageMeter
+                key={m.key}
+                label={m.label}
+                valueLabel={
+                  m.cap == null
+                    ? tf(t.dashboard.planUsageUnlimited, { used: m.used })
+                    : tf(m.template, { used: m.used, cap: m.cap })
+                }
+                pct={usagePct(m.used, m.cap)}
+                unlimited={m.cap == null}
+              />
+            ))}
             {planUsage.periodEnd ? (
               <p className="pt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
                 {tf(t.dashboard.planUsageResets, {

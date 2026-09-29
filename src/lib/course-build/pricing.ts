@@ -1,3 +1,4 @@
+import { parsePlanTier, planLimits } from "../billing/plans.ts";
 import type { CourseBuildConfig } from "./config.ts";
 
 /** USD per million tokens. */
@@ -119,10 +120,22 @@ export function buildSpendCapUsd(sourcePages: number, cfg: CourseBuildConfig, la
   return Math.max(cfg.minCapUsd, Math.round(pages * cfg.capUsdPerPage * factor * 1e6) / 1e6);
 }
 
+/** Rolling 24-hour spend guard for app admins, who have no plan limits. */
+export const UNLIMITED_DAILY_CAP_USD = 100;
+
 /**
- * Rolling 24-hour AI spend ceiling for a user. Every tier gets the default
- * until plans are rebuilt around measured per-course cost.
+ * Rolling 24-hour AI spend ceiling for a user: the tier's cap from
+ * `plans.ts`, never above `COURSE_BUILD_DAILY_CAP_USD` when that is set.
+ * Always positive (the ledger rejects 0); unpaid tiers can't start a build.
  */
-export function dailyCapUsdForTier(_tier: string | null | undefined, cfg: CourseBuildConfig): number {
-  return cfg.defaultDailyCapUsd;
+export function dailyCapUsdForTier(
+  tier: string | null | undefined,
+  cfg: CourseBuildConfig,
+  opts?: { unlimited?: boolean }
+): number {
+  const tierCap = opts?.unlimited
+    ? UNLIMITED_DAILY_CAP_USD
+    : planLimits(parsePlanTier(tier) ?? "free").dailyCourseBuildUsd;
+  const capped = cfg.dailyCapCeilingUsd != null ? Math.min(tierCap, cfg.dailyCapCeilingUsd) : tierCap;
+  return capped > 0 ? capped : cfg.minCapUsd;
 }

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { parseCoursePayload } from "@/lib/ai/course-payload";
 import { generateAdditionalModuleQuizItems } from "@/lib/ai/expand-module-quiz";
+import {
+  extraQuestionLimitResponse,
+  reserveExtraQuestionClick,
+} from "@/lib/billing/extra-question-usage";
 import { createClient } from "@/lib/supabase/server";
 import type { CoursePayload } from "@/types/course";
 
@@ -73,10 +77,14 @@ export async function POST(request: Request, ctx: Params) {
     return NextResponse.json({ error: "Module not found." }, { status: 404 });
   }
 
+  const quota = await reserveExtraQuestionClick(user);
+  if (!quota.allowed) return extraQuestionLimitResponse(quota);
+
   let newItems;
   try {
     newItems = await generateAdditionalModuleQuizItems(mod, count);
   } catch (e) {
+    await quota.refund();
     console.error(e);
     return NextResponse.json(
       {
@@ -97,6 +105,7 @@ export async function POST(request: Request, ctx: Params) {
     .eq("id", materialId);
 
   if (saveErr) {
+    await quota.refund();
     console.error(saveErr);
     return NextResponse.json({ error: "Could not save." }, { status: 500 });
   }

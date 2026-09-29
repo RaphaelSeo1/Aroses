@@ -2,7 +2,13 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getGenerationUsageTotals, releaseGenerationUsage, reserveCourseGeneration } from "@/lib/billing/course-cap";
+import {
+  getGenerationUsageTotals,
+  releaseGenerationUsage,
+  reserveCourseGeneration,
+  SOURCE_PAGE_CAP_CODE,
+} from "@/lib/billing/course-cap";
+import { sourcePagesUsedUpMessage } from "@/lib/billing/limit-messages";
 import { resolveBillingPeriod } from "@/lib/billing/billing-period";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
 import { isPaidTier, sourcePageCap } from "@/lib/billing/plans";
@@ -13,6 +19,7 @@ import { readCourseBuildConfig } from "./config.ts";
 import { createCourseBuild, type NewBuildSource } from "./create-build.ts";
 import { languageByCode } from "./language.ts";
 import { runCourseBuild } from "./drive.ts";
+import { dailyCapUsdForTier } from "./pricing.ts";
 
 /** The after() window of the route that starts a build (its maxDuration is 300 s). */
 const FIRST_RUN_MS = 270_000;
@@ -57,12 +64,13 @@ export async function checkCanBuild(userId: string, email: string | null): Promi
   const period = resolveBillingPeriod(sub);
   const totals = await getGenerationUsageTotals(userId, period.startIso);
   if (!totals) return METERING_DOWN;
-  if (totals.sourcePages >= sourcePageCap(sub.tier)) {
+  const cap = sourcePageCap(sub.tier);
+  if (totals.sourcePages >= cap) {
     return {
       ok: false,
       status: 402,
-      code: "source_page_cap_reached",
-      error: "You've used all the source pages in your plan for this billing period. Upgrade or wait for your allowance to reset.",
+      code: SOURCE_PAGE_CAP_CODE,
+      error: sourcePagesUsedUpMessage({ tier: sub.tier, cap, periodEnd: period.endIso }),
     };
   }
   return null;
@@ -86,6 +94,7 @@ export async function startCourseBuild(input: StartInput): Promise<StartResult> 
     jobId: buildId,
   });
   if (!reserved.ok) return { ok: false, status: reserved.status, code: reserved.code, error: reserved.error };
+  const dailyCapUsd = dailyCapUsdForTier(reserved.tier, config, { unlimited: reserved.unlimited });
 
   try {
     await createCourseBuild(
@@ -97,7 +106,7 @@ export async function startCourseBuild(input: StartInput): Promise<StartResult> 
         examGroupId: input.examGroupId,
         sources: input.sources,
         estimatedPages: 0,
-        dailyCapUsd: config.defaultDailyCapUsd,
+        dailyCapUsd,
         outputLanguage: input.outputLanguage,
         studyGoal: input.studyGoal,
         usageReservationId: reserved.reservationId,

@@ -4,6 +4,10 @@ import {
   generatePersonalQuizFromNotes,
 } from "@/lib/ai/personal-quiz-from-notes";
 import {
+  extraQuestionLimitResponse,
+  reserveExtraQuestionClick,
+} from "@/lib/billing/extra-question-usage";
+import {
   NOTES_FOCUS_BUCKET_ID,
   parseNotesFocusBucketNoteId,
 } from "@/lib/notes/notes-focus-bucket";
@@ -85,6 +89,9 @@ export async function POST(request: Request) {
     console.error("[notes/focus-questions counts]", existingError);
   }
 
+  const quota = await reserveExtraQuestionClick(user);
+  if (!quota.allowed) return extraQuestionLimitResponse(quota);
+
   let items;
   try {
     items = await generatePersonalQuizFromNotes(
@@ -94,11 +101,13 @@ export async function POST(request: Request) {
       }
     );
   } catch (e) {
+    await quota.refund();
     const msg = e instanceof Error ? e.message : "Generation failed.";
     return NextResponse.json({ error: msg }, { status: 400 });
   }
 
   if (items.length === 0) {
+    await quota.refund();
     return NextResponse.json(
       { error: "Could not build questions from that note." },
       { status: 400 }
@@ -120,6 +129,7 @@ export async function POST(request: Request) {
   );
 
   if (!inserted.ok) {
+    await quota.refund();
     return NextResponse.json(
       { error: inserted.message },
       { status: inserted.needsMigration ? 503 : 500 }

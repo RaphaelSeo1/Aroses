@@ -91,7 +91,7 @@ export async function POST(_request: Request, ctx: Params) {
     });
   }
 
-  const cap = await assertCanStartLectureRecording(user.id);
+  const cap = await assertCanStartLectureRecording(user.id, { email: user.email });
   if (!cap.ok) {
     return NextResponse.json(
       {

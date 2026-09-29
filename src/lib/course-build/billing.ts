@@ -31,6 +31,7 @@ export async function reserveBuildPages(build: BuildRecord, pages: number): Prom
   const unlimited = await isUnlimitedPlanMeterUser(build.userId);
   const res = await reserveSourcePages({
     userId: build.userId,
+    tier: sub.tier,
     reservationId: build.usageReservationId,
     sourcePageUnits: pages,
     cap: unlimited ? NO_PAGE_CAP : sourcePageCap(sub.tier),

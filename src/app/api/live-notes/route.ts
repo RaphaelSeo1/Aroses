@@ -60,7 +60,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const cap = await assertCanStartLectureRecording(user.id);
+  const cap = await assertCanStartLectureRecording(user.id, { email: user.email });
   if (!cap.ok) {
     return NextResponse.json(
       {

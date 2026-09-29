@@ -1,7 +1,8 @@
-import type { PlanTier } from "./plans.ts";
+import { PLAN_ORDER, PLANS, TOP_PLAN_TIER, type PlanTier } from "./plans.ts";
 
 /**
- * Monthly per-student chat message caps — THE one place to change them.
+ * Monthly per-student chat message caps. The defaults live with every other
+ * allowance in `plans.ts` (`chatMessages` / `chatPremiumMessages`).
  *
  * Covers every text chat turn that calls the model once per student message:
  * Rose study chat, review chat, Mentored Learning turns, tutor sessions and
@@ -26,12 +27,15 @@ export type ChatLimit = {
   premiumMessages: number;
 };
 
-export const DEFAULT_CHAT_LIMITS: Record<PlanTier, ChatLimit> = {
-  free: { monthlyMessages: 20, premiumMessages: 10 },
-  student: { monthlyMessages: 200, premiumMessages: 50 },
-  advanced: { monthlyMessages: 400, premiumMessages: 50 },
-  premium: { monthlyMessages: 600, premiumMessages: 50 },
-};
+export const DEFAULT_CHAT_LIMITS: Record<PlanTier, ChatLimit> = Object.fromEntries(
+  PLAN_ORDER.map((tier) => [
+    tier,
+    {
+      monthlyMessages: PLANS[tier].limits.chatMessages,
+      premiumMessages: PLANS[tier].limits.chatPremiumMessages,
+    },
+  ])
+) as Record<PlanTier, ChatLimit>;
 
 export const CHAT_LIMIT_REACHED_CODE = "chat_limit_reached";
 
@@ -99,7 +103,7 @@ export function chatLimitReachedMessage(input: {
     n > 0
       ? `You've reached your monthly chat limit (${n} messages with Rose). It resets on ${date}.`
       : `Chat with Rose isn't included right now. It resets on ${date}.`;
-  if (!input.upgradeAvailable || input.tier === "premium") return head;
+  if (!input.upgradeAvailable || input.tier === TOP_PLAN_TIER) return head;
   return input.tier === "free"
     ? `${head} Choose a plan to get more messages each month.`
     : `${head} Upgrade your plan for more messages each month.`;

@@ -17,6 +17,7 @@ import {
   OPEN_UPGRADE_EVENT,
   unpaidUserShouldBlockFeaturePath,
 } from "@/lib/billing/paid-access";
+import { planCardCopy } from "@/lib/billing/plan-card-copy";
 import {
   CHECKOUT_PLAN_ORDER,
   formatUsdAmount,
@@ -31,7 +32,6 @@ import {
 import { isStudentTrialActive } from "@/lib/billing/student-trial";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
-import type { Dictionary } from "@/locales";
 import { configuredTourCourseId } from "@/lib/product-tour/bio-1a";
 import {
   buildProductTourSteps,
@@ -54,54 +54,6 @@ const TOOLTIP_GAP = 14;
 const TOOLTIP_EST_HEIGHT = 230;
 
 type Rect = { top: number; left: number; width: number; height: number };
-
-function planCardCopy(
-  billing: Dictionary["billing"],
-  tier: PlanTier
-) {
-  const names: Record<PlanTier, string> = {
-    free: billing.planFree,
-    student: billing.planStudent,
-    advanced: billing.planAdvanced,
-    premium: billing.planPremium,
-  };
-  const taglines: Record<PlanTier, string> = {
-    free: billing.planFreeTag,
-    student: billing.planStudentTag,
-    advanced: billing.planAdvancedTag,
-    premium: billing.planPremiumTag,
-  };
-  const highlights: Record<PlanTier, string[]> = {
-    free: [
-      billing.planFreeHighlight1,
-      billing.planFreeHighlight2,
-      billing.planFreeHighlight3,
-    ],
-    student: [
-      billing.planStudentIncludes,
-      billing.planStudentHighlight1,
-      billing.planStudentHighlight2,
-      billing.planStudentHighlight5,
-    ],
-    advanced: [
-      billing.planAdvancedIncludes,
-      billing.planAdvancedHighlight1,
-      billing.planAdvancedHighlight2,
-      billing.planAdvancedHighlight7,
-    ],
-    premium: [
-      billing.planPremiumIncludes,
-      billing.planPremiumHighlight1,
-      billing.planPremiumHighlight2,
-      billing.planPremiumHighlight5,
-    ],
-  };
-  return {
-    name: names[tier],
-    tagline: taglines[tier],
-    highlights: highlights[tier],
-  };
-}
 
 function readSessionFlag(key: string): boolean {
   if (typeof window === "undefined") return false;
@@ -245,9 +197,14 @@ function UpgradePlanCards({
               wasPrice != null &&
               wasPrice > charged;
             const salePercent = showSale ? salePercentForTier(tier) : 0;
-            const isBest = tier === "advanced";
+            const isBest = tier === "plus";
             const isTrialCard = isStudentTrialActive() && tier === "student";
-            const { name, tagline, highlights } = planCardCopy(billing, tier);
+            const copy = planCardCopy(billing, tier);
+            const { name, tagline } = copy;
+            const highlights = [
+              ...(copy.includes ? [copy.includes] : []),
+              ...copy.highlights.slice(0, 3),
+            ];
             return (
               <div
                 key={tier}

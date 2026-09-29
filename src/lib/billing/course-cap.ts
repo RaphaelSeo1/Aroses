@@ -1,9 +1,9 @@
 import "server-only";
 import { isUnlimitedPlanMeterUser } from "@/lib/billing/plan-cap-exempt";
+import { sourcePagesShortMessage } from "@/lib/billing/limit-messages";
 import {
   courseGenerationCap,
   isPaidTier,
-  PLANS,
   type PlanTier,
 } from "@/lib/billing/plans";
 import { resolveBillingPeriod } from "@/lib/billing/billing-period";
@@ -27,6 +27,7 @@ export type CourseCapOk = {
   ok: true;
   tier: PlanTier;
   used: number;
+  /** `null` = not counted (every paid tier, and app admins). */
   cap: number | null;
 };
 
@@ -40,31 +41,9 @@ export type CourseCapBlocked = {
   cap: number;
 };
 
-function resetLabel(iso: string | null): string {
-  if (!iso) return "your next billing period";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "your next billing period";
-  return d.toLocaleDateString("en-US", { month: "long", day: "numeric" });
-}
-
-export function courseGenerationCapMessage(opts: {
-  tier: PlanTier;
-  cap: number;
-  periodEnd: string | null;
-}): string {
-  const planName = PLANS[opts.tier].name;
-  if (!isPaidTier(opts.tier) || opts.cap <= 0) {
-    return "Choose a plan to generate an AI course.";
-  }
-  return `You've used all ${opts.cap} AI course generations included with ${planName} for this billing period. Your allowance resets on ${resetLabel(opts.periodEnd)}, or you can upgrade for a higher limit.`;
-}
-
-export function sourcePageCapMessage(opts: {
-  remaining: number;
-  needed: number;
-  periodEnd: string | null;
-}): string {
-  return `You have ${opts.remaining} source pages remaining this billing period. This material contains ${opts.needed} pages. Remove some source material or upgrade your plan.`;
+/** Only unpaid accounts have a course-build count (zero); paid tiers are limited by pages. */
+export function courseGenerationCapMessage(): string {
+  return "Choose a plan to build an AI course.";
 }
 
 type UsageRpcRow = {
@@ -122,7 +101,7 @@ export async function assertCanCreateCourse(
       ok: false,
       status: 402,
       code: PAID_GENERATION_REQUIRED_CODE,
-      error: "Choose a plan to generate an AI course.",
+      error: courseGenerationCapMessage(),
       tier,
       used: 0,
       cap: 0,
@@ -146,7 +125,8 @@ export type GenerationReserveOk = {
   generationUnits: number;
   tier: PlanTier;
   used: number;
-  cap: number;
+  /** `null` = builds are not counted; pages are the limit. */
+  cap: number | null;
   periodStart: string;
   periodEnd: string | null;
   unlimited: boolean;
@@ -193,14 +173,15 @@ export async function reserveCourseGeneration(opts: {
   const tier = sub.tier;
   const period = resolveBillingPeriod(sub);
   const unlimited = await isUnlimitedPlanMeterUser(opts.userId, opts.email);
-  const cap = unlimited ? Number.MAX_SAFE_INTEGER : courseGenerationCap(tier);
+  const cap = unlimited ? null : courseGenerationCap(tier);
+  const blockedCap = cap ?? 0;
 
   if (!unlimited && !isPaidTier(tier)) {
     return {
       ok: false,
       status: 402,
       code: PAID_GENERATION_REQUIRED_CODE,
-      error: "Choose a plan to generate an AI course.",
+      error: courseGenerationCapMessage(),
       tier,
       used: 0,
       cap: 0,
@@ -217,7 +198,7 @@ export async function reserveCourseGeneration(opts: {
         "Billing metering is temporarily unavailable. Try again in a moment.",
       tier,
       used: 0,
-      cap: courseGenerationCap(tier),
+      cap: blockedCap,
     };
   }
 
@@ -234,7 +215,7 @@ export async function reserveCourseGeneration(opts: {
         "Billing metering is temporarily unavailable. Try again in a moment.",
       tier,
       used: 0,
-      cap: courseGenerationCap(tier),
+      cap: blockedCap,
     };
   }
 
@@ -260,7 +241,7 @@ export async function reserveCourseGeneration(opts: {
     p_reason: reason,
     p_generation_units: generationUnits,
     p_idempotency_key: idempotencyKey,
-    p_cap: unlimited ? null : cap,
+    p_cap: cap,
   });
 
   if (error) {
@@ -270,19 +251,15 @@ export async function reserveCourseGeneration(opts: {
         opts.userId,
         period.startIso
       );
-      const used = totals?.courseGenerations ?? cap;
+      const used = totals?.courseGenerations ?? blockedCap;
       return {
         ok: false,
         status: 402,
         code: COURSE_GENERATION_CAP_CODE,
-        error: courseGenerationCapMessage({
-          tier,
-          cap: courseGenerationCap(tier),
-          periodEnd: period.endIso,
-        }),
+        error: courseGenerationCapMessage(),
         tier,
         used,
-        cap: courseGenerationCap(tier),
+        cap: blockedCap,
       };
     }
     console.error("[billing] reserve_course_generation", error);
@@ -294,7 +271,7 @@ export async function reserveCourseGeneration(opts: {
         "Billing metering is temporarily unavailable. Try again in a moment.",
       tier,
       used: 0,
-      cap: courseGenerationCap(tier),
+      cap: blockedCap,
     };
   }
 
@@ -309,7 +286,7 @@ export async function reserveCourseGeneration(opts: {
         "Billing metering is temporarily unavailable. Try again in a moment.",
       tier,
       used: 0,
-      cap: courseGenerationCap(tier),
+      cap: blockedCap,
     };
   }
 
@@ -321,7 +298,7 @@ export async function reserveCourseGeneration(opts: {
     generationUnits,
     tier,
     used: totals?.courseGenerations ?? generationUnits,
-    cap: courseGenerationCap(tier),
+    cap,
     periodStart: period.startIso,
     periodEnd: period.endIso,
     unlimited,
@@ -330,6 +307,7 @@ export async function reserveCourseGeneration(opts: {
 
 export async function reserveSourcePages(opts: {
   userId: string;
+  tier: PlanTier;
   reservationId: string;
   sourcePageUnits: number;
   cap: number;
@@ -373,7 +351,8 @@ export async function reserveSourcePages(opts: {
         ok: false,
         status: 402,
         code: SOURCE_PAGE_CAP_CODE,
-        error: sourcePageCapMessage({
+        error: sourcePagesShortMessage({
+          tier: opts.tier,
           remaining,
           needed: opts.sourcePageUnits,
           periodEnd: opts.periodEnd,

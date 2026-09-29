@@ -1,7 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { STORED_PAID_TIER_VALUES, parsePlanTier } from "@/lib/billing/plans";
 import {
-  PAID_PLAN_TIERS,
   isPaidPlanTier,
   listPriceCentsForTier,
   sortAdminPlanSubscriptionRows,
@@ -79,7 +79,7 @@ export async function loadAdminPlanSubscriptions(): Promise<
   const full = await admin
     .from("user_subscriptions")
     .select(SUB_SELECT)
-    .in("tier", [...PAID_PLAN_TIERS]);
+    .in("tier", STORED_PAID_TIER_VALUES);
 
   let rows: SubRow[] | null = null;
   if (full.error && /grant_source|schema cache/i.test(full.error.message ?? "")) {
@@ -88,12 +88,12 @@ export async function loadAdminPlanSubscriptions(): Promise<
       .select(
         "user_id, tier, status, current_period_start, current_period_end, updated_at, cancel_at_period_end, admin_granted"
       )
-      .in("tier", [...PAID_PLAN_TIERS]);
+      .in("tier", STORED_PAID_TIER_VALUES);
     if (noSource.error && /admin_granted|schema cache/i.test(noSource.error.message ?? "")) {
       const legacy = await admin
         .from("user_subscriptions")
         .select(SUB_SELECT_LEGACY)
-        .in("tier", [...PAID_PLAN_TIERS]);
+        .in("tier", STORED_PAID_TIER_VALUES);
       if (legacy.error) {
         console.error("[admin plan subscriptions]", legacy.error);
         return [];
@@ -109,7 +109,7 @@ export async function loadAdminPlanSubscriptions(): Promise<
     const legacy = await admin
       .from("user_subscriptions")
       .select(SUB_SELECT_LEGACY)
-      .in("tier", [...PAID_PLAN_TIERS]);
+      .in("tier", STORED_PAID_TIER_VALUES);
     if (legacy.error) {
       console.error("[admin plan subscriptions]", legacy.error);
       return [];
@@ -122,7 +122,10 @@ export async function loadAdminPlanSubscriptions(): Promise<
     rows = (full.data ?? []) as SubRow[];
   }
 
-  const subs = (rows ?? []).filter((row) => isPaidPlanTier(row.tier));
+  // Old basic / advanced / premium rows count as Lite / Plus / Pro.
+  const subs = (rows ?? []).filter((row) =>
+    isPaidPlanTier(parsePlanTier(row.tier) ?? "free")
+  );
   if (subs.length === 0) return [];
 
   const userIds = subs.map((row) => row.user_id);
@@ -144,7 +147,7 @@ export async function loadAdminPlanSubscriptions(): Promise<
   }
 
   const mapped: AdminPlanSubscriptionRow[] = subs.map((row) => {
-    const tier = row.tier.toLowerCase() as PaidPlanTier;
+    const tier = parsePlanTier(row.tier) as PaidPlanTier;
     const profile = profileMap.get(row.user_id);
     const email = emailMap.get(row.user_id) ?? null;
     return {

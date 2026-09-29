@@ -18,6 +18,7 @@ import {
   getUserSubscription,
   reconcileUserSubscription,
 } from "@/lib/billing/subscription";
+import { PLAN_ORDER, planLimits } from "@/lib/billing/plans";
 import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
 import { loadDashboardProgress } from "@/lib/dashboard-progress-data";
 import { TOUR_DEMO_COOKIE } from "@/lib/product-tour/tour-demo-cookie";
@@ -182,6 +183,9 @@ async function ProfilePageBody({
           voiceCapSeconds={
             billingBundle[1].unlimited ? null : billingBundle[1].capSeconds
           }
+          planLimitsByTier={Object.fromEntries(
+            PLAN_ORDER.map((tier) => [tier, planLimits(tier)])
+          )}
         />
       </Suspense>
     ) : undefined;

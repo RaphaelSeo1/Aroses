@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { PlanCardsRow, StudentPlanCornerBadge } from "@/components/billing/PlanCardsRow";
+import { planCardCopy } from "@/lib/billing/plan-card-copy";
 import {
   CHECKOUT_PLAN_ORDER,
   formatUsdAmount,
   isPaidTier,
-  voiceHours,
+  type PlanLimits,
   type PlanTier,
 } from "@/lib/billing/plans";
 import {
@@ -19,61 +20,6 @@ import { isStudentTrialActive } from "@/lib/billing/student-trial";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
 import type { Dictionary } from "@/locales";
-
-function planStrings(t: Dictionary["billing"], tier: PlanTier) {
-  const names: Record<PlanTier, string> = {
-    free: t.planFree,
-    student: t.planStudent,
-    advanced: t.planAdvanced,
-    premium: t.planPremium,
-  };
-  const taglines: Record<PlanTier, string> = {
-    free: t.planFreeTag,
-    student: t.planStudentTag,
-    advanced: t.planAdvancedTag,
-    premium: t.planPremiumTag,
-  };
-  const includes: Record<PlanTier, string | null> = {
-    free: null,
-    student: t.planStudentIncludes,
-    advanced: t.planAdvancedIncludes,
-    premium: t.planPremiumIncludes,
-  };
-  const highlights: Record<PlanTier, string[]> = {
-    free: [t.planFreeHighlight1, t.planFreeHighlight2, t.planFreeHighlight3],
-    student: [
-      t.planStudentHighlight1,
-      t.planStudentHighlight2,
-      t.planStudentHighlight3,
-      t.planStudentHighlight4,
-      t.planStudentHighlight5,
-      t.planStudentHighlight6,
-    ],
-    advanced: [
-      t.planAdvancedHighlight1,
-      t.planAdvancedHighlight2,
-      t.planAdvancedHighlight3,
-      t.planAdvancedHighlight4,
-      t.planAdvancedHighlight5,
-      t.planAdvancedHighlight6,
-      t.planAdvancedHighlight7,
-    ],
-    premium: [
-      t.planPremiumHighlight1,
-      t.planPremiumHighlight2,
-      t.planPremiumHighlight3,
-      t.planPremiumHighlight4,
-      t.planPremiumHighlight5,
-      t.planPremiumHighlight6,
-    ],
-  };
-  return {
-    name: names[tier],
-    tagline: taglines[tier],
-    includes: includes[tier],
-    highlights: highlights[tier],
-  };
-}
 
 function statusLine(
   t: Dictionary["billing"],
@@ -104,6 +50,7 @@ export function BillingClient({
   hasCustomer,
   voiceUsedSeconds,
   voiceCapSeconds,
+  planLimitsByTier,
 }: {
   currentTier: PlanTier;
   status: string;
@@ -112,6 +59,8 @@ export function BillingClient({
   hasCustomer: boolean;
   voiceUsedSeconds: number;
   voiceCapSeconds: number | null;
+  /** Server-resolved limits (includes env overrides); falls back to plan defaults. */
+  planLimitsByTier?: Partial<Record<PlanTier, PlanLimits>>;
 }) {
   const t = useT();
   const searchParams = useSearchParams();
@@ -179,6 +128,14 @@ export function BillingClient({
         year: "numeric",
       })
     : null;
+  const resetLabel =
+    periodEndLabel ??
+    (() => {
+      const now = new Date();
+      return new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
+      ).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+    })();
 
   const usedMinutes = Math.floor(voiceUsedSeconds / 60);
   const voiceUnlimited = voiceCapSeconds == null;
@@ -191,7 +148,9 @@ export function BillingClient({
   const capReached =
     !voiceUnlimited && voiceCapSeconds > 0 && voiceUsedSeconds >= voiceCapSeconds;
 
-  const currentPlan = planStrings(t.billing, currentTier);
+  const copyFor = (tier: PlanTier) =>
+    planCardCopy(t.billing, tier, planLimitsByTier?.[tier]);
+  const currentPlan = copyFor(currentTier);
 
   return (
     <div>
@@ -212,10 +171,13 @@ export function BillingClient({
 
       {lectureCapHit ? (
         <Banner tone="error">
-          {tf(t.billing.lectureCapBanner, {
-            used: lectureCapUsed || "—",
-            cap: lectureCapLimit || "—",
-          })}
+          {lectureCapLimit === "0" || !isPaidTier(currentTier)
+            ? t.billing.lectureCapBannerFree
+            : tf(t.billing.lectureCapBanner, {
+                used: lectureCapUsed || "—",
+                cap: lectureCapLimit || "—",
+                date: resetLabel,
+              })}
         </Banner>
       ) : null}
 
@@ -236,9 +198,7 @@ export function BillingClient({
             ) : currentTier !== "free" ? (
               <span className="ml-2 text-sm font-normal text-zinc-500">
                 ·{" "}
-                {tf(t.billing.voiceHoursMonth, {
-                  hours: String(voiceHours(currentTier)),
-                })}
+                {tf(t.billing.voiceMinutesMonth, { minutes: capMinutes })}
               </span>
             ) : null}
           </p>
@@ -289,7 +249,7 @@ export function BillingClient({
       {/* Plan cards — five across; scroll on narrow viewports instead of wrapping */}
       <PlanCardsRow>
         {CHECKOUT_PLAN_ORDER.map((tier) => {
-          const plan = planStrings(t.billing, tier);
+          const plan = copyFor(tier);
           const charged = salePriceMonthly(tier);
           const isCurrent = tier === currentTier;
           const wasPrice = compareAtPriceMonthly(tier);
@@ -299,7 +259,7 @@ export function BillingClient({
             wasPrice != null &&
             wasPrice > charged;
           const salePercent = showSale ? salePercentForTier(tier) : 0;
-          const isBest = tier === "advanced";
+          const isBest = tier === "plus";
           const isTrialCard =
             isStudentTrialActive() && tier === "student" && !isCurrent;
           return (

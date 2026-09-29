@@ -6,19 +6,14 @@ import {
   adminSetUserSubscription,
   type AdminSubscriptionStatus,
 } from "@/lib/billing/subscription";
-import { parsePlanTier, type PlanTier } from "@/lib/billing/plans";
+import { PLAN_ORDER, parsePlanTier, type PlanTier } from "@/lib/billing/plans";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const TIERS = new Set<PlanTier>([
-  "free",
-  "student",
-  "advanced",
-  "premium",
-]);
+const TIERS = new Set<PlanTier>(PLAN_ORDER);
 const STATUSES = new Set<string>(ADMIN_SUBSCRIPTION_STATUSES);
 
 type Params = { params: Promise<{ userId: string }> };
@@ -62,7 +57,7 @@ export async function POST(req: Request, ctx: Params) {
     return NextResponse.json(
       {
         error:
-          "tier must be free, basic, student, plus, advanced, or premium.",
+          "tier must be free, lite, student, plus, pro, or max.",
       },
       { status: 400 }
     );

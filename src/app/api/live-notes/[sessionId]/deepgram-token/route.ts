@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
-import { checkVoiceAllowance } from "@/lib/billing/voice-usage";
+import { sessionLimitSeconds } from "@/lib/billing/lecture-minutes";
+import {
+  getLectureAllowance,
+  lectureLimitBody,
+} from "@/lib/billing/lecture-recording-cap";
 import { mintDeepgramToken, normalizeDeepgramKey } from "@/lib/deepgram";
 import { report } from "@/lib/report-error";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
-import { voiceCapBody } from "@/lib/voice-tutor/voice-cap";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
 export const runtime = "nodejs";
@@ -15,9 +18,11 @@ type Params = { params: Promise<{ sessionId: string }> };
  * POST /api/live-notes/[sessionId]/deepgram-token
  *
  * Mints a short-lived Deepgram access token for the live lecture capture
- * WebSocket. Same voice-cap gating as the voice-tutor flavor; scoped to an
- * active (recording/paused) session the caller owns. Called on every
- * (re)connect — the token TTL only matters at connect time.
+ * WebSocket, gated on the plan's live lecture hours; scoped to an active
+ * (recording/paused) session the caller owns. Called on every (re)connect —
+ * the token TTL only matters at connect time. Returns
+ * `lectureLimitSeconds`: the session length at which the plan runs out
+ * (null = unlimited), so the client can warn and stop in time.
  */
 export async function POST(_request: Request, ctx: Params) {
   try {
@@ -47,7 +52,7 @@ export async function POST(_request: Request, ctx: Params) {
     // RLS restricts the row to its owner; a miss is 404 either way.
     const { data: session } = await supabase
       .from("live_lecture_sessions")
-      .select("id, status")
+      .select("id, status, duration_seconds, metered_seconds")
       .eq("id", sessionId)
       .maybeSingle();
     if (!session) {
@@ -60,10 +65,14 @@ export async function POST(_request: Request, ctx: Params) {
       );
     }
 
-    const allowance = await checkVoiceAllowance(user.id, { email: user.email });
+    const allowance = await getLectureAllowance(user.id, { email: user.email });
     if (!allowance.allowed) {
-      return NextResponse.json(voiceCapBody(), { status: 402 });
+      return NextResponse.json(lectureLimitBody(allowance), { status: 402 });
     }
+    const recorded = Math.max(
+      Number(session.duration_seconds) || 0,
+      Number(session.metered_seconds) || 0
+    );
 
     const token = await mintDeepgramToken();
     if (!token.ok) {
@@ -77,6 +86,10 @@ export async function POST(_request: Request, ctx: Params) {
     return NextResponse.json({
       accessToken: token.accessToken,
       expiresIn: token.expiresIn,
+      lectureLimitSeconds: sessionLimitSeconds({
+        allowance,
+        sessionRecordedSeconds: recorded,
+      }),
     });
   } catch (e) {
     console.error("[live-notes deepgram-token]", e);

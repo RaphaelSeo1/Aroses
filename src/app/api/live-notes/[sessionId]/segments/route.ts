@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { recordVoiceSeconds } from "@/lib/billing/voice-usage";
+import { sessionLimitSeconds } from "@/lib/billing/lecture-minutes";
+import {
+  getLectureAllowance,
+  meterLectureSession,
+} from "@/lib/billing/lecture-recording-cap";
 import { createRouteHandlerSupabase } from "@/lib/supabase/route-handler-client";
 import { isUuid } from "@/lib/voice-tutor/uuid";
 
@@ -115,18 +119,28 @@ export async function POST(request: Request, ctx: Params) {
     b.durationSeconds >= 0
       ? Math.min(24 * 60 * 60, Math.round(b.durationSeconds))
       : null;
+  // Lecture limit for this session, refreshed whenever a minute is metered.
+  let lectureLimitSeconds: number | null | undefined;
   if (durationSeconds != null) {
     sessionPatch.duration_seconds = durationSeconds;
 
-    // Meter Deepgram minutes against the voice cap in ~1-minute deltas (only
-    // TTS was metered before; live STT rode free). `metered_seconds` tracks
-    // what has been recorded so retried flushes never double-bill.
+    // Meter recorded minutes against the plan's live lecture hours in
+    // ~1-minute deltas. `metered_seconds` tracks what has been recorded so
+    // retried flushes never double-count.
     const meteredSeconds =
       typeof session.metered_seconds === "number" ? session.metered_seconds : 0;
-    const delta = durationSeconds - meteredSeconds;
-    if (delta >= 60) {
-      await recordVoiceSeconds(user.id, delta);
-      sessionPatch.metered_seconds = durationSeconds;
+    const metered = await meterLectureSession({
+      userId: user.id,
+      durationSeconds,
+      meteredSeconds,
+    });
+    if (metered != null) {
+      sessionPatch.metered_seconds = metered;
+      const allowance = await getLectureAllowance(user.id, { email: user.email });
+      lectureLimitSeconds = sessionLimitSeconds({
+        allowance,
+        sessionRecordedSeconds: Math.max(durationSeconds, metered),
+      });
     }
   }
   await supabase
@@ -135,7 +149,11 @@ export async function POST(request: Request, ctx: Params) {
     .eq("id", sessionId)
     .eq("user_id", user.id);
 
-  return NextResponse.json({ ok: true, saved: rows.length });
+  return NextResponse.json({
+    ok: true,
+    saved: rows.length,
+    ...(lectureLimitSeconds !== undefined ? { lectureLimitSeconds } : {}),
+  });
 }
 
 export async function GET(_request: Request, ctx: Params) {

@@ -11,50 +11,28 @@ import {
   type AdminPlanSubscriptionRow,
 } from "./admin-plan-subscription-rows.ts";
 
-test("paid plan tiers include Basic and Plus", () => {
-  assert.equal(isPaidPlanTier("student"), true);
-  assert.equal(isPaidPlanTier("advanced"), true);
-  assert.equal(isPaidPlanTier("premium"), true);
+test("paid plan tiers are Lite, Student, Plus, Pro, Max", () => {
+  for (const tier of ["lite", "student", "plus", "pro", "max"]) {
+    assert.equal(isPaidPlanTier(tier), true, tier);
+  }
   assert.equal(isPaidPlanTier("free"), false);
 });
 
-test("charged prices use promo monthly USD when promo is on", () => {
-  const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
-  process.env.SUBSCRIPTION_PROMO_ENABLED = "true";
-  try {
-    assert.equal(listPriceCentsForTier("student"), 1499);
-    assert.equal(listPriceCentsForTier("advanced"), 3999);
-    assert.equal(listPriceCentsForTier("premium"), 5999);
-  } finally {
-    process.env.SUBSCRIPTION_PROMO_ENABLED = prev;
-  }
+test("charged prices are the plan's monthly USD", () => {
+  assert.equal(listPriceCentsForTier("lite"), 899);
+  assert.equal(listPriceCentsForTier("student"), 1499);
+  assert.equal(listPriceCentsForTier("plus"), 2999);
+  assert.equal(listPriceCentsForTier("pro"), 4999);
+  assert.equal(listPriceCentsForTier("max"), 9999);
 });
 
-test("charged prices use regular monthly USD when promo is off", () => {
-  const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
-  process.env.SUBSCRIPTION_PROMO_ENABLED = "false";
-  try {
-    assert.equal(listPriceCentsForTier("student"), 3999);
-    assert.equal(listPriceCentsForTier("advanced"), 7999);
-    assert.equal(listPriceCentsForTier("premium"), 10999);
-  } finally {
-    process.env.SUBSCRIPTION_PROMO_ENABLED = prev;
-  }
-});
-
-test("stored Stripe amount wins over catalog sale price", () => {
-  const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
-  process.env.SUBSCRIPTION_PROMO_ENABLED = "true";
-  try {
-    assert.equal(listPriceCentsForTier("advanced", 7999), 7999);
-    assert.equal(listPriceCentsForTier("advanced", 0), 0);
-    assert.equal(listPriceCentsForTier("advanced", null), 3999);
-    assert.equal(storedStripeAmountCents({ amount_cents: 500 }), 500);
-    assert.equal(storedStripeAmountCents({ stripe_amount_cents: 7999 }), 7999);
-    assert.equal(storedStripeAmountCents({}), null);
-  } finally {
-    process.env.SUBSCRIPTION_PROMO_ENABLED = prev;
-  }
+test("stored Stripe amount wins over the catalog price", () => {
+  assert.equal(listPriceCentsForTier("plus", 500), 500);
+  assert.equal(listPriceCentsForTier("plus", 0), 0);
+  assert.equal(listPriceCentsForTier("plus", null), 2999);
+  assert.equal(storedStripeAmountCents({ amount_cents: 500 }), 500);
+  assert.equal(storedStripeAmountCents({ stripe_amount_cents: 7999 }), 7999);
+  assert.equal(storedStripeAmountCents({}), null);
 });
 
 test("subscriber label prefers email then name then username", () => {
@@ -115,7 +93,7 @@ test("plan KPIs count current subscribers and paying MRR only", () => {
       ...base,
       userId: "b",
       subscriberLabel: "b",
-      tier: "premium",
+      tier: "pro",
       amountCents: 10999,
       status: "trialing",
     },
@@ -123,7 +101,7 @@ test("plan KPIs count current subscribers and paying MRR only", () => {
       ...base,
       userId: "c",
       subscriberLabel: "c",
-      tier: "advanced",
+      tier: "plus",
       amountCents: 7999,
       status: "active",
       adminGranted: true,
@@ -144,58 +122,51 @@ test("plan KPIs count current subscribers and paying MRR only", () => {
   assert.equal(summary.mrrCents, 14998);
 });
 
-test("screenshot case: one paying Advanced at promo $39.99, admin Premiums excluded from MRR", () => {
-  const prev = process.env.SUBSCRIPTION_PROMO_ENABLED;
-  process.env.SUBSCRIPTION_PROMO_ENABLED = "true";
-  try {
-    const base = {
-      email: null,
-      displayName: null,
-      currency: "usd" as const,
-      startedAt: "2026-07-24T00:00:00.000Z",
-      periodEnd: null,
-      cancelAtPeriodEnd: false,
-    };
+test("one paying old-Advanced subscriber (now Plus) at their $5 Stripe price; admin grants excluded from MRR", () => {
+  const base = {
+    email: null,
+    displayName: null,
+    currency: "usd" as const,
+    startedAt: "2026-07-24T00:00:00.000Z",
+    periodEnd: null,
+    cancelAtPeriodEnd: false,
+  };
 
-    const rows: AdminPlanSubscriptionRow[] = [
-      {
-        ...base,
-        userId: "paying-advanced",
-        subscriberLabel: "rithwick70911@gmail.com",
-        tier: "advanced",
-        amountCents: listPriceCentsForTier("advanced"),
-        status: "active",
-        startedAt: "2026-09-09T00:00:00.000Z",
-        adminGranted: false,
-      },
-      {
-        ...base,
-        userId: "admin-premium-1",
-        subscriberLabel: "raphaelseo@berkeley.edu",
-        tier: "premium",
-        amountCents: listPriceCentsForTier("premium"),
-        status: "active",
-        adminGranted: true,
-      },
-      {
-        ...base,
-        userId: "admin-premium-2",
-        subscriberLabel: "raphaelxseo@gmail.com",
-        tier: "premium",
-        amountCents: listPriceCentsForTier("premium"),
-        status: "active",
-        adminGranted: true,
-      },
-    ];
+  const rows: AdminPlanSubscriptionRow[] = [
+    {
+      ...base,
+      userId: "paying-plus",
+      subscriberLabel: "paying@example.com",
+      tier: "plus",
+      amountCents: listPriceCentsForTier("plus", 500),
+      status: "active",
+      startedAt: "2026-09-09T00:00:00.000Z",
+      adminGranted: false,
+    },
+    {
+      ...base,
+      userId: "admin-pro-1",
+      subscriberLabel: "admin1@example.com",
+      tier: "pro",
+      amountCents: listPriceCentsForTier("pro"),
+      status: "active",
+      adminGranted: true,
+    },
+    {
+      ...base,
+      userId: "admin-pro-2",
+      subscriberLabel: "admin2@example.com",
+      tier: "pro",
+      amountCents: listPriceCentsForTier("pro"),
+      status: "active",
+      adminGranted: true,
+    },
+  ];
 
-    assert.equal(rows[0].amountCents, 3999);
-    const summary = summarizeAdminPlanSubscriptions(rows);
-    assert.equal(summary.subscriberCount, 3);
-    assert.equal(summary.payingCount, 1);
-    assert.equal(summary.mrrCents, 3999);
-  } finally {
-    process.env.SUBSCRIPTION_PROMO_ENABLED = prev;
-  }
+  const summary = summarizeAdminPlanSubscriptions(rows);
+  assert.equal(summary.subscriberCount, 3);
+  assert.equal(summary.payingCount, 1);
+  assert.equal(summary.mrrCents, 500);
 });
 
 test("rows sort newest started first", () => {

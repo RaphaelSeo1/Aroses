@@ -1,6 +1,11 @@
 import "server-only";
 import type Stripe from "stripe";
-import { tierForPriceId, type PlanTier } from "@/lib/billing/plans";
+import {
+  isTierCheckViolation,
+  preMigrationTierValue,
+  tierForPriceId,
+  type PlanTier,
+} from "@/lib/billing/plans";
 import { getStripe } from "@/lib/stripe/client";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -138,49 +143,75 @@ export async function syncStripeSubscription(
   const customerId = customerIdFrom(sub.customer);
   const { startIso, endIso } = billingPeriodFromSubscription(sub);
 
-  const { error } = await admin.from("user_subscriptions").upsert(
-    {
-      user_id: userId,
-      tier,
-      status: sub.status,
-      stripe_customer_id: customerId,
-      stripe_subscription_id: sub.id,
-      current_period_start: startIso,
-      current_period_end: endIso,
-      cancel_at_period_end: sub.cancel_at_period_end ?? false,
-      // Real Stripe billing takes over any previous admin / check-in grant.
-      admin_granted: false,
-      grant_source: null,
-    },
-    { onConflict: "user_id" }
-  );
+  const row = await upsertSyncedRow(admin, {
+    userId,
+    tier,
+    status: sub.status,
+    customerId,
+    subscriptionId: sub.id,
+    startIso,
+    endIso,
+    cancelAtPeriodEnd: sub.cancel_at_period_end ?? false,
+  });
+  if (row.error) {
+    console.error("[billing] sync subscription upsert failed", row.error);
+    throw row.error;
+  }
+}
 
-  if (error && /grant_source|schema cache/i.test(error.message ?? "")) {
-    const retry = await admin.from("user_subscriptions").upsert(
+type SyncedRow = {
+  userId: string;
+  tier: PlanTier;
+  status: string;
+  customerId: string | null;
+  subscriptionId: string;
+  startIso: string | null;
+  endIso: string | null;
+  cancelAtPeriodEnd: boolean;
+};
+
+/**
+ * Writes the row, retrying without `grant_source` on older schemas and with
+ * a legacy tier name while migration 118 (lite/pro/max) isn't applied.
+ */
+async function upsertSyncedRow(
+  admin: NonNullable<ReturnType<typeof createAdminClient>>,
+  input: SyncedRow
+): Promise<{ error: { code?: string; message?: string } | null }> {
+  const write = async (tierValue: string, withGrantSource: boolean) => {
+    const { error } = await admin.from("user_subscriptions").upsert(
       {
-        user_id: userId,
-        tier,
-        status: sub.status,
-        stripe_customer_id: customerId,
-        stripe_subscription_id: sub.id,
-        current_period_start: startIso,
-        current_period_end: endIso,
-        cancel_at_period_end: sub.cancel_at_period_end ?? false,
+        user_id: input.userId,
+        tier: tierValue,
+        status: input.status,
+        stripe_customer_id: input.customerId,
+        stripe_subscription_id: input.subscriptionId,
+        current_period_start: input.startIso,
+        current_period_end: input.endIso,
+        cancel_at_period_end: input.cancelAtPeriodEnd,
+        // Real Stripe billing takes over any previous admin / check-in grant.
         admin_granted: false,
+        ...(withGrantSource ? { grant_source: null } : {}),
       },
       { onConflict: "user_id" }
     );
-    if (retry.error) {
-      console.error("[billing] sync subscription upsert failed", retry.error);
-      throw retry.error;
-    }
-    return;
-  }
+    return error;
+  };
 
-  if (error) {
-    console.error("[billing] sync subscription upsert failed", error);
-    throw error;
+  let withGrantSource = true;
+  let error = await write(input.tier, withGrantSource);
+  if (error && /grant_source|schema cache/i.test(error.message ?? "")) {
+    withGrantSource = false;
+    error = await write(input.tier, withGrantSource);
   }
+  const standIn = preMigrationTierValue(input.tier);
+  if (error && isTierCheckViolation(error) && standIn !== input.tier) {
+    console.warn(
+      `[billing] tier "${input.tier}" not allowed yet (apply migration 118_plan_tiers_v2.sql); stored as "${standIn}"`
+    );
+    error = await write(standIn, withGrantSource);
+  }
+  return { error };
 }
 
 /** Mark a user as free after subscription deletion. */

@@ -14,8 +14,6 @@ import { createClient } from "@/lib/supabase/client";
 export type BuilderCourse = { id: string; title: string; sections: Array<{ id: string; name: string }> };
 export type BuilderPrefill = { kind: "note" | "live_session" | "tutor_session"; id: string; label: string };
 export type BuilderLimits = {
-  coursesUsed: number;
-  coursesCap: number | null;
   pagesUsed: number;
   pagesCap: number | null;
   periodEnd: string | null;
@@ -112,10 +110,9 @@ export function CourseBuildUpload({ userId, enabled, courses, initialCourseId, i
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const coursesLeft = remaining(limits.coursesUsed, limits.coursesCap);
   const pagesLeft = remaining(limits.pagesUsed, limits.pagesCap);
-  const outOfPages = pagesLeft === 0;
-  const outOfCourses = courseMode === "new" && coursesLeft === 0;
+  const needsPlan = limits.pagesCap === 0;
+  const outOfPages = !needsPlan && pagesLeft === 0;
 
   const hasText = showText && pasted.trim().length > 0;
   const hasLink = showLink && link.trim().length > 0;
@@ -214,7 +211,7 @@ export function CourseBuildUpload({ userId, enabled, courses, initialCourseId, i
     router.push(`/dashboard/courses/${targetCourse}/build/${firstBuild}${rest.length ? `?also=${rest.join(",")}` : ""}`);
   }
 
-  const disabled = !enabled || busy !== null || outOfPages || outOfCourses;
+  const disabled = !enabled || busy !== null || outOfPages || needsPlan;
 
   return (
     <div>
@@ -233,21 +230,16 @@ export function CourseBuildUpload({ userId, enabled, courses, initialCourseId, i
         </div>
       ) : null}
 
-      <div className="mt-6 grid grid-cols-2 gap-3">
+      <div className="mt-6 grid grid-cols-1 gap-3">
         <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/60">
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">New courses left</p>
-          <p className="mt-0.5 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-            {coursesLeft == null ? "Unlimited" : `${coursesLeft} of ${limits.coursesCap}`}
-          </p>
-          <p className="text-[11px] text-zinc-500 dark:text-zinc-500">Adding to an existing course is free</p>
-        </div>
-        <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/60">
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">Source pages left</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">Pages of course material left</p>
           <p className="mt-0.5 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
             {pagesLeft == null ? "Unlimited" : `${pagesLeft.toLocaleString()} of ${limits.pagesCap?.toLocaleString()}`}
           </p>
-          {pagesLeft != null ? (
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-500">Resets {resetDate(limits.periodEnd)}</p>
+          {pagesLeft != null && !needsPlan ? (
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-500">
+              Every page you upload counts, for new and existing courses. Resets {resetDate(limits.periodEnd)}
+            </p>
           ) : null}
         </div>
       </div>
@@ -461,17 +453,20 @@ export function CourseBuildUpload({ userId, enabled, courses, initialCourseId, i
         </label>
       </section>
 
-      {outOfPages ? (
+      {needsPlan ? (
         <p className="mt-6 text-sm text-red-600 dark:text-red-400">
-          You&apos;ve used all your source pages for this period. They reset {resetDate(limits.periodEnd)}, or you can{" "}
+          <Link href="/dashboard/billing" className="underline">
+            Choose a plan
+          </Link>{" "}
+          to build an AI course from your materials.
+        </p>
+      ) : outOfPages ? (
+        <p className="mt-6 text-sm text-red-600 dark:text-red-400">
+          You&apos;ve used all your pages of course material for this period. They reset {resetDate(limits.periodEnd)}, or you can{" "}
           <Link href="/dashboard/billing" className="underline">
             upgrade
-          </Link>
-          .
-        </p>
-      ) : outOfCourses ? (
-        <p className="mt-6 text-sm text-red-600 dark:text-red-400">
-          You&apos;ve used all your new courses for this period. You can still add materials to an existing course.
+          </Link>{" "}
+          for more pages.
         </p>
       ) : null}
       {error ? <p className="mt-6 text-sm text-red-600 dark:text-red-400">{error}</p> : null}

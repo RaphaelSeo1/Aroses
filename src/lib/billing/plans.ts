@@ -1,13 +1,27 @@
 /**
  * Subscription plans — THE single source of truth for tiers, prices, Stripe
- * price IDs, voice allowance, generation caps, source pages, PDF limits and
- * lecture-recording caps.
+ * price IDs and every monthly allowance (course pages, live lecture minutes,
+ * voice tutor minutes, chat messages, extra-question clicks, daily course
+ * build spend).
  *
- * Three paid tiers: Student, Advanced, Premium. Course generation depth is NOT
- * a tier capability — every plan builds courses the same way.
+ * Five paid tiers: Lite, Student, Plus, Pro, Max, priced from measured AI
+ * cost. Internal `free` is the unsubscribed fallback (canceled / missing /
+ * unpaid). It is never offered at checkout and has no expensive AI
+ * allowances (chat keeps a small taste).
  *
- * Internal `free` is the unsubscribed fallback (canceled / missing / unpaid).
- * It is never offered at checkout and has no expensive AI allowances.
+ * Older subscribers keep their Stripe price and read as a new tier:
+ * Student → Student, Advanced → Plus, Premium → Pro (see
+ * LEGACY_TIER_ALIASES and LEGACY_STRIPE_PRICE_TIERS).
+ *
+ * Every numeric limit can be overridden per tier from the environment:
+ *   PLAN_LIMIT_<TIER>_PAGES            course pages per billing period
+ *   PLAN_LIMIT_<TIER>_LECTURE_MINUTES  live lecture minutes per billing period
+ *   PLAN_LIMIT_<TIER>_VOICE_MINUTES    voice tutor minutes per billing period
+ *   PLAN_LIMIT_<TIER>_EXTRA_QUESTIONS  extra-question clicks per billing period
+ *   PLAN_LIMIT_<TIER>_DAILY_BUILD_USD  rolling 24h course-build AI spend
+ *   CHAT_LIMIT_<TIER>_MESSAGES / _SONNET  (see chat-limits.ts)
+ * e.g. PLAN_LIMIT_STUDENT_PAGES=700. Overrides only apply on the server;
+ * pricing cards show the defaults below.
  *
  * Numeric limits are NOT additive across tiers.
  *
@@ -15,43 +29,50 @@
  * `feature-flag.ts` (`BILLING_UI_ENABLED`).
  */
 
-export type PlanTier = "free" | "student" | "advanced" | "premium";
+export type PlanTier = "free" | "lite" | "student" | "plus" | "pro" | "max";
 
-export const PAID_PLAN_TIERS = ["student", "advanced", "premium"] as const;
+export const PAID_PLAN_TIERS = ["lite", "student", "plus", "pro", "max"] as const;
 
 export type PaidPlanTier = (typeof PAID_PLAN_TIERS)[number];
+
+export type PlanLimits = {
+  /** Pages of course material the course builder reads per billing period. */
+  sourcePages: number;
+  /** Recorded live lecture minutes per billing period. */
+  lectureMinutes: number;
+  /** Voice tutor minutes per billing period. */
+  voiceMinutes: number;
+  /** Rose chat messages per billing period. */
+  chatMessages: number;
+  /** Of those, how many run on the premium (Sonnet) model. */
+  chatPremiumMessages: number;
+  /** "Generate more questions" + "focus questions" clicks per billing period. */
+  extraQuestionClicks: number;
+  /** Rolling 24-hour AI spend ceiling for course builds, in USD. */
+  dailyCourseBuildUsd: number;
+  /**
+   * AI course builds per billing period. `null` = not counted (pages are the
+   * limit on every paid tier).
+   */
+  courseGenerations: number | null;
+  /** Cumulative active PDFs allowed on one course. */
+  maxPdfsPerCourse: number;
+};
 
 export type PlanConfig = {
   tier: PlanTier;
   name: string;
-  /** Regular (non-promo) monthly USD. Stripe is the charge source of truth. */
+  /** Monthly USD charged. Stripe is the charge source of truth. */
   priceMonthly: number;
-  /** Promotional monthly USD charged when the promo flag is on. */
-  promoPriceMonthly: number | null;
-  /** Regular recurring Stripe Price ID. Null for free / when unset. */
+  /** Recurring Stripe Price ID used for new checkouts. Null for free. */
   stripePriceId: string | null;
-  /** Promo recurring Stripe Price ID. Null for free / when unset. */
-  stripePromoPriceId: string | null;
   /**
-   * Extra Price IDs that still map to this tier (legacy subscribers).
-   * Never used for new checkout once regular/promo IDs exist.
+   * Older Price IDs that still map to this tier (existing subscribers keep
+   * paying them). Never used for new checkout.
    */
   legacyStripePriceIds: string[];
-  /** Monthly voice-tutoring allowance, in minutes. */
-  voiceMinutes: number;
-  /** Successful AI course generations per billing period. */
-  courseGenerations: number;
-  /** Normalized source-page equivalents per billing period. */
-  sourcePages: number;
-  /** Cumulative active PDFs allowed on one course. */
-  maxPdfsPerCourse: number;
-  /** New live lecture recording sessions per billing period. */
-  lectureRecordings: number;
+  limits: PlanLimits;
   earlyAccess: boolean;
-  /** One-line tagline for the pricing card. */
-  tagline: string;
-  /** Incremental highlights (cumulative “everything in previous, plus”). */
-  highlights: string[];
 };
 
 function envId(name: string): string | null {
@@ -70,132 +91,203 @@ function uniqueIds(...ids: Array<string | null | undefined>): string[] {
   return out;
 }
 
-const STUDENT_REGULAR =
-  envId("STRIPE_PRICE_STUDENT_REGULAR") ?? envId("STRIPE_PRICE_STUDENT");
-const ADVANCED_REGULAR =
-  envId("STRIPE_PRICE_ADVANCED_REGULAR") ?? envId("STRIPE_PRICE_ADVANCED");
-const PREMIUM_REGULAR =
-  envId("STRIPE_PRICE_PREMIUM_REGULAR") ?? envId("STRIPE_PRICE_PREMIUM");
+/**
+ * Live-mode monthly prices created for the five tiers. Price IDs are not
+ * secrets; `STRIPE_PRICE_<TIER>_MONTHLY` overrides them (required in Stripe
+ * test mode, where these IDs don't exist).
+ */
+const DEFAULT_LIVE_PRICE_IDS: Record<PaidPlanTier, string> = {
+  lite: "price_1UKuPlLYnLcQuKlVAk8EjEbQ",
+  student: "price_1UKuPmLYnLcQuKlV5MDooEhz",
+  plus: "price_1UKuPmLYnLcQuKlVL2nCc96M",
+  pro: "price_1UKuPnLYnLcQuKlVy40pqbMh",
+  max: "price_1UKuPoLYnLcQuKlV8syiPcmk",
+};
+
+/**
+ * Live Price IDs from the previous plan lineups. Subscribers on them keep
+ * paying the same amount and get the mapped tier's allowances.
+ */
+const LEGACY_STRIPE_PRICE_TIERS: Record<string, PaidPlanTier> = {
+  price_1Tdu1ILYnLcQuKlVA8TIie5B: "student", // Student $29
+  price_1UFpv0LYnLcQuKlVDQS1XA25: "student", // Student $14.99
+  price_1U38d2LYnLcQuKlVXTwztiY1: "plus", // Advanced $5
+  price_1UIAdNLYnLcQuKlVsKmlSVeF: "plus", // Advanced $39.99
+  price_1Tdu2CLYnLcQuKlVT4mqde0C: "pro", // Premium $59
+  price_1UFpwvLYnLcQuKlVNTKjOC7V: "pro", // Premium $59.99
+  price_1UFpxJLYnLcQuKlV7nOXYtYO: "plus", // retired Plus $24.99
+  price_1UFptiLYnLcQuKlVAntBPDIZ: "lite", // retired Basic $3.99
+};
+
+/** Old env names whose prices still map to a tier. */
+const LEGACY_PRICE_ENV: Record<PaidPlanTier, string[]> = {
+  lite: ["STRIPE_PRICE_BASIC", "STRIPE_PRICE_BASIC_PROMO"],
+  student: [
+    "STRIPE_PRICE_STUDENT",
+    "STRIPE_PRICE_STUDENT_REGULAR",
+    "STRIPE_PRICE_STUDENT_PROMO",
+  ],
+  plus: [
+    "STRIPE_PRICE_ADVANCED",
+    "STRIPE_PRICE_ADVANCED_REGULAR",
+    "STRIPE_PRICE_ADVANCED_PROMO",
+    "STRIPE_PRICE_PLUS",
+    "STRIPE_PRICE_PLUS_PROMO",
+  ],
+  pro: [
+    "STRIPE_PRICE_PREMIUM",
+    "STRIPE_PRICE_PREMIUM_REGULAR",
+    "STRIPE_PRICE_PREMIUM_PROMO",
+  ],
+  max: [],
+};
+
+export function checkoutPriceEnvName(tier: PaidPlanTier): string {
+  return `STRIPE_PRICE_${tier.toUpperCase()}_MONTHLY`;
+}
+
+function paidPlanPrices(tier: PaidPlanTier): Pick<
+  PlanConfig,
+  "stripePriceId" | "legacyStripePriceIds"
+> {
+  const current = envId(checkoutPriceEnvName(tier)) ?? DEFAULT_LIVE_PRICE_IDS[tier];
+  const legacy = uniqueIds(
+    ...LEGACY_PRICE_ENV[tier].map(envId),
+    ...Object.entries(LEGACY_STRIPE_PRICE_TIERS)
+      .filter(([, t]) => t === tier)
+      .map(([id]) => id)
+  ).filter((id) => id !== current);
+  return { stripePriceId: current, legacyStripePriceIds: legacy };
+}
 
 export const PLANS: Record<PlanTier, PlanConfig> = {
   free: {
     tier: "free",
     name: "Free",
     priceMonthly: 0,
-    promoPriceMonthly: null,
     stripePriceId: null,
-    stripePromoPriceId: null,
     legacyStripePriceIds: [],
-    voiceMinutes: 0,
-    courseGenerations: 0,
-    sourcePages: 0,
-    maxPdfsPerCourse: 0,
-    lectureRecordings: 0,
+    limits: {
+      sourcePages: 0,
+      lectureMinutes: 0,
+      voiceMinutes: 0,
+      chatMessages: 20,
+      chatPremiumMessages: 10,
+      extraQuestionClicks: 0,
+      dailyCourseBuildUsd: 0,
+      courseGenerations: 0,
+      maxPdfsPerCourse: 0,
+    },
     earlyAccess: false,
-    tagline: "Unpaid default — not offered at checkout.",
-    highlights: ["Choose a plan to generate AI courses."],
+  },
+  lite: {
+    tier: "lite",
+    name: "Lite",
+    priceMonthly: 8.99,
+    ...paidPlanPrices("lite"),
+    limits: {
+      sourcePages: 300,
+      lectureMinutes: 2 * 60,
+      voiceMinutes: 10,
+      chatMessages: 100,
+      chatPremiumMessages: 50,
+      extraQuestionClicks: 5,
+      dailyCourseBuildUsd: 1,
+      courseGenerations: null,
+      maxPdfsPerCourse: 3,
+    },
+    earlyAccess: false,
   },
   student: {
     tier: "student",
     name: "Student",
-    priceMonthly: 39.99,
-    promoPriceMonthly: 14.99,
-    stripePriceId: STUDENT_REGULAR,
-    stripePromoPriceId: envId("STRIPE_PRICE_STUDENT_PROMO"),
-    legacyStripePriceIds: uniqueIds(
-      envId("STRIPE_PRICE_STUDENT"),
-      STUDENT_REGULAR
-    ).filter((id) => id !== STUDENT_REGULAR),
-    voiceMinutes: 90,
-    courseGenerations: 2,
-    sourcePages: 200,
-    maxPdfsPerCourse: 5,
-    lectureRecordings: 3,
+    priceMonthly: 14.99,
+    ...paidPlanPrices("student"),
+    limits: {
+      sourcePages: 600,
+      lectureMinutes: 3 * 60,
+      voiceMinutes: 20,
+      chatMessages: 200,
+      chatPremiumMessages: 50,
+      extraQuestionClicks: 15,
+      dailyCourseBuildUsd: 1.5,
+      courseGenerations: null,
+      maxPdfsPerCourse: 5,
+    },
     earlyAccess: false,
-    tagline: "For students studying across multiple classes.",
-    highlights: [
-      "2 AI course generations",
-      "200 source pages",
-      "Up to 5 PDFs per course",
-      "1.5 hours voice tutoring",
-      "3 lecture recordings",
-    ],
   },
-  advanced: {
-    tier: "advanced",
-    name: "Advanced",
-    priceMonthly: 79.99,
-    promoPriceMonthly: 39.99,
-    stripePriceId: ADVANCED_REGULAR,
-    stripePromoPriceId: envId("STRIPE_PRICE_ADVANCED_PROMO"),
-    legacyStripePriceIds: uniqueIds(
-      envId("STRIPE_PRICE_ADVANCED"),
-      ADVANCED_REGULAR
-    ).filter((id) => id !== ADVANCED_REGULAR),
-    voiceMinutes: 180,
-    courseGenerations: 3,
-    sourcePages: 400,
-    maxPdfsPerCourse: 10,
-    lectureRecordings: 6,
+  plus: {
+    tier: "plus",
+    name: "Plus",
+    priceMonthly: 29.99,
+    ...paidPlanPrices("plus"),
+    limits: {
+      sourcePages: 1_200,
+      lectureMinutes: 8 * 60,
+      voiceMinutes: 45,
+      chatMessages: 400,
+      chatPremiumMessages: 50,
+      extraQuestionClicks: 30,
+      dailyCourseBuildUsd: 3,
+      courseGenerations: null,
+      maxPdfsPerCourse: 10,
+    },
     earlyAccess: true,
-    tagline: "Comprehensive depth, higher limits, and early access.",
-    highlights: [
-      "3 AI course generations",
-      "400 source pages",
-      "Up to 10 PDFs per course",
-      "3 hours voice tutoring",
-      "6 lecture recordings",
-      "Early access to new features",
-    ],
   },
-  premium: {
-    tier: "premium",
-    name: "Premium",
-    priceMonthly: 109.99,
-    promoPriceMonthly: 59.99,
-    stripePriceId: PREMIUM_REGULAR,
-    stripePromoPriceId: envId("STRIPE_PRICE_PREMIUM_PROMO"),
-    legacyStripePriceIds: uniqueIds(
-      envId("STRIPE_PRICE_PREMIUM"),
-      PREMIUM_REGULAR
-    ).filter((id) => id !== PREMIUM_REGULAR),
-    voiceMinutes: 240,
-    courseGenerations: 4,
-    sourcePages: 500,
-    maxPdfsPerCourse: 12,
-    lectureRecordings: 8,
+  pro: {
+    tier: "pro",
+    name: "Pro",
+    priceMonthly: 49.99,
+    ...paidPlanPrices("pro"),
+    limits: {
+      sourcePages: 2_400,
+      lectureMinutes: 12 * 60,
+      voiceMinutes: 90,
+      chatMessages: 600,
+      chatPremiumMessages: 50,
+      extraQuestionClicks: 50,
+      dailyCourseBuildUsd: 5,
+      courseGenerations: null,
+      maxPdfsPerCourse: 12,
+    },
     earlyAccess: true,
-    tagline: "Maximum depth and the highest Aroses limits.",
-    highlights: [
-      "4 AI course generations",
-      "500 source pages",
-      "Up to 12 PDFs per course",
-      "4 hours voice tutoring",
-      "8 lecture recordings",
-    ],
+  },
+  max: {
+    tier: "max",
+    name: "Max",
+    priceMonthly: 99.99,
+    ...paidPlanPrices("max"),
+    limits: {
+      sourcePages: 5_000,
+      lectureMinutes: 25 * 60,
+      voiceMinutes: 150,
+      chatMessages: 1_000,
+      chatPremiumMessages: 50,
+      extraQuestionClicks: 80,
+      dailyCourseBuildUsd: 8,
+      courseGenerations: null,
+      maxPdfsPerCourse: 15,
+    },
+    earlyAccess: true,
   },
 };
 
 /** Internal order including the unpaid default (not shown at checkout). */
-export const PLAN_ORDER: PlanTier[] = [
-  "free",
-  "student",
-  "advanced",
-  "premium",
-];
+export const PLAN_ORDER: PlanTier[] = ["free", ...PAID_PLAN_TIERS];
 
 /** Plans students can buy. Free is not offered. */
-export const CHECKOUT_PLAN_ORDER: PaidPlanTier[] = [
-  "student",
-  "advanced",
-  "premium",
-];
+export const CHECKOUT_PLAN_ORDER: PaidPlanTier[] = [...PAID_PLAN_TIERS];
+
+/** Highest tier: nothing to upgrade to. */
+export const TOP_PLAN_TIER: PaidPlanTier = "max";
 
 export const PLAN_RANK: Record<PlanTier, number> = {
   free: 0,
-  student: 1,
-  advanced: 2,
-  premium: 3,
+  lite: 1,
+  student: 2,
+  plus: 3,
+  pro: 4,
+  max: 5,
 };
 
 /**
@@ -217,15 +309,40 @@ export function isPaidPlanTier(tier: string): tier is PaidPlanTier {
 }
 
 /**
- * Retired tiers still present on existing subscription rows. `basic` and `plus`
- * were removed when pricing went back to three paid tiers; anyone still carrying
- * one (including users who earned `plus` from the day-30 check-in streak) is
- * read as Student so they never silently lose paid access.
+ * Tier names from older lineups still stored on subscription rows. Nobody
+ * silently loses paid access: Advanced reads as Plus, Premium as Pro, and the
+ * retired Basic as Lite.
  */
-const LEGACY_TIER_ALIASES: Record<string, PlanTier> = {
-  basic: "student",
-  plus: "student",
+const LEGACY_TIER_ALIASES: Record<string, PaidPlanTier> = {
+  basic: "lite",
+  advanced: "plus",
+  premium: "pro",
 };
+
+/** Every stored `user_subscriptions.tier` value that means a paid plan. */
+export const STORED_PAID_TIER_VALUES: string[] = [
+  ...PAID_PLAN_TIERS,
+  ...Object.keys(LEGACY_TIER_ALIASES),
+];
+
+/**
+ * Tier value the database accepted before migration 118 added lite/pro/max.
+ * Each reads back as the same tier through LEGACY_TIER_ALIASES, except Max,
+ * which reads as Pro until the migration is applied.
+ */
+export function preMigrationTierValue(tier: PlanTier): string {
+  if (tier === "lite") return "basic";
+  if (tier === "pro" || tier === "max") return "premium";
+  return tier;
+}
+
+/** Postgres rejected the tier value (user_subscriptions_tier_check). */
+export function isTierCheckViolation(
+  err: { code?: string; message?: string } | null | undefined
+): boolean {
+  if (!err) return false;
+  return err.code === "23514" || /user_subscriptions_tier_check/i.test(err.message ?? "");
+}
 
 export function parsePlanTier(raw: string | null | undefined): PlanTier | null {
   const t = (raw ?? "").trim().toLowerCase();
@@ -241,36 +358,65 @@ export function meetsPlanRank(tier: PlanTier, minimum: PlanTier): boolean {
   return PLAN_RANK[tier] >= PLAN_RANK[minimum];
 }
 
+type Env = Record<string, string | undefined>;
+
+function envCount(env: Env, name: string): number | null {
+  const raw = env[name]?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+function envUsd(env: Env, name: string): number | null {
+  const raw = env[name]?.trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/** A tier's allowances with any `PLAN_LIMIT_<TIER>_*` overrides applied. */
+export function planLimits(tier: PlanTier, env: Env = process.env): PlanLimits {
+  const base = (PLANS[tier] ?? PLANS.free).limits;
+  const key = `PLAN_LIMIT_${tier.toUpperCase()}`;
+  return {
+    ...base,
+    sourcePages: envCount(env, `${key}_PAGES`) ?? base.sourcePages,
+    lectureMinutes:
+      envCount(env, `${key}_LECTURE_MINUTES`) ?? base.lectureMinutes,
+    voiceMinutes: envCount(env, `${key}_VOICE_MINUTES`) ?? base.voiceMinutes,
+    extraQuestionClicks:
+      envCount(env, `${key}_EXTRA_QUESTIONS`) ?? base.extraQuestionClicks,
+    dailyCourseBuildUsd:
+      envUsd(env, `${key}_DAILY_BUILD_USD`) ?? base.dailyCourseBuildUsd,
+  };
+}
+
 /** Monthly voice allowance for a tier, in seconds (used by server-side caps). */
-export function voiceCapSeconds(tier: PlanTier): number {
-  return Math.max(0, Math.round((PLANS[tier]?.voiceMinutes ?? 0) * 60));
+export function voiceCapSeconds(tier: PlanTier, env?: Env): number {
+  return Math.max(0, Math.round(planLimits(tier, env).voiceMinutes * 60));
 }
 
-/** Voice hours for display (derived from minutes). */
-export function voiceHours(tier: PlanTier): number {
-  return (PLANS[tier]?.voiceMinutes ?? 0) / 60;
+/** Monthly live lecture allowance for a tier, in seconds. */
+export function lectureCapSeconds(tier: PlanTier, env?: Env): number {
+  return Math.max(0, Math.round(planLimits(tier, env).lectureMinutes * 60));
 }
 
-/** Successful AI course generations per billing period. */
-export function courseGenerationCap(tier: PlanTier): number {
-  return Math.max(0, PLANS[tier]?.courseGenerations ?? 0);
+/** AI course builds per billing period; null = not counted. */
+export function courseGenerationCap(tier: PlanTier): number | null {
+  const n = PLANS[tier]?.limits.courseGenerations;
+  return n == null ? null : Math.max(0, n);
 }
 
-/** @deprecated Use `courseGenerationCap`. Kept for older call sites. */
-export function courseCap(tier: PlanTier): number {
-  return courseGenerationCap(tier);
+export function sourcePageCap(tier: PlanTier, env?: Env): number {
+  return Math.max(0, planLimits(tier, env).sourcePages);
 }
 
-export function sourcePageCap(tier: PlanTier): number {
-  return Math.max(0, PLANS[tier]?.sourcePages ?? 0);
+export function extraQuestionCap(tier: PlanTier, env?: Env): number {
+  return Math.max(0, planLimits(tier, env).extraQuestionClicks);
 }
 
 export function maxPdfsPerCourse(tier: PlanTier): number {
-  return Math.max(0, PLANS[tier]?.maxPdfsPerCourse ?? 0);
-}
-
-export function lectureRecordingCap(tier: PlanTier): number {
-  return Math.max(0, PLANS[tier]?.lectureRecordings ?? 0);
+  return Math.max(0, PLANS[tier]?.limits.maxPdfsPerCourse ?? 0);
 }
 
 export function formatUsdAmount(amount: number): string {
@@ -283,24 +429,26 @@ export function formatUsdAmount(amount: number): string {
 
 function priceIdsForTier(tier: PlanTier): string[] {
   const plan = PLANS[tier];
-  return uniqueIds(
-    plan.stripePriceId,
-    plan.stripePromoPriceId,
-    ...plan.legacyStripePriceIds
-  );
+  return uniqueIds(plan.stripePriceId, ...plan.legacyStripePriceIds);
 }
 
 export function stripePriceIdsForTier(tier: PlanTier): string[] {
   return priceIdsForTier(tier);
 }
 
-/** Resolve a Stripe price ID back to a tier (used by the webhook). */
+/**
+ * Resolve a Stripe price ID back to a tier (used by the webhook). The current
+ * checkout price wins over a legacy mapping if an env reuses an old ID.
+ */
 export function tierForPriceId(
   priceId: string | null | undefined
 ): PlanTier | null {
   if (!priceId) return null;
-  for (const tier of PLAN_ORDER) {
-    if (priceIdsForTier(tier).includes(priceId)) return tier;
+  for (const tier of PAID_PLAN_TIERS) {
+    if (PLANS[tier].stripePriceId === priceId) return tier;
+  }
+  for (const tier of PAID_PLAN_TIERS) {
+    if (PLANS[tier].legacyStripePriceIds.includes(priceId)) return tier;
   }
   return null;
 }
@@ -309,4 +457,12 @@ export function previousPaidTier(tier: PaidPlanTier): PaidPlanTier | null {
   const i = CHECKOUT_PLAN_ORDER.indexOf(tier);
   if (i <= 0) return null;
   return CHECKOUT_PLAN_ORDER[i - 1] ?? null;
+}
+
+/** Next tier up, or null on the top tier. */
+export function nextPaidTier(tier: PlanTier): PaidPlanTier | null {
+  if (tier === "free") return CHECKOUT_PLAN_ORDER[0] ?? null;
+  const i = CHECKOUT_PLAN_ORDER.indexOf(tier);
+  if (i < 0 || i >= CHECKOUT_PLAN_ORDER.length - 1) return null;
+  return CHECKOUT_PLAN_ORDER[i + 1] ?? null;
 }

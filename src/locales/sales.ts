@@ -44,10 +44,10 @@ const en = {
   managePayouts: "Manage payouts",
   adminPlansTitle: "Plan subscriptions",
   adminPlansSubtitle:
-    "Who subscribed to Student, Advanced, or Premium. Visible only to founders and admins.",
+    "Who subscribed to a paid plan (Lite, Student, Plus, Pro, or Max). Visible only to founders and admins.",
   adminPlansEmpty: "No plan subscribers yet",
   adminPlansEmptyBody:
-    "When someone checks out Student, Advanced, or Premium, they show up here with plan, amount, and status.",
+    "When someone checks out a paid plan (Lite, Student, Plus, Pro, or Max), they show up here with plan, amount, and status.",
   adminSubscriber: "Subscriber",
   adminPlan: "Plan",
   adminAmount: "Amount",
@@ -75,7 +75,7 @@ const en = {
   listingsTotalHint: "{count} listed",
   subscribers: "Subscribers",
   mrr: "MRR",
-  mrrHint: "Paying Student / Advanced / Premium",
+  mrrHint: "Paying paid plans",
   payingHint: "{count} paying",
   platformFeeHint: "{amount} platform fee",
   completedHint: "{count} completed",
@@ -132,10 +132,10 @@ const ko: typeof en = {
   managePayouts: "정산 관리",
   adminPlansTitle: "요금제 구독",
   adminPlansSubtitle:
-    "스튜던트·어드밴스드·프리미엄을 구독한 사람이에요. 창업자/관리자에게만 보여요.",
+    "유료 요금제(라이트·스튜던트·플러스·프로·맥스)를 구독한 사람이에요. 창업자/관리자에게만 보여요.",
   adminPlansEmpty: "아직 요금제 구독자가 없어요",
   adminPlansEmptyBody:
-    "누군가 스튜던트, 어드밴스드, 프리미엄을 결제하면 요금제·금액·상태와 함께 여기에 표시돼요.",
+    "누군가 유료 요금제를 결제하면 요금제·금액·상태와 함께 여기에 표시돼요.",
   adminSubscriber: "구독자",
   adminPlan: "요금제",
   adminAmount: "금액",
@@ -163,7 +163,7 @@ const ko: typeof en = {
   listingsTotalHint: "등록 {count}개",
   subscribers: "구독자",
   mrr: "월 반복 매출",
-  mrrHint: "유료 스튜던트·어드밴스드·프리미엄",
+  mrrHint: "유료 요금제",
   payingHint: "유료 {count}명",
   platformFeeHint: "수수료 {amount}",
   completedHint: "완료 {count}건",

@@ -4,6 +4,7 @@ import { readCourseBuildConfig } from "./config.ts";
 import {
   actualCostUsd,
   buildSpendCapUsd,
+  dailyCapUsdForTier,
   estimateInputTokens,
   estimateTextTokens,
   modelPrice,
@@ -29,6 +30,28 @@ test("build cap is pages × per-page cap with a floor", () => {
   assert.equal(buildSpendCapUsd(3, c), 0.06);
   assert.equal(buildSpendCapUsd(0, c), 0.06);
   assert.equal(buildSpendCapUsd(Number.NaN, c), 0.06);
+});
+
+test("daily build spend cap follows the tier; COURSE_BUILD_DAILY_CAP_USD is a ceiling", () => {
+  const c = readCourseBuildConfig({});
+  assert.equal(c.dailyCapCeilingUsd, null);
+  assert.equal(dailyCapUsdForTier("lite", c), 1);
+  assert.equal(dailyCapUsdForTier("student", c), 1.5);
+  assert.equal(dailyCapUsdForTier("plus", c), 3);
+  assert.equal(dailyCapUsdForTier("pro", c), 5);
+  assert.equal(dailyCapUsdForTier("max", c), 8);
+  // Old tier names use the mapped tier's cap.
+  assert.equal(dailyCapUsdForTier("advanced", c), 3);
+  assert.equal(dailyCapUsdForTier("premium", c), 5);
+  // Free can't build; the DB still needs a positive cap on the row.
+  assert.equal(dailyCapUsdForTier("free", c), c.minCapUsd);
+  assert.ok(dailyCapUsdForTier("free", c, { unlimited: true }) >= 8);
+
+  const ceiling = readCourseBuildConfig({ COURSE_BUILD_DAILY_CAP_USD: "2" });
+  assert.equal(ceiling.dailyCapCeilingUsd, 2);
+  assert.equal(dailyCapUsdForTier("lite", ceiling), 1);
+  assert.equal(dailyCapUsdForTier("max", ceiling), 2);
+  assert.equal(dailyCapUsdForTier("max", ceiling, { unlimited: true }), 2);
 });
 
 test("model prices match Anthropic's published Haiku 4.5 rates", () => {

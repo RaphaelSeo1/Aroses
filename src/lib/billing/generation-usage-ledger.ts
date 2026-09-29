@@ -79,7 +79,8 @@ export type ReserveCourseGenerationInput = {
   idempotencyKey: string;
   reason: GenerationReason;
   generationUnits: number;
-  cap: number;
+  /** `null` = builds are not counted (paid tiers are limited by pages). */
+  cap: number | null;
   now?: string;
 };
 
@@ -155,7 +156,7 @@ export class InMemoryGenerationLedger {
 
     const used = this.totals(input.userId, input.periodStart).courseGenerations;
     const units = Math.max(0, input.generationUnits);
-    if (units > 0 && used + units > input.cap) {
+    if (units > 0 && input.cap != null && used + units > input.cap) {
       return {
         ok: false,
         code: "course_generation_cap_reached",

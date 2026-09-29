@@ -6,7 +6,11 @@ export type CourseBuildConfig = {
   outputTokensPerPage: number;
   capUsdPerPage: number;
   minCapUsd: number;
-  defaultDailyCapUsd: number;
+  /**
+   * `COURSE_BUILD_DAILY_CAP_USD`: a global ceiling on every tier's rolling
+   * 24-hour spend (`plans.ts` `dailyCourseBuildUsd`). Null = tier caps only.
+   */
+  dailyCapCeilingUsd: number | null;
   visionMaxCrops: number;
   figuresEnabled: boolean;
   /** Most PDF pages rendered per file when looking for figures. */
@@ -25,6 +29,11 @@ function positiveNumber(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function positiveNumberOrNull(raw: string | undefined): number | null {
+  const n = Number(raw?.trim());
+  return raw?.trim() && Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function nonNegativeInt(raw: string | undefined, fallback: number): number {
   const n = Number(raw?.trim());
   return Number.isInteger(n) && n >= 0 ? n : fallback;
@@ -38,7 +47,7 @@ export function readCourseBuildConfig(env: Env = process.env): CourseBuildConfig
     outputTokensPerPage: positiveNumber(env.COURSE_BUILD_OUTPUT_TOKENS_PER_PAGE, 200),
     capUsdPerPage: positiveNumber(env.COURSE_BUILD_CAP_USD_PER_PAGE, 0.0025),
     minCapUsd: positiveNumber(env.COURSE_BUILD_MIN_CAP_USD, 0.06),
-    defaultDailyCapUsd: positiveNumber(env.COURSE_BUILD_DAILY_CAP_USD, 1),
+    dailyCapCeilingUsd: positiveNumberOrNull(env.COURSE_BUILD_DAILY_CAP_USD),
     visionMaxCrops: nonNegativeInt(env.COURSE_BUILD_VISION_MAX_CROPS, 24),
     figuresEnabled: !["0", "false", "off"].includes(env.COURSE_BUILD_FIGURES?.trim().toLowerCase() ?? ""),
     figureMaxPages: nonNegativeInt(env.COURSE_BUILD_FIGURE_MAX_PAGES, 20),

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { recordVoiceSeconds } from "@/lib/billing/voice-usage";
+import { meterLectureSession } from "@/lib/billing/lecture-recording-cap";
 import { liveNotesToPlainText } from "@/lib/live-notes/notes-review";
 import { runLiveNotesWrapUp } from "@/lib/live-notes/run-notes-wrap-up";
 import { loadCanonicalLiveNoteSources } from "@/lib/live-notes/source-bundle";
@@ -236,15 +236,17 @@ export async function POST(request: Request, ctx: Params) {
     });
   }
 
-  // ── Meter the un-metered tail of Deepgram seconds ────────────────────────
+  // ── Meter the un-metered tail of recorded lecture seconds ────────────────
   const durationSeconds =
     typeof session.duration_seconds === "number" ? session.duration_seconds : 0;
   const meteredSeconds =
     typeof session.metered_seconds === "number" ? session.metered_seconds : 0;
-  const unmetered = durationSeconds - meteredSeconds;
-  if (unmetered > 0) {
-    await recordVoiceSeconds(user.id, unmetered);
-  }
+  await meterLectureSession({
+    userId: user.id,
+    durationSeconds,
+    meteredSeconds,
+    final: true,
+  });
 
   const { error: sessionErr } = await supabase
     .from("live_lecture_sessions")

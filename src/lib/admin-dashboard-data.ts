@@ -1,4 +1,5 @@
 import type { SupabaseClient, User } from "@supabase/supabase-js";
+import { parsePlanTier, type PlanTier } from "@/lib/billing/plans";
 
 export type AdminActivityKind =
   | "course_created"
@@ -212,7 +213,7 @@ export type AdminUserRow = {
   displayName: string | null;
   username: string | null;
   onboardingCompletedAt: string | null;
-  planTier: "free" | "student" | "advanced" | "premium";
+  planTier: PlanTier;
   planStatus: string;
   planAdminGranted: boolean;
 };
@@ -324,13 +325,8 @@ export async function fetchAdminUserDirectory(
     const sub = subMap.get(u.id);
     const email = typeof u.email === "string" ? u.email.trim() : "";
     const tierRaw = (sub?.tier ?? "free").toLowerCase();
-    // Retired `basic` / `plus` rows read as Student (see LEGACY_TIER_ALIASES).
-    const planTier =
-      tierRaw === "basic" || tierRaw === "plus" || tierRaw === "student"
-        ? ("student" as const)
-        : tierRaw === "advanced" || tierRaw === "premium"
-          ? tierRaw
-          : ("free" as const);
+    // Old basic / advanced / premium rows read as Lite / Plus / Pro.
+    const planTier = parsePlanTier(tierRaw) ?? "free";
     return {
       id: u.id,
       email: email.length > 0 ? email : "—",

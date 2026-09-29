@@ -4,7 +4,7 @@
  */
 
 import { isBillingUiEnabled } from "@/lib/billing/feature-flag";
-import { PLANS, formatUsdAmount } from "@/lib/billing/plans";
+import { PAID_PLAN_TIERS, PLANS, formatUsdAmount } from "@/lib/billing/plans";
 import { salePriceMonthly } from "@/lib/billing/sale";
 import { tf } from "@/lib/i18n/format";
 import type { UiLocale } from "@/lib/i18n/config";
@@ -19,6 +19,20 @@ export type HonestFaqItem = {
 
 const BILLING_ONLY_FAQ_IDS = new Set(["why-pay", "cancel"]);
 
+/** `{litePrice}`, `{litePages}`, `{liteLecture}` … for every paid tier. */
+function pricingVars(locale: UiLocale): Record<string, string> {
+  const vars: Record<string, string> = {};
+  for (const tier of PAID_PLAN_TIERS) {
+    const { sourcePages, lectureMinutes } = PLANS[tier].limits;
+    const hours = Math.round((lectureMinutes / 60) * 10) / 10;
+    vars[`${tier}Price`] = formatUsdAmount(salePriceMonthly(tier));
+    vars[`${tier}Pages`] = sourcePages.toLocaleString("en-US");
+    vars[`${tier}Lecture`] =
+      (locale as string) === "ko" ? `${hours}시간` : hours === 1 ? "1 hour" : `${hours} hours`;
+  }
+  return vars;
+}
+
 function resolveHonestItem(
   locale: UiLocale,
   item: (typeof helpContent.en.faq.honestItems)[number]
@@ -28,15 +42,7 @@ function resolveHonestItem(
       id: item.id,
       question: item.question,
       paragraphs: [
-        tf(helpContent[locale].faq.pricingParagraph, {
-          studentPrice: formatUsdAmount(salePriceMonthly("student")),
-          advancedPrice: formatUsdAmount(salePriceMonthly("advanced")),
-          premiumPrice: formatUsdAmount(salePriceMonthly("premium")),
-          studentGens: String(PLANS.student.courseGenerations),
-          studentPages: String(PLANS.student.sourcePages),
-          advancedGens: String(PLANS.advanced.courseGenerations),
-          premiumGens: String(PLANS.premium.courseGenerations),
-        }),
+        tf(helpContent[locale].faq.pricingParagraph, pricingVars(locale)),
       ],
     };
   }

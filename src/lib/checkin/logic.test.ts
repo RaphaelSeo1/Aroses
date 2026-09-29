@@ -205,7 +205,7 @@ test("evaluateCheckIn flags Plus on the 30th consecutive day only", () => {
   assert.equal(day31.shouldGrantPlus, false);
 });
 
-test("Plus grant skips Plus/Advanced/Premium and does not skip free/basic/student", () => {
+test("Plus grant skips every paid tier (old and new names) and only grants free", () => {
   assert.equal(
     plusGrantSkipReason({
       tier: "premium",
@@ -236,7 +236,7 @@ test("Plus grant skips Plus/Advanced/Premium and does not skip free/basic/studen
       status: "active",
       adminGranted: false,
     }),
-    null
+    "already_plus_or_higher"
   );
   assert.equal(
     plusGrantSkipReason({
@@ -244,8 +244,14 @@ test("Plus grant skips Plus/Advanced/Premium and does not skip free/basic/studen
       status: "active",
       adminGranted: false,
     }),
-    null
+    "already_plus_or_higher"
   );
+  for (const tier of ["lite", "pro", "max"]) {
+    assert.equal(
+      plusGrantSkipReason({ tier, status: "active", adminGranted: false }),
+      "already_plus_or_higher"
+    );
+  }
   assert.equal(
     plusGrantSkipReason({
       tier: "free",

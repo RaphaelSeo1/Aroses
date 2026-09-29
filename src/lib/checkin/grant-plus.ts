@@ -7,7 +7,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
  * Grant one month of Student as an admin-style comp (`admin_granted`,
- * `grant_source = checkin`). Skips Student/Advanced/Premium so we never
+ * `grant_source = checkin`). Skips every paid plan so we never
  * downgrade or wipe a higher Stripe plan. Keeps stripe_customer_id;
  * clears stripe_subscription_id so webhooks do not immediately revert
  * (same as a manual admin grant).

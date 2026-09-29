@@ -13,7 +13,6 @@ import {
   pdfCapWouldExceed,
   sumActivePdfsForCourse,
 } from "./pdf-per-course.ts";
-import { resolveCheckoutPriceId } from "./sale.ts";
 
 const PERIOD = "2026-09-01T00:00:00.000Z";
 const USER = "user-student";
@@ -401,19 +400,55 @@ test("internal free has no generation entitlement", () => {
   assert.equal(blocked.ok, false);
 });
 
-test("promo vs regular checkout IDs agree with display charged price path", () => {
-  assert.equal(
-    resolveCheckoutPriceId(
-      { stripePriceId: "reg", stripePromoPriceId: "promo" },
-      true
-    ),
-    "promo"
-  );
-  assert.equal(
-    resolveCheckoutPriceId(
-      { stripePriceId: "reg", stripePromoPriceId: "promo" },
-      false
-    ),
-    "reg"
-  );
+test("paid tiers pass a null build cap: builds aren't counted, pages still are", () => {
+  const ledger = studentLedger();
+  const reserve = (i: number) =>
+    ledger.reserveCourseGeneration({
+      userId: USER,
+      periodStart: PERIOD,
+      periodEnd: null,
+      tierSnapshot: "student",
+      courseId: `course-${i}`,
+      jobId: `job-${i}`,
+      idempotencyKey: initialGenerationIdempotencyKey(`course-${i}`),
+      reason: "initial",
+      generationUnits: 1,
+      cap: null,
+    });
+  const ids: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const r = reserve(i);
+    assert.equal(r.ok, true, `build ${i}`);
+    if (r.ok) ids.push(r.row.id);
+  }
+
+  const cap = 600;
+  const first = ledger.reserveSourcePages({
+    reservationId: ids[0],
+    sourcePageUnits: 450,
+    cap,
+    userId: USER,
+    periodStart: PERIOD,
+  });
+  assert.equal(first.ok, true);
+  const over = ledger.reserveSourcePages({
+    reservationId: ids[1],
+    sourcePageUnits: 200,
+    cap,
+    userId: USER,
+    periodStart: PERIOD,
+  });
+  assert.equal(over.ok, false);
+
+  // A failed or canceled build gives its pages back.
+  ledger.release(ids[0]);
+  assert.equal(ledger.totals(USER, PERIOD).sourcePages, 0);
+  const retry = ledger.reserveSourcePages({
+    reservationId: ids[1],
+    sourcePageUnits: 200,
+    cap,
+    userId: USER,
+    periodStart: PERIOD,
+  });
+  assert.equal(retry.ok, true);
 });

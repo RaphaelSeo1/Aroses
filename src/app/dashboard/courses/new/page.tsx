@@ -80,8 +80,6 @@ export default async function NewCoursePage({ searchParams }: Props) {
           initialSectionId={initialSectionId}
           prefill={prefill}
           limits={{
-            coursesUsed: usage.courseGenerationsUsed,
-            coursesCap: usage.courseGenerationsCap,
             pagesUsed: usage.sourcePagesUsed,
             pagesCap: usage.sourcePagesCap,
             periodEnd: usage.periodEnd,

@@ -11,7 +11,7 @@ export const VOICE_CAP_CODE = "voice_cap_reached";
 
 export function voiceCapMessage(): string {
   if (isBillingUiEnabled()) {
-    return "You've used all your voice time for this billing period. Switched to text — upgrade your plan for more voice hours.";
+    return "You've used all your voice time for this billing period. Switched to text — upgrade your plan for more voice minutes.";
   }
   return "You've used your voice allowance for this month. Switched to text — you can keep studying everything else.";
 }

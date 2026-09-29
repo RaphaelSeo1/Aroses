@@ -34,16 +34,21 @@ function reserve(
   });
 }
 
-test("every plan tier has a default chat limit; paid tiers map to 200/400/600", () => {
+test("every plan tier has a default chat limit; paid tiers map to 100/200/400/600/1000", () => {
   for (const tier of PLAN_ORDER) {
     const limit = DEFAULT_CHAT_LIMITS[tier];
     assert.ok(limit, `missing limit for ${tier}`);
     assert.ok(limit.premiumMessages <= limit.monthlyMessages);
   }
+  assert.equal(DEFAULT_CHAT_LIMITS.lite.monthlyMessages, 100);
   assert.equal(DEFAULT_CHAT_LIMITS.student.monthlyMessages, 200);
-  assert.equal(DEFAULT_CHAT_LIMITS.advanced.monthlyMessages, 400);
-  assert.equal(DEFAULT_CHAT_LIMITS.premium.monthlyMessages, 600);
-  assert.equal(DEFAULT_CHAT_LIMITS.student.premiumMessages, 50);
+  assert.equal(DEFAULT_CHAT_LIMITS.plus.monthlyMessages, 400);
+  assert.equal(DEFAULT_CHAT_LIMITS.pro.monthlyMessages, 600);
+  assert.equal(DEFAULT_CHAT_LIMITS.max.monthlyMessages, 1000);
+  for (const tier of ["lite", "student", "plus", "pro", "max"] as const) {
+    assert.equal(DEFAULT_CHAT_LIMITS[tier].premiumMessages, 50, tier);
+  }
+  assert.deepEqual(DEFAULT_CHAT_LIMITS.free, { monthlyMessages: 20, premiumMessages: 10 });
   assert.ok(DEFAULT_CHAT_LIMITS.free.monthlyMessages < DEFAULT_CHAT_LIMITS.student.monthlyMessages);
 });
 
@@ -56,11 +61,11 @@ test("env overrides replace defaults; invalid values are ignored; premium clamps
     { monthlyMessages: 250, premiumMessages: 75 }
   );
   assert.deepEqual(
-    chatLimitForTier("advanced", {
-      CHAT_LIMIT_ADVANCED_MESSAGES: "-5",
-      CHAT_LIMIT_ADVANCED_SONNET: "abc",
+    chatLimitForTier("plus", {
+      CHAT_LIMIT_PLUS_MESSAGES: "-5",
+      CHAT_LIMIT_PLUS_SONNET: "abc",
     }),
-    DEFAULT_CHAT_LIMITS.advanced
+    DEFAULT_CHAT_LIMITS.plus
   );
   assert.deepEqual(
     chatLimitForTier("free", { CHAT_LIMIT_FREE_MESSAGES: "5" }),
@@ -247,7 +252,7 @@ test("limit message mentions upgrades only where they exist", () => {
     /Choose a plan/
   );
   assert.doesNotMatch(
-    chatLimitReachedMessage({ ...base, tier: "premium", upgradeAvailable: true }),
+    chatLimitReachedMessage({ ...base, tier: "max", upgradeAvailable: true }),
     /Upgrade|Choose a plan/
   );
   assert.doesNotMatch(

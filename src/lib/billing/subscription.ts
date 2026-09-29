@@ -3,7 +3,12 @@ import type Stripe from "stripe";
 import { isStripeConfigured, getStripe } from "@/lib/stripe/client";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isCheckInGrantExpired } from "@/lib/billing/paid-access";
-import { parsePlanTier, type PlanTier } from "@/lib/billing/plans";
+import {
+  isTierCheckViolation,
+  parsePlanTier,
+  preMigrationTierValue,
+  type PlanTier,
+} from "@/lib/billing/plans";
 import { syncStripeSubscription } from "@/lib/billing/sync-subscription";
 
 export type UserSubscription = {
@@ -465,6 +470,16 @@ export async function adminSetUserSubscription(opts: {
     ({ error } = await admin
       .from("user_subscriptions")
       .upsert(payload, { onConflict: "user_id" }));
+  }
+  const standIn = preMigrationTierValue(opts.tier);
+  if (error && standIn !== opts.tier && isTierCheckViolation(error)) {
+    console.warn(
+      `[billing] tier "${opts.tier}" not allowed yet (apply migration 118_plan_tiers_v2.sql); stored as "${standIn}"`
+    );
+    ({ error } = await admin.from("user_subscriptions").upsert(
+      { ...payload, tier: standIn, admin_granted: true, grant_source: "admin" },
+      { onConflict: "user_id" }
+    ));
   }
 
   if (error) {

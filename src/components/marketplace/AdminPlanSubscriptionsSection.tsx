@@ -3,6 +3,7 @@
 import { formatPrice } from "@/lib/marketplace/listing-access";
 import { useT } from "@/lib/i18n/LocaleProvider";
 import { tf } from "@/lib/i18n/format";
+import { planDisplayName } from "@/lib/billing/plan-card-copy";
 import {
   summarizeAdminPlanSubscriptions,
   type AdminPlanSubscriptionRow,
@@ -21,16 +22,7 @@ function planLabel(
   tier: AdminPlanSubscriptionRow["tier"],
   t: ReturnType<typeof useT>
 ): string {
-  switch (tier) {
-    case "student":
-      return t.billing.planStudent;
-    case "advanced":
-      return t.billing.planAdvanced;
-    case "premium":
-      return t.billing.planPremium;
-    default:
-      return tier;
-  }
+  return planDisplayName(t.billing, tier);
 }
 
 function statusLabel(

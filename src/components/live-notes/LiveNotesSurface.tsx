@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { confirmDialog } from "@/components/AppDialogs";
 import {
+  lectureMinutesStoppedMessage,
+  lectureMinutesWarningMessage,
+} from "@/lib/billing/limit-messages";
+import {
   NotesPanel,
   type NotesPanelHandle,
 } from "@/components/immersive/NotesPanel";
@@ -243,7 +247,9 @@ export function LiveNotesSurface({
     initialSegments
   );
   const [error, setError] = useState<string | null>(null);
-  const [voiceCapped, setVoiceCapped] = useState(false);
+  /** Plan's live lecture hours: near the limit, or used up. */
+  const [lectureLimitNotice, setLectureLimitNotice] = useState<string | null>(null);
+  const [lectureLimitStops, setLectureLimitStops] = useState(0);
   const [autoGenerate, setAutoGenerate] = useState(true);
   const [railOpen, setRailOpen] = useState(true);
   const [railWidth, setRailWidth] = useState(320);
@@ -1133,8 +1139,15 @@ export function LiveNotesSurface({
     onNaturalBreak: () => {
       void maybeSynthesize(false);
     },
-    onCapped: () => {
-      setVoiceCapped(true);
+    onCapped: (message) => {
+      setLectureLimitNotice(message || lectureMinutesStoppedMessage());
+    },
+    onLimitWarning: (secondsLeft) => {
+      setLectureLimitNotice(lectureMinutesWarningMessage(secondsLeft));
+    },
+    onLimitReached: () => {
+      setLectureLimitNotice(lectureMinutesStoppedMessage());
+      setLectureLimitStops((n) => n + 1);
     },
     onError: (message) => {
       setError(message);
@@ -1394,6 +1407,11 @@ export function LiveNotesSurface({
     if (captureEndedCount === 0) return;
     void finalizeStoppedCapture(true);
   }, [captureEndedCount, finalizeStoppedCapture]);
+
+  useEffect(() => {
+    if (lectureLimitStops === 0) return;
+    void finalizeStoppedCapture(false);
+  }, [lectureLimitStops, finalizeStoppedCapture]);
 
   const sourceOptions: Array<{ id: LiveCaptureSource; label: string }> = [
     { id: "tab", label: "Tab" },
@@ -1951,15 +1969,16 @@ export function LiveNotesSurface({
       ) : null}
 
       {/* ── Error / cap banners ────────────────────────────────────────── */}
-      {voiceCapped ? (
+      {lectureLimitNotice ? (
         <DismissibleInlineBanner
           tone="warning"
           layout="bar"
-          onDismiss={() => setVoiceCapped(false)}
+          onDismiss={() => setLectureLimitNotice(null)}
         >
-          You&apos;ve reached this month&apos;s voice limit, so live transcription is
-          unavailable. Your notes and transcript so far are saved — you can
-          still finish and build the course.
+          {lectureLimitNotice}{" "}
+          <Link href="/dashboard/billing" className="font-semibold underline">
+            See plans
+          </Link>
         </DismissibleInlineBanner>
       ) : error ? (
         <DismissibleInlineBanner
@@ -2209,7 +2228,6 @@ export function LiveNotesSurface({
                   pushAiActivity(kind, message, loc)
                 }
                 active={railOpen && railTab === "chat"}
-                voiceCapped={voiceCapped}
               />
             </div>
           </aside>

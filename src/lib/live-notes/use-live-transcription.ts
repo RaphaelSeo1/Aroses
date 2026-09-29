@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { lectureLimitState } from "@/lib/billing/lecture-minutes";
 import {
   acquireLectureCaptureStream,
   audioOnlyStream,
@@ -113,8 +114,12 @@ export function useLiveLectureTranscription(options: {
   onSegment?: (segment: LiveTranscriptSegment) => void;
   /** Fired at utterance boundaries — the natural-break signal for synthesis. */
   onNaturalBreak?: () => void;
-  /** Monthly voice allowance exhausted (server 402). */
-  onCapped?: () => void;
+  /** No live lecture minutes left on the plan (server 402, with its message). */
+  onCapped?: (message?: string) => void;
+  /** A few minutes of the plan's lecture time remain (fires once per limit). */
+  onLimitWarning?: (secondsLeft: number) => void;
+  /** The plan's lecture time ran out mid-session; the caller stops capture. */
+  onLimitReached?: () => void;
   onError?: (message: string) => void;
 }) {
   const {
@@ -124,6 +129,8 @@ export function useLiveLectureTranscription(options: {
     onSegment,
     onNaturalBreak,
     onCapped,
+    onLimitWarning,
+    onLimitReached,
     onError,
   } = options;
 
@@ -164,6 +171,21 @@ export function useLiveLectureTranscription(options: {
   onNaturalBreakRef.current = onNaturalBreak;
   const onCappedRef = useRef(onCapped);
   onCappedRef.current = onCapped;
+  const onLimitWarningRef = useRef(onLimitWarning);
+  onLimitWarningRef.current = onLimitWarning;
+  const onLimitReachedRef = useRef(onLimitReached);
+  onLimitReachedRef.current = onLimitReached;
+  /** Session length (s) at which the plan's lecture hours run out; null = unlimited / unknown. */
+  const lectureLimitSecondsRef = useRef<number | null>(null);
+  /** Which limit value already fired its warning / stop, so each fires once. */
+  const limitWarnedForRef = useRef<number | null>(null);
+  const limitReachedForRef = useRef<number | null>(null);
+  const setLectureLimit = useCallback((raw: unknown) => {
+    if (raw === null) lectureLimitSecondsRef.current = null;
+    else if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+      lectureLimitSecondsRef.current = raw;
+    }
+  }, []);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
@@ -236,6 +258,10 @@ export function useLiveLectureTranscription(options: {
         }),
       });
       if (res.ok) {
+        const saved = (await res.json().catch(() => ({}))) as {
+          lectureLimitSeconds?: unknown;
+        };
+        if ("lectureLimitSeconds" in saved) setLectureLimit(saved.lectureLimitSeconds);
         // Remove exactly what we sent; new segments may have arrived meanwhile.
         const sentSeqs = new Set(batch.map((s) => s.seq));
         pendingFlushRef.current = pendingFlushRef.current.filter(
@@ -259,7 +285,7 @@ export function useLiveLectureTranscription(options: {
         void flushSegments();
       }
     }
-  }, [sessionId, currentElapsedMs, syncPendingCount]);
+  }, [sessionId, currentElapsedMs, syncPendingCount, setLectureLimit]);
 
   const foldInterimIntoBuffer = useCallback(() => {
     const tail = interimTailRef.current.trim();
@@ -328,12 +354,36 @@ export function useLiveLectureTranscription(options: {
     }
   }, []);
 
+  /** True when the plan's lecture time is used up (and reports it once). */
+  const checkLectureLimit = useCallback(
+    (elapsedMs: number): boolean => {
+      const limit = lectureLimitSecondsRef.current;
+      const state = lectureLimitState(elapsedMs / 1000, limit);
+      if (limit == null || state === "ok") return false;
+      if (state === "warn") {
+        if (limitWarnedForRef.current !== limit) {
+          limitWarnedForRef.current = limit;
+          onLimitWarningRef.current?.(Math.max(0, limit - elapsedMs / 1000));
+        }
+        return false;
+      }
+      if (limitReachedForRef.current !== limit) {
+        limitReachedForRef.current = limit;
+        onLimitReachedRef.current?.();
+      }
+      return true;
+    },
+    []
+  );
+
   const ensureElapsedTimer = useCallback(() => {
     if (elapsedTimerRef.current != null) return;
     elapsedTimerRef.current = window.setInterval(() => {
-      setElapsedMs(currentElapsedMs());
+      const ms = currentElapsedMs();
+      setElapsedMs(ms);
+      if (statusRef.current === "recording") checkLectureLimit(ms);
     }, 1_000) as unknown as number;
-  }, [currentElapsedMs]);
+  }, [currentElapsedMs, checkLectureLimit]);
 
   const closeSocket = useCallback(() => {
     const ws = socketRef.current;
@@ -498,12 +548,13 @@ export function useLiveLectureTranscription(options: {
     }
     const tokenBody = (await tokenRes.json().catch(() => ({}))) as {
       accessToken?: string;
+      lectureLimitSeconds?: unknown;
       error?: string;
       code?: string;
     };
     if (tokenRes.status === 402) {
-      onCappedRef.current?.();
-      throw new Error(tokenBody.error || "Monthly voice allowance reached.");
+      onCappedRef.current?.(tokenBody.error);
+      throw new Error(tokenBody.error || "Your plan's live lecture hours are used up.");
     }
     if (!tokenRes.ok || typeof tokenBody.accessToken !== "string") {
       throw new Error(
@@ -511,8 +562,9 @@ export function useLiveLectureTranscription(options: {
           `Deepgram token failed with status ${tokenRes.status}.`
       );
     }
+    setLectureLimit(tokenBody.lectureLimitSeconds);
     return tokenBody.accessToken;
-  }, [sessionId]);
+  }, [sessionId, setLectureLimit]);
 
   /**
    * Warm the Deepgram JWT while Chrome's share picker is open so connect
@@ -542,10 +594,12 @@ export function useLiveLectureTranscription(options: {
         }
         const tokenBody = (await tokenRes.json().catch(() => ({}))) as {
           accessToken?: string;
+          lectureLimitSeconds?: unknown;
         };
         if (!tokenRes.ok || typeof tokenBody.accessToken !== "string") {
           return null;
         }
+        setLectureLimit(tokenBody.lectureLimitSeconds);
         prefetchedTokenRef.current = {
           accessToken: tokenBody.accessToken,
           fetchedAt: Date.now(),
@@ -557,7 +611,7 @@ export function useLiveLectureTranscription(options: {
         prefetchInFlightRef.current = null;
       }
     })();
-  }, [sessionId]);
+  }, [sessionId, setLectureLimit]);
 
   const connectSocket = useCallback(async (): Promise<WebSocket> => {
     const accessToken = await fetchDeepgramAccessToken();
@@ -1088,6 +1142,7 @@ export function useLiveLectureTranscription(options: {
 
   const resume = useCallback(async () => {
     if (statusRef.current !== "paused" && statusRef.current !== "error") return;
+    if (checkLectureLimit(currentElapsedMs())) return;
     suppressingTrackEndRef.current = false;
 
     const markRecording = () => {
@@ -1185,6 +1240,7 @@ export function useLiveLectureTranscription(options: {
     startAudioForSocket,
     ensureElapsedTimer,
     currentElapsedMs,
+    checkLectureLimit,
   ]);
 
   /**
