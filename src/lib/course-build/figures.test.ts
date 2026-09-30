@@ -13,6 +13,7 @@ import {
   autoPlaceFigures,
   captionLines,
   confirmedBy,
+  dedupe,
   dropRepeatedImages,
   figureCaption,
   placeChosenFigures,
@@ -220,6 +221,30 @@ test("figures the writer skipped go into the lesson covering their page, after t
   );
   assert.deepEqual(dropped, ["F9"]);
   assert.deepEqual(lesson.assets.map((a) => [a.assetId, a.caption, a.placementAfterParagraph]), [["p-F5", "Kinase step", 2]]);
+});
+
+test("same-page slices of one picture collapse to the larger crop", () => {
+  const slice = (box: Box, hash = "aaaaaaaaaaaaaaaa") => cand(18, box, { hash, quality: 1 });
+  const middle = slice({ x: 0.24, y: 0.04, w: 0.27, h: 0.84 });
+  const left = slice({ x: 0.07, y: 0.24, w: 0.33, h: 0.64 });
+  const right = slice({ x: 0.75, y: 0, w: 0.25, h: 0.88 }, "bbbbbbbbbbbbbbbb");
+  const overlapped = dedupe([middle, left, right]);
+  assert.deepEqual(
+    overlapped.map((c) => c.box.x),
+    [0.24, 0.75],
+    "a 48% overlap is one figure; a separate crop on the page stays"
+  );
+  const adjacent = dedupe([
+    cand(4, { x: 0.05, y: 0.2, w: 0.4, h: 0.5 }),
+    cand(4, { x: 0.42, y: 0.2, w: 0.4, h: 0.5 }),
+  ]);
+  assert.equal(adjacent.length, 2, "figures that only touch stay separate");
+  const samePhoto = dropRepeatedImages([
+    { candidate: slice({ x: 0.75, y: 0, w: 0.2, h: 0.5 }, "cccccccccccccccc") },
+    { candidate: slice({ x: 0.1, y: 0.1, w: 0.5, h: 0.7 }, "cccccccccccccccc") },
+  ]);
+  assert.equal(samePhoto.length, 1);
+  assert.equal(samePhoto[0]!.candidate.box.w, 0.5, "the larger slice of the same photo wins");
 });
 
 test("a picture repeated on later slides is kept once", () => {

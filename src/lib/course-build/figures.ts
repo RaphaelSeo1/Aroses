@@ -140,13 +140,19 @@ export function rejectReason(c: FigureCandidate, repeated: Box[]): string | null
   return null;
 }
 
+/**
+ * Same-page crops that share this much of the smaller box are one figure.
+ * Lecture files often store one photo as overlapping slices; 0.6 let those through.
+ */
+const SAME_PAGE_COVER = 0.4;
+
 /** Drops crops mostly inside a better one on the same page. */
 export function dedupe(cands: FigureCandidate[]): FigureCandidate[] {
   const byQuality = cands.slice().sort((a, b) => b.quality - a.quality || area(b.box) - area(a.box));
   const kept: FigureCandidate[] = [];
   for (const c of byQuality) {
     const covered = kept.some(
-      (k) => k.page === c.page && intersection(k.box, c.box) > 0.6 * Math.min(area(k.box), area(c.box))
+      (k) => k.page === c.page && intersection(k.box, c.box) > SAME_PAGE_COVER * Math.min(area(k.box), area(c.box))
     );
     if (!covered) kept.push(c);
   }
@@ -581,20 +587,34 @@ function hashDistance(a: string, b: string): number {
   return d;
 }
 
-/** Slides often repeat one picture; only its first appearance is kept. */
+/**
+ * Slides often repeat one picture; only its first appearance is kept.
+ * On one page the same photo is also sliced into different shapes, so aspect
+ * ratio is ignored and the larger slice wins.
+ */
 export function dropRepeatedImages<T extends { candidate: FigureCandidate }>(items: T[]): T[] {
   const kept: T[] = [];
   for (const it of items) {
     const h = it.candidate.hash;
     const ar = it.candidate.width / Math.max(1, it.candidate.height);
-    const dup =
-      h &&
-      kept.some((k) => {
-        const kh = k.candidate.hash;
-        const kar = k.candidate.width / Math.max(1, k.candidate.height);
-        return kh && kh.length === h.length && Math.abs(Math.log(ar / kar)) < 0.1 && hashDistance(kh, h) <= 6;
-      });
-    if (!dup) kept.push(it);
+    const dupAt =
+      h == null
+        ? -1
+        : kept.findIndex((k) => {
+            const kh = k.candidate.hash;
+            if (!kh || kh.length !== h.length || hashDistance(kh, h) > 6) return false;
+            if (k.candidate.page === it.candidate.page) return true;
+            const kar = k.candidate.width / Math.max(1, k.candidate.height);
+            return Math.abs(Math.log(ar / kar)) < 0.1;
+          });
+    if (dupAt < 0) {
+      kept.push(it);
+      continue;
+    }
+    const prev = kept[dupAt]!;
+    if (prev.candidate.page === it.candidate.page && area(it.candidate.box) > area(prev.candidate.box)) {
+      kept[dupAt] = it;
+    }
   }
   return kept;
 }

@@ -16,6 +16,7 @@ import {
 import { loadPdfDocument } from "@/lib/study-ingest/source-images/render-pdf-page";
 import type { PageBox } from "./clean.ts";
 import { FigureBudget, eachWithinBudget, spreadOrder, yieldToEventLoop } from "./figure-budget.ts";
+import { prepareRasterCrop } from "./figure-crop.ts";
 import { isChromeBox, repeatedBoxes, type Box, type FigureCandidate } from "./figures.ts";
 
 const RENDER_WIDTH_PX = 1100;
@@ -373,7 +374,7 @@ async function renderPageCrops(
   for (const c of crops) {
     budget.check(signal);
     await yieldToEventLoop();
-    const crop = c.cropBuffer;
+    let crop = c.cropBuffer;
     const r = c.pixelRect;
     const origin = c.source === "structural_raster" ? "raster" : "vector";
     // Font checks only mean something for drawn regions; an embedded
@@ -381,15 +382,22 @@ async function renderPageCrops(
     if (origin === "vector" && ((await isLikelyTextOrIconCropPng(crop)) || (await isLikelyMissingGlyphCropPng(crop)))) {
       continue;
     }
+    const prepared = await prepareRasterCrop(crop);
+    if (!prepared) continue;
+    crop = prepared.buffer;
+    const rx = r.x + prepared.box.x * r.w;
+    const ry = r.y + prepared.box.y * r.h;
+    const rw = prepared.box.w * r.w;
+    const rh = prepared.box.h * r.h;
     const quality = origin === "raster" ? await rasterQuality(crop) : await scoreCropQuality(crop, { skipGlyphCheck: true });
     if (quality <= 0) continue;
     const mime = origin === "raster" ? "image/jpeg" : "image/png";
     emit({
       page: n,
       origin,
-      box: { x: r.x / canvas.width, y: r.y / canvas.height, w: r.w / canvas.width, h: r.h / canvas.height },
-      width: r.w,
-      height: r.h,
+      box: { x: rx / canvas.width, y: ry / canvas.height, w: rw / canvas.width, h: rh / canvas.height },
+      width: Math.max(1, Math.round(rw)),
+      height: Math.max(1, Math.round(rh)),
       image: await encode(crop, MAX_UPLOAD_SIDE_PX, mime),
       mime,
       thumb: await encode(crop, THUMB_SIDE_PX, "image/jpeg"),
