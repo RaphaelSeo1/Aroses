@@ -1,5 +1,6 @@
 import type { SourcePage } from "./clean.ts";
 import { contentLength } from "./language.ts";
+import { isQuestionPage, isReferencePage, namedLists } from "./page-signals.ts";
 
 /** A page addressed by its position across every source in the build (1-based). */
 export type BuildPage = {
@@ -53,16 +54,17 @@ export function mentionsFigure(text: string): boolean {
 
 /**
  * Share of the per-page output budget a page earns. Empty pages earn none,
- * thin ones half, dense prose one and a half, tables double. Length is in
- * Latin-character equivalents, so a dense Chinese page weighs like a dense
- * English one.
+ * thin ones half, dense prose or a page laying out a list of named items
+ * one and a half (every item needs its own sentences), tables double.
+ * Length is in Latin-character equivalents, so a dense Chinese page weighs
+ * like a dense English one.
  */
 export function pageWeight(text: string): number {
   const chars = contentLength(text.replace(/\s+/g, " ").trim());
   if (chars < 25) return 0;
   if (chars < 120) return 0.5;
   if (looksLikeTable(text)) return 2;
-  return chars > 1_800 ? 1.5 : 1;
+  return chars > 1_800 || namedLists(text).length > 0 ? 1.5 : 1;
 }
 
 function clip(s: string, max: number): string {
@@ -72,7 +74,8 @@ function clip(s: string, max: number): string {
 
 /**
  * One short line per page for the planner: heading, first line, and markers.
- * `[T]` table, `[F]` figure reference, `[·]` nearly empty.
+ * `[T]` table, `[F]` figure reference, `[·]` nearly empty, `[Q]` only asks
+ * a question, `[R]` reference list.
  */
 export function compactOutline(pages: BuildPage[], sources: BuildSourceInfo[]): string {
   const out: string[] = [];
@@ -89,6 +92,8 @@ export function compactOutline(pages: BuildPage[], sources: BuildSourceInfo[]): 
       chars < 25 ? "·" : "",
       looksLikeTable(p.text) ? "T" : "",
       mentionsFigure(p.text) ? "F" : "",
+      isQuestionPage(p.text) ? "Q" : "",
+      isReferencePage(p.text) ? "R" : "",
     ]
       .filter(Boolean)
       .map((m) => `[${m}]`)

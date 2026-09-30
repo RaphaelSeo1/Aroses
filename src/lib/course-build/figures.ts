@@ -306,10 +306,34 @@ function numbersBacked(caption: string, sourceText: string): boolean {
   return (caption.match(/\d+(?:[.,]\d+)?/g) ?? []).every((n) => have.has(n));
 }
 
+function unbalanced(text: string): boolean {
+  const count = (re: RegExp) => (text.match(re) ?? []).length;
+  return count(/\(/g) !== count(/\)/g) || count(/\[/g) !== count(/\]/g);
+}
+
+/**
+ * A caption cut off mid-sentence: it ends on a comma, dash or open bracket,
+ * on a short lower-case word ("occurs on", "in the"), or the page carries
+ * the sentence on past it ("The chromatin in human" + "chromosomes is …").
+ */
+export function truncatedCaption(caption: string, pageText = ""): boolean {
+  const c = caption.replace(/\s+/g, " ").trim();
+  if (!c) return false;
+  if (/(?:[,;:(\[{/&\-–—…]|\.\.\.)$/u.test(c) || unbalanced(c)) return true;
+  if (/[.!?。！？؟)\]"'”’]$/u.test(c)) return false;
+  // A unit after a number ("50 nm") is a complete label, not a cut-off word.
+  if (/(?:^|[^\p{N}\s]\s)\p{Ll}{1,3}$/u.test(c)) return true;
+  const page = pageText.replace(/\s+/g, " ");
+  const at = page.indexOf(c);
+  return at >= 0 && /^ ?\p{Ll}/u.test(page.slice(at + c.length, at + c.length + 3));
+}
+
 /**
  * The source's own caption wins. Otherwise the writer's caption, then the
  * vision description, but only when the page text backs its words up; a
  * caption nothing confirms is dropped rather than risk naming the wrong thing.
+ * A caption cut off mid-sentence never shows; the neutral "from page N"
+ * does instead.
  *
  * When converting to another language the source's words can't be shown and
  * can't be compared, so the writer's caption is kept only if the writer was
@@ -319,15 +343,17 @@ function numbersBacked(caption: string, sourceText: string): boolean {
 export function figureCaption(f: FigureAsset, writerCaption: string, pageText: string, opts: CaptionOptions = {}): string {
   const writer = writerCaption.replace(/\s+/g, " ").trim().slice(0, 200);
   const source = `${pageText} ${f.label}`;
+  const whole = (t: string) => Boolean(t) && !truncatedCaption(t, pageText);
+  const label = whole(f.label) ? f.label : "";
   if (opts.converting) {
-    const labelled = Boolean(f.label && descriptiveLabel(f.label));
+    const labelled = Boolean(label && descriptiveLabel(label));
     const described = Boolean(f.description && confirmedBy(f.description, source));
-    return writer && (labelled || described) && numbersBacked(writer, `${source} ${f.description}`) ? writer : "";
+    return whole(writer) && (labelled || described) && numbersBacked(writer, `${source} ${f.description}`) ? writer : "";
   }
-  if (f.label && descriptiveLabel(f.label)) return f.label;
-  if (writer && confirmedBy(writer, source)) return writer;
-  if (f.description && confirmedBy(f.description, source)) return f.description;
-  return f.label;
+  if (label && descriptiveLabel(label)) return label;
+  if (whole(writer) && confirmedBy(writer, source)) return writer;
+  if (whole(f.description) && confirmedBy(f.description, source)) return f.description;
+  return label;
 }
 
 function toVisualAsset(
@@ -350,9 +376,20 @@ function toVisualAsset(
   };
 }
 
+/** A lesson's own source pages, as the writer gave them. */
+export type PageRange = { first: number; last: number };
+
+/** True when the range is unknown, or holds page `g`. */
+function onPages(range: PageRange | undefined, g: number): boolean {
+  if (!range || !(range.first > 0) || !(range.last >= range.first)) return true;
+  return g >= range.first && g <= range.last;
+}
+
 /**
  * Turns the writer's markers into `visual_assets`. Unknown IDs and repeats
- * (within the module) are dropped; `used` is shared across the module's lessons.
+ * (within the module) are dropped; `used` is shared across the module's
+ * lessons. A figure from a page outside the lesson's `range` isn't placed
+ * here (`offPage`): it goes to the lesson that teaches its page, if any.
  */
 export function placeFigures(
   content: string,
@@ -360,21 +397,27 @@ export function placeFigures(
   used: Set<string>,
   pageText: (g: number) => string,
   assetPrefix: string,
-  opts: CaptionOptions = {}
-): { content: string; assets: LessonVisualAsset[]; dropped: string[] } {
+  opts: CaptionOptions = {},
+  range?: PageRange
+): { content: string; assets: LessonVisualAsset[]; dropped: string[]; offPage: string[] } {
   const { text, markers } = extractFigureMarkers(content);
   const assets: LessonVisualAsset[] = [];
   const dropped: string[] = [];
+  const offPage: string[] = [];
   for (const m of markers as FigureMarker[]) {
     const f = figures.get(m.id);
     if (!f || used.has(m.id)) {
       dropped.push(m.id);
       continue;
     }
+    if (!onPages(range, f.g)) {
+      offPage.push(m.id);
+      continue;
+    }
     used.add(m.id);
     assets.push(toVisualAsset(f, figureCaption(f, m.caption, pageText(f.g), opts), m.afterParagraph, assetPrefix, opts));
   }
-  return { content: text, assets, dropped };
+  return { content: text, assets, dropped, offPage };
 }
 
 export const MAX_FIGURES_PER_LESSON = 3;
@@ -429,7 +472,12 @@ function sortAssets(lesson: PlacedLesson) {
   lesson.assets.sort((a, b) => (a.placementAfterParagraph ?? 0) - (b.placementAfterParagraph ?? 0));
 }
 
-/** The figures the writer listed for a lesson. Returns IDs that were unknown, repeated, over the cap or left without a free paragraph. */
+/**
+ * The figures the writer listed for a lesson. Returns IDs that were unknown,
+ * repeated, over the cap or left without a free paragraph. A figure from a
+ * page outside the lesson's page range is left unplaced (and not returned),
+ * for the lesson that teaches its page.
+ */
 export function placeChosenFigures(
   lesson: PlacedLesson,
   chosen: Array<{ id: string; caption: string }>,
@@ -443,6 +491,7 @@ export function placeChosenFigures(
   for (const c of chosen) {
     const id = c.id.trim().toUpperCase();
     const f = figures.get(id);
+    if (f && !used.has(id) && !onPages({ first: lesson.firstPage, last: lesson.lastPage }, f.g)) continue;
     if (!f || used.has(id) || lesson.assets.length >= MAX_FIGURES_PER_LESSON) {
       dropped.push(id);
       continue;
@@ -461,8 +510,11 @@ export function placeChosenFigures(
 }
 
 /**
- * Places figures the writer left out: each goes into the lesson whose page
- * range holds its page. Figures with no lesson covering their page stay out.
+ * Places figures the writer left out: each goes into the lesson whose source
+ * pages hold its page. `sourcePages` (one per lesson) are the pages the
+ * writer said each lesson draws on, which may be narrower than the ranges
+ * stretched to cover the module; without it the lesson ranges count.
+ * Figures with no lesson on their page stay out.
  */
 export function autoPlaceFigures(
   lessons: PlacedLesson[],
@@ -470,14 +522,20 @@ export function autoPlaceFigures(
   used: Set<string>,
   pageText: (g: number) => string,
   assetPrefix: string,
-  opts: CaptionOptions = {}
+  opts: CaptionOptions = {},
+  sourcePages?: PageRange[]
 ): string[] {
   const placed: string[] = [];
+  const rangeOf = (i: number): PageRange => {
+    const r = sourcePages?.[i];
+    return r && r.first > 0 && r.last >= r.first ? r : { first: lessons[i]!.firstPage, last: lessons[i]!.lastPage };
+  };
   for (const f of [...figures].sort((a, b) => a.g - b.g)) {
     if (used.has(f.id)) continue;
-    const lesson = lessons.find(
-      (l) => f.g >= l.firstPage && f.g <= l.lastPage && l.assets.length < MAX_FIGURES_PER_LESSON
-    );
+    const lesson = lessons.find((l, i) => {
+      const r = rangeOf(i);
+      return f.g >= r.first && f.g <= r.last && l.assets.length < MAX_FIGURES_PER_LESSON;
+    });
     if (!lesson) continue;
     const caption = figureCaption(f, "", pageText(f.g), opts);
     const after = matchingParagraph(lesson, f, caption, pageText);

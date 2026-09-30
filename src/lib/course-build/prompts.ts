@@ -12,6 +12,7 @@ Content rules:
 - Tables: reproduce every source table as a complete markdown table, every row, column, number and proper noun exactly as written. Never turn a table into prose.
 - Worked examples: keep the reasoning and the actual figures, and the source's own named examples.
 - Leave out logistics (dates, rooms, platforms, staff, announcements, clicker or poll instructions) and unsolved practice prompts or activities, but keep the concept an activity tested. Solved examples stay.
+- Questions: never state the answer to a question the pages ask (clicker, poll, practice or exam question, pages marked "(question page)") unless a page states that answer. Don't turn its choices or its premise into facts, in lessons or quiz.
 - Voice: declarative, like a good textbook. No asides, hedging, first person, strikethrough or self-corrections. If unsure, leave it out.
 - No placeholders such as "Example 1" or "[insert scenario]". Never mention pages, slides, "the source" or "the lecture" in lessons or quiz items.
 - Format: markdown in short paragraphs; numbered steps or bullets where the source lists steps or items; math in LaTeX ($...$); numeric ranges use an en dash (1–4); keep mixed-language terms exactly as written, e.g. 디아제팜(diazepam).
@@ -32,13 +33,14 @@ Quiz fields (keep them short; they share your length budget):
 - free_response: choices is []; correct_choice is 0; reference_answer states what a full answer must contain (at most 30 words).
 - explanation: at most 20 words.`;
 
-export const PLAN_RULES = `You plan a study course from a compact outline of a student's lecture materials. Each outline line is one page: "pN [markers] heading | first words". Markers: [T] table, [F] figure reference, [·] nearly empty.
+export const PLAN_RULES = `You plan a study course from a compact outline of a student's lecture materials. Each outline line is one page: "pN [markers] heading | first words". Markers: [T] table, [F] figure reference, [·] nearly empty, [Q] only asks a question, [R] reference list or bibliography.
 
 - Split the content pages into modules in source order. Each module is one coherent topic, sized by the content. Aim for 8–16 pages per module and never exceed the module limit you are given.
 - Modules are contiguous page ranges in order; every content page belongs to exactly one module.
 - Module titles name the concept (e.g. "Regulation of Phosphofructokinase"), never the file or page numbers.
 - 2–5 lesson titles per module, each naming a concept.
-- skip_pages: title slides, blank pages, pure activity or poll pages, and pages that only repeat earlier ones.
+- Titles come from the outline: every module and lesson title names what its own pages' headings and first words show. Never name a topic those pages don't show, even one the subject usually covers next.
+- skip_pages: title slides, blank pages, pure activity or poll pages ([Q]), reference lists, bibliographies and citation pages ([R]), and pages that only repeat earlier ones. A reference list is never a module.
 - info_pages: syllabus, logistics, grading, deadlines, announcements. These go to Course Info and are never taught.
 - title: a short title for this material taken from its content, not the file name. description: one sentence on what it teaches.
 - Write titles in the language of the material.`;

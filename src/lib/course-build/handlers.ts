@@ -28,6 +28,7 @@ import { builderStrings, locatorKind, resolveBuildLanguage, type BuildLanguagePl
 import { meteredClaudeCall, type MeteredCallDeps, type MessagesClient } from "./metered-call.ts";
 import {
   ModuleOutputError,
+  coverageGaps,
   gapRequest,
   mergeGapLessons,
   moduleRequest,
@@ -429,7 +430,7 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
     const build = await data.getBuild(step.buildId);
     const { sources, pages } = await loadPages(step.buildId);
     const lang = buildLanguage(build.outputLanguage, pages);
-    const budget = { ...config, languageFactor: lang.factor, strings: lang.strings };
+    const budget = { ...config, languageFactor: lang.factor, strings: lang.strings, converting: lang.converting };
     const pdfs = sources.filter((s) => s.kind === "pdf").length;
     await data.setBuildSize(step.buildId, pages.length, buildSpendCapUsd(pages.length, config, lang.costFactor, pdfs));
 
@@ -671,21 +672,27 @@ export function createStepHandlers(deps: HandlerDeps): StepHandlers {
     const input = toolInput(message, tool) as Record<string, unknown>;
     const moduleTitle = single ? String(input.module_title ?? "").trim() : mod.title;
     let converted = toCourseModule(input, writer, moduleTitle);
-    const missing = uncoveredPages(converted.module, writer);
+    const gaps = coverageGaps(converted.module, writer);
+    const missing = gaps.map((c) => c.g);
     if (missing.length > 0) {
+      const items = Object.fromEntries(gaps.filter((c) => c.missingItems.length).map((c) => [c.g, c.missingItems]));
+      if (Object.keys(items).length) converted.notes.push(`list items missing ${JSON.stringify(items)}`);
       // One bounded call for the pages the lessons skipped; on any failure the module stands as written.
       try {
         const gap = await meteredClaudeCall(
           metered,
           { buildId: step.buildId, stepId: step.id, userId: build.userId, purpose: `module:${mod.id}:gap` },
-          gapRequest(writer, missing, converted.module),
+          gapRequest(writer, missing, converted.module, items),
           { signal: ctx.signal }
         );
         costUsd += gap.costUsd;
         const extra = (toolInput(gap.message, GAP_TOOL.name) as { lessons?: unknown }).lessons;
         const merged = toCourseModule(mergeGapLessons(input, extra), writer, moduleTitle);
         const still = uncoveredPages(merged.module, writer);
-        converted = { ...merged, notes: [...merged.notes, `gap pages ${missing.join(",")}${still.length ? `, still ${still.join(",")}` : ""}`] };
+        converted = {
+          ...merged,
+          notes: [...converted.notes.filter((n) => n.startsWith("list items")), ...merged.notes, `gap pages ${missing.join(",")}${still.length ? `, still ${still.join(",")}` : ""}`],
+        };
       } catch (err) {
         if (ctx.signal.aborted) throw err;
         converted.notes.push(`gap pages ${missing.join(",")} not filled: ${errText(err)}`);

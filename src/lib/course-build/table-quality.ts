@@ -148,6 +148,11 @@ export function judgeTable(grid: string[][]): TableVerdict {
     seen.add(key);
   }
   if (repeatRows + dupRows >= Math.max(1, rows.length * MAX_REPEAT_ROW_SHARE)) return { ok: false, reason: "repeated" };
+  // A running page header ("276 | CHAPTER 8 | …") picked up on every line: a
+  // column whose every record just repeats its header is no column at all.
+  if (header.some((h, j) => h && body.every((r) => (r[j] ?? "").toLowerCase() === h.toLowerCase()))) {
+    return { ok: false, reason: "repeated" };
+  }
 
   // Running text split into cells: a cell stops mid-sentence and the next one
   // carries straight on, and the row as a line runs on into the next row.

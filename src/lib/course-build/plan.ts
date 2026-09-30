@@ -1,5 +1,6 @@
 import type { BuilderStrings } from "./language.ts";
 import { pageWeight, type BuildPage } from "./outline.ts";
+import { isQuestionPage, isReferencePage } from "./page-signals.ts";
 
 export type PlanModule = {
   /** Stable module id (1-based, plan order). Review cards key off it. */
@@ -35,6 +36,8 @@ export type BudgetConfig = {
    */
   languageFactor?: number;
   strings?: Pick<BuilderStrings, "module" | "continued">;
+  /** Titles are translated from the pages, so their words can't be checked against them. */
+  converting?: boolean;
 };
 
 function factorOf(cfg: BudgetConfig): number {
@@ -91,7 +94,8 @@ type Draft = { title: string; lessons: string[]; start: number };
 
 function finishModules(drafts: Draft[], pages: BuildPage[], excluded: Set<number>, cfg: BudgetConfig): PlanModule[] {
   // The spend cap is per source page, so dense pages may share out the
-  // budget differently but never add to it.
+  // budget differently but never add to it. Skipped pages' share isn't
+  // handed on: the cap also pays for reading, and for the gap call.
   const included = pages.filter((p) => !excluded.has(p.g));
   const rawTotal = included.reduce((sum, p) => sum + pageWeight(p.text), 0);
   const scale = rawTotal > included.length ? included.length / rawTotal : 1;
@@ -182,16 +186,102 @@ function finishModules(drafts: Draft[], pages: BuildPage[], excluded: Set<number
     });
   }
 
-  return sized.map((s, i) => ({
-    id: i + 1,
-    title: s.title || (cfg.strings?.module ?? ((n: number) => `Module ${n}`))(i + 1),
-    lessons: s.lessons,
-    pages: s.pages,
-    weight: s.weight,
-    targetTokens: moduleTargetTokens(s.weight, cfg),
-    maxTokens: moduleMaxTokens(s.weight, cfg),
-    quizCount: quizCountForWeight(s.weight),
-  }));
+  const byPage = new Map(pages.map((p) => [p.g, p]));
+  return sized.map((s, i) => {
+    const own = s.pages.map((g) => byPage.get(g)).filter((p): p is BuildPage => !!p);
+    const { title, lessons } = cfg.converting ? s : groundTitles(s.title, s.lessons, own);
+    return {
+      id: i + 1,
+      title: title || (cfg.strings?.module ?? ((n: number) => `Module ${n}`))(i + 1),
+      lessons,
+      pages: s.pages,
+      weight: s.weight,
+      targetTokens: moduleTargetTokens(s.weight, cfg),
+      maxTokens: moduleMaxTokens(s.weight, cfg),
+      quizCount: quizCountForWeight(s.weight),
+    };
+  });
+}
+
+const CJK_CHAR = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/u;
+const TERM_CHARS = 6;
+/** A title word must be found on its pages this often, share of its words. */
+const MIN_TITLE_GROUNDING = 0.6;
+
+function termWords(text: string): string[][] {
+  return text
+    .toLowerCase()
+    .replace(/(\p{L})[-‐‑](?=\p{L})/gu, "$1")
+    .split(/[^\p{L}\p{N}\p{M}]+/u)
+    .map((w) => [...w])
+    .filter((w) => w.length > 0);
+}
+
+/** A title's words to look for: the start of each longer word, and CJK as character pairs. */
+function titleTerms(title: string): string[] {
+  const out = new Set<string>();
+  for (const w of termWords(title)) {
+    if (w.some((c) => CJK_CHAR.test(c))) for (let i = 0; i + 1 < w.length; i++) out.add(w[i]! + w[i + 1]!);
+    else if (w.length >= 4) out.add(w.slice(0, TERM_CHARS).join(""));
+  }
+  return [...out];
+}
+
+/** Everything a title term can match on the pages: word starts of 4–6 letters, and CJK pairs. */
+function pageTerms(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const w of termWords(text)) {
+    if (w.some((c) => CJK_CHAR.test(c))) for (let i = 0; i + 1 < w.length; i++) out.add(w[i]! + w[i + 1]!);
+    else for (let k = 4; k <= Math.min(TERM_CHARS, w.length); k++) out.add(w.slice(0, k).join(""));
+  }
+  return out;
+}
+
+/** Share of the title's words its pages contain; 1 when it has none to check. */
+export function titleGrounding(title: string, have: Set<string>): number {
+  const terms = titleTerms(title);
+  return terms.length === 0 ? 1 : terms.filter((t) => have.has(t)).length / terms.length;
+}
+
+function isHeadingLine(line: string): boolean {
+  return (
+    line.length >= 3 &&
+    line.length <= 80 &&
+    /\p{L}{3}/u.test(line) &&
+    !/^[\p{N}([]/u.test(line) &&
+    !/[.!?,;:。！？؟]$/u.test(line)
+  );
+}
+
+/** The pages' own heading: the first page's title line, else the first heading that opens a paragraph. */
+export function pagesHeading(pages: BuildPage[]): string {
+  for (const p of pages) {
+    if (isQuestionPage(p.text)) continue;
+    const first = p.text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+    if (isHeadingLine(first)) return first.slice(0, 140);
+  }
+  for (const p of pages) {
+    const lines = p.text.split("\n").map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i + 1 < lines.length; i++) {
+      if (isHeadingLine(lines[i]!) && lines[i + 1]!.split(/\s+/).length >= 8) return lines[i]!.slice(0, 140);
+    }
+  }
+  return "";
+}
+
+/**
+ * The planner names modules from a one-line outline, so a title can name a
+ * topic its pages don't teach, and the writer then fills it from memory. A
+ * module title whose words aren't on its pages is replaced by the pages' own
+ * heading when they have one; a lesson title that isn't is dropped.
+ */
+export function groundTitles(title: string, lessons: string[], pages: BuildPage[]): { title: string; lessons: string[] } {
+  const have = pageTerms(pages.map((p) => p.text).join("\n"));
+  const grounded = (t: string) => titleGrounding(t, have) >= MIN_TITLE_GROUNDING;
+  return {
+    title: !title || grounded(title) ? title : pagesHeading(pages) || title,
+    lessons: lessons.filter(grounded),
+  };
 }
 
 /**
@@ -212,6 +302,11 @@ export function repairPlan(raw: unknown, pages: BuildPage[], cfg: BudgetConfig):
   const total = pages.reduce((sum, p) => sum + pageWeight(p.text), 0);
   const excludedWeight = [...skipPages, ...infoPages].reduce((sum, g) => sum + weightOf(g), 0);
   if (total > 0 && excludedWeight > total * 0.5) skipPages = [];
+  // Reference lists are never taught, whatever the planner says; a file that is mostly references keeps them.
+  const references = pages.filter((p) => !infoPages.includes(p.g) && isReferencePage(p.text)).map((p) => p.g);
+  if (references.reduce((sum, g) => sum + weightOf(g), 0) < total * 0.5) {
+    skipPages = [...new Set([...skipPages, ...references])];
+  }
   const excluded = new Set([...skipPages, ...infoPages]);
 
   const rawModules = Array.isArray(o.modules) ? o.modules : [];

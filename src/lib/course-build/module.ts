@@ -13,6 +13,7 @@ import {
   placeChosenFigures,
   placeFigures,
   type FigureAsset,
+  type PageRange,
   type PlacedLesson,
 } from "./figures.ts";
 import { builderStrings, detectLanguage, locatorKind, resolveBuildLanguage, visibleLength, type BuildLanguagePlan, type BuilderStrings } from "./language.ts";
@@ -20,7 +21,8 @@ import type { MeteredRequest } from "./metered-call.ts";
 import type { BuildPage, BuildSourceInfo } from "./outline.ts";
 import type { BuildPlan, PlanModule } from "./plan.ts";
 import { planSummary } from "./plan.ts";
-import { pageCoverage } from "./coverage.ts";
+import { pageCoverage, type PageCoverage } from "./coverage.ts";
+import { isQuestionPage } from "./page-signals.ts";
 import { numberBacking, stripUnbackedNumbers, unbackedNumbers, type NumberBacking } from "./numbers.ts";
 import { pageWeight } from "./outline.ts";
 import { CONTENT_RULES, GAP_TOOL, MODULE_TOOL, SINGLE_MODULE_TOOL } from "./prompts.ts";
@@ -110,9 +112,13 @@ function pagesBlock(ctx: WriterContext): string {
     }
     lastSource = p.sourceIndex;
     const figs = (ctx.figures ?? []).filter((f) => f.g === p.g);
-    out.push(`[p${p.g}]\n${p.text}${figs.length ? `\n${figureManifest(figs, p.text)}` : ""}`);
+    out.push(`${pageTag(p)}\n${p.text}${figs.length ? `\n${figureManifest(figs, p.text)}` : ""}`);
   }
   return out.join("\n\n");
+}
+
+function pageTag(p: BuildPage): string {
+  return isQuestionPage(p.text) ? `[p${p.g}] (question page)` : `[p${p.g}]`;
 }
 
 function figuresBlock(ctx: WriterContext): string {
@@ -161,7 +167,7 @@ function taskLines(ctx: WriterContext): string {
   const perLesson = Math.max(unit.unit === "char" ? 120 : 60, Math.round(words / lessons / 10) * 10);
   const noun = unit.unit === "char" ? "characters" : "words";
   return [
-    `Lessons: ${lessons} (use 2–5 only if the content clearly needs a different number). Each lesson's content is at most ${perLesson} ${noun}; stay under ${words} ${noun} across all lessons. Spend them on explanation, not on key terms or examples.`,
+    `Lessons: ${lessons} (use 2–5 only if the content clearly needs a different number). Each lesson's content is at most ${perLesson} ${noun}; stay under ${words} ${noun} across all lessons. Within that, dense pages and tables get more room and thin pages less. Spend them on explanation, not on key terms or examples.`,
     `Cover every page: together the lessons' first_page–last_page ranges include every page (${pageList(ctx.module.pages)}), and each page's facts, numbers and examples are taught.`,
     `Quiz: exactly ${ctx.module.quizCount} questions, ${mcq} multiple_choice then ${free} free_response.`,
     languageLine(lang),
@@ -190,6 +196,7 @@ export function moduleRequest(ctx: WriterContext): MeteredRequest {
     `Plan (each module teaches only its own topics):\n${planSummary(ctx.plan)}`,
     "",
     `Write module ${m.id}: "${m.title}".${suggested}`,
+    "The plan's titles come from a one-line outline and are only hints: teach what these pages say, name each lesson after what its pages teach, and never write about a hinted topic the pages don't cover.",
     taskLines(ctx),
     "",
     `Pages:\n${pagesBlock(ctx)}`,
@@ -336,10 +343,19 @@ export type ConvertedModule = {
 
 type ConvertContext = Pick<WriterContext, "module" | "pages" | "sources" | "figures" | "assetPrefix" | "outputLanguage" | "language">;
 
-/** Numbers the source states: every page's text plus what its figures show. */
-function sourceBacking(ctx: Pick<WriterContext, "pages" | "figures">): NumberBacking {
-  const figureText = (ctx.figures ?? []).map((f) => `${f.label ?? ""} ${f.description ?? ""}`).join("\n");
-  return numberBacking(`${ctx.pages.map((p) => p.text).join("\n")}\n${figureText}`);
+/**
+ * Numbers this module's pages state, with what their figures show. Another
+ * section's numbers don't count: a figure from elsewhere in the file must
+ * not let a wrong sentence through.
+ */
+export function sourceBacking(ctx: Pick<WriterContext, "module" | "pages" | "figures">): NumberBacking {
+  const own = new Set(ctx.module.pages);
+  const figureText = (ctx.figures ?? [])
+    .filter((f) => own.has(f.g))
+    .map((f) => `${f.label ?? ""} ${f.description ?? ""}`)
+    .join("\n");
+  const pageText = ctx.pages.filter((p) => own.has(p.g)).map((p) => p.text).join("\n");
+  return numberBacking(`${pageText}\n${figureText}`);
 }
 
 /**
@@ -403,26 +419,31 @@ export function toCourseModule(input: unknown, ctx: ConvertContext, title: strin
     title: string;
     first: number;
     last: number;
+    /** The pages the writer said the lesson draws on, before ranges are stretched over the module. */
+    declared: PageRange;
     order: number;
     placed: PlacedLesson;
     keyTerms: KeyTerm[];
     examples: string[];
   };
   const drafts: Draft[] = [];
+  const offPage: string[] = [];
   for (const raw of Array.isArray(o.lessons) ? o.lessons : []) {
     if (!raw || typeof raw !== "object") continue;
     const l = raw as Record<string, unknown>;
     const lessonTitle = fixShortText(s(l.title));
-    const placed = placeFigures(clean(fixLessonText(s(l.content))), figures, usedFigures, pageText, ctx.assetPrefix ?? "", captions);
+    const start = Number(l.first_page);
+    const end = Number(l.last_page);
+    const declared: PageRange = Number.isFinite(start) ? { first: start, last: Number.isFinite(end) ? Math.max(start, end) : start } : { first: -1, last: -1 };
+    const placed = placeFigures(clean(fixLessonText(s(l.content))), figures, usedFigures, pageText, ctx.assetPrefix ?? "", captions, declared);
     droppedFigures.push(...placed.dropped);
+    offPage.push(...placed.offPage);
     if (!lessonTitle || visibleLength(placed.content) < 40) continue;
     const examples = (Array.isArray(l.examples) ? l.examples : [])
       .map((e) => fixShortText(s(e)))
       .filter((e) => visibleLength(e) >= 4 && faithful(e))
       .slice(0, 2);
     const keyTerms = toKeyTerms(l.key_terms).filter((k) => faithful(k.definition));
-    const start = Number(l.first_page);
-    const end = Number(l.last_page);
     const lessonFigures: PlacedLesson = {
       content: placed.content,
       firstPage: Number.isFinite(start) ? start : -1,
@@ -440,6 +461,7 @@ export function toCourseModule(input: unknown, ctx: ConvertContext, title: strin
       title: lessonTitle,
       first: start,
       last: end,
+      declared,
       order: Number.isFinite(start) ? start : Number.MAX_SAFE_INTEGER,
       placed: lessonFigures,
       keyTerms,
@@ -467,9 +489,12 @@ export function toCourseModule(input: unknown, ctx: ConvertContext, title: strin
     usedFigures,
     pageText,
     ctx.assetPrefix ?? "",
-    captions
+    captions,
+    sorted.map((d) => d.declared)
   );
   if (auto.length) notes.push(`figures auto-placed ${auto.join(",")}`);
+  const unplaced = [...new Set(offPage)].filter((id) => !usedFigures.has(id));
+  if (unplaced.length) notes.push(`figures off their lesson's pages dropped ${unplaced.join(",")}`);
   const lessons: CourseLesson[] = sorted.map((d) => {
     const sources = lessonSources(d.first, d.last, ctx.module.pages, ctx.pages, ctx.sources, strings);
     return {
@@ -517,34 +542,100 @@ export function toCourseModule(input: unknown, ctx: ConvertContext, title: strin
   };
 }
 
-/** Module pages with content whose facts the lessons didn't teach. */
-export function uncoveredPages(module: CourseModule, ctx: Pick<WriterContext, "module" | "pages" | "outputLanguage" | "language">): number[] {
-  const lang = languageOf(ctx);
-  const written = module.lessons
+function writtenText(module: CourseModule): string {
+  return module.lessons
     .map((l) => [l.title, l.content, ...l.examples, ...l.key_terms.map((k) => `${k.term} ${k.definition}`)].join("\n"))
     .join("\n");
-  const pages = ctx.pages.filter((p) => ctx.module.pages.includes(p.g) && pageWeight(p.text) > 0);
-  return pageCoverage(pages, ctx.pages, written, lang.converting)
-    .filter((c) => !c.covered)
-    .map((c) => c.g);
 }
 
-/** One extra call that writes lessons for pages the module's lessons missed. */
-export function gapRequest(ctx: WriterContext, missing: number[], existing: CourseModule): MeteredRequest {
+/**
+ * Module pages with content whose facts the lessons didn't teach. Pages that
+ * only ask a question are never counted: there is nothing on them to teach,
+ * and filling them in means inventing the answer.
+ */
+export function coverageGaps(
+  module: CourseModule,
+  ctx: Pick<WriterContext, "module" | "pages" | "outputLanguage" | "language">
+): PageCoverage[] {
+  const lang = languageOf(ctx);
+  const pages = ctx.pages.filter((p) => ctx.module.pages.includes(p.g) && pageWeight(p.text) > 0 && !isQuestionPage(p.text));
+  return pageCoverage(pages, ctx.pages, writtenText(module), lang.converting).filter((c) => !c.covered);
+}
+
+export function uncoveredPages(module: CourseModule, ctx: Pick<WriterContext, "module" | "pages" | "outputLanguage" | "language">): number[] {
+  return coverageGaps(module, ctx).map((c) => c.g);
+}
+
+/** Pages either side of a missed page that the gap call reads for context. */
+const GAP_NEIGHBOURS = 2;
+const GAP_NEIGHBOUR_CHARS = 1_500;
+/** All neighbouring pages together, nearest first. */
+const GAP_CONTEXT_CHARS = 6_000;
+/** How much of the module's existing lesson text the gap call sees. */
+const GAP_LESSON_CHARS = 6_000;
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max).trimEnd()}…`;
+}
+
+/** Pages next to the missed ones, in the same file, that aren't missed themselves; nearest first up to the budget. */
+function neighbourPages(ctx: WriterContext, missing: number[]): BuildPage[] {
+  const want = new Set(missing);
+  const byG = new Map(ctx.pages.map((p) => [p.g, p]));
+  const dist = new Map<number, number>();
+  for (const g of missing) {
+    const at = byG.get(g);
+    for (let d = -GAP_NEIGHBOURS; d <= GAP_NEIGHBOURS; d++) {
+      const n = byG.get(g + d);
+      if (!n || !at || want.has(n.g) || n.sourceIndex !== at.sourceIndex || pageWeight(n.text) === 0) continue;
+      dist.set(n.g, Math.min(dist.get(n.g) ?? Infinity, Math.abs(d)));
+    }
+  }
+  let left = GAP_CONTEXT_CHARS;
+  const out: BuildPage[] = [];
+  for (const [g] of [...dist].sort((a, b) => a[1] - b[1] || a[0] - b[0])) {
+    const cost = Math.min(GAP_NEIGHBOUR_CHARS, byG.get(g)!.text.length);
+    if (cost > left) continue;
+    left -= cost;
+    out.push(byG.get(g)!);
+  }
+  return out.sort((a, b) => a.g - b.g);
+}
+
+/**
+ * One extra call that writes lessons for pages the module's lessons missed.
+ * It reads the pages around them and the lessons already written, so it
+ * reads each missed page in context, and adds only what that page states.
+ * `items` lists named list items the lessons left out, per page.
+ */
+export function gapRequest(ctx: WriterContext, missed: number[], existing: CourseModule, items: Record<number, string[]> = {}): MeteredRequest {
   const lang = languageOf(ctx);
   const unit = lengthUnit(lang);
+  const missing = missed.filter((g) => !isQuestionPage(ctx.pages.find((p) => p.g === g)?.text ?? ""));
   const weight = ctx.pages.filter((p) => missing.includes(p.g)).reduce((n, p) => n + pageWeight(p.text), 0);
   const perPage = Math.max(1, ctx.module.targetTokens / Math.max(1, ctx.module.weight));
   const target = Math.round(Math.max(500, weight * perPage));
   const words = Math.max(unit.unit === "char" ? 160 : 80, Math.round(target / unit.tokensPerUnit / 10) * 10);
   const noun = unit.unit === "char" ? "characters" : "words";
+  const lessons = clip(existing.lessons.map((l) => `## ${l.title}\n${l.content}`).join("\n\n"), GAP_LESSON_CHARS);
+  const context = neighbourPages(ctx, missing).map((p) => `${pageTag(p)}\n${clip(p.text, GAP_NEIGHBOUR_CHARS)}`);
+  const left = Object.entries(items)
+    .filter(([g, list]) => missing.includes(Number(g)) && list.length > 0)
+    .map(([g, list]) => `p${g}: ${list.join("; ")}`);
   const text = [
-    `Module ${ctx.module.id}: "${ctx.module.title}". Its lessons so far: ${existing.lessons.map((l) => l.title).join("; ")}.`,
-    `They missed these pages (${pageList(missing)}). Write lessons that teach what these pages say: every fact, number, example and table on them. Don't repeat what the existing lessons already teach. At most ${words} ${noun} in total; one lesson per group of neighbouring pages. If the pages hold only logistics or unsolved activities, return no lessons.`,
+    `Module ${ctx.module.id}: "${ctx.module.title}". Its lessons so far:\n${lessons}`,
+    "",
+    `They missed these pages (${pageList(missing)}). Write lessons that teach only what these pages state: every fact, number, example, table and named item on them. Don't repeat what the existing lessons already teach.`,
+    left.length ? `Named items the lessons leave out: ${left.join(" | ")}.` : "",
+    "The context pages are there only so you read the missed pages correctly: never teach from them, and never add a fact, mechanism, location or number the missed pages don't state, even a well-known one. Where a missed page leaves something unexplained or asks a question it doesn't answer, leave it unexplained.",
+    `At most ${words} ${noun} in total; one lesson per group of neighbouring pages. If the pages hold only logistics or unsolved activities, return no lessons.`,
     languageLine(lang),
     "",
-    `Pages:\n${pagesBlock({ ...ctx, module: { ...ctx.module, pages: missing }, figures: [] })}`,
-  ].join("\n");
+    context.length ? `Context pages (don't teach):\n${context.join("\n\n")}\n` : "",
+    `Missed pages to teach:\n${pagesBlock({ ...ctx, module: { ...ctx.module, pages: missing }, figures: [] })}`,
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
   return {
     max_tokens: Math.round(target * 1.5 + 400),
     system: CONTENT_RULES,

@@ -214,7 +214,7 @@ const figure = (over: Partial<FigureAsset> = {}): FigureAsset => ({
 });
 
 test("converting: the source's caption isn't shown; the writer's translation is kept only when it had something confirmed", () => {
-  const page = "Figure 3. Lipid bilayer with 2 layers of phospholipids.";
+  const page = "Figure 3. Lipid bilayer\nThe membrane has 2 layers of phospholipids.";
   const labelled = figure({ label: "Figure 3. Lipid bilayer" });
   assert.equal(figureCaption(labelled, "Bicapa lipídica", page), "Figure 3. Lipid bilayer");
   assert.equal(figureCaption(labelled, "Bicapa lipídica", page, { converting: true }), "Bicapa lipídica");

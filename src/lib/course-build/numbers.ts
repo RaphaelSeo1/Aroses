@@ -112,9 +112,10 @@ export function numberBacking(sourceText: string): NumberBacking {
     all.some((v) => decimalsOfValue(v) > decimals && Math.abs(v - x) <= 0.5 * 10 ** -decimals + 1e-9);
   return {
     backed(token) {
+      // "10,000" also reads as the decimal 10.000; only a count written as one is always allowed.
       return token.values.some(
         (x, i) =>
-          alwaysAllowed(x) ||
+          (alwaysAllowed(x) && !(token.decimals[i] ?? 0)) ||
           exact.has(x) ||
           scaled.has(x) ||
           rounds(x, token.decimals[i] ?? 0) ||

@@ -1,12 +1,15 @@
 /**
- * Did the lessons teach every content page? Two signals per page: its most
- * characteristic words (frequent on the page, rare elsewhere) and its
- * numbers. A page whose words barely appear in the lessons, or whose
- * several numbers are all missing, wasn't taught. When the course is in
- * another language only numbers and Latin acronyms can be compared.
+ * Did the lessons teach every content page? Three signals per page: its
+ * most characteristic words (frequent on the page, rare elsewhere), its
+ * numbers, and the named items of any list it lays out. A page whose words
+ * barely appear in the lessons, whose several numbers are all missing, or
+ * whose list of N named items the lessons name fewer of, wasn't taught.
+ * When the course is in another language only numbers and Latin acronyms
+ * can be compared.
  */
 import { matchTokens } from "./language.ts";
 import { numberTokens } from "./numbers.ts";
+import { missingItems, namedLists } from "./page-signals.ts";
 
 export type CoveragePage = { g: number; text: string };
 
@@ -16,6 +19,8 @@ export type PageCoverage = {
   words: number;
   /** Share of the page's numbers found (1 when it has fewer than two). */
   numbers: number;
+  /** Named list items on the page that the lessons never name. */
+  missingItems: string[];
   covered: boolean;
 };
 
@@ -89,7 +94,8 @@ export function pageCoverage(
     const nums = numberKeys(p.text);
     const words = top.length >= MIN_WORDS ? top.filter((w) => haveWords.has(w)).length / top.length : 1;
     const numbers = nums.length >= MIN_NUMBERS ? nums.filter((n) => haveNumbers.has(n)).length / nums.length : 1;
-    const covered = words >= MIN_WORD_SHARE && !(numbers === 0 && words < STRONG_WORD_SHARE);
-    return { g: p.g, words, numbers, covered };
+    const missing = converting ? [] : [...new Set(namedLists(p.text).flatMap((items) => missingItems(items, written)))];
+    const covered = words >= MIN_WORD_SHARE && !(numbers === 0 && words < STRONG_WORD_SHARE) && missing.length === 0;
+    return { g: p.g, words, numbers, missingItems: missing, covered };
   });
 }
