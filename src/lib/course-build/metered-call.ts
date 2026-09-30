@@ -140,7 +140,7 @@ function classify(err: unknown, random: () => number): Classified {
 }
 
 /**
- * The only way the course builder talks to Claude.
+ * The only way the course builder talks to the configured model.
  *
  * 1. Refuses if COURSE_BUILD_ENABLED is off or the model has no known price.
  * 2. Reserves the worst case (estimated input + max_tokens of output) against

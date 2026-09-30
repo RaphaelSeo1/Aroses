@@ -48,7 +48,7 @@ export function readCourseBuildConfig(env: Env = process.env): CourseBuildConfig
   const flag = env.COURSE_BUILD_ENABLED?.trim().toLowerCase();
   return {
     enabled: flag === "1" || flag === "true" || flag === "on",
-    model: env.COURSE_BUILD_MODEL?.trim() || "claude-haiku-4-5",
+    model: env.COURSE_BUILD_MODEL?.trim() || "gpt-5.6-luna",
     outputTokensPerPage: positiveNumber(env.COURSE_BUILD_OUTPUT_TOKENS_PER_PAGE, 200),
     capUsdPerPage: positiveNumber(env.COURSE_BUILD_CAP_USD_PER_PAGE, 0.0025),
     minCapUsd: positiveNumber(env.COURSE_BUILD_MIN_CAP_USD, 0.06),

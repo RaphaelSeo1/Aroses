@@ -26,7 +26,7 @@ after(async () => {
   await t.close();
 });
 
-const ON = readCourseBuildConfig({ COURSE_BUILD_ENABLED: "1" });
+const ON = readCourseBuildConfig({ COURSE_BUILD_ENABLED: "1", COURSE_BUILD_MODEL: "claude-haiku-4-5" });
 
 function reply(usage: Partial<Anthropic.Usage>): Anthropic.Message {
   return {

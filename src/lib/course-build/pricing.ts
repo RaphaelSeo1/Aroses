@@ -13,6 +13,9 @@ const PRICES: Array<[prefix: string, price: ModelPrice]> = [
   ["claude-haiku-4-5", { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 }],
   ["claude-sonnet-4-6", { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 }],
   ["claude-sonnet-4-5", { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 }],
+  // OpenAI list prices (2026-07-30 cut). Cached input is billed at the read rate.
+  ["gpt-5.6-luna", { input: 0.2, output: 1.2, cacheWrite: 0.2, cacheRead: 0.02 }],
+  ["gpt-5.6-terra", { input: 2, output: 12, cacheWrite: 2, cacheRead: 0.2 }],
 ];
 
 /** Null for models we cannot price; callers must refuse those. */
