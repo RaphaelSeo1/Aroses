@@ -1,7 +1,10 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { partialParse } from "@anthropic-ai/sdk/_vendor/partial-json-parser/parser";
 import type { MessagesClient } from "./metered-call.ts";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+/** Re-parse the growing tool arguments at most this often; each parse reads the whole string. */
+const SNAPSHOT_INTERVAL_MS = 250;
 
 export function isOpenAiCourseBuildModel(model: string): boolean {
   const id = model.trim().toLowerCase();
@@ -107,23 +110,26 @@ export function parseToolArguments(raw: string): unknown {
   }
 }
 
+/** The object streamed so far, with unfinished strings and arrays closed; undefined before the first key. */
 export function tryParsePartialJson(raw: string): unknown | undefined {
+  if (!raw.trim()) return undefined;
   try {
-    return JSON.parse(raw) as unknown;
+    return partialParse(raw);
   } catch {
     return undefined;
   }
 }
 
-function usageFromOpenAi(usage: {
+/** OpenAI counts cached tokens inside prompt_tokens; Anthropic (and the ledger) keep them apart. */
+export function usageFromOpenAi(usage: {
   prompt_tokens?: number;
   completion_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number };
 } | undefined): Anthropic.Usage {
-  const input = usage?.prompt_tokens ?? 0;
-  const cached = usage?.prompt_tokens_details?.cached_tokens ?? 0;
+  const prompt = usage?.prompt_tokens ?? 0;
+  const cached = Math.min(prompt, usage?.prompt_tokens_details?.cached_tokens ?? 0);
   return {
-    input_tokens: input,
+    input_tokens: prompt - cached,
     output_tokens: usage?.completion_tokens ?? 0,
     cache_creation_input_tokens: 0,
     cache_read_input_tokens: cached,
@@ -135,7 +141,8 @@ export function toAnthropicMessage(
   id: string,
   toolCalls: OpenAiToolCall[],
   text: string,
-  usage: Anthropic.Usage
+  usage: Anthropic.Usage,
+  finishReason?: string | null
 ): Anthropic.Message {
   const content: Anthropic.ContentBlock[] = [];
   if (toolCalls.length === 0 && text) {
@@ -156,7 +163,7 @@ export function toAnthropicMessage(
     role: "assistant",
     model,
     content,
-    stop_reason: toolCalls.length > 0 ? "tool_use" : "end_turn",
+    stop_reason: finishReason === "length" ? "max_tokens" : toolCalls.length > 0 ? "tool_use" : "end_turn",
     stop_sequence: null,
     usage,
   } as Anthropic.Message;
@@ -173,15 +180,39 @@ class OpenAiHttpError extends Error {
   }
 }
 
-async function openAiPost(
+type OpenAiResponseChunk = {
+  id?: string;
+  choices?: Array<{
+    finish_reason?: string | null;
+    message?: { content?: string | null; tool_calls?: OpenAiToolCall[] };
+    delta?: {
+      content?: string | null;
+      tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
+    };
+  }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
+};
+
+/**
+ * Sends one request and hands the response to `read`. The timeout and the
+ * caller's abort signal cover the whole exchange, body included, so a stalled
+ * stream is cut off and a canceled build stops paying for tokens.
+ */
+async function openAiRequest<T>(
   apiKey: string,
   payload: OpenAiChatRequest,
-  options?: RequestOptions
-): Promise<Response> {
+  options: RequestOptions | undefined,
+  read: (res: Response) => Promise<T>
+): Promise<T> {
   const timeout = options?.timeout ?? 120_000;
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeout);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ac.abort();
+  }, timeout);
   const onAbort = () => ac.abort();
+  if (options?.signal?.aborted) ac.abort();
   options?.signal?.addEventListener("abort", onAbort, { once: true });
   try {
     const res = await fetch(OPENAI_URL, {
@@ -197,12 +228,13 @@ async function openAiPost(
       const detail = await res.text().catch(() => "");
       throw new OpenAiHttpError(res.status, detail.slice(0, 400) || `OpenAI ${res.status}`, res.headers);
     }
-    return res;
+    return await read(res);
   } catch (err) {
     if (err instanceof OpenAiHttpError) throw err;
-    if ((err as { name?: string }).name === "AbortError") {
-      const e = new Error("AI call aborted");
-      e.name = options?.signal?.aborted ? "APIUserAbortError" : "AbortError";
+    if (ac.signal.aborted) {
+      // A timeout is retried like a dropped connection; only the caller's abort stops the step.
+      const e = new Error(timedOut ? `OpenAI request timed out after ${timeout}ms` : "AI call aborted");
+      e.name = timedOut ? "TimeoutError" : "APIUserAbortError";
       throw e;
     }
     throw err;
@@ -212,10 +244,11 @@ async function openAiPost(
   }
 }
 
-async function readOpenAiSse(
+export async function readOpenAiSse(
   res: Response,
   model: string,
-  onSnapshot: (snapshot: unknown) => void
+  onSnapshot: (snapshot: unknown) => void,
+  now: () => number = Date.now
 ): Promise<Anthropic.Message> {
   if (!res.body) throw new Error("OpenAI stream had no body");
   const reader = res.body.getReader();
@@ -223,19 +256,52 @@ async function readOpenAiSse(
   let buf = "";
   let id = "msg_openai";
   let text = "";
+  let finishReason: string | null = null;
+  let sawUsage = false;
   const calls = new Map<number, { id: string; name: string; arguments: string }>();
-  let usage: Anthropic.Usage = {
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_creation_input_tokens: 0,
-    cache_read_input_tokens: 0,
-  } as Anthropic.Usage;
+  let usage: Anthropic.Usage = usageFromOpenAi(undefined);
+  let lastSnapshotAt = -Infinity;
+  let snapshotLength = 0;
 
-  const emit = () => {
+  const emit = (force: boolean) => {
     const first = [...calls.values()][0];
-    if (!first?.arguments) return;
+    if (!first?.arguments || first.arguments.length === snapshotLength) return;
+    if (!force && now() - lastSnapshotAt < SNAPSHOT_INTERVAL_MS) return;
+    lastSnapshotAt = now();
+    snapshotLength = first.arguments.length;
     const snap = tryParsePartialJson(first.arguments);
     if (snap !== undefined) onSnapshot(snap);
+  };
+
+  const handle = (line: string) => {
+    if (!line.startsWith("data:")) return;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    let parsed: OpenAiResponseChunk & { error?: { message?: string } };
+    try {
+      parsed = JSON.parse(data) as typeof parsed;
+    } catch {
+      return;
+    }
+    if (parsed.error) throw new Error(`OpenAI stream error: ${parsed.error.message ?? "unknown"}`);
+    if (parsed.id) id = parsed.id;
+    const choice = parsed.choices?.[0];
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    const delta = choice?.delta;
+    if (typeof delta?.content === "string") text += delta.content;
+    for (const tc of delta?.tool_calls ?? []) {
+      const i = tc.index ?? 0;
+      const cur = calls.get(i) ?? { id: "", name: "", arguments: "" };
+      if (tc.id) cur.id = tc.id;
+      if (tc.function?.name) cur.name = tc.function.name;
+      if (typeof tc.function?.arguments === "string") cur.arguments += tc.function.arguments;
+      calls.set(i, cur);
+    }
+    if (delta?.tool_calls?.length) emit(false);
+    if (parsed.usage) {
+      usage = usageFromOpenAi(parsed.usage);
+      sawUsage = true;
+    }
   };
 
   while (true) {
@@ -244,47 +310,20 @@ async function readOpenAiSse(
     buf += decoder.decode(value, { stream: true });
     let nl = buf.indexOf("\n");
     while (nl >= 0) {
-      const line = buf.slice(0, nl).trim();
+      handle(buf.slice(0, nl).trim());
       buf = buf.slice(nl + 1);
       nl = buf.indexOf("\n");
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (!data || data === "[DONE]") continue;
-      let parsed: {
-        id?: string;
-        choices?: Array<{
-          delta?: {
-            content?: string | null;
-            tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
-          };
-        }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
-      };
-      try {
-        parsed = JSON.parse(data) as typeof parsed;
-      } catch {
-        continue;
-      }
-      if (parsed.id) id = parsed.id;
-      const delta = parsed.choices?.[0]?.delta;
-      if (typeof delta?.content === "string") text += delta.content;
-      for (const tc of delta?.tool_calls ?? []) {
-        const i = tc.index ?? 0;
-        const cur = calls.get(i) ?? { id: "", name: "", arguments: "" };
-        if (tc.id) cur.id = tc.id;
-        if (tc.function?.name) cur.name = tc.function.name;
-        if (typeof tc.function?.arguments === "string") cur.arguments += tc.function.arguments;
-        calls.set(i, cur);
-        emit();
-      }
-      if (parsed.usage) usage = usageFromOpenAi(parsed.usage);
     }
   }
+  handle(buf.trim());
+  // The ledger settles on usage; a stream cut before it can't be priced and is retried at worst case.
+  if (!finishReason || !sawUsage) throw new Error("OpenAI stream ended before the response finished");
+  emit(true);
   const toolCalls = [...calls.values()].map((c) => ({
     id: c.id,
     function: { name: c.name, arguments: c.arguments },
   }));
-  return toAnthropicMessage(model, id, toolCalls, text, usage);
+  return toAnthropicMessage(model, id, toolCalls, text, usage, finishReason);
 }
 
 /**
@@ -295,22 +334,15 @@ export function createOpenAiMessagesClient(apiKey: string): MessagesClient {
   return {
     messages: {
       async create(body, options) {
-        const payload = toOpenAiChatBody(body);
-        const res = await openAiPost(apiKey, payload, options);
-        const json = (await res.json()) as {
-          id?: string;
-          choices?: Array<{
-            message?: { content?: string | null; tool_calls?: OpenAiToolCall[] };
-          }>;
-          usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
-        };
-        const msg = json.choices?.[0]?.message;
+        const json = await openAiRequest(apiKey, toOpenAiChatBody(body), options, (res) => res.json() as Promise<OpenAiResponseChunk>);
+        const choice = json.choices?.[0];
         return toAnthropicMessage(
           body.model,
           json.id ?? "msg_openai",
-          msg?.tool_calls ?? [],
-          msg?.content ?? "",
-          usageFromOpenAi(json.usage)
+          choice?.message?.tool_calls ?? [],
+          choice?.message?.content ?? "",
+          usageFromOpenAi(json.usage),
+          choice?.finish_reason
         );
       },
       stream(body, options) {
@@ -330,11 +362,12 @@ export function createOpenAiMessagesClient(apiKey: string): MessagesClient {
             return this;
           },
           finalMessage() {
-            pending ??= (async () => {
-              const payload = { ...toOpenAiChatBody(body), stream: true, stream_options: { include_usage: true } };
-              const res = await openAiPost(apiKey, payload, options);
-              return readOpenAiSse(res, body.model, snapshotFn);
-            })();
+            pending ??= openAiRequest(
+              apiKey,
+              { ...toOpenAiChatBody(body), stream: true, stream_options: { include_usage: true } },
+              options,
+              (res) => readOpenAiSse(res, body.model, snapshotFn)
+            );
             return pending;
           },
         };
@@ -342,3 +375,4 @@ export function createOpenAiMessagesClient(apiKey: string): MessagesClient {
     },
   };
 }
+
