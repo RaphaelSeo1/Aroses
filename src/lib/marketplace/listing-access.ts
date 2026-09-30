@@ -39,14 +39,7 @@ export async function fetchListingForCourse(
   };
 }
 
-/** True when listing blocks free Explore (pending or live). */
-export function listingBlocksFreeExplore(status: ListingStatus | null): boolean {
-  return (
-    status === "pending_review" ||
-    status === "approved" ||
-    status === "draft"
-  );
-}
+export { listingBlocksFreeExplore } from "@/lib/marketplace/listing-status";
 
 export function activeListingStatus(
   status: ListingStatus | null | undefined

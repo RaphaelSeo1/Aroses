@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
-import { createClient } from "@/lib/supabase/server";
 import { logActivity } from "@/lib/activity-log";
+import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
+import { listingBlocksFreeExplore } from "@/lib/marketplace/listing-access";
+import type { ListingStatus } from "@/lib/marketplace/types";
+import { createClient } from "@/lib/supabase/server";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -82,14 +84,14 @@ export async function PATCH(request: Request, ctx: Params) {
       .select("status")
       .eq("course_id", courseId)
       .maybeSingle();
-    const st = listing?.status as string | undefined;
+    const st = (listing?.status as ListingStatus | undefined) ?? null;
 
-    if (
-      st === "draft" ||
-      st === "pending_review" ||
-      st === "approved"
-    ) {
-      if (!isMarketplaceUiEnabled()) {
+    if (!isMarketplaceUiEnabled()) {
+      if (
+        st === "draft" ||
+        st === "pending_review" ||
+        st === "approved"
+      ) {
         // Marketplace is hidden — suspend any in-progress listing so free Explore works.
         await supabase
           .from("course_listings")
@@ -100,13 +102,26 @@ export async function PATCH(request: Request, ctx: Params) {
           })
           .eq("course_id", courseId)
           .in("status", ["draft", "pending_review", "approved"]);
-      } else {
+      }
+    } else if (listingBlocksFreeExplore(st)) {
+      return NextResponse.json(
+        {
+          error:
+            "Delist the paid listing before enabling free Explore.",
+        },
+        { status: 409 }
+      );
+    } else if (st === "draft" || st === "rejected") {
+      const { error: dropError } = await supabase
+        .from("course_listings")
+        .delete()
+        .eq("course_id", courseId)
+        .in("status", ["draft", "rejected"]);
+      if (dropError) {
+        console.error("[course public] drop listing", dropError);
         return NextResponse.json(
-          {
-            error:
-              "This course has a marketplace listing. Delist or remove the listing before enabling free Explore.",
-          },
-          { status: 409 }
+          { error: "Could not clear the old listing." },
+          { status: 500 }
         );
       }
     }

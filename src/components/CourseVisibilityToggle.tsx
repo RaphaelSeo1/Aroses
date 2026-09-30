@@ -109,9 +109,8 @@ export function CourseVisibilityToggle({
 
       {marketplaceEnabled && listingBlocksExplore ? (
         <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
-          {isPublic
-            ? "A marketplace listing draft is in progress while Explore is still on. You can turn Explore off anytime; turn the listing off (or wait for review) before enabling free Explore again."
-            : "A marketplace listing is active or in progress. Delist or wait for review before enabling free Explore."}
+          This course is for sale or waiting for review. Delist it, then turn
+          this switch on for free Explore.
         </p>
       ) : null}
 

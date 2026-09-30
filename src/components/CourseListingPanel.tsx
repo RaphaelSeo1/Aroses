@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   LISTING_ATTESTATION_ITEMS,
   LISTING_POLICY_SUMMARY,
@@ -24,16 +24,25 @@ export function CourseListingPanel({
   courseId,
   initialListing,
   hasMaterials,
+  isPublic = false,
 }: {
   courseId: string;
   initialListing: ListingState | null;
   hasMaterials: boolean;
+  isPublic?: boolean;
 }) {
   const router = useRouter();
   const [listing, setListing] = useState(initialListing);
   const [priceInput, setPriceInput] = useState(
     initialListing ? (initialListing.priceCents / 100).toFixed(2) : "9.99"
   );
+
+  useEffect(() => {
+    setListing(initialListing);
+    setPriceInput(
+      initialListing ? (initialListing.priceCents / 100).toFixed(2) : "9.99"
+    );
+  }, [initialListing]);
   const [checks, setChecks] = useState([false, false, false]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -172,7 +181,12 @@ export function CourseListingPanel({
         </p>
       ) : null}
 
-      {canEdit ? (
+      {isPublic && canEdit ? (
+        <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
+          This course is on free Explore. Turn off Public Explore listing above
+          to sell it.
+        </p>
+      ) : canEdit ? (
         <>
           <div className="mt-5">
             <label

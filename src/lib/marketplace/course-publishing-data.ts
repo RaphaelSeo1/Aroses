@@ -3,7 +3,10 @@ import {
   fetchSellerPayoutAccount,
   sellerCanReceivePayments,
 } from "@/lib/marketplace/connect";
-import { formatPrice } from "@/lib/marketplace/listing-access";
+import {
+  formatPrice,
+  listingBlocksFreeExplore,
+} from "@/lib/marketplace/listing-access";
 import { isMarketplacePaymentsEnabled } from "@/lib/marketplace/platform-fee";
 import type { ListingStatus } from "@/lib/marketplace/types";
 import { isMarketplaceUiEnabled } from "@/lib/marketplace/feature-flag";
@@ -78,9 +81,7 @@ export async function fetchCoursePublishingPanels(
 
   const listingStatus = (listingRow?.status as ListingStatus | undefined) ?? null;
   const listingBlocksExplore = isMarketplaceUiEnabled()
-    ? listingStatus === "draft" ||
-      listingStatus === "pending_review" ||
-      listingStatus === "approved"
+    ? listingBlocksFreeExplore(listingStatus)
     : false;
 
   const sellerPayout = await fetchSellerPayoutAccount(supabase, input.userId);

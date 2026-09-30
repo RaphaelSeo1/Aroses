@@ -147,6 +147,7 @@ export default async function CourseSettingsPage({ params, searchParams }: Props
                 courseId={course.id}
                 initialListing={publishing.initialListing}
                 hasMaterials={publishing.hasMaterials}
+                isPublic={publishing.isPublic}
               />
             </>
           ) : null}
