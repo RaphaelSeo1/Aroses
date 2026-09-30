@@ -351,9 +351,22 @@ export function figureCaption(f: FigureAsset, writerCaption: string, pageText: s
     return whole(writer) && (labelled || described) && numbersBacked(writer, `${source} ${f.description}`) ? writer : "";
   }
   if (label && descriptiveLabel(label)) return label;
-  if (whole(writer) && confirmedBy(writer, source)) return writer;
+  if (whole(writer) && confirmedBy(writer, source) && agreesWithPicture(writer, f.description)) return writer;
   if (whole(f.description) && confirmedBy(f.description, source)) return f.description;
   return label;
+}
+
+/**
+ * A page can print captions for other figures than the one cropped (a
+ * textbook scan behind a slide's own photos), so page text alone doesn't
+ * prove a caption fits this picture. When the vision check said what the
+ * picture shows, the caption must name at least one of those things.
+ */
+function agreesWithPicture(caption: string, description: string | undefined): boolean {
+  const seen = contentStems(description ?? "");
+  if (seen.length === 0) return true;
+  const named = new Set(contentStems(caption));
+  return seen.some((w) => named.has(w));
 }
 
 function toVisualAsset(
@@ -532,9 +545,16 @@ export function autoPlaceFigures(
   };
   for (const f of [...figures].sort((a, b) => a.g - b.g)) {
     if (used.has(f.id)) continue;
-    const lesson = lessons.find((l, i) => {
+    // The narrowest range wins: a lesson stretched over pages it skipped yields to one written for the page.
+    let lesson: PlacedLesson | undefined;
+    let span = Infinity;
+    lessons.forEach((l, i) => {
       const r = rangeOf(i);
-      return f.g >= r.first && f.g <= r.last && l.assets.length < MAX_FIGURES_PER_LESSON;
+      if (f.g < r.first || f.g > r.last || l.assets.length >= MAX_FIGURES_PER_LESSON) return;
+      if (r.last - r.first < span) {
+        lesson = l;
+        span = r.last - r.first;
+      }
     });
     if (!lesson) continue;
     const caption = figureCaption(f, "", pageText(f.g), opts);

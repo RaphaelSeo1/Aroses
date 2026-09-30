@@ -121,9 +121,10 @@ export function judgeTable(grid: string[][]): TableVerdict {
     return { ok: false, reason: "header" };
   }
 
-  // A column name doesn't carry on into the first record like a wrapped sentence or label.
-  const first = body[0]!;
-  if (header.some((c, j) => flowsInto(c, first[j] ?? ""))) return { ok: false, reason: "header" };
+  // A column name doesn't carry on into the first record like a wrapped sentence or label,
+  // even past blank cells when text laid out in columns was read as rows.
+  const firstBelow = (j: number) => body.find((r) => r[j])?.[j] ?? "";
+  if (header.some((c, j) => flowsInto(c, firstBelow(j)))) return { ok: false, reason: "header" };
 
   const filled = body.reduce((n, r) => n + r.filter(Boolean).length, 0);
   // With few records there is little evidence, so they must be nearly complete.

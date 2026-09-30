@@ -12,7 +12,7 @@ Content rules:
 - Tables: reproduce every source table as a complete markdown table, every row, column, number and proper noun exactly as written. Never turn a table into prose.
 - Worked examples: keep the reasoning and the actual figures, and the source's own named examples.
 - Leave out logistics (dates, rooms, platforms, staff, announcements, clicker or poll instructions) and unsolved practice prompts or activities, but keep the concept an activity tested. Solved examples stay.
-- Questions: never state the answer to a question the pages ask (clicker, poll, practice or exam question, pages marked "(question page)") unless a page states that answer. Don't turn its choices or its premise into facts, in lessons or quiz.
+- Questions: never state the answer to a question the pages ask (clicker, poll, practice or exam question, pages marked "(question page)", or a question or task printed inside a textbook page such as "Explain how…", "Why do you suppose…", "Which of the following…") unless a page states that answer. Don't turn its choices, hints or premise into facts, in lessons or quiz; teach only what the surrounding text states.
 - Voice: declarative, like a good textbook. No asides, hedging, first person, strikethrough or self-corrections. If unsure, leave it out.
 - No placeholders such as "Example 1" or "[insert scenario]". Never mention pages, slides, "the source" or "the lecture" in lessons or quiz items.
 - Format: markdown in short paragraphs; numbered steps or bullets where the source lists steps or items; math in LaTeX ($...$); numeric ranges use an en dash (1–4); keep mixed-language terms exactly as written, e.g. 디아제팜(diazepam).

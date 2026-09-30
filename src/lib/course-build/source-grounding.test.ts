@@ -32,6 +32,15 @@ test("question pages: clicker and practice slides are recognised in any language
   assert.equal(isQuestionPage("How is transport specificity achieved?\n" + RAN_PLACES), false, "a rhetorical heading over stated content is teaching");
 });
 
+test("question pages: a title and a labelled practice task is a question page; a labelled fact isn't", () => {
+  // Lewis MCB 104 lecture 3, p46: the writer and the gap writer both answered it.
+  assert.equal(isQuestionPage("Import Export\nPractice Exam Question: compare/contrast"), true);
+  assert.equal(isQuestionPage("Nuclear transport\nDiscuss: why directionality?"), true);
+  assert.equal(isQuestionPage("Ran cycle\nKey idea: Ran-GTP releases cargo"), false);
+  assert.equal(isQuestionPage("Import Export\nPractice: compare/contrast\n" + RAN_PLACES), false, "a task beside real content leaves the page teachable");
+  assert.equal(isQuestionPage(RAN_FACTS), false);
+});
+
 test("reference pages: a bibliography is recognised; a page that cites a study isn't", () => {
   const refs = [
     "Plaxton WC (1996) The organization and regulation of plant glycolysis. Annu Rev Plant Physiol 47:185–214.",
@@ -123,6 +132,17 @@ test("captions: a caption cut off mid-sentence never shows; the neutral page cap
   assert.equal((lesson.assets as Array<{ caption?: string }>)[0]?.caption, "From page 5 of your file");
 });
 
+test("captions: a caption the page prints for another figure isn't put on a picture the vision check saw differently", () => {
+  // Lewis MCB 104 lecture 2, p23: the slide's thread-spool photos sit over a textbook scan.
+  const page =
+    "Figure 5−23 DNA packing occurs on several levels in chromosomes.\nFigure 5−22 The chromatin in human chromosomes is folded into looped domains.\nFiber\nSingle nucleosome";
+  const spools = fig({ kind: "image", description: "Photograph of colored fiber spools" });
+  assert.equal(figureCaption(spools, "The chromatin in human chromosomes is folded into looped domains.", page), "");
+  const packing = fig({ description: "Diagram of DNA packing into chromatin loops" });
+  assert.equal(figureCaption(packing, "DNA packing occurs on several levels in chromosomes.", page), "DNA packing occurs on several levels in chromosomes.");
+  assert.equal(figureCaption(fig(), "DNA packing occurs on several levels in chromosomes.", page), "DNA packing occurs on several levels in chromosomes.");
+});
+
 test("figures: a figure only lands in a lesson that teaches its page", () => {
   const f = fig({ id: "F2", g: 7, page: 7, label: "Figure 7. The nuclear pore complex" });
   const used = new Set<string>();
@@ -139,6 +159,17 @@ test("figures: a figure only lands in a lesson that teaches its page", () => {
   ]);
   assert.equal(early.assets.length, 0, "the stretched range doesn't pull it into the wrong lesson");
   assert.equal(late.assets.length, 1);
+});
+
+test("figures: a gap lesson written for a page gets that page's figure, not the lesson stretched over it", () => {
+  // Lewis MCB 104 lecture 2: nuclear-envelope figures (p32, p36) landed in a histone lesson stretched to p24–p37.
+  const pore = fig({ id: "F10", g: 36, page: 36, description: "Diagram of outer nuclear membrane and nuclear pores" });
+  const text = () => "The nuclear envelope has an outer nuclear membrane perforated by nuclear pores.";
+  const histones: PlacedLesson = { content: "Histone tails are modified.\n\nThe nuclear envelope has an outer nuclear membrane.", firstPage: 24, lastPage: 37, assets: [] };
+  const pores: PlacedLesson = { content: "Nuclear pores perforate the outer nuclear membrane.", firstPage: 36, lastPage: 36, assets: [] };
+  autoPlaceFigures([histones, pores], [pore], new Set(), text, "");
+  assert.equal(histones.assets.length, 0);
+  assert.equal(pores.assets.length, 1);
 });
 
 const INHIBITION =

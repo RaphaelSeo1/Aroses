@@ -131,6 +131,15 @@ test("coverage: handwriting and label fragments on a page don't hide that its pr
   assert.equal(cov!.covered, true, `words ${cov!.words}`);
 });
 
+test("coverage: a slide's video link doesn't make its one taught sentence look untaught", () => {
+  // Lewis MCB 104 lecture 2, p37: a title and a movie link sent the page to the gap writer twice.
+  const page = { g: 5, text: "NPC are oriented in the nuclear envelope\nMovie: https://www.youtube.com/watch?v=UyhqLpjicZg" };
+  const written = "Nuclear pore complexes (NPC) are oriented in the nuclear envelope, with a cytoplasmic and a nucleoplasmic face.";
+  const nuclear = [6, 7, 8].map((g) => ({ g, text: `Nuclear lamins line the nuclear membrane (slide ${g}).` }));
+  const [cov] = pageCoverage([page], [...PAGES, ...nuclear, page], written);
+  assert.equal(cov!.covered, true, `words ${cov!.words}`);
+});
+
 test("coverage: lesson page ranges are stretched to span every content page", () => {
   const ranges = [
     { first: 2, last: 3 },

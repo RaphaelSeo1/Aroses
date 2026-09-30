@@ -14,6 +14,22 @@ const CHOICE = /^(?:\(?(\p{L})[.)]|([\u2460-\u2473]))\s*\S/u;
 const PROMPT_LABEL = /^\p{L}{1,2}\d{0,2}\s*[:：]/u;
 /** Declarative text a question page may carry (the setup, a label); more is teaching content. */
 const QUESTION_PAGE_MAX_STATED = 200;
+/**
+ * "Practice Exam Question: compare/contrast": a label of up to four words and
+ * a short lower-case task. A capitalised remainder ("Key idea: Ran-GTP
+ * releases cargo") names something, so it is content, not a task.
+ */
+const LABELLED_TASK = /^((?:\p{L}[\p{L}'’-]*\s+){0,3}\p{L}[\p{L}'’-]*)\s*[:：]\s*(\S.*)$/u;
+const TASK_WORDS = 3;
+/** A slide that is only a title and a labelled task; anything longer has something to teach. */
+const TASK_PAGE_MAX_STATED = 60;
+
+function labelledTask(unit: string): boolean {
+  const m = LABELLED_TASK.exec(unit);
+  if (!m) return false;
+  const task = m[2]!.trim();
+  return task.split(/\s+/).length <= TASK_WORDS && !/\p{Lu}/u.test(task) && !/[.!。！]$/u.test(task);
+}
 
 /** Lines joined where a sentence wraps, then split into sentences. */
 function sentenceUnits(text: string): string[] {
@@ -55,11 +71,14 @@ export function isQuestionPage(text: string): boolean {
   if (units.length === 0) return false;
   let asked = 0;
   let stated = 0;
+  let tasks = 0;
   for (const u of units) {
     const n = letters(u);
     if (CHOICE.test(u) || QUESTION_END.test(u)) asked += n;
+    else if (labelledTask(u)) tasks += 1;
     else if (!/[:：]$/u.test(u)) stated += n;
   }
+  if (tasks > 0 && asked === 0 && stated <= TASK_PAGE_MAX_STATED) return true;
   const choices = choiceRun(units) >= 2;
   const asks = asked > 0 || choices || PROMPT_LABEL.test(units[0]!);
   if (!asks) return false;

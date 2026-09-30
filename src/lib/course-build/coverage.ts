@@ -53,6 +53,11 @@ function latinWords(text: string): string[] {
   return (text.match(/\b[A-Z][A-Za-z0-9]*[A-Z0-9][A-Za-z0-9]*\b/g) ?? []).map((w) => w.toLowerCase());
 }
 
+/** Links are never taught, so their fragments ("youtube", "watch", a video id) can't count against a page. */
+function withoutLinks(text: string): string {
+  return text.replace(/\b(?:https?:\/\/|www\.)\S+/giu, " ");
+}
+
 /** Lines of at least three words: sentences and bullets, not handwriting, labels or axis ticks. */
 function isProse(line: string): boolean {
   return (line.match(/\p{L}{2,}/gu) ?? []).length >= 3;
@@ -78,12 +83,13 @@ export function pageCoverage(
   converting = false
 ): PageCoverage[] {
   const df = new Map<string, number>();
-  for (const p of allPages) for (const w of new Set(wordsOf(p.text, converting))) df.set(w, (df.get(w) ?? 0) + 1);
+  for (const p of allPages) for (const w of new Set(wordsOf(withoutLinks(p.text), converting))) df.set(w, (df.get(w) ?? 0) + 1);
   const common = Math.max(2, Math.ceil(allPages.length * 0.25));
   const haveWords = new Set(converting ? latinWords(written) : matchTokens(written));
   const haveNumbers = numberSet(written);
 
-  return modulePages.map((p) => {
+  return modulePages.map((page) => {
+    const p = { ...page, text: withoutLinks(page.text) };
     const freq = new Map<string, number>();
     for (const w of wordsOf(p.text, converting)) freq.set(w, (freq.get(w) ?? 0) + 1);
     const top = [...freq.entries()]

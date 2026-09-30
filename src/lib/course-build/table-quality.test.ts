@@ -187,6 +187,17 @@ test("a form's labels are not a table: a header cell that reads on into the next
   assert.equal(judgeTable(form).ok, false);
 });
 
+test("a textbook panel's columns read as rows are not a table, even when the header's next line sits below a blank", () => {
+  // Lewis MCB 104 lecture 2, p32: the TEM panel's side text, one column per text column.
+  const panel = parseMarkdownTable(
+    "| | embedded in plastic, and cut | detector |\n| --- | --- | --- |\n| viewing | | specimen |\n| screen or | into very thin sections that have | |\n| photographic | then been stained with salts of | In the scanning electron microscope (SEM), the specimen, which |\n| film | uranium and lead. | |"
+  )!;
+  assert.deepEqual(judgeTable(panel), { ok: false, reason: "header" });
+  // A real table with a blank first record keeps its short column names.
+  const gaps = parseMarkdownTable("| Stage | Length | Notes |\n| --- | --- | --- |\n| G1 | | variable |\n| S | 8 h | DNA copied |\n| G2 | 4 h | checks |")!;
+  assert.deepEqual(judgeTable(gaps), { ok: true });
+});
+
 test("after the writer: a fragment table in a lesson is demoted to text, source tables still restored", () => {
   const lessons = [
     {
