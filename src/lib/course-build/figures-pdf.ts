@@ -54,7 +54,8 @@ function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-type PdfPage = Awaited<ReturnType<Awaited<ReturnType<typeof loadPdfDocument>>["pdf"]["getPage"]>>;
+type PdfDoc = Awaited<ReturnType<typeof loadPdfDocument>>["pdf"];
+type PdfPage = Awaited<ReturnType<PdfDoc["getPage"]>>;
 type PageScan = { page: number; images: Box[]; paths: number };
 
 async function scanPage(page: PdfPage, pageNum: number, OPS: Record<string, number>): Promise<PageScan> {
@@ -214,34 +215,25 @@ export type TablePageRequest = { page: number; boxes?: PageBox[] };
 
 /** Whole-page renders with legible text, within a share of the figure budget; failures just skip the page. */
 async function renderTablePages(
-  buffer: Buffer,
+  pdf: PdfDoc,
   pages: TablePageRequest[],
   budget: FigureBudget,
   signal: AbortSignal | undefined
 ): Promise<Array<{ page: number; image: Buffer }>> {
   const tableBudget = budget.portion(TABLE_PAGE_BUDGET_SHARE);
-  let pdf: Awaited<ReturnType<typeof loadPdfDocument>>["pdf"] | null = null;
-  try {
-    const doc = (await loadPdfDocument(buffer, { outlineFonts: true })).pdf;
-    pdf = doc;
-    const wanted = pages.filter((p) => Number.isInteger(p.page) && p.page >= 1 && p.page <= doc.numPages);
-    const done = await eachWithinBudget<TablePageRequest, { page: number; image: Buffer }>(wanted, tableBudget, signal, async (p, emit) => {
-      const page = await doc.getPage(p.page);
-      try {
-        emit({ page: p.page, image: await renderTablePage(page, p.boxes ?? [], tableBudget) });
-      } catch {
-        // An unrenderable page keeps its text-layer decision.
-      } finally {
-        page.cleanup();
-      }
-    });
-    return done.results;
-  } catch (err) {
-    if (signal?.aborted) throw err;
-    return [];
-  } finally {
-    await pdf?.destroy().catch(() => {});
-  }
+  const wanted = pages.filter((p) => Number.isInteger(p.page) && p.page >= 1 && p.page <= pdf.numPages);
+  const done = await eachWithinBudget<TablePageRequest, { page: number; image: Buffer }>(wanted, tableBudget, signal, async (p, emit) => {
+    const page = await pdf.getPage(p.page);
+    try {
+      emit({ page: p.page, image: await renderTablePage(page, p.boxes ?? [], tableBudget) });
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      // An unrenderable page keeps its text-layer decision.
+    } finally {
+      page.cleanup();
+    }
+  });
+  return done.results;
 }
 
 /** The page with each text-layer table outlined in red, so vision judges the right area. */
@@ -284,9 +276,10 @@ async function findPdfFiguresNow(buffer: Buffer, opts: FindFiguresOptions, budge
   if (budget.expired) return { candidates: [], repeated: [], pagesRendered: 0, truncated: true };
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const OPS = pdfjsLib.OPS as unknown as Record<string, number>;
-  const pageImages = opts.tablePages?.length ? await renderTablePages(buffer, opts.tablePages, budget, signal) : [];
-  const { pdf } = await loadPdfDocument(buffer);
+  // Outline fonts: Node can't register font faces, so without them rendered labels come out as boxes.
+  const { pdf } = await loadPdfDocument(buffer, { outlineFonts: true });
   try {
+    const pageImages = opts.tablePages?.length ? await renderTablePages(pdf, opts.tablePages, budget, signal) : [];
     const total = Math.min(pdf.numPages, MAX_SCAN_PAGES);
     // Scanning may use at most half the remaining budget so rendering still gets time.
     const scan = await eachWithinBudget<number, PageScan>(spreadOrder(total), budget.portion(0.5), signal, async (n, emit) => {
