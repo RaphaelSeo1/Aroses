@@ -10,7 +10,7 @@
  * Read at call time so an env change applies without a code change.
  */
 
-export const DEFAULT_LIVE_NOTES_MODEL = "gpt-5.6-luna";
+export const DEFAULT_LIVE_NOTES_MODEL = "gpt-6-luna";
 export const DEFAULT_LIVE_NOTES_FINAL_MODEL = "gpt-5.6-sol";
 
 export function liveNotesModel(): string {

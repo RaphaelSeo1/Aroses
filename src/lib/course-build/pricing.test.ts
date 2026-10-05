@@ -14,7 +14,7 @@ import {
 test("config defaults: off, Luna, 200 tokens/page, $0.0025/page, $0.06 floor", () => {
   const c = readCourseBuildConfig({});
   assert.equal(c.enabled, false);
-  assert.equal(c.model, "gpt-5.6-luna");
+  assert.equal(c.model, "gpt-6-luna");
   assert.equal(c.outputTokensPerPage, 200);
   assert.equal(c.capUsdPerPage, 0.0025);
   assert.equal(c.minCapUsd, 0.06);
@@ -68,6 +68,7 @@ test("model prices match Anthropic's published Haiku 4.5 rates", () => {
   assert.deepEqual(modelPrice("claude-haiku-4-5-20251001"), p);
   assert.equal(modelPrice("claude-haiku-4"), null);
   assert.equal(modelPrice("gpt-4o"), null);
+  assert.deepEqual(modelPrice("gpt-6-luna"), { input: 0.1, output: 0.5, cacheWrite: 0.125, cacheRead: 0.01 });
   assert.deepEqual(modelPrice("gpt-5.6-luna"), { input: 0.2, output: 1.2, cacheWrite: 0.2, cacheRead: 0.02 });
 });
 
