@@ -1968,10 +1968,10 @@ export function NotesPanel({
       {/* Document body — generous padding, max-width centered. */}
       <div ref={scrollBodyRef} className="min-h-0 flex-1 overflow-y-auto">
         <div
-          className={`mx-auto w-full max-w-[880px] ${
+          className={`mx-auto w-full max-w-[880px] pb-[min(40vh,20rem)] ${
             fillHeight
-              ? "px-5 py-5 sm:px-6 sm:py-6"
-              : "px-6 py-10 sm:px-10 lg:px-14 lg:py-14"
+              ? "px-5 pt-5 sm:px-6 sm:pt-6"
+              : "px-6 pt-10 sm:px-10 lg:px-14 lg:pt-14"
           }`}
         >
           {/* Document chrome — emoji + course metadata.
