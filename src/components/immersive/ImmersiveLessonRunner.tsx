@@ -2862,6 +2862,11 @@ export function ImmersiveLessonRunner({
         assetCaption={whiteboardAssetImage?.caption ?? null}
         liveCanvasEnabled
         liveCanvasState={liveCanvasState}
+        scene={
+          attempts > 0 && chunk.analogyDiagram
+            ? chunk.analogyDiagram
+            : (chunk.diagram ?? null)
+        }
       />
 
       {/* Concept + explanation */}

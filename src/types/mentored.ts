@@ -231,6 +231,42 @@ export type MentoredLessonChunk = {
   visualAssetIds?: string[];
   /** Planned whiteboard sequence (show figure, highlight region, etc.). */
   whiteboardActions?: WhiteboardAction[];
+  /** Drawn scene for this concept — shapes, not a slide of sentences. */
+  diagram?: BoardScene;
+  /** A second drawing for the spoken analogy, swapped in after a miss. */
+  analogyDiagram?: BoardScene;
+};
+
+export type BoardTone = "rose" | "gold" | "blue" | "ink" | "muted";
+
+export type BoardMarkKind =
+  | "band"
+  | "box"
+  | "circle"
+  | "arrow"
+  | "text"
+  | "wave"
+  | "dots";
+
+/** One mark on the teaching board. Coordinates are 0–100, y grows downward. */
+export type BoardMark = {
+  kind: BoardMarkKind;
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+  r?: number;
+  x2?: number;
+  y2?: number;
+  text?: string;
+  tone?: BoardTone;
+};
+
+/** A drawn whiteboard scene. */
+export type BoardScene = {
+  kicker?: string;
+  title?: string;
+  marks: BoardMark[];
 };
 
 /** Cached plan for a module — produced by Claude on first entry. */

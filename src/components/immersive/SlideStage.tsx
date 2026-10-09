@@ -5,7 +5,8 @@ import {
   LiveOverlaySvg,
   LiveWhiteboardLayer,
 } from "@/components/immersive/LiveWhiteboardLayer";
-import type { WhiteboardAction } from "@/types/mentored";
+import type { BoardScene, WhiteboardAction } from "@/types/mentored";
+import { BoardSceneView } from "@/components/immersive/BoardSceneView";
 import {
   overlayDrawableActions,
   visibleLiveActions,
@@ -156,6 +157,7 @@ function SlideStageImpl({
   liveCanvasState,
   assetImageUrl,
   assetCaption,
+  scene = null,
 }: {
   chunkId: string;
   concept: string;
@@ -176,6 +178,8 @@ function SlideStageImpl({
   };
   assetImageUrl?: string | null;
   assetCaption?: string | null;
+  /** Drawn concept or analogy. When set, this replaces the word slides. */
+  scene?: BoardScene | null;
 }) {
   const points = useMemo(
     () => keyPoints.map((p) => p.trim()).filter((p) => p.length > 0),
@@ -300,10 +304,12 @@ function SlideStageImpl({
 
       <div className="relative grid min-h-[clamp(20rem,46vh,30rem)] flex-1 grid-rows-[minmax(0,1fr)_auto] gap-y-4 px-6 py-8 sm:px-10">
         <div
-          key={`${chunkId}-${beatIdx}`}
+          key={`${chunkId}-${scene ? "draw" : beatIdx}`}
           className="slide-scene flex min-h-0 w-full items-center justify-center self-center"
         >
-          {active.kind === "title" ? (
+          {scene ? (
+            <BoardSceneView scene={scene} />
+          ) : active.kind === "title" ? (
             <div className="mx-auto max-w-3xl text-center">
               <h2 className="text-3xl font-semibold leading-tight tracking-tight text-zinc-900 sm:text-4xl">
                 {concept}
@@ -379,7 +385,7 @@ function SlideStageImpl({
         ) : null}
       </div>
 
-      {beats.length > 1 ? (
+      {!scene && beats.length > 1 ? (
         <div className="relative flex items-center justify-center gap-1.5 pb-5">
           {beats.map((b, i) => (
             <button
