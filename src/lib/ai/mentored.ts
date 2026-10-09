@@ -129,7 +129,7 @@ export type LessonPlanInput = {
 // Bump when the prompt or parser changes in a way that invalidates cached
 // plans. v2 adds `keyTerms` so the immersive runner can glow phrases in the
 // source-lesson panel.
-export const LESSON_PLAN_GENERATOR_VERSION = 7;
+export const LESSON_PLAN_GENERATOR_VERSION = 8;
 const LESSON_PLAN_VERSION = LESSON_PLAN_GENERATOR_VERSION;
 
 function levelGuidance(level: KnowledgeLevel): string {
@@ -493,8 +493,8 @@ Call the submit_lesson_plan tool with a "chunks" array. Each chunk object:
 - keyPoints: 3-5 short phrases the student's answer should hit
 - sourceLessonIndex: 0-based lesson index this chunk maps to
 - keyTerms (optional): 2-5 phrases that appear VERBATIM in the source lesson
-- diagram (required): a DRAWN scene of this concept, not a list of sentences. Object { kicker, title, marks }. kicker is "Whiteboard". marks is 6–14 items. Each mark: kind (band | box | circle | arrow | text | wave | dots), x, y (0–100, y grows downward), optional w, h, r, x2, y2, text (short label), tone (rose | gold | blue | ink | muted). Draw the mechanism: objects, arrows, and a few labels. Example shape: a band for a membrane, boxes labeled I II III IV sitting on it, arrows for proton flow, a gold circle for ATP synthase.
-- analogyDiagram (required whenever analogy is set): a SECOND drawing of the analogy, with different objects. kicker is "New analogy". A dam analogy is water (wave, blue dots), a vertical box for the dam, and a gold circle for the turbine — not a repeat of the scientific diagram.
+- diagram (required): a drawn scene of THIS chunk only, in whatever subject the source is. Object { kicker, title, marks }. kicker is "Whiteboard". title names this idea in a few words. marks is 6–14 items. Each mark: kind (band | box | circle | arrow | text | wave | dots), x, y (0–100, y grows downward), optional w, h, r, x2, y2, text (a short label taken from this concept), tone (rose | gold | blue | ink | muted). Boxes and circles are things, steps, people, or ideas. Arrows are cause, sequence, or change. Text is a short label. A band is a timeline, axis, barrier, or divider. A wave is a trend or curve. Dots are many small items. Pick the layout that matches the idea: a sequence left to right, a comparison of two groups, a before-and-after, a cause pointing at an effect, a number line, or a simple map.
+- analogyDiagram (required whenever analogy is set): a second drawing of the analogy, using different objects than diagram. kicker is "New analogy".
 - whiteboardActions (optional): planned live-whiteboard sequence. Types: show_table (anchor source table first), highlight_bbox, draw_arrow, add_label. Coords 0–100. Each action may include a short "cue" phrase Rose says when drawing it (for progressive reveal sync).
 
 Strict rules:
@@ -506,7 +506,7 @@ Strict rules:
 6) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.
 7) DEPTH: Explanations must teach mechanisms and reasoning (why/how), not just name a concept. Include at least one concrete detail from the source (pathway, drug, number, comparison). Avoid generic openers — start with substance.
 8) KEY TERMS APPEAR IN SOURCE: Every keyTerm MUST be a substring of the lesson the chunk maps to. Do not invent terms. If a chunk is hard to anchor (e.g. pure overview), it's fine to return fewer keyTerms or an empty array.
-9) DRAWINGS TEACH: diagram.marks must depict the idea with shapes. Do not put the keyPoints into the drawing as a numbered list. analogyDiagram must be visually different from diagram.`}
+9) DRAWINGS MATCH THE CHUNK: Every diagram depicts that chunk's concept and no other. A history idea is events and causes, a math idea is steps or a number line, an economics idea is a comparison or a shift, a science idea is the mechanism in the source. Do not reuse one picture for every chunk. Do not put the keyPoints on the board as a numbered list of sentences. analogyDiagram shows the analogy, not a copy of diagram.`}
 
   const anthropic = new Anthropic({ apiKey, timeout: 180_000, maxRetries: 0 });
 

@@ -165,36 +165,3 @@ export function boardSceneSvg(scene: BoardScene): string {
   ${marks}
 </svg>`;
 }
-
-/** Chemiosmosis membrane: complexes, protons, ATP synthase. */
-export const CHEMIOSMOSIS_SCENE: BoardScene = {
-  kicker: "Whiteboard",
-  title: "Protons power ATP synthase",
-  marks: [
-    { kind: "text", x: 50, y: 20, text: "Intermembrane space", tone: "muted" },
-    { kind: "dots", x: 50, y: 28, w: 50, h: 8, tone: "ink" },
-    { kind: "band", x: 50, y: 48, w: 88, h: 7, tone: "muted" },
-    { kind: "box", x: 22, y: 48, w: 12, h: 22, text: "I", tone: "rose" },
-    { kind: "box", x: 38, y: 48, w: 12, h: 22, text: "II", tone: "rose" },
-    { kind: "box", x: 54, y: 48, w: 12, h: 22, text: "III", tone: "rose" },
-    { kind: "box", x: 70, y: 48, w: 12, h: 22, text: "IV", tone: "rose" },
-    { kind: "arrow", x: 22, y: 34, x2: 22, y2: 24, tone: "rose" },
-    { kind: "circle", x: 88, y: 48, r: 8, text: "ATP", tone: "gold" },
-    { kind: "text", x: 50, y: 78, text: "Matrix", tone: "muted" },
-  ],
-};
-
-/** Dam analogy: water, dam, turbine. Distinct from the membrane scene. */
-export const DAM_ANALOGY_SCENE: BoardScene = {
-  kicker: "New analogy",
-  title: "Protons are water behind a dam",
-  marks: [
-    { kind: "wave", x: 8, y: 36, w: 36, tone: "blue" },
-    { kind: "dots", x: 24, y: 44, w: 28, h: 16, tone: "blue" },
-    { kind: "box", x: 48, y: 50, w: 8, h: 42, text: "Dam", tone: "muted" },
-    { kind: "text", x: 22, y: 24, text: "Water held back", tone: "blue" },
-    { kind: "circle", x: 72, y: 58, r: 9, text: "ATP", tone: "gold" },
-    { kind: "arrow", x: 56, y: 58, x2: 64, y2: 58, tone: "gold" },
-    { kind: "text", x: 74, y: 78, text: "Turbine", tone: "gold" },
-  ],
-};
