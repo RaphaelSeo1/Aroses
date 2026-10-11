@@ -16,7 +16,11 @@ import type {
   CoursePayload,
 } from "@/types/course";
 import { parseBoardScene } from "@/lib/mentored/board-scene";
-import { pictureBrief } from "@/lib/mentored/board-illustration";
+import {
+  motionLine,
+  parseVisualForm,
+  pictureBrief,
+} from "@/lib/mentored/board-illustration";
 import { TURN_WB_SENTINEL } from "@/lib/mentored/whiteboard-utils";
 import { cachedSystem, EPHEMERAL, usageTokens } from "@/lib/ai/prompt-cache";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
@@ -128,8 +132,8 @@ export type LessonPlanInput = {
 };
 
 // Bump when the prompt or parser changes in a way that invalidates cached
-// plans. v8 asks for an illustration brief so the board can draw a picture.
-export const LESSON_PLAN_GENERATOR_VERSION = 8;
+// plans. v9 lets each chunk choose a still, a moving figure, or a short clip.
+export const LESSON_PLAN_GENERATOR_VERSION = 9;
 const LESSON_PLAN_VERSION = LESSON_PLAN_GENERATOR_VERSION;
 
 function levelGuidance(level: KnowledgeLevel): string {
@@ -167,6 +171,13 @@ const LESSON_PLAN_TOOL = {
             analogyDiagram: { type: "object" },
             illustrationBrief: { type: "string" },
             analogyIllustration: { type: "string" },
+            visualForm: { type: "string", enum: ["still", "animation", "clip"] },
+            motion: { type: "string" },
+            analogyVisualForm: {
+              type: "string",
+              enum: ["still", "animation", "clip"],
+            },
+            analogyMotion: { type: "string" },
             whiteboardActions: {
               type: "array",
               items: {
@@ -296,6 +307,10 @@ function buildLessonChunksFromArray(
     const analogyDiagram = parseBoardScene(raw.analogyDiagram);
     const illustrationBrief = pictureBrief(raw.illustrationBrief);
     const analogyIllustration = pictureBrief(raw.analogyIllustration);
+    const visualForm = parseVisualForm(raw.visualForm);
+    const motion = motionLine(raw.motion);
+    const analogyVisualForm = parseVisualForm(raw.analogyVisualForm);
+    const analogyMotion = motionLine(raw.analogyMotion);
 
     chunks.push({
       id: shortIdFor(concept, i),
@@ -313,6 +328,10 @@ function buildLessonChunksFromArray(
       analogyDiagram,
       illustrationBrief,
       analogyIllustration,
+      visualForm,
+      motion,
+      analogyVisualForm,
+      analogyMotion,
     });
   }
 
@@ -499,8 +518,11 @@ Call the submit_lesson_plan tool with a "chunks" array. Each chunk object:
 - keyPoints: 3-5 short phrases the student's answer should hit
 - sourceLessonIndex: 0-based lesson index this chunk maps to
 - keyTerms (optional): 2-5 phrases that appear VERBATIM in the source lesson
-- illustrationBrief (required): 2-4 sentences describing a single illustrated teaching diagram of THIS concept, in whatever subject the source is. Name the objects to draw and the short labels that may appear on them. Use only objects and labels supported by this chunk. A science idea is the mechanism (parts, flow, structure). A history idea is the people, place, or event. A math idea is the quantities and the step. An economics idea is the comparison or the shift. Do not describe a flowchart of text boxes.
+- illustrationBrief (required): 2-4 sentences describing one illustrated teaching visual of THIS concept, in whatever subject the source is. Name the objects to draw and the short labels that may appear on them. Use only objects and labels supported by this chunk. Do not describe a flowchart of text boxes.
+- visualForm (required): "still", "animation", or "clip". Choose still when the idea is a structure, a scene, or a comparison that does not change. Choose animation when a change has a clear before and after, so the figure itself should move while you teach it. Choose clip when the student needs to watch a continuous action unfold. Most chunks are still. Use clip only when a still or a before-and-after cannot show the action.
+- motion (required when visualForm is animation or clip): one sentence saying what moves, using only this chunk. Leave it out for a still.
 - analogyIllustration (required whenever analogy is set): 2-4 sentences describing a different picture of the analogy. Draw the analogy's objects, not a copy of the concept diagram.
+- analogyVisualForm and analogyMotion: the same choice for the analogy. The analogy may move even when the concept is a still, and the reverse.
 - whiteboardActions (optional): planned live-whiteboard sequence. Types: show_table (anchor source table first), highlight_bbox, draw_arrow, add_label. Coords 0–100. Each action may include a short "cue" phrase Rose says when drawing it (for progressive reveal sync).
 
 Strict rules:
@@ -512,7 +534,7 @@ Strict rules:
 6) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.
 7) DEPTH: Explanations must teach mechanisms and reasoning (why/how), not just name a concept. Include at least one concrete detail from the source (pathway, drug, number, comparison). Avoid generic openers — start with substance.
 8) KEY TERMS APPEAR IN SOURCE: Every keyTerm MUST be a substring of the lesson the chunk maps to. Do not invent terms. If a chunk is hard to anchor (e.g. pure overview), it's fine to return fewer keyTerms or an empty array.
-9) PICTURES MATCH THE CHUNK: illustrationBrief describes a picture of that chunk only. analogyIllustration describes the analogy's objects, not the same picture. Do not invent labels, numbers, or parts the source did not teach.`}
+9) VISUALS MATCH THE CHUNK: illustrationBrief describes that chunk only. analogyIllustration describes the analogy's objects, not the same picture. visualForm is about whether this idea changes while it is taught. Do not invent labels, numbers, or parts the source did not teach.`}
 
   const anthropic = new Anthropic({ apiKey, timeout: 180_000, maxRetries: 0 });
 

@@ -1,14 +1,21 @@
 import { NextResponse } from "next/server";
-import { generateBoardIllustration } from "@/lib/mentored/board-image";
+import {
+  generateBoardAnimation,
+  generateBoardClip,
+  generateBoardIllustration,
+} from "@/lib/mentored/board-image";
+import { parseVisualForm } from "@/lib/mentored/board-illustration";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 90;
+export const maxDuration = 180;
 
 type Body = {
   title?: unknown;
   brief?: unknown;
   labels?: unknown;
+  form?: unknown;
+  motion?: unknown;
 };
 
 function asText(value: unknown, max: number): string {
@@ -44,9 +51,29 @@ export async function POST(request: Request) {
         .slice(0, 6)
     : [];
 
+  const form = parseVisualForm(body.form);
+  const motion = asText(body.motion, 300);
+
   try {
+    if (form === "animation" && motion.length >= 8) {
+      const frames = await generateBoardAnimation({ title, brief, labels, motion });
+      return NextResponse.json({ form: "animation", frames });
+    }
+    if (form === "clip" && motion.length >= 8) {
+      try {
+        const video = await generateBoardClip({ title, brief, labels, motion });
+        return NextResponse.json({ form: "clip", video });
+      } catch (error) {
+        console.error(
+          "[mentored/board-image] clip fell back to animation",
+          error instanceof Error ? error.message : error
+        );
+        const frames = await generateBoardAnimation({ title, brief, labels, motion });
+        return NextResponse.json({ form: "animation", frames });
+      }
+    }
     const image = await generateBoardIllustration({ title, brief, labels });
-    return NextResponse.json({ image });
+    return NextResponse.json({ form: "still", image });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not draw the board.";
     console.error("[mentored/board-image]", message);

@@ -242,6 +242,15 @@ export type MentoredLessonChunk = {
   illustrationBrief?: string;
   /** Picture description for the analogy, used after a missed check. */
   analogyIllustration?: string;
+  /**
+   * How this concept should be shown. The planner picks one per chunk.
+   * still is a picture, animation is that picture changing, clip is a short video.
+   */
+  visualForm?: "still" | "animation" | "clip";
+  /** What moves, when visualForm is animation or clip. */
+  motion?: string;
+  analogyVisualForm?: "still" | "animation" | "clip";
+  analogyMotion?: string;
 };
 
 export type BoardTone = "rose" | "gold" | "blue" | "ink" | "muted";

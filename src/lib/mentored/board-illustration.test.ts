@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  clipPrompt,
   illustrationForChunk,
   illustrationPrompt,
+  motionFrameIndex,
+  motionStageBriefs,
   pictureBrief,
   revealFraction,
 } from "./board-illustration.ts";
 
-const SCIENCE = {
-  title: "Chemiosmosis",
+const SHIFT = {
+  title: "A tax shifts supply",
   brief:
-    "A horizontal cell membrane holds protein complexes I, II, III, and IV. Complexes I, III, and IV pump protons, shown as small dots, into the space above the membrane. A gold turbine-shaped ATP synthase sits in the membrane on the right.",
-  labels: ["I", "II", "III", "IV", "ATP synthase", "Matrix"],
+    "A price axis and a quantity axis. A blue demand curve slopes down. A rose supply curve slopes up.",
+  labels: ["Demand", "Supply", "Tax"],
 };
 
 const HISTORY = {
@@ -24,8 +27,8 @@ const HISTORY = {
 test("picture briefs stay short and drop empty text", () => {
   assert.equal(pictureBrief("  too short  "), undefined);
   assert.equal(
-    pictureBrief("  A membrane with complexes and a turbine.  "),
-    "A membrane with complexes and a turbine."
+    pictureBrief("  A shop with fewer items on the shelf.  "),
+    "A shop with fewer items on the shelf."
   );
 });
 
@@ -40,35 +43,56 @@ test("a mid-teach moment is only part of the drawing", () => {
 
 test("a missed check swaps in the analogy picture", () => {
   const chunk = {
-    concept: "Chemiosmosis",
+    concept: "A tax shifts supply",
     explanation:
-      "Complexes I, III, and IV pump protons across the membrane, and that gradient turns ATP synthase.",
+      "A tax raises the cost of selling, so the supply curve slides left and the price buyers pay goes up.",
     analogy:
-      "Picture water held behind a dam. As it rushes through, it spins a turbine. That turbine is ATP synthase.",
-    keyPoints: ["proton gradient", "ATP synthase"],
+      "Picture a shop that must pay a new fee on every item. Fewer items stay on the shelf.",
+    keyPoints: ["supply shifts left", "price rises"],
     illustrationBrief:
-      "A membrane with complexes I, II, III, IV and a gold ATP synthase turbine.",
+      "A graph with a downward demand curve and an upward supply curve.",
     analogyIllustration:
-      "Water held behind a dam rushes through and spins a turbine.",
+      "A shop counter with fewer items on the shelf after a fee.",
+    visualForm: "animation" as const,
+    motion: "The supply curve slides left.",
+    analogyVisualForm: "still" as const,
   };
   const teaching = illustrationForChunk(chunk, 0);
   const analogy = illustrationForChunk(chunk, 1);
   assert.equal(teaching?.kicker, "Whiteboard");
-  assert.match(teaching?.brief ?? "", /membrane/);
+  assert.equal(teaching?.form, "animation");
+  assert.match(teaching?.motion ?? "", /slides left/);
   assert.equal(analogy?.kicker, "New analogy");
-  assert.match(analogy?.brief ?? "", /dam/);
-  assert.equal((analogy?.brief ?? "").includes("complexes"), false);
+  assert.equal(analogy?.form, "still");
+  assert.match(analogy?.brief ?? "", /shop/);
+  assert.equal((analogy?.brief ?? "").includes("demand curve"), false);
 });
 
-test("science and history prompts ask for different illustrated objects", () => {
-  const science = illustrationPrompt(SCIENCE);
+test("a moving figure advances to a later frame while it is taught", () => {
+  assert.equal(motionFrameIndex(0.08, 3), 0);
+  assert.equal(motionFrameIndex(0.5, 3), 1);
+  assert.equal(motionFrameIndex(1, 3), 2);
+  const stages = motionStageBriefs(
+    "A graph with a demand curve and a supply curve.",
+    "The supply curve slides left."
+  );
+  assert.equal(stages.length, 3);
+  assert.match(stages[0], /starting position only/);
+  assert.match(stages[2], /slides left/);
+  assert.equal(stages[0] === stages[2], false);
+});
+
+test("a clip prompt describes motion and a still prompt does not reuse another subject", () => {
+  const shift = illustrationPrompt(SHIFT);
   const history = illustrationPrompt(HISTORY);
-  assert.match(science, /ATP synthase/);
-  assert.match(science, /protein complexes/);
+  const clip = clipPrompt({
+    ...SHIFT,
+    motion: "The supply curve slides left.",
+  });
+  assert.match(shift, /supply curve/);
   assert.match(history, /boycott/i);
-  assert.match(history, /1765/);
-  assert.equal(science.includes("Stamp Act"), false);
-  assert.equal(history.includes("ATP synthase"), false);
-  assert.match(science, /only words allowed/);
-  assert.match(science, /not a flowchart/);
+  assert.equal(shift.includes("Stamp Act"), false);
+  assert.equal(history.includes("supply curve"), false);
+  assert.match(clip, /slides left/);
+  assert.match(clip, /continuous shot/);
 });

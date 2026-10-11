@@ -4,6 +4,18 @@
  * The image call itself lives next to the API route so this file stays pure.
  */
 
+export type BoardVisualForm = "still" | "animation" | "clip";
+
+export function parseVisualForm(raw: unknown): BoardVisualForm {
+  return raw === "animation" || raw === "clip" ? raw : "still";
+}
+
+export function motionLine(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const text = raw.replace(/\s+/g, " ").trim().slice(0, 300);
+  return text.length >= 8 ? text : undefined;
+}
+
 export function illustrationForChunk(
   chunk: {
     concept: string;
@@ -12,6 +24,10 @@ export function illustrationForChunk(
     keyPoints: string[];
     illustrationBrief?: string;
     analogyIllustration?: string;
+    visualForm?: BoardVisualForm;
+    motion?: string;
+    analogyVisualForm?: BoardVisualForm;
+    analogyMotion?: string;
   },
   attempts: number
 ): {
@@ -20,18 +36,28 @@ export function illustrationForChunk(
   labels: string[];
   script: string;
   kicker: string;
+  form: BoardVisualForm;
+  motion?: string;
 } | null {
   const missed = attempts > 0 && Boolean(chunk.analogy || chunk.analogyIllustration);
   const brief = missed
     ? (pictureBrief(chunk.analogyIllustration) ?? pictureBrief(chunk.analogy))
     : (pictureBrief(chunk.illustrationBrief) ?? pictureBrief(chunk.explanation));
   if (!brief) return null;
+  const form = missed
+    ? parseVisualForm(chunk.analogyVisualForm)
+    : parseVisualForm(chunk.visualForm);
+  const motion = missed
+    ? motionLine(chunk.analogyMotion)
+    : motionLine(chunk.motion);
   return {
     title: chunk.concept,
     brief,
     labels: chunk.keyPoints,
     script: missed ? chunk.analogy || chunk.explanation : chunk.explanation,
     kicker: missed ? "New analogy" : "Whiteboard",
+    form: form === "still" || motion ? form : "still",
+    motion,
   };
 }
 
@@ -90,5 +116,63 @@ export function illustrationPrompt(input: {
       .slice(0, 700)}`,
     words,
     "No watermark, no border, no app chrome, no speech bubbles, no paragraphs.",
+  ].join("\n");
+}
+
+/** Which frame of a motion is on screen. 0 is the start; the last index is the end. */
+export function motionFrameIndex(progress: number, frameCount: number): number {
+  if (frameCount <= 1) return 0;
+  const t = Math.min(1, Math.max(0, progress));
+  return Math.min(frameCount - 1, Math.floor(t * frameCount * 0.999));
+}
+
+/**
+ * The opening picture, then the edit instruction for the middle and the end.
+ * Later frames must show the moving part in a new place, not a copy of the start.
+ */
+export function motionStageBriefs(brief: string, motion: string): string[] {
+  const scene = brief.trim().slice(0, 500);
+  const move = motion.trim().slice(0, 300);
+  return [
+    `${scene} Draw this before anything moves. One of each object, in its starting position only. Do not also draw where it will end up.`,
+    move,
+    move,
+  ];
+}
+
+export function motionEditPrompt(stage: "middle" | "end", motion: string): string {
+  const where =
+    stage === "middle"
+      ? "Move that part about halfway from where it starts to where it finishes."
+      : "Move that part all the way to its final place. This frame must look different from the start.";
+  return [
+    "Edit this teaching diagram. Keep the same background, axes, colors, and labels.",
+    "One of each moving object only. Erase any ghost of its earlier position.",
+    where,
+    `The change: ${motion.trim().slice(0, 300)}`,
+  ].join(" ");
+}
+
+export function clipPrompt(input: {
+  title: string;
+  brief: string;
+  labels: string[];
+  motion: string;
+}): string {
+  const labels = input.labels
+    .map((label) => label.replace(/\s+/g, " ").trim())
+    .filter((label) => label.length >= 1 && label.length <= 42)
+    .slice(0, 6);
+  const words =
+    labels.length > 0
+      ? `The only words allowed are: ${labels.map((label) => `"${label}"`).join(", ")}.`
+      : "Do not put any words in the clip.";
+  return [
+    "A four-second teaching clip on a dark charcoal board. Flat, precise, slightly painterly shapes in rose, gold, and blue.",
+    "One continuous shot. The same objects stay in the frame the whole time. No cuts, no slideshow, no photograph, no watermark, no app chrome.",
+    `The idea (do not print it as a title): ${input.title.trim().slice(0, 120)}.`,
+    `The scene: ${input.brief.trim().slice(0, 500)}`,
+    `What moves, smoothly and clearly, from the first moment to the last: ${input.motion.trim().slice(0, 300)}`,
+    words,
   ].join("\n");
 }
