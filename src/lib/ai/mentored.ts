@@ -534,7 +534,7 @@ Strict rules:
 6) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.
 7) DEPTH: Explanations must teach mechanisms and reasoning (why/how), not just name a concept. Include at least one concrete detail from the source (pathway, drug, number, comparison). Avoid generic openers — start with substance.
 8) KEY TERMS APPEAR IN SOURCE: Every keyTerm MUST be a substring of the lesson the chunk maps to. Do not invent terms. If a chunk is hard to anchor (e.g. pure overview), it's fine to return fewer keyTerms or an empty array.
-9) VISUALS MATCH THE CHUNK: illustrationBrief describes that chunk only. analogyIllustration describes the analogy's objects, not the same picture. visualForm is about whether this idea changes while it is taught. Do not invent labels, numbers, or parts the source did not teach.`}
+9) VISUALS MATCH THE CHUNK: illustrationBrief describes that chunk only. analogyIllustration describes the analogy's objects, not the same picture. visualForm is about whether this idea changes while it is taught. Do not invent labels, numbers, or parts the source did not teach.`
 
   const anthropic = new Anthropic({ apiKey, timeout: 180_000, maxRetries: 0 });
 
