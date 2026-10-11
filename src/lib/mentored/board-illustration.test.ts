@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  captionLine,
   clipPrompt,
   illustrationForChunk,
   illustrationPrompt,
@@ -23,6 +24,14 @@ const HISTORY = {
     "In a colonial port in 1765, a tax stamp is pressed onto a newspaper. Colonists refuse the stamped paper and stand together in a boycott.",
   labels: ["Stamp Act", "Boycott", "1765"],
 };
+
+test("the caption is the line being spoken", () => {
+  assert.equal(
+    captionLine("Protons flow across. The gradient builds.", "unused"),
+    "The gradient builds."
+  );
+  assert.equal(captionLine("", "A tax shifts the supply curve."), "A tax shifts the supply curve.");
+});
 
 test("picture briefs stay short and drop empty text", () => {
   assert.equal(pictureBrief("  too short  "), undefined);

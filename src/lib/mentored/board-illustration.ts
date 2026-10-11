@@ -22,6 +22,7 @@ export function illustrationForChunk(
     explanation: string;
     analogy?: string;
     keyPoints: string[];
+    keyTerms?: string[];
     illustrationBrief?: string;
     analogyIllustration?: string;
     visualForm?: BoardVisualForm;
@@ -53,12 +54,32 @@ export function illustrationForChunk(
   return {
     title: chunk.concept,
     brief,
-    labels: chunk.keyPoints,
+    labels: shortLabels(chunk.keyTerms, chunk.keyPoints),
     script: missed ? chunk.analogy || chunk.explanation : chunk.explanation,
     kicker: missed ? "New analogy" : "Whiteboard",
     form: form === "still" || motion ? form : "still",
     motion,
   };
+}
+
+function shortLabels(terms: string[] | undefined, points: string[]): string[] {
+  const clean = (values: string[], max: number) =>
+    values
+      .map((value) => value.replace(/\s+/g, " ").trim())
+      .filter((value) => value.length >= 1 && value.length <= max)
+      .slice(0, 8);
+  const fromTerms = clean(terms ?? [], 32);
+  if (fromTerms.length > 0) return fromTerms;
+  return clean(points, 24);
+}
+
+/** The caption beside the drawing. Real text, taken from what Rose is saying. */
+export function captionLine(spoken: string, script: string): string {
+  const source = spoken.trim() || script.trim();
+  if (!source) return "";
+  const parts = source.split(/(?<=[.!?])\s+/).filter((part) => part.length > 0);
+  const line = parts[parts.length - 1] ?? source;
+  return line.slice(0, 180);
 }
 
 export function pictureBrief(raw: unknown): string | undefined {

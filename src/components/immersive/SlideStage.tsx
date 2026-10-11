@@ -6,8 +6,7 @@ import {
   LiveWhiteboardLayer,
 } from "@/components/immersive/LiveWhiteboardLayer";
 import type { BoardScene, WhiteboardAction } from "@/types/mentored";
-import { BoardIllustration } from "@/components/immersive/BoardIllustration";
-import { BoardMotion } from "@/components/immersive/BoardMotion";
+import { BoardAnimation } from "@/components/immersive/BoardAnimation";
 import { BoardSceneView } from "@/components/immersive/BoardSceneView";
 import {
   overlayDrawableActions,
@@ -323,25 +322,12 @@ function SlideStageImpl({
           key={`${chunkId}-${illustration ? "illustration" : scene ? "draw" : beatIdx}`}
           className="slide-scene flex min-h-0 w-full items-center justify-center self-center"
         >
-          {illustration &&
-          (illustration.form === "animation" || illustration.form === "clip") &&
-          illustration.motion ? (
-            <BoardMotion
+          {illustration ? (
+            <BoardAnimation
               title={illustration.title}
               brief={illustration.brief}
               labels={illustration.labels}
               motion={illustration.motion}
-              script={illustration.script}
-              spoken={narrationText}
-              kicker={illustration.kicker}
-              form={illustration.form}
-              fallback={scene ? <BoardSceneView scene={scene} /> : null}
-            />
-          ) : illustration ? (
-            <BoardIllustration
-              title={illustration.title}
-              brief={illustration.brief}
-              labels={illustration.labels}
               script={illustration.script}
               spoken={narrationText}
               kicker={illustration.kicker}
