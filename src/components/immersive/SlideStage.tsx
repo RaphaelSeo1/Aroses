@@ -6,6 +6,7 @@ import {
   LiveWhiteboardLayer,
 } from "@/components/immersive/LiveWhiteboardLayer";
 import type { BoardScene, WhiteboardAction } from "@/types/mentored";
+import { BoardIllustration } from "@/components/immersive/BoardIllustration";
 import { BoardSceneView } from "@/components/immersive/BoardSceneView";
 import {
   overlayDrawableActions,
@@ -158,6 +159,7 @@ function SlideStageImpl({
   assetImageUrl,
   assetCaption,
   scene = null,
+  illustration = null,
 }: {
   chunkId: string;
   concept: string;
@@ -180,6 +182,17 @@ function SlideStageImpl({
   assetCaption?: string | null;
   /** Drawn concept or analogy. When set, this replaces the word slides. */
   scene?: BoardScene | null;
+  /**
+   * Illustrated diagram for this concept. Uncovers while `script` is spoken.
+   * Replaces the geometric scene when the picture description is present.
+   */
+  illustration?: {
+    title: string;
+    brief: string;
+    labels: string[];
+    script: string;
+    kicker?: string;
+  } | null;
 }) {
   const points = useMemo(
     () => keyPoints.map((p) => p.trim()).filter((p) => p.length > 0),
@@ -304,10 +317,20 @@ function SlideStageImpl({
 
       <div className="relative grid min-h-[clamp(20rem,46vh,30rem)] flex-1 grid-rows-[minmax(0,1fr)_auto] gap-y-4 px-6 py-8 sm:px-10">
         <div
-          key={`${chunkId}-${scene ? "draw" : beatIdx}`}
+          key={`${chunkId}-${illustration ? "illustration" : scene ? "draw" : beatIdx}`}
           className="slide-scene flex min-h-0 w-full items-center justify-center self-center"
         >
-          {scene ? (
+          {illustration ? (
+            <BoardIllustration
+              title={illustration.title}
+              brief={illustration.brief}
+              labels={illustration.labels}
+              script={illustration.script}
+              spoken={narrationText}
+              kicker={illustration.kicker}
+              fallback={scene ? <BoardSceneView scene={scene} /> : null}
+            />
+          ) : scene ? (
             <BoardSceneView scene={scene} />
           ) : active.kind === "title" ? (
             <div className="mx-auto max-w-3xl text-center">

@@ -16,6 +16,7 @@ import type {
   CoursePayload,
 } from "@/types/course";
 import { parseBoardScene } from "@/lib/mentored/board-scene";
+import { pictureBrief } from "@/lib/mentored/board-illustration";
 import { TURN_WB_SENTINEL } from "@/lib/mentored/whiteboard-utils";
 import { cachedSystem, EPHEMERAL, usageTokens } from "@/lib/ai/prompt-cache";
 import { recordAiUsage } from "@/lib/billing/ai-usage";
@@ -127,8 +128,7 @@ export type LessonPlanInput = {
 };
 
 // Bump when the prompt or parser changes in a way that invalidates cached
-// plans. v2 adds `keyTerms` so the immersive runner can glow phrases in the
-// source-lesson panel.
+// plans. v8 asks for an illustration brief so the board can draw a picture.
 export const LESSON_PLAN_GENERATOR_VERSION = 8;
 const LESSON_PLAN_VERSION = LESSON_PLAN_GENERATOR_VERSION;
 
@@ -165,6 +165,8 @@ const LESSON_PLAN_TOOL = {
             keyTerms: { type: "array", items: { type: "string" } },
             diagram: { type: "object" },
             analogyDiagram: { type: "object" },
+            illustrationBrief: { type: "string" },
+            analogyIllustration: { type: "string" },
             whiteboardActions: {
               type: "array",
               items: {
@@ -292,6 +294,8 @@ function buildLessonChunksFromArray(
     const whiteboardActions = parseWhiteboardActions(raw.whiteboardActions);
     const diagram = parseBoardScene(raw.diagram);
     const analogyDiagram = parseBoardScene(raw.analogyDiagram);
+    const illustrationBrief = pictureBrief(raw.illustrationBrief);
+    const analogyIllustration = pictureBrief(raw.analogyIllustration);
 
     chunks.push({
       id: shortIdFor(concept, i),
@@ -307,6 +311,8 @@ function buildLessonChunksFromArray(
         whiteboardActions.length > 0 ? whiteboardActions : undefined,
       diagram,
       analogyDiagram,
+      illustrationBrief,
+      analogyIllustration,
     });
   }
 
@@ -493,8 +499,8 @@ Call the submit_lesson_plan tool with a "chunks" array. Each chunk object:
 - keyPoints: 3-5 short phrases the student's answer should hit
 - sourceLessonIndex: 0-based lesson index this chunk maps to
 - keyTerms (optional): 2-5 phrases that appear VERBATIM in the source lesson
-- diagram (required): a drawn scene of THIS chunk only, in whatever subject the source is. Object { kicker, title, marks }. kicker is "Whiteboard". title names this idea in a few words. marks is 6–14 items. Each mark: kind (band | box | circle | arrow | text | wave | dots), x, y (0–100, y grows downward), optional w, h, r, x2, y2, text (a short label taken from this concept), tone (rose | gold | blue | ink | muted). Boxes and circles are things, steps, people, or ideas. Arrows are cause, sequence, or change. Text is a short label. A band is a timeline, axis, barrier, or divider. A wave is a trend or curve. Dots are many small items. Pick the layout that matches the idea: a sequence left to right, a comparison of two groups, a before-and-after, a cause pointing at an effect, a number line, or a simple map.
-- analogyDiagram (required whenever analogy is set): a second drawing of the analogy, using different objects than diagram. kicker is "New analogy".
+- illustrationBrief (required): 2-4 sentences describing a single illustrated teaching diagram of THIS concept, in whatever subject the source is. Name the objects to draw and the short labels that may appear on them. Use only objects and labels supported by this chunk. A science idea is the mechanism (parts, flow, structure). A history idea is the people, place, or event. A math idea is the quantities and the step. An economics idea is the comparison or the shift. Do not describe a flowchart of text boxes.
+- analogyIllustration (required whenever analogy is set): 2-4 sentences describing a different picture of the analogy. Draw the analogy's objects, not a copy of the concept diagram.
 - whiteboardActions (optional): planned live-whiteboard sequence. Types: show_table (anchor source table first), highlight_bbox, draw_arrow, add_label. Coords 0–100. Each action may include a short "cue" phrase Rose says when drawing it (for progressive reveal sync).
 
 Strict rules:
@@ -506,7 +512,7 @@ Strict rules:
 6) SPOKEN PROSE: Write explanation and analogy as if speaking — no bullet points, no headers, no markdown.
 7) DEPTH: Explanations must teach mechanisms and reasoning (why/how), not just name a concept. Include at least one concrete detail from the source (pathway, drug, number, comparison). Avoid generic openers — start with substance.
 8) KEY TERMS APPEAR IN SOURCE: Every keyTerm MUST be a substring of the lesson the chunk maps to. Do not invent terms. If a chunk is hard to anchor (e.g. pure overview), it's fine to return fewer keyTerms or an empty array.
-9) DRAWINGS MATCH THE CHUNK: Every diagram depicts that chunk's concept and no other. A history idea is events and causes, a math idea is steps or a number line, an economics idea is a comparison or a shift, a science idea is the mechanism in the source. Do not reuse one picture for every chunk. Do not put the keyPoints on the board as a numbered list of sentences. analogyDiagram shows the analogy, not a copy of diagram.`}
+9) PICTURES MATCH THE CHUNK: illustrationBrief describes a picture of that chunk only. analogyIllustration describes the analogy's objects, not the same picture. Do not invent labels, numbers, or parts the source did not teach.`}
 
   const anthropic = new Anthropic({ apiKey, timeout: 180_000, maxRetries: 0 });
 

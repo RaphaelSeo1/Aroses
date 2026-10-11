@@ -235,6 +235,13 @@ export type MentoredLessonChunk = {
   diagram?: BoardScene;
   /** A second drawing for the spoken analogy, swapped in after a miss. */
   analogyDiagram?: BoardScene;
+  /**
+   * What to illustrate for this concept. Objects and labels from the lesson
+   * only. The board turns this into a picture while Rose teaches.
+   */
+  illustrationBrief?: string;
+  /** Picture description for the analogy, used after a missed check. */
+  analogyIllustration?: string;
 };
 
 export type BoardTone = "rose" | "gold" | "blue" | "ink" | "muted";

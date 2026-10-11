@@ -13,6 +13,7 @@ import {
 import { RoseDialoguePanel } from "@/components/immersive/RoseDialoguePanel";
 import { RoseQuestionBanner } from "@/components/immersive/RoseQuestionBanner";
 import { SlideStage } from "@/components/immersive/SlideStage";
+import { illustrationForChunk } from "@/lib/mentored/board-illustration";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
@@ -2867,6 +2868,7 @@ export function ImmersiveLessonRunner({
             ? chunk.analogyDiagram
             : (chunk.diagram ?? null)
         }
+        illustration={illustrationForChunk(chunk, attempts)}
       />
 
       {/* Concept + explanation */}
