@@ -13,7 +13,11 @@ import {
 import { RoseDialoguePanel } from "@/components/immersive/RoseDialoguePanel";
 import { RoseQuestionBanner } from "@/components/immersive/RoseQuestionBanner";
 import { SlideStage } from "@/components/immersive/SlideStage";
-import { illustrationForChunk } from "@/lib/mentored/board-illustration";
+import {
+  asksForVisualization,
+  illustrationForChunk,
+  illustrationForRequest,
+} from "@/lib/mentored/board-illustration";
 import { shouldSpeakFetchedGreeting } from "@/lib/mentored/opening-speech";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
@@ -294,6 +298,7 @@ export function ImmersiveLessonRunner({
   // re-renders when it changes; the panel is memo'd so other state
   // changes don't trigger unnecessary work here.
   const [narrationText, setNarrationText] = useState<string>("");
+  const [visualRequestKey, setVisualRequestKey] = useState(0);
 
   const [preferTableBeat, setPreferTableBeat] = useState(false);
   const [whiteboardActions, setWhiteboardActions] = useState<WhiteboardAction[]>(
@@ -1560,6 +1565,10 @@ export function ImmersiveLessonRunner({
       }
 
       if (!chunk || !plan) return;
+
+      if (asksForVisualization(text)) {
+        setVisualRequestKey((n) => n + 1);
+      }
 
       // Typed or voice interrupt while a turn is still streaming / speaking.
       // Use the stream ref (not `submitting` state) so rapid double-sends
@@ -2866,7 +2875,7 @@ export function ImmersiveLessonRunner({
       {!awaitingContinue && chunk ? (
         <>
       <SlideStage
-        key={`slide-${chunk.id}`}
+        key={`slide-${chunk.id}-${visualRequestKey}`}
         chunkId={chunk.id}
         concept={chunk.concept}
         keyPoints={chunk.keyPoints}
@@ -2884,7 +2893,10 @@ export function ImmersiveLessonRunner({
             ? chunk.analogyDiagram
             : (chunk.diagram ?? null)
         }
-        illustration={illustrationForChunk(chunk, attempts)}
+        illustration={
+          illustrationForChunk(chunk, attempts) ??
+          (visualRequestKey > 0 ? illustrationForRequest(chunk) : null)
+        }
       />
 
       {/* Concept + explanation */}

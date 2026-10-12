@@ -1,60 +1,28 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { ANTHROPIC_HAIKU } from "@/lib/ai/anthropic-models";
+import { ANTHROPIC_SONNET } from "@/lib/ai/anthropic-models";
+import { renderBoardScene, templatedScene } from "@/lib/mentored/board-scene-spec";
 import {
-  boardScenePrompt,
-  parseSceneSpec,
-  reconcileScene,
-  renderBoardScene,
-  type BoardSceneSpec,
-} from "@/lib/mentored/board-scene-spec";
+  boardSvgPrompt,
+  sanitizeBoardSvg,
+  teachingSvgProblems,
+  withoutProseLabels,
+} from "@/lib/mentored/board-svg";
 
 const cache = new Map<string, string>();
 const CACHE_MAX = 24;
 
 const SCENE_TOOL = {
-  name: "submit_scene",
-  description: "Submit the short teaching scene. Do not include coordinates.",
+  name: "submit_svg",
+  description: "Submit one teaching SVG. The picture is the objects, not a caption.",
   input_schema: {
     type: "object" as const,
     properties: {
-      motion: {
+      svg: {
         type: "string",
-        enum: ["share", "transfer", "flow", "slide", "press", "cycle", "steps", "hold"],
+        description: "One svg document, viewBox 0 0 960 540, with the objects drawn.",
       },
-      glyphs: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            role: {
-              type: "string",
-              enum: [
-                "atom",
-                "electron",
-                "membrane",
-                "complex",
-                "rotor",
-                "proton",
-                "demand",
-                "supply",
-                "marker",
-                "page",
-                "stamp",
-                "aside",
-                "note",
-                "station",
-                "object",
-              ],
-            },
-            label: { type: "string" },
-            tone: { type: "string", enum: ["rose", "gold", "blue", "white"] },
-          },
-          required: ["role"],
-        },
-      },
-      steps: { type: "array", items: { type: "string" } },
     },
-    required: ["motion", "glyphs"],
+    required: ["svg"],
   },
 };
 
@@ -68,8 +36,8 @@ function cacheSet(key: string, value: string) {
 }
 
 /**
- * Haiku names the objects, the exact labels, and the motion.
- * The app draws and animates that scene.
+ * A known diagram (atoms, a synthase membrane, a supply curve) is drawn here.
+ * Every other idea is drawn from the description, and rejected if it is only words.
  */
 export async function generateBoardSvg(input: {
   title: string;
@@ -81,39 +49,68 @@ export async function generateBoardSvg(input: {
   const hit = cache.get(key);
   if (hit) return hit;
 
-  let spec: BoardSceneSpec;
-  try {
-    const parsed = await requestScene(input);
-    spec = reconcileScene(parsed, input);
-  } catch {
-    spec = reconcileScene(null, input);
-  }
-  const svg = renderBoardScene(spec);
+  const templated = templatedScene(input);
+  const svg = templated
+    ? renderBoardScene(templated)
+    : await drawDescribedSvg(input);
   cacheSet(key, svg);
   return svg;
 }
 
-async function requestScene(input: {
+async function drawDescribedSvg(input: {
   title: string;
   brief: string;
   labels: string[];
   motion?: string;
-}): Promise<BoardSceneSpec | null> {
+}): Promise<string> {
+  let problems: string[] = [];
+  let last = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let raw = "";
+    try {
+      raw = await requestSvg({ ...input, problems });
+    } catch (error) {
+      problems = [error instanceof Error ? error.message : "the drawing request failed"];
+      continue;
+    }
+    const svg = raw ? sanitizeBoardSvg(raw) : null;
+    if (!svg) {
+      problems = ["the reply was not an svg drawing"];
+      continue;
+    }
+    const cleaned = withoutProseLabels(svg);
+    last = cleaned;
+    problems = teachingSvgProblems(cleaned, input);
+    if (problems.length === 0) return cleaned;
+  }
+  const error = new Error(
+    problems.length > 0 ? problems.join("; ") : "Could not draw the board."
+  );
+  if (last) (error as Error & { svg?: string }).svg = last;
+  throw error;
+}
+
+async function requestSvg(input: {
+  title: string;
+  brief: string;
+  labels: string[];
+  motion?: string;
+  problems?: string[];
+}): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!apiKey) return null;
+  if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
-  const user = boardScenePrompt(input);
-
-  const anthropic = new Anthropic({ apiKey, timeout: 25_000, maxRetries: 0 });
+  const anthropic = new Anthropic({ apiKey, timeout: 90_000, maxRetries: 0 });
   const msg = await anthropic.messages.create({
-    model: ANTHROPIC_HAIKU,
-    max_tokens: 700,
-    temperature: 0,
+    model: ANTHROPIC_SONNET,
+    max_tokens: 8000,
+    temperature: 0.2,
     tools: [SCENE_TOOL],
     tool_choice: { type: "tool", name: SCENE_TOOL.name },
-    messages: [{ role: "user", content: user }],
+    messages: [{ role: "user", content: boardSvgPrompt(input) }],
   });
   const tool = msg.content.find((part) => part.type === "tool_use");
-  if (!tool || tool.type !== "tool_use") return null;
-  return parseSceneSpec(tool.input);
+  if (!tool || tool.type !== "tool_use") return "";
+  const payload = tool.input as { svg?: unknown };
+  return typeof payload.svg === "string" ? payload.svg : "";
 }

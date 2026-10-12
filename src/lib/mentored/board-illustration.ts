@@ -54,12 +54,84 @@ export function illustrationForChunk(
   return {
     title: chunk.concept,
     brief,
-    labels: shortLabels(chunk.keyTerms, chunk.keyPoints),
+    labels: boardPartLabels(chunk.concept, chunk.keyTerms, chunk.keyPoints),
     script: missed ? chunk.analogy || chunk.explanation : chunk.explanation,
     kicker: missed ? "New analogy" : "Whiteboard",
     form: form === "still" || motion ? form : "still",
     motion,
   };
+}
+
+/** The student asked to see the idea, not to hear it again. */
+export function asksForVisualization(utterance: string): boolean {
+  const text = utterance.replace(/\s+/g, " ").trim();
+  if (text.length < 3) return false;
+  const lower = text.toLowerCase();
+  if (/\b(visuali[sz]e|visuali[sz]ation|diagram|animation|whiteboard)\b/.test(lower)) {
+    return true;
+  }
+  if (/\b(draw|sketch|illustrate)\b/.test(lower) && /\b(it|this|that|concept|me|board)\b/.test(lower)) {
+    return true;
+  }
+  if (
+    /\b(show|see|watch|play)\b/.test(lower) &&
+    /\b(picture|drawing|video|animation|diagram|visual)\b/.test(lower)
+  ) {
+    return true;
+  }
+  return /시각화|그림으로|그려\s*줘|그림\s*보여/.test(text);
+}
+
+/**
+ * Picture payload for "show me a visualization", using the concept being discussed.
+ * Falls back to the explanation when the lesson plan has no picture brief.
+ */
+export function illustrationForRequest(chunk: {
+  concept: string;
+  explanation: string;
+  analogy?: string;
+  keyPoints: string[];
+  keyTerms?: string[];
+  illustrationBrief?: string;
+  analogyIllustration?: string;
+  visualForm?: BoardVisualForm;
+  motion?: string;
+  analogyVisualForm?: BoardVisualForm;
+  analogyMotion?: string;
+}): {
+  title: string;
+  brief: string;
+  labels: string[];
+  script: string;
+  kicker: string;
+  form: BoardVisualForm;
+  motion?: string;
+} | null {
+  const ready = illustrationForChunk(chunk, 0);
+  if (ready) return ready;
+  const brief = [chunk.explanation, ...chunk.keyPoints]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const usable = pictureBrief(brief) ?? pictureBrief(`${chunk.concept}. ${brief}`);
+  if (!usable) return null;
+  return {
+    title: chunk.concept,
+    brief: usable,
+    labels: boardPartLabels(chunk.concept, chunk.keyTerms, chunk.keyPoints),
+    script: chunk.explanation || chunk.concept,
+    kicker: "Whiteboard",
+    form: "animation",
+    motion: motionLine(chunk.motion),
+  };
+}
+
+function boardPartLabels(concept: string, terms: string[] | undefined, points: string[]): string[] {
+  const title = concept.replace(/\s+/g, " ").trim().toLowerCase();
+  return shortLabels(terms, points)
+    .filter((label) => label.split(/\s+/).length <= 3 && label.length <= 24)
+    .filter((label) => label.toLowerCase() !== title)
+    .slice(0, 4);
 }
 
 function shortLabels(terms: string[] | undefined, points: string[]): string[] {

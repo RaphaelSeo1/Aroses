@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  asksForVisualization,
   captionLine,
   clipPrompt,
   illustrationForChunk,
+  illustrationForRequest,
   illustrationPrompt,
   motionFrameIndex,
   motionStageBriefs,
@@ -89,6 +91,24 @@ test("a moving figure advances to a later frame while it is taught", () => {
   assert.match(stages[0], /starting position only/);
   assert.match(stages[2], /slides left/);
   assert.equal(stages[0] === stages[2], false);
+});
+
+test("a request to see the idea is recognized, and the picture stays on this concept", () => {
+  assert.equal(asksForVisualization("show me a visualization"), true);
+  assert.equal(asksForVisualization("can you draw this"), true);
+  assert.equal(asksForVisualization("play a video of it"), true);
+  assert.equal(asksForVisualization("그림으로 보여줘"), true);
+  assert.equal(asksForVisualization("yes that makes sense"), false);
+  assert.equal(asksForVisualization("show me the module"), false);
+  const picture = illustrationForRequest({
+    concept: "Half-equivalence point",
+    explanation: "At the half-equivalence point, half of the weak base has become its conjugate acid.",
+    keyPoints: ["moles of base equal moles of conjugate acid"],
+    keyTerms: ["Half-equivalence point", "Limiting reactant"],
+  });
+  assert.match(picture?.brief ?? "", /conjugate acid/);
+  assert.equal((picture?.labels ?? []).includes("Half-equivalence point"), false);
+  assert.equal((picture?.labels ?? []).includes("Limiting reactant"), true);
 });
 
 test("a clip prompt describes motion and a still prompt does not reuse another subject", () => {

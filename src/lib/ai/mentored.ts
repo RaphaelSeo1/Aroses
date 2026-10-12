@@ -889,6 +889,7 @@ Guidelines for classification + reply tone:
 - tangent_question → answer briefly (1-2 sentences), then steer back to the current concept. "advance": false.
 - request_repeat → restate the explanation in fresh words. "advance": false.
 - request_clarify → clarify ONE step. "advance": false.
+- The student asks to see a visualization, diagram, drawing, animation, or video of THIS concept → the board draws that concept. Describe the picture in one or two sentences using only this chunk. intent request_clarify, "advance": false.
 - request_pause → acknowledge and offer to resume. "advance": false.
 - other → infer best interpretation; default "advance": false.
 

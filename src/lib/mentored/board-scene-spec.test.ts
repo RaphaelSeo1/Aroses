@@ -7,6 +7,7 @@ import {
   reconcileScene,
   renderBoardScene,
   stepOpacity,
+  templatedScene,
 } from "./board-scene-spec.ts";
 
 const BOND = {
@@ -64,7 +65,6 @@ test("every label is placed inside the frame", () => {
   );
   for (const svg of scenes) {
     const labels = [...svg.matchAll(/<text x="([\d.]+)" y="([\d.]+)"[^>]*>([^<]*)<\/text>/g)];
-    assert.ok(labels.length > 0);
     for (const match of labels) {
       const x = Number(match[1]);
       const y = Number(match[2]);
@@ -87,8 +87,8 @@ test("a chemical bond draws atoms sharing electrons, not a membrane", () => {
   assert.match(svg, /data-layout="bond"/);
   assert.match(svg, /data-role="atom"/);
   assert.match(svg, /data-role="electron"/);
-  assert.match(svg, /chemical bonds/);
-  assert.match(svg, /forces that hold atoms together/);
+  assert.doesNotMatch(svg, /chemical bonds/);
+  assert.doesNotMatch(svg, /forces that hold atoms together/);
   assert.doesNotMatch(svg, /data-role="membrane"/);
   assert.doesNotMatch(svg, /data-role="rotor"/);
 });
@@ -157,6 +157,28 @@ test("invented labels are dropped and a missing required label is kept", () => {
   );
   const labels = scene.glyphs.map((glyph) => glyph.label);
   assert.deepEqual(labels, ["Evaporation", "Condensation", "Precipitation"]);
+});
+
+test("a membrane mention that is not chemiosmosis is not the synthase diagram", () => {
+  assert.equal(
+    templatedScene({
+      title: "Crossing a barrier",
+      brief: "Small molecules cross a membrane inside tiny spheres, then exit on the other side.",
+      labels: ["spheres"],
+    }),
+    null
+  );
+});
+
+test("the word ionic without a bond is not an atom diagram", () => {
+  assert.equal(
+    templatedScene({
+      title: "Ionic systems at equilibrium",
+      brief: "Ionic systems shift when the concentration of a dissolved salt changes.",
+      labels: ["equilibrium"],
+    }),
+    null
+  );
 });
 
 test("a bad model reply falls back to the labels", () => {

@@ -97,9 +97,9 @@ const LEGACY_ROLE: Record<string, GlyphRole> = {
 };
 
 const BOND_WORDS =
-  /chemical bond|covalent|ionic|shared electron|sharing electron|valence|hold atoms|atoms together|atoms share|transfer(?:s|red)? an electron|electron (?:is )?transferred/;
+  /chemical bond|covalent|ionic bond|shared electron|sharing electron|valence electron|hold atoms|atoms together|atoms share|transfer(?:s|red)? an electron|electron (?:is )?transferred/;
 const MEMBRANE_WORDS =
-  /membrane|bilayer|chemiosmos|atp synthase|proton|electron transport/;
+  /chemiosmos|atp synthase|protons? (?:are )?pumped|pumped across the membrane/;
 
 export function boardScenePrompt(input: {
   title: string;
@@ -243,7 +243,7 @@ export function renderBoardScene(spec: BoardSceneSpec): string {
   return `<svg viewBox="0 0 960 540" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" data-layout="${kind}">
 <style>
   text { font-family: system-ui, sans-serif; }
-  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fadeIn { from { opacity: 1 } to { opacity: 1 } }
   @keyframes drift {
     0%, 100% { transform: translateY(0) }
     50% { transform: translateY(10px) }
@@ -320,15 +320,30 @@ function pictureKind(input: {
   if (bond && !membrane) return "bond";
   if (membrane && !bond) return "membrane";
   if (bond && membrane) {
-    if (/chemical bond|covalent|ionic|hold atoms|atoms together|shared electron|transfer(?:s|red)? an electron/.test(text)) return "bond";
+    if (/chemical bond|covalent|ionic bond|hold atoms|atoms together|shared electron|transfer(?:s|red)? an electron/.test(text)) return "bond";
     return "membrane";
   }
-  const stage = /stamp|boycott|colonist|newspaper/.test(text);
-  const graph = /supply|demand/.test(text) && /curve|price|quantity|tax|shift|market/.test(text);
+  const stage = /\bstamp\b|stamp act/.test(text) && /boycott|colonist|newspaper|1765/.test(text);
+  const graph =
+    /supply/.test(text) &&
+    /demand/.test(text) &&
+    /curve|price|quantity|tax/.test(text);
   if (stage && !/supply curve|demand curve/.test(text)) return "stage";
   if (graph) return "graph";
   if (/evaporation|condensation|precipitation|water cycle/.test(text)) return "cycle";
   return "free";
+}
+
+/** A hand-built diagram when the description is that diagram. Anything else is drawn from scratch. */
+export function templatedScene(input: {
+  title?: string;
+  brief?: string;
+  labels?: string[];
+  motion?: string;
+}): BoardSceneSpec | null {
+  const kind = pictureKind({ ...input, labels: input.labels ?? [] });
+  if (kind === "free") return null;
+  return sceneForKind(kind, { ...input, labels: input.labels ?? [] });
 }
 
 function sceneForKind(
@@ -479,6 +494,7 @@ function renderBond(spec: BoardSceneSpec): string {
         <circle class="electron" cx="${(left.x + right.x) / 2}" cy="${left.y + 18}" r="11" fill="#7eb6ff" style="animation-delay:-1.4s"/>
       </g>`;
   const caption = captions
+    .filter((line) => line.split(/\s+/).length === 1 && line.length <= 16)
     .map((line, index) =>
       label(line, 480, 430 + index * 42, index === 0 ? 26 : 20, index === 0 ? "#fff7f4" : "#f5c16c", 760)
     )
