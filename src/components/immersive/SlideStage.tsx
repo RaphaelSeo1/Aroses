@@ -306,7 +306,7 @@ function SlideStageImpl({
         }}
       />
 
-      <div className="relative flex items-center justify-between gap-3 px-6 pt-5 sm:px-8">
+      <div className="relative flex items-center justify-between gap-3 px-6 pb-4 pt-5 sm:px-8">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-fuchsia-600/80">
             Now teaching
@@ -317,23 +317,27 @@ function SlideStageImpl({
         </div>
       </div>
 
+      {illustration ? (
+        <div className="relative flex min-h-[clamp(22rem,52vh,36rem)] flex-1 flex-col bg-[#140c10]">
+          <BoardAnimation
+            title={illustration.title}
+            brief={illustration.brief}
+            labels={illustration.labels}
+            motion={illustration.motion}
+            script={illustration.script}
+            spoken={narrationText}
+            kicker={illustration.kicker}
+            fallback={scene ? <BoardSceneView scene={scene} /> : null}
+          />
+        </div>
+      ) : (
+      <>
       <div className="relative grid min-h-[clamp(20rem,46vh,30rem)] flex-1 grid-rows-[minmax(0,1fr)_auto] gap-y-4 px-6 py-8 sm:px-10">
         <div
-          key={`${chunkId}-${illustration ? "illustration" : scene ? "draw" : beatIdx}`}
+          key={`${chunkId}-${scene ? "draw" : beatIdx}`}
           className="slide-scene flex min-h-0 w-full items-center justify-center self-center"
         >
-          {illustration ? (
-            <BoardAnimation
-              title={illustration.title}
-              brief={illustration.brief}
-              labels={illustration.labels}
-              motion={illustration.motion}
-              script={illustration.script}
-              spoken={narrationText}
-              kicker={illustration.kicker}
-              fallback={scene ? <BoardSceneView scene={scene} /> : null}
-            />
-          ) : scene ? (
+          {scene ? (
             <BoardSceneView scene={scene} />
           ) : active.kind === "title" ? (
             <div className="mx-auto max-w-3xl text-center">
@@ -436,6 +440,8 @@ function SlideStageImpl({
           ))}
         </div>
       ) : null}
+      </>
+      )}
 
       <style jsx>{`
         .slide-grid {

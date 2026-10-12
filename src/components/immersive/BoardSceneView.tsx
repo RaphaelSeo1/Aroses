@@ -6,7 +6,7 @@ export function BoardSceneView({ scene }: { scene: BoardScene }) {
   const svg = boardSceneSvg(scene);
   return (
     <div
-      className="mx-auto aspect-square w-full max-w-3xl overflow-hidden rounded-2xl shadow-sm ring-1 ring-white/40"
+      className="h-full w-full"
       data-board-scene={scene.kicker ?? "diagram"}
       dangerouslySetInnerHTML={{ __html: svg }}
     />

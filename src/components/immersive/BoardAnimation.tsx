@@ -64,14 +64,17 @@ export function BoardAnimation({
   const caption = captionLine(spoken, script);
 
   return (
-    <div className="mx-auto w-full max-w-3xl" data-board-animation={kicker}>
-      <div className="relative aspect-video overflow-hidden rounded-2xl bg-[#140c10] shadow-sm ring-1 ring-white/20">
+    <div
+      className="flex h-full min-h-[clamp(22rem,52vh,36rem)] w-full flex-col"
+      data-board-animation={kicker}
+    >
+      <div className="relative min-h-0 w-full flex-1">
         {svg ? (
           <iframe
             title={title}
             sandbox=""
             srcDoc={boardSvgDocument(svg)}
-            className="pointer-events-none h-full w-full border-0"
+            className="pointer-events-none absolute inset-0 h-full w-full border-0 bg-[#140c10]"
           />
         ) : (
           <div className="flex h-full items-center justify-center px-8 text-center">
@@ -80,12 +83,9 @@ export function BoardAnimation({
             </p>
           </div>
         )}
-        <p className="pointer-events-none absolute left-4 top-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-rose-100/70">
-          {kicker}
-        </p>
       </div>
       {caption ? (
-        <p className="mt-3 rounded-2xl bg-[#1c1216] px-4 py-3 text-sm leading-relaxed text-rose-50 ring-1 ring-white/10">
+        <p className="shrink-0 border-t border-white/10 px-6 py-3 text-sm leading-relaxed text-rose-50 sm:px-8">
           <span className="mr-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-rose-300">
             Rose
           </span>

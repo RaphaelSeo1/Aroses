@@ -2,9 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { ANTHROPIC_HAIKU } from "@/lib/ai/anthropic-models";
 import {
   boardScenePrompt,
-  constrainScene,
-  fallbackScene,
   parseSceneSpec,
+  reconcileScene,
   renderBoardScene,
   type BoardSceneSpec,
 } from "@/lib/mentored/board-scene-spec";
@@ -18,32 +17,44 @@ const SCENE_TOOL = {
   input_schema: {
     type: "object" as const,
     properties: {
-      layout: {
-        type: "string",
-        enum: ["flow", "graph", "cycle", "steps", "stage"],
-      },
       motion: {
         type: "string",
-        enum: ["flow", "slide", "press", "cycle", "steps", "hold"],
+        enum: ["share", "transfer", "flow", "slide", "press", "cycle", "steps", "hold"],
       },
-      parts: {
+      glyphs: {
         type: "array",
         items: {
           type: "object",
           properties: {
-            label: { type: "string" },
-            kind: {
+            role: {
               type: "string",
-              enum: ["node", "end", "card", "aside", "note", "demand", "supply", "marker", "station"],
+              enum: [
+                "atom",
+                "electron",
+                "membrane",
+                "complex",
+                "rotor",
+                "proton",
+                "demand",
+                "supply",
+                "marker",
+                "page",
+                "stamp",
+                "aside",
+                "note",
+                "station",
+                "object",
+              ],
             },
+            label: { type: "string" },
             tone: { type: "string", enum: ["rose", "gold", "blue", "white"] },
           },
-          required: ["label"],
+          required: ["role"],
         },
       },
       steps: { type: "array", items: { type: "string" } },
     },
-    required: ["layout", "motion"],
+    required: ["motion", "glyphs"],
   },
 };
 
@@ -73,9 +84,9 @@ export async function generateBoardSvg(input: {
   let spec: BoardSceneSpec;
   try {
     const parsed = await requestScene(input);
-    spec = parsed ? constrainScene(parsed, input.labels) : fallbackScene(input);
+    spec = reconcileScene(parsed, input);
   } catch {
-    spec = fallbackScene(input);
+    spec = reconcileScene(null, input);
   }
   const svg = renderBoardScene(spec);
   cacheSet(key, svg);
@@ -89,7 +100,7 @@ async function requestScene(input: {
   motion?: string;
 }): Promise<BoardSceneSpec | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!apiKey) return fallbackScene(input);
+  if (!apiKey) return null;
 
   const user = boardScenePrompt(input);
 
