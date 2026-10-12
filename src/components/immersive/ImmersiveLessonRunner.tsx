@@ -14,6 +14,7 @@ import { RoseDialoguePanel } from "@/components/immersive/RoseDialoguePanel";
 import { RoseQuestionBanner } from "@/components/immersive/RoseQuestionBanner";
 import { SlideStage } from "@/components/immersive/SlideStage";
 import { illustrationForChunk } from "@/lib/mentored/board-illustration";
+import { shouldSpeakFetchedGreeting } from "@/lib/mentored/opening-speech";
 import { SourceLessonPanel } from "@/components/immersive/SourceLessonPanel";
 import type { TranscriptLine } from "@/components/immersive/TranscriptPanel";
 import { TypewriterText } from "@/components/immersive/TypewriterText";
@@ -980,13 +981,28 @@ export function ImmersiveLessonRunner({
 
       prependOrUpdateSessionGreeting(text);
       setTutorReply(text);
-      lastSpokenRef.current = text;
-      const greetingAlreadyInDialogue = transcriptLines.some(
+      // Continue starts the concept narration immediately. speak() cancels
+      // whatever is already playing, and the chunk effect will not start
+      // that narration again after it claims the chunk. A greeting that
+      // arrives late must not take the audio back.
+      const teachingHasStarted =
+        (needsAcknowledgement && !awaitingContinueRef.current) ||
+        lastSpokenChunkIdRef.current != null;
+      if (!teachingHasStarted) {
+        lastSpokenRef.current = text;
+      }
+      // Snapshot from when this effect ran — not the fallback line this
+      // effect just queued — so an unchanged greeting can still be spoken
+      // while the student is on Continue.
+      const alreadyShown = transcriptLines.some(
         (l) => l.role === "rose" && l.text.trim() === text.trim()
       );
       if (
-        interactionModeRef.current === "voice" &&
-        !greetingAlreadyInDialogue
+        shouldSpeakFetchedGreeting({
+          voice: interactionModeRef.current === "voice",
+          alreadyShown,
+          teachingHasStarted,
+        })
       ) {
         try {
           await voice.speak(text);
